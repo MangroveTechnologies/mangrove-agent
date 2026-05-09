@@ -27,12 +27,13 @@ import os
 import sys
 
 from eth_account import Account
-from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from x402 import x402Client
 from x402.mcp import x402MCPSession
 from x402.mechanisms.evm.exact import ExactEvmClientScheme
 from x402.mechanisms.evm.signers import EthAccountSigner
+
+from mcp import ClientSession
 
 
 def _extract_message(content) -> str:
