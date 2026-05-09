@@ -243,13 +243,18 @@ bottom of the file.
 
 ```
 .claude/
-├── skills/create-strategy/SKILL.md  ← authoring workflow
-├── skills/onboard/SKILL.md          ← rebrand path for forkers
+├── skills/create-strategy/SKILL.md  ← strategy authoring workflow
+├── skills/backtest/SKILL.md         ← bar-window sizing + verdict
+├── skills/custom-signal/SKILL.md    ← compose entry/exit signal stacks
+├── skills/audit-security/SKILL.md   ← wallet/EIP-7702 security audit
+├── skills/check-alignment/SKILL.md  ← read-only "does this fit" check
+├── skills/tool-spec/SKILL.md        ← draft new MCP tool specs
 ├── rules/trading-bot-workflow.md    ← Stage 0-6 of the agent's loop
 ├── rules/wallet-presentation.md     ← how to present wallet output
 ├── rules/git-workflow.md            ← branch / PR conventions
 ├── hooks/block-wallet-secrets.sh    ← regex key-paste block
-└── hooks/check-onboard.sh           ← fresh-clone greeter trigger
+├── hooks/block-main-commits.sh      ← refuse direct commits to main
+└── hooks/preflight-swap.sh          ← refuse swap if input_token balance is 0
 ```
 
 These are all Markdown and shell — no build step. Edit in place,
@@ -287,32 +292,6 @@ loads at server start.
 To change backtest thresholds (e.g., tighten Sharpe to 1.5 from
 1.2), edit `threshold_spec.json`. Applies to all subsequent
 backtests.
-
-## Forking this for your own app
-
-If you want to use this as a scaffold for something non-trading
-(say, an NFT portfolio tracker, an on-chain analytics bot, a
-game-asset helper), the legacy development-lifecycle tutorial at
-[`../scaffold-lifecycle/`](../scaffold-lifecycle/) walks through the
-onboard → requirements → specification → architecture → implementation
-pattern. It's the old `tutorials/trading-app/` content, preserved
-verbatim.
-
-In summary:
-
-- Run `/onboard` in a fresh clone to rebrand (CLAUDE.md persona,
-  branding.json, assets).
-- Remove the trading-bot-specific rules/skills/hooks that don't
-  apply to your use case.
-- Add your own services, routes, MCP tools in
-  `server/src/services/`, `api/routes/`, `mcp/tools.py`.
-- Reuse the auth middleware, MCP scaffolding, scheduler, and
-  wallet-handling patterns if any apply.
-
-The defi-agent architecture (one process, SQLite for state,
-APScheduler for cron, MCP + REST on the same service layer) is a
-decent foundation for most "local-first agent" apps, trading or
-otherwise.
 
 ## Post-workshop: things to try
 

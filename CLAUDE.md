@@ -8,8 +8,6 @@ Claude Code adopts the persona defined in the `Project Context` + `Agent Identit
 
 **Homepage:** https://mangrovedeveloper.ai
 
-> Not here for a trading bot? This same codebase can be rebranded into any FastAPI + Claude Code app. Run `/onboard` inside Claude Code to start the rebrand flow.
-
 ## Quickstart
 
 ```bash
@@ -23,22 +21,11 @@ Health check once running: `http://localhost:9080/health`.
 
 ## Getting the Code
 
-Two paths depending on what you want:
-
-**Path A — Use as-is (you're here for the trading bot):**
-
 ```bash
 git clone https://github.com/MangroveTechnologies/app-in-a-box.git
 cd app-in-a-box
 ./scripts/setup.sh
 ```
-
-**Path B — Fork as a scaffold (you're building something else on top):**
-
-1. On GitHub, click **Use this template** to cut a fresh repo with no history, or fork the repo normally if you want to keep the upstream link for pulling updates.
-2. Clone your copy locally.
-3. Run `claude` in the directory and invoke `/onboard` — it rewrites persona, branding, and CLAUDE.md for your project.
-4. Dev-lifecycle scaffolding (`/requirements → /specification → /architecture → /plan`) lives in `tutorials/scaffold-lifecycle/`.
 
 ## Architecture
 
@@ -98,10 +85,6 @@ Not sure where it goes? File here — we'll route it.
 - One concern per PR — don't bundle unrelated changes
 - CI (ruff + pytest, via `.github/workflows/ci.yml`) must pass
 - Describe *why*, not *what* — the diff shows what
-
-## Branding
-
-Edit `branding.json` + `assets/`, then run `./init.sh` to propagate.
 
 ## Project Context
 

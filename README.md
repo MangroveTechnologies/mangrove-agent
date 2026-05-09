@@ -206,13 +206,7 @@ For live trades the agent decrypts your wallet's secret in-process, signs the un
 
 ## Development
 
-Design-first workflow powered by Claude Code skills — use these when you're building something new on top of the template, not when running defi-agent itself:
-
-```
-/onboard → /requirements → /specification → /architecture → /plan
-```
-
-Each phase produces a doc in `docs/` and waits for your approval before proceeding. See [docs/](docs/) for the defi-agent outputs.
+Extending the agent — adding a new endpoint, MCP tool, signal, or strategy — follows the service-layer pattern documented in [`docs/contributing.md`](docs/contributing.md). Trading-bot-specific skills available in this repo: `/create-strategy`, `/backtest`, `/custom-signal`, `/audit-security`, `/check-alignment`, `/tool-spec`. See `.claude/skills/` for what each one does.
 
 ## Tests
 

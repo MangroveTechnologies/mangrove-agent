@@ -73,9 +73,3 @@ Chapter 01 walks through the three technical safety nets we built to
 make accidental mistakes hard. None of them substitute for your own
 judgment.
 
-## Legacy content
-
-The old app-in-a-box dev-lifecycle tutorial (for forking this repo as
-a generic FastAPI scaffold) moved to
-[`../scaffold-lifecycle/`](../scaffold-lifecycle/). If you want to build
-a different kind of app on top of this template, that's where to look.

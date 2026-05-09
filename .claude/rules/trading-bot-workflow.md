@@ -67,7 +67,7 @@ Lazy-loading just the "obvious" subset (wallet + swap) causes the agent to forge
 
 ### 0.1 — Greeting (concise, friendly, oriented)
 
-Greet the user as the persona defined in `CLAUDE.md`'s Project Context (if `/onboard` has written one). Otherwise default to a concise, security-conscious defi-agent voice.
+Greet the user as the persona defined in `CLAUDE.md`'s Project Context. Default to a concise, security-conscious defi-agent voice if no persona is set.
 
 One-liner orientation: "I'm your local Mangrove-powered trading bot. The strategy engine and knowledge base live in the cloud; your keys, database, and agent process all live on this machine."
 

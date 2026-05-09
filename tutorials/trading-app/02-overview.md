@@ -107,7 +107,7 @@ Already introduced in Chapter 01. Quick refresher:
 ├── skills/          ← playbooks the agent loads on demand
 ├── rules/           ← global guardrails loaded at session start
 ├── hooks/           ← intercept scripts (e.g., block-wallet-secrets.sh)
-├── agents/          ← agent personas (if /onboard has customized)
+├── agents/          ← agent personas (e.g., the product owner)
 └── settings.json    ← hook registrations
 ```
 
