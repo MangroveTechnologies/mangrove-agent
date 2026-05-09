@@ -98,6 +98,12 @@ class _Config:
         str_val = str(value)
         if str_val.startswith("secret:"):
             parts = str_val.split(":")
+            if len(parts) != 3 or not parts[1] or not parts[2]:
+                print(
+                    f"Malformed secret reference for '{key}': '{str_val}'. "
+                    f"Expected 'secret:<name>:<property>', got {len(parts)} segment(s)."
+                )
+                sys.exit(1)
             secret_id = parts[1]
             secret_property = parts[2]
             value = SecretUtils.get_secret(project_id, secret_id, secret_property)

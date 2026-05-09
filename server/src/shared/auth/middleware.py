@@ -4,6 +4,7 @@ Validates X-API-Key header against configured API_KEYS (comma-separated).
 When AUTH_ENABLED is false, all requests pass without validation.
 API key holders bypass x402 payment requirements.
 """
+import secrets
 from typing import Optional
 
 
@@ -11,6 +12,22 @@ def _get_config():
     """Lazy import to avoid circular imports during testing."""
     from src.config import app_config
     return app_config
+
+
+def _matches_any(api_key: str, valid_keys: set[str]) -> bool:
+    """Constant-time comparison against the configured key set.
+
+    Avoids the timing oracle in plain ``api_key in valid_keys``: the dict /
+    set ``in`` operator falls through to ``str.__eq__``, which short-circuits
+    on first byte mismatch. Iterating the full set with
+    ``secrets.compare_digest`` and folding the result with a non-short-
+    circuiting OR keeps cost independent of which key matches.
+    """
+    matched = False
+    for k in valid_keys:
+        if secrets.compare_digest(api_key, k):
+            matched = True
+    return matched
 
 
 def validate_api_key(api_key: Optional[str]) -> Optional[str]:
@@ -28,7 +45,7 @@ def validate_api_key(api_key: Optional[str]) -> Optional[str]:
         raise ValueError("Missing API key")
 
     valid_keys = {k.strip() for k in str(config.API_KEYS).split(",")}
-    if api_key not in valid_keys:
+    if not _matches_any(api_key, valid_keys):
         raise ValueError("Invalid API key")
 
     return api_key
@@ -46,6 +63,6 @@ def has_valid_api_key(api_key: Optional[str]) -> bool:
         if not api_key:
             return False
         valid_keys = {k.strip() for k in str(config.API_KEYS).split(",")}
-        return api_key in valid_keys
+        return _matches_any(api_key, valid_keys)
     except Exception:
         return False
