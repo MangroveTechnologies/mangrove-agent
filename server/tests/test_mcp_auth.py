@@ -5,7 +5,7 @@ requirements when called without payment in the MCP _meta. Garbage-payment
 rejection is no longer in our code path — it's handled inside the x402
 library's create_payment_wrapper, which has its own tests upstream.
 
-Phase 4 will add auth tests for the defi-agent tools once they exist.
+Phase 4 will add auth tests for the mangrove-agent tools once they exist.
 """
 import json
 import os

@@ -17,6 +17,7 @@ from x402.http.middleware.fastapi import payment_middleware
 from src.api.router import api_router, x402_router
 from src.config import app_config
 from src.health import health_payload
+from src.shared.auth.middleware import has_valid_api_key
 from src.shared.errors import AgentError, agent_error_handler
 from src.shared.logging import CorrelationIdMiddleware, get_logger
 from src.shared.logging import configure as configure_logging
@@ -86,7 +87,7 @@ def create_app() -> FastAPI:
         scheduler_shutdown()  # wait=False so we don't block on in-flight ticks
 
     application = FastAPI(
-        title="App-in-a-Box",
+        title="Mangrove Agent",
         description=(
             "FastAPI + MCP service template with three-tier access control.\n\n"
             "## For Agents\n\n"
@@ -110,8 +111,12 @@ def create_app() -> FastAPI:
 
     @application.middleware("http")
     async def x402_middleware(request: Request, call_next):
+        # Bypass x402 only for *valid* API keys. A previous version
+        # short-circuited on header presence alone, which let any
+        # X-API-Key value skip payment. See tests/test_x402.py
+        # ::test_invalid_api_key_does_not_bypass_x402.
         api_key = request.headers.get("x-api-key")
-        if api_key:
+        if api_key and has_valid_api_key(api_key):
             return await call_next(request)
         return await x402_handler(request, call_next)
 

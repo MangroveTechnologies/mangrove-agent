@@ -1,13 +1,13 @@
 ---
 name: audit-security
-description: Run a focused security audit of the app-in-a-box trading bot. Covers wallet signing surfaces, EIP-7702 / arbitrary-signing risks, MCP tool permissions, Fernet key handling, DEX executor paths, hook-enforcement gaps, OWASP Top 10, and dependency CVEs. Use when the user asks for "security audit", "audit security", "security review", "check for vulnerabilities", "OWASP audit", or "/audit-security". Adapted from the Mangrove workspace `audit-security` skill with a trading-bot lens added after the 2026-04-24 EIP-7702 incident.
+description: Run a focused security audit of the mangrove-agent trading bot. Covers wallet signing surfaces, EIP-7702 / arbitrary-signing risks, MCP tool permissions, Fernet key handling, DEX executor paths, hook-enforcement gaps, OWASP Top 10, and dependency CVEs. Use when the user asks for "security audit", "audit security", "security review", "check for vulnerabilities", "OWASP audit", or "/audit-security". Adapted from the Mangrove workspace `audit-security` skill with a trading-bot lens added after the 2026-04-24 EIP-7702 incident.
 disable-model-invocation: true
 allowed-tools: Read, Grep, Glob, Bash
 ---
 
-# Security Audit — app-in-a-box trading bot
+# Security Audit — mangrove-agent trading bot
 
-Read-only audit against the app-in-a-box repo. Covers:
+Read-only audit against the mangrove-agent repo. Covers:
 
 - **Wallet + signing surfaces** (post-2026-04-24 incident focus)
 - **Web3 / crypto-specific threats** (EIP-7702 delegation, permit abuse, tx replay, router allowlist drift, private-key lifetime, Fernet at rest)
@@ -61,7 +61,7 @@ Read-only audit against the app-in-a-box repo. Covers:
 
 ## Output
 
-Write a report to `docs/audits/YYYY-MM-DD-app-in-a-box-security-audit.md` with this shape:
+Write a report to `docs/audits/YYYY-MM-DD-mangrove-agent-security-audit.md` with this shape:
 
 ```
 # Security Audit — YYYY-MM-DD

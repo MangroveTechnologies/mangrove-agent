@@ -81,7 +81,7 @@ Code session. Run the `reveal_cmd` the bot gave you, copy-pasting
 verbatim. Example:
 
 ```bash
-cd ~/Desktop/defi-agent
+cd ~/Desktop/mangrove-agent
 ./scripts/reveal-secret.sh a8f72b3e
 ```
 
@@ -293,7 +293,7 @@ Worth a sentence on this because attendees get confused:
 
 - **On macOS / Linux with keychain reachable:** the Fernet master
   key is stored in your OS keychain (macOS Keychain app / Linux
-  Secret Service). The defi-agent reads it at startup and holds it
+  Secret Service). The mangrove-agent reads it at startup and holds it
   in process memory. Your wallet secrets are encrypted with a
   different per-wallet key, derived from the master.
 - **Otherwise:** the master key is in `./agent-data/master.key`,

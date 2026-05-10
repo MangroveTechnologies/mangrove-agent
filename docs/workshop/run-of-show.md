@@ -322,7 +322,7 @@
 - 50: Act 02 divider · 30 sec
 - 51: Where things run (architecture diagram) · 3 min ★ **The keystone slide.** Walk it carefully.
 - 52: Trust boundary · 90 sec
-- 53: defi-agent process · 90 sec
+- 53: mangrove-agent process · 90 sec
 - 54: Mangrove side · 90 sec
 - 55: Nothing touches Base mainnet (pullquote) · 30 sec
 
@@ -522,7 +522,7 @@
 
 #### Slide 103 — Resources
 - ◷ 2 min.
-- Setup guide / Survival kit / app-in-a-box repo / mangrovedeveloper.ai / Claude Code docs / Tim's email.
+- Setup guide / Survival kit / mangrove-agent repo / mangrovedeveloper.ai / Claude Code docs / Tim's email.
 - "Take a picture of this slide."
 
 #### Slide 104 — Thank you / Q&A

@@ -54,8 +54,8 @@ Then test you can clone:
 
 ```bash
 cd ~/Desktop                  # or wherever you keep projects
-git clone https://github.com/MangroveTechnologies/app-in-a-box.git defi-agent-dry-run
-cd defi-agent-dry-run
+git clone https://github.com/MangroveTechnologies/mangrove-agent.git mangrove-agent-dry-run
+cd mangrove-agent-dry-run
 ls
 ```
 
@@ -64,7 +64,7 @@ others. If so, you're set — delete the test clone:
 
 ```bash
 cd ..
-rm -rf defi-agent-dry-run
+rm -rf mangrove-agent-dry-run
 ```
 
 You'll clone it fresh during the workshop.
@@ -112,7 +112,7 @@ can hand out a workshop key if needed.
 
 ### Port conflicts (rare, but)
 
-The defi-agent listens on port 9080. Before the workshop, confirm
+The mangrove-agent listens on port 9080. Before the workshop, confirm
 nothing else is bound there:
 
 ```bash

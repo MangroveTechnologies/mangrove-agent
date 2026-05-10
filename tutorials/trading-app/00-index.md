@@ -25,7 +25,7 @@ A trading bot that:
 ```
 
 You drive it by chatting with Claude Code in your terminal. Under the
-hood, Claude Code talks to a local FastAPI server (the "defi-agent")
+hood, Claude Code talks to a local FastAPI server (the "mangrove-agent")
 via MCP. The agent talks to Mangrove's hosted API for signals,
 strategy logic, and market data.
 
@@ -73,9 +73,3 @@ Chapter 01 walks through the three technical safety nets we built to
 make accidental mistakes hard. None of them substitute for your own
 judgment.
 
-## Legacy content
-
-The old app-in-a-box dev-lifecycle tutorial (for forking this repo as
-a generic FastAPI scaffold) moved to
-[`../scaffold-lifecycle/`](../scaffold-lifecycle/). If you want to build
-a different kind of app on top of this template, that's where to look.

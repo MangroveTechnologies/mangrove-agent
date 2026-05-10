@@ -75,3 +75,13 @@ server/scripts/first_live_swap.py
 # Slide-source pptx — bulky binary; the rendered .pdf is the committed artifact.
 # If you need to commit a specific pptx, use git add -f.
 *.pptx
+
+# Stale workshop binaries — canonical copies live under docs/workshop/.
+# These were collocated by PR #64 and should not reappear at the repo root.
+/bots-and-bytes-v5.*
+/workshop-run-of-show.*
+/workshop-setup-guide.*
+.Rhistory
+.coverage
+**/.coverage
+htmlcov/

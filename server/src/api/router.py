@@ -1,7 +1,7 @@
 """REST API routers.
 
 /api/v1/*       -- Free and auth-gated endpoints
-/api/v1/agent/* -- defi-agent endpoints (free discovery + auth-gated actions)
+/api/v1/agent/* -- mangrove-agent endpoints (free discovery + auth-gated actions)
 /api/x402/*     -- x402 payment-gated endpoints
 """
 from fastapi import APIRouter
@@ -21,7 +21,7 @@ from src.api.routes.wallet import router as wallet_router
 # Free + auth-gated
 api_router = APIRouter(prefix="/api/v1")
 
-# defi-agent namespace
+# mangrove-agent namespace
 agent_router = APIRouter(prefix="/agent")
 agent_router.include_router(discovery_router, tags=["discovery"])
 agent_router.include_router(wallet_router)

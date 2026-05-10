@@ -1,4 +1,4 @@
--- defi-agent initial schema.
+-- mangrove-agent initial schema.
 -- All tables from docs/specification.md SQLite Schema section.
 -- APScheduler manages its own tables via SQLAlchemyJobStore.
 

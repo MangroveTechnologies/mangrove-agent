@@ -1,17 +1,5 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup",
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/check-onboard.sh",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "hooks": [
@@ -46,7 +34,7 @@
         ]
       },
       {
-        "matcher": "mcp__defi-agent__execute_swap",
+        "matcher": "mcp__mangrove-agent__execute_swap",
         "hooks": [
           {
             "type": "command",

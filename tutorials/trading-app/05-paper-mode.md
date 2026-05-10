@@ -54,7 +54,7 @@ Every strategy timeframe has a corresponding cron schedule:
 | `1d` | midnight UTC (`0 0 * * *`) |
 
 When the cron fires, the scheduler calls a tick function inside the
-defi-agent process. That tick:
+mangrove-agent process. That tick:
 
 1. Pulls the current OHLCV for the strategy's asset.
 2. Calls `mangroveai.execution.evaluate()` with the strategy and

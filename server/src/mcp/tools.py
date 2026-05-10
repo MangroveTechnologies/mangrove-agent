@@ -1,4 +1,4 @@
-"""MCP tool definitions for the defi-agent.
+"""MCP tool definitions for the mangrove-agent.
 
 Every tool mirrors a REST route by calling the same service function.
 Zero duplicated business logic — the MCP layer is just a different
@@ -1903,7 +1903,7 @@ def _register_strategy(server: FastMCP) -> None:
         strategies don't populate MangroveAI execution accounts
         unless a strategy was authored through the MangroveAI copilot
         path. This tool is exposed for completeness + cases where a
-        user has both app-in-a-box AND copilot-authored strategies.
+        user has both mangrove-agent AND copilot-authored strategies.
         """
         if not _require(api_key):
             return _auth_error()

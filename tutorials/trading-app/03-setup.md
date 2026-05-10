@@ -30,8 +30,8 @@ missing pieces.
 
 ```bash
 cd ~/Desktop   # or wherever you keep projects
-git clone https://github.com/MangroveTechnologies/app-in-a-box.git defi-agent
-cd defi-agent
+git clone https://github.com/MangroveTechnologies/mangrove-agent.git mangrove-agent
+cd mangrove-agent
 ```
 
 You'll end up in a directory with `README.md`, `scripts/`, `server/`,
@@ -67,7 +67,7 @@ First run takes about 60 seconds. It does, in order:
    `http://localhost:9080`.
 7. Waits for `/health` to return 200 before moving on.
 8. Registers the MCP server with Claude Code via
-   `claude mcp add -s local -t http defi-agent http://localhost:9080/mcp/ --header "X-API-Key: dev-key-1"`.
+   `claude mcp add -s local -t http mangrove-agent http://localhost:9080/mcp/ --header "X-API-Key: dev-key-1"`.
 9. Runs a quick verify pass — hits a few endpoints to confirm the
    tool catalog loaded.
 
@@ -79,7 +79,7 @@ If everything went well, the last thing you see is:
     PID:   12345  (agent-data/bare.pid)
     Logs:  agent-data/bare.log
 
-    Restart Claude Code in this directory to load the 41 defi-agent
+    Restart Claude Code in this directory to load the 41 mangrove-agent
     tools. Then try: "Status check. List my wallets and strategies."
 ```
 
@@ -147,7 +147,7 @@ claude mcp list
 Expected: a line like
 
 ```
-defi-agent: http://localhost:9080/mcp/ (HTTP) - ✓ Connected
+mangrove-agent: http://localhost:9080/mcp/ (HTTP) - ✓ Connected
 ```
 
 If it says `✗ Failed to connect`, the MCP URL in Claude Code's
@@ -156,8 +156,8 @@ Usually because port 9080 is squatted and the server is on a
 different port. Re-register:
 
 ```bash
-claude mcp remove defi-agent
-claude mcp add -s local -t http defi-agent http://localhost:<PORT>/mcp/ \
+claude mcp remove mangrove-agent
+claude mcp add -s local -t http mangrove-agent http://localhost:<PORT>/mcp/ \
   --header "X-API-Key: dev-key-1"
 ```
 
@@ -229,7 +229,7 @@ Usually one of three things:
 
 1. **Tools didn't load.** The bot can't complete Stage 0 without
    calling `list_wallets` and `list_strategies`. If you see a
-   "ToolSearch" call that returns nothing, or a "the defi-agent MCP
+   "ToolSearch" call that returns nothing, or a "the mangrove-agent MCP
    server isn't connected" message, go back to step 4 and fix the
    MCP registration.
 2. **You've already onboarded in this session.** If `.claude/.onboarded`
@@ -237,7 +237,7 @@ Usually one of three things:
    `rm .claude/.onboarded` to reset.
 3. **Claude Code was started from the wrong directory.** MCP local
    registrations are keyed to the project directory. Make sure
-   you're in `~/Desktop/defi-agent` (or wherever you cloned).
+   you're in `~/Desktop/mangrove-agent` (or wherever you cloned).
 
 ### "I see fewer than 41 tools"
 
@@ -259,7 +259,7 @@ kill $(cat agent-data/bare.pid) 2>/dev/null
 rm -rf agent-data/
 
 # 3. Remove the MCP registration
-claude mcp remove defi-agent 2>/dev/null
+claude mcp remove mangrove-agent 2>/dev/null
 
 # 4. Re-setup from scratch
 ./scripts/setup.sh

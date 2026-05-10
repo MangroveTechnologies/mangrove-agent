@@ -20,7 +20,7 @@ Mangrove (behind an API key), and on the public blockchain.
 │                │  MCP over HTTP (localhost:9080/mcp/)              │
 │                ▼                                                   │
 │  ┌─────────────────────────────────────────────────┐               │
-│  │ defi-agent (uvicorn process, port 9080)         │               │
+│  │ mangrove-agent (uvicorn process, port 9080)         │               │
 │  │   • 41 MCP tools + REST API                     │               │
 │  │   • APScheduler (in-process cron)               │               │
 │  │   • Fernet-encrypted wallet keys                │               │
@@ -47,7 +47,7 @@ Everything inside the laptop box is yours.
 
 ## What runs on your laptop
 
-### The `defi-agent` process
+### The `mangrove-agent` process
 
 A single Python / FastAPI process. Starts when you run
 `./scripts/setup.sh`, listens on `http://localhost:9080`, and does
@@ -107,7 +107,7 @@ Already introduced in Chapter 01. Quick refresher:
 ├── skills/          ← playbooks the agent loads on demand
 ├── rules/           ← global guardrails loaded at session start
 ├── hooks/           ← intercept scripts (e.g., block-wallet-secrets.sh)
-├── agents/          ← agent personas (if /onboard has customized)
+├── agents/          ← agent personas (e.g., the product owner)
 └── settings.json    ← hook registrations
 ```
 
@@ -143,7 +143,7 @@ config. All three of the bot's upstream dependencies live there:
 ### `mangroveai` — signals, strategies, evaluations
 
 The core intelligence. When you call `backtest_strategy` or
-`evaluate_strategy`, the defi-agent calls Mangrove, which runs the
+`evaluate_strategy`, the mangrove-agent calls Mangrove, which runs the
 strategy logic against historical or current OHLCV, applies the
 signals (RSI, MACD, ichimoku, etc.), computes risk/position sizing,
 and returns either backtest metrics or a list of order intents.
@@ -256,7 +256,7 @@ Three things:
    execute from here, state lives here. Anything beyond the laptop
    is either public (on-chain) or an advisor (Mangrove API) that
    can't move your funds.
-2. **The defi-agent process is the system.** If it's running,
+2. **The mangrove-agent process is the system.** If it's running,
    everything works. If it's not, nothing does. No background
    daemons, no Docker unless you opt in, no phantom state.
 3. **Mangrove provides intelligence, not execution.** The strategy

@@ -1,13 +1,13 @@
-# App-in-a-Box Plugin
+# Mangrove Agent Plugin
 
-Claude Code plugin for interacting with your app-in-a-box application.
+Claude Code plugin for interacting with your mangrove-agent application.
 
 ## Installation
 
 Install this plugin into Claude Code:
 
 ```bash
-claude plugin install /path/to/app-in-a-box/plugin
+claude plugin install /path/to/mangrove-agent/plugin
 ```
 
 ## Commands
@@ -27,7 +27,7 @@ Update `.mcp.json` with your server's URL:
 ```json
 {
   "mcpServers": {
-    "app-in-a-box": {
+    "mangrove-agent": {
       "type": "streamableHttp",
       "url": "https://your-server.com/mcp/"
     }

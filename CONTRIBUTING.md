@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in contributing to app-in-a-box.
+Thanks for your interest in contributing to mangrove-agent.
 
 ## Getting Started
 
@@ -32,7 +32,7 @@ ruff check src/ tests/
 
 ## Reporting Issues
 
-Open an issue at [github.com/MangroveTechnologies/app-in-a-box/issues](https://github.com/MangroveTechnologies/app-in-a-box/issues).
+Open an issue at [github.com/MangroveTechnologies/mangrove-agent/issues](https://github.com/MangroveTechnologies/mangrove-agent/issues).
 
 ## License
 

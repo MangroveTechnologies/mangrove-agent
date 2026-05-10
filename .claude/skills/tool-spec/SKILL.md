@@ -1,20 +1,20 @@
 ---
 name: tool-spec
-description: Draft an MCP tool specification for an app-in-a-box extension. Use when the user asks to "draft an MCP tool", "spec out a new tool", "add a tool for X", or "/tool-spec <purpose>". Produces a JSON-schema-shaped spec that matches the app-in-a-box service-layer pattern and auth-tier conventions, ready to paste into `server/src/mcp/tools.py`. Adapted from the Mangrove workspace `tool-spec` skill with app-in-a-box conventions.
+description: Draft an MCP tool specification for an mangrove-agent extension. Use when the user asks to "draft an MCP tool", "spec out a new tool", "add a tool for X", or "/tool-spec <purpose>". Produces a JSON-schema-shaped spec that matches the mangrove-agent service-layer pattern and auth-tier conventions, ready to paste into `server/src/mcp/tools.py`. Adapted from the Mangrove workspace `tool-spec` skill with mangrove-agent conventions.
 user_invocable: true
 argument-hint: "<tool name and purpose>"
 ---
 
 # Draft MCP Tool Specification
 
-Parse `$ARGUMENTS` as a natural-language description of the tool you want to add (no project prefix — this skill is scoped to app-in-a-box).
+Parse `$ARGUMENTS` as a natural-language description of the tool you want to add (no project prefix — this skill is scoped to mangrove-agent).
 
 Produce a complete MCP tool specification following the conventions already in `server/src/mcp/tools.py` and the service-layer pattern documented in `docs/contributing.md` and `CLAUDE.md`.
 
 ## Output sections
 
 ### 1. Tool name
-Lowercase snake_case. No prefix (the MCP server is single-tenant; all tools live under `mcp__defi-agent__*`). Match existing patterns: `get_balances`, `create_strategy_autonomous`, `list_trades`, `evaluate_strategy`.
+Lowercase snake_case. No prefix (the MCP server is single-tenant; all tools live under `mcp__mangrove-agent__*`). Match existing patterns: `get_balances`, `create_strategy_autonomous`, `list_trades`, `evaluate_strategy`.
 
 ### 2. Access tier
 Pick one:

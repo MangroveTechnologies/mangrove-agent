@@ -299,7 +299,7 @@ kill $(cat agent-data/bare.pid)
 ```
 
 The strategy's cron job is in APScheduler, which only runs inside
-the defi-agent process. Killing the process stops ticks immediately.
+the mangrove-agent process. Killing the process stops ticks immediately.
 No further trades will fire until you restart.
 
 Your funds are still yours (self-custody). You can withdraw them to

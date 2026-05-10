@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup-mcp.sh — register the defi-agent MCP server with Claude Code.
+# setup-mcp.sh — register the mangrove-agent MCP server with Claude Code.
 #
 # Why this exists:
 #   Claude Code's project-scope .mcp.json approval is unreliable
@@ -15,8 +15,8 @@
 #   2. Container is up and /health returns 200
 #   3. server/src/config/local-config.json exists
 #   4. Extract the first value of API_KEYS for the X-API-Key header
-#   5. Remove any existing defi-agent registration (idempotent)
-#   6. Register defi-agent at http://localhost:9080/mcp/ in local scope
+#   5. Remove any existing mangrove-agent registration (idempotent)
+#   6. Register mangrove-agent at http://localhost:9080/mcp/ in local scope
 #
 # After this: restart Claude Code in the repo directory. Tools load
 # automatically. No approval prompt.
@@ -29,7 +29,7 @@ cd "$REPO_ROOT"
 
 BASE_URL="${BASE_URL:-http://localhost:9080}"
 CONFIG_FILE="server/src/config/local-config.json"
-SERVER_NAME="defi-agent"
+SERVER_NAME="mangrove-agent"
 
 GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; DIM="\033[2m"; CLR="\033[0m"
 step() { printf "${YELLOW}==>${CLR} %s\n" "$1"; }
@@ -47,7 +47,7 @@ ok "claude found: $(command -v claude)"
 
 # -- 2. Container reachable -------------------------------------------------
 
-step "2. defi-agent container healthy at $BASE_URL"
+step "2. mangrove-agent container healthy at $BASE_URL"
 if ! curl -fsS -m 5 "$BASE_URL/health" >/dev/null 2>&1; then
   fail "$BASE_URL/health did not respond. Run './scripts/setup.sh --yes' first (bare-metal) or 'docker compose up -d --build' (docker)."
 fi
@@ -85,14 +85,14 @@ step "5. Remove stale $SERVER_NAME registration (idempotent)"
 claude mcp remove "$SERVER_NAME" -s local >/dev/null 2>&1 || true
 ok "cleared"
 
-# -- 6. Register defi-agent -------------------------------------------------
+# -- 6. Register mangrove-agent -------------------------------------------------
 
 step "6. Register $SERVER_NAME in local scope"
 claude mcp add --transport http --scope local "$SERVER_NAME" "$BASE_URL/mcp/" --header "X-API-Key: $API_KEY" >/dev/null
 ok "registered"
 
 echo
-printf "${GREEN}Done.${CLR} Restart Claude Code in this directory to load the defi-agent tools (41 total).\n\n"
+printf "${GREEN}Done.${CLR} Restart Claude Code in this directory to load the mangrove-agent tools (41 total).\n\n"
 echo "  cd $(pwd)"
 echo "  claude"
 echo

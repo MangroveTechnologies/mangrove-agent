@@ -48,7 +48,7 @@ _log = get_logger(__name__)
 # startup doesn't crash.
 #
 # To pick up canon updates, restart the server after the API returns the
-# new values. `mcp__defi-agent__status` and `/api/v1/agent/status` both
+# new values. `mcp__mangrove-agent__status` and `/api/v1/agent/status` both
 # show which version the cache holds.
 # ---------------------------------------------------------------------------
 

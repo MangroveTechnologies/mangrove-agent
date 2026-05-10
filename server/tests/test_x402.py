@@ -1,7 +1,9 @@
-"""Tests for x402 config system.
+"""Tests for x402 config system + middleware bypass guard.
 
 Verifies that all x402 config values are loaded from the JSON config file
-via the app_config singleton. No hardcoded values, no env var overrides.
+via the app_config singleton (no hardcoded values), and that the HTTP
+middleware does not bypass payment for invalid API keys (regression
+test for the audit finding where any non-empty X-API-Key skipped x402).
 """
 import os
 
@@ -46,3 +48,39 @@ def test_network_is_caip2_format():
 def test_cdp_keys_are_strings():
     assert isinstance(get_cdp_api_key_id(), str)
     assert isinstance(get_cdp_api_key_secret(), str)
+
+
+# ---------------------------------------------------------------------------
+# x402 middleware bypass regression
+# ---------------------------------------------------------------------------
+#
+# Previously, the middleware in src/app.py treated *any* non-empty X-API-Key
+# header as a bypass signal, without validating it. A request with
+# `X-API-Key: anything` skipped the x402 payment path entirely. The fix
+# validates the key against has_valid_api_key before bypassing.
+
+def test_invalid_api_key_does_not_bypass_x402(client):
+    """An invalid X-API-Key must NOT skip x402; expect 402 Payment Required."""
+    r = client.get(
+        "/api/x402/hello-mangrove",
+        headers={"X-API-Key": "this-is-not-a-real-key"},
+    )
+    assert r.status_code == 402, (
+        f"Expected 402 (payment required) for invalid API key — got {r.status_code}. "
+        "Middleware is letting any X-API-Key value bypass x402 without validation."
+    )
+
+
+def test_valid_api_key_bypasses_x402(client):
+    """A valid X-API-Key skips x402 and returns 200."""
+    r = client.get(
+        "/api/x402/hello-mangrove",
+        headers={"X-API-Key": "test-key-1"},
+    )
+    assert r.status_code == 200
+
+
+def test_no_api_key_returns_402(client):
+    """No X-API-Key, no payment header → 402."""
+    r = client.get("/api/x402/hello-mangrove")
+    assert r.status_code == 402

@@ -1,5 +1,5 @@
 {
-  "description": "Hand-curated seed set of reference strategies for app-in-a-box. Populated by copying known-good configs from MangroveAI's reference_strategies table + TA best practices from the KB. Replaced by live mangroveai.reference_strategies.search() once MangroveOracle issue #156 + MangroveAI endpoint land. Until then, the agent picks from these via /create-strategy skill (Mechanism 2). Signal names verified against MangroveAI/src/MangroveAI/domains/signals/signals_metadata.json (2026-04-22 snapshot).",
+  "description": "Hand-curated seed set of reference strategies for mangrove-agent. Populated by copying known-good configs from MangroveAI's reference_strategies table + TA best practices from the KB. Replaced by live mangroveai.reference_strategies.search() once MangroveOracle issue #156 + MangroveAI endpoint land. Until then, the agent picks from these via /create-strategy skill (Mechanism 2). Signal names verified against MangroveAI/src/MangroveAI/domains/signals/signals_metadata.json (2026-04-22 snapshot).",
   "schema_version": "1.0",
   "strategies": [
     {

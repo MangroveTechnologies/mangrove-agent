@@ -31,7 +31,7 @@ def create_mcp_server() -> FastMCP:
     # group state means the session manager is safe to reuse across multiple
     # TestClient lifespans (and matches our single-user, request-driven model).
     _mcp_server = FastMCP(
-        "app-in-a-box", streamable_http_path="/", stateless_http=True, json_response=True
+        "mangrove-agent", streamable_http_path="/", stateless_http=True, json_response=True
     )
 
     from src.mcp.tools import register

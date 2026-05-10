@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-bare.sh — start the defi-agent bare-metal (no Docker required).
+# run-bare.sh — start the mangrove-agent bare-metal (no Docker required).
 #
 # Primary install path (bare-metal vs Docker decision in docs/):
 #   - Bare-metal is the default because the `keyring` library can reach
@@ -99,7 +99,7 @@ KC_STATUS="$(python3 - <<'PY'
 try:
     import keyring
     # Non-destructive: read-only probe. No key is created.
-    keyring.get_password("defi-agent-probe", "user")
+    keyring.get_password("mangrove-agent-probe", "user")
     print("ok")
 except Exception as e:
     print(f"fail: {e}")

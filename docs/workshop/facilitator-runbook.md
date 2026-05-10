@@ -1,6 +1,6 @@
 # Facilitator runbook
 
-Reference for running the *Bots & Bytes* app-in-a-box workshop.
+Reference for running the *Bots & Bytes* mangrove-agent workshop.
 Scannable while you're on the floor — not a script to read line by
 line.
 
@@ -93,7 +93,7 @@ Most failure-prone phase. Walk through step-by-step. Common issues:
   Fix: install 3.11 via `brew` / python.org, confirm PATH. Budget
   5 min.
 - **Port 9080 conflict.** Usually another dev tool or a previous
-  defi-agent instance. `lsof -iTCP:9080 -sTCP:LISTEN` to identify;
+  mangrove-agent instance. `lsof -iTCP:9080 -sTCP:LISTEN` to identify;
   kill or use `BARE_PORT=9082`.
 - **MCP not connecting.** `claude mcp list` shows "Failed to
   connect." Confirm server is on the port you think it is; confirm
@@ -276,14 +276,14 @@ kill $(cat agent-data/bare.pid) 2>/dev/null ; ./scripts/setup.sh --yes --no-mcp 
 # "Claude Code can't see my tools."
 claude mcp list
 # If not Connected:
-claude mcp remove defi-agent
-claude mcp add -s local -t http defi-agent http://localhost:9080/mcp/ --header "X-API-Key: dev-key-1"
+claude mcp remove mangrove-agent
+claude mcp add -s local -t http mangrove-agent http://localhost:9080/mcp/ --header "X-API-Key: dev-key-1"
 # Then restart Claude Code in the repo dir.
 
 # "I want to nuke everything and start over."
 kill $(cat agent-data/bare.pid) 2>/dev/null
 rm -rf agent-data/
-claude mcp remove defi-agent 2>/dev/null
+claude mcp remove mangrove-agent 2>/dev/null
 ./scripts/setup.sh
 
 # "I want to pause my strategy immediately."
@@ -300,7 +300,7 @@ curl -s -H 'X-API-Key: dev-key-1' -X PATCH \
 
 By the end of the workshop, every attendee should have:
 
-- A local defi-agent running on their laptop.
+- A local mangrove-agent running on their laptop.
 - At least one strategy in `paper` status.
 - Optionally: a wallet, a funded wallet, and a live trade on-chain.
 - A clear sense of how to stop, restart, and resume the bot.

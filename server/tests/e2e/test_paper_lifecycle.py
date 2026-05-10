@@ -22,7 +22,7 @@ from unittest.mock import MagicMock
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
-from datetime import datetime  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -177,7 +177,7 @@ def test_paper_lifecycle_end_to_end(client):
 
     # 3. Non-blocking observation: hammer /status while we trigger a tick.
     # /status should stay <200ms every time.
-    t_activation = datetime.utcnow().isoformat()
+    t_activation = datetime.now(timezone.utc).isoformat()
     latencies_ms = []
     for _ in range(5):
         t0 = time.monotonic()
