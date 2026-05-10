@@ -5,7 +5,7 @@
   "MANGROVEMARKETS_BASE_URL": "http://localhost:9081",
   "DB_PATH": ":memory:",
   "MASTER_KEY_PATH": "./agent-data-test/master.key",
-  "KEYRING_SERVICE_NAME": "defi-agent-test",
+  "KEYRING_SERVICE_NAME": "mangrove-agent-test",
   "BACKTEST_CANDIDATE_COUNT": 7,
   "BACKTEST_MIN_WIN_RATE": 0.51,
   "BACKTEST_MIN_TRADES": 10,

@@ -1,12 +1,12 @@
 {
-  "name": "app-in-a-box",
-  "description": "Claude Code plugin for your app-in-a-box application",
+  "name": "mangrove-agent",
+  "description": "Claude Code plugin for your mangrove-agent application",
   "version": "0.1.0",
   "author": {
     "name": "Mangrove Technologies"
   },
   "homepage": "https://mangrovedeveloper.ai",
-  "repository": "https://github.com/MangroveTechnologies/app-in-a-box",
+  "repository": "https://github.com/MangroveTechnologies/mangrove-agent",
   "hooks": "./hooks/hooks.json",
   "license": "MIT",
   "category": "productivity",

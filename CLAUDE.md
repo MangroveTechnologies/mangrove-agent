@@ -1,4 +1,4 @@
-# App-in-a-Box
+# Mangrove Agent
 
 ## What This Is
 
@@ -22,8 +22,8 @@ Health check once running: `http://localhost:9080/health`.
 ## Getting the Code
 
 ```bash
-git clone https://github.com/MangroveTechnologies/app-in-a-box.git
-cd app-in-a-box
+git clone https://github.com/MangroveTechnologies/mangrove-agent.git
+cd mangrove-agent
 ./scripts/setup.sh
 ```
 
@@ -67,8 +67,8 @@ Secrets use `secret:name:property` syntax for GCP Secret Manager.
 
 ## Raising Issues and PRs
 
-**This repo (app-in-a-box):** bugs in the agent, MCP surface, onboarding flow, or tutorials.
-→ https://github.com/MangroveTechnologies/app-in-a-box/issues
+**This repo (mangrove-agent):** bugs in the agent, MCP surface, onboarding flow, or tutorials.
+→ https://github.com/MangroveTechnologies/mangrove-agent/issues
 
 **Upstream issues belong upstream:**
 - SDK / DEX / markets bugs → [MangroveMarkets](https://github.com/MangroveTechnologies/MangroveMarkets) (core SDK) or [MangroveMarkets-MCP-Server](https://github.com/MangroveTechnologies/MangroveMarkets-MCP-Server) (MCP wrapper)

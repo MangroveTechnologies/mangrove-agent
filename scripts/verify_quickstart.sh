@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# verify_quickstart.sh — prove defi-agent is set up correctly.
+# verify_quickstart.sh — prove mangrove-agent is set up correctly.
 #
 # Modes:
 #   (default) Docker    Full check including docker daemon, compose up,
@@ -179,7 +179,7 @@ fi
 
 TOTAL="$(elapsed)"
 printf "\n${GREEN}✓ quickstart verified in ${TOTAL}s${CLR}\n\n"
-info "defi-agent is running at ${BASE_URL}"
+info "mangrove-agent is running at ${BASE_URL}"
 if [ "$MODE" = "docker" ]; then
     info "stop with: docker compose down"
 else

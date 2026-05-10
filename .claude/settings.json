@@ -34,7 +34,7 @@
         ]
       },
       {
-        "matcher": "mcp__defi-agent__execute_swap",
+        "matcher": "mcp__mangrove-agent__execute_swap",
         "hooks": [
           {
             "type": "command",

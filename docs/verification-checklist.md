@@ -19,7 +19,7 @@ a failed early step will cascade into false failures downstream.
 
 **Do:**
 ```bash
-cd ~/Desktop/mangrove/app-in-a-box
+cd ~/Desktop/mangrove/mangrove-agent
 git status
 git log --oneline -5
 ```
@@ -68,7 +68,7 @@ the agent should deliver the Stage 0 greeter (security primer + wallet
 question).
 
 **Expect (if fresh clone):**
-- Brief intro as the defi-agent
+- Brief intro as the mangrove-agent
 - 6-bullet security primer
 - Question: "Do you have an existing wallet you want to use, or
   should I create a fresh one?"

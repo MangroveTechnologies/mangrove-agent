@@ -8,7 +8,7 @@ mcp[cli]>=1.2.0
 google-cloud-secret-manager>=2.20.0
 PyJWT>=2.9.0
 
-# defi-agent SDKs + infra.
+# mangrove-agent SDKs + infra.
 # Upper bounds pinned at the next minor: both SDKs are at 0.1.x (Alpha)
 # and minor bumps may carry breaking changes. Revisit pins when either
 # stabilizes to 1.0.

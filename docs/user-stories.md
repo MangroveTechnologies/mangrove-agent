@@ -1,6 +1,6 @@
 # Hank — User Stories & Flows
 
-Scope for the AI trading bot ("Hank", project code: `defi-agent`). These stories and flows define the surface area the Mangrove SDK + MCP server must expose. Endpoint-level detail is in [`api-reference.md`](./api-reference.md).
+Scope for the AI trading bot ("Hank", project code: `mangrove-agent`). These stories and flows define the surface area the Mangrove SDK + MCP server must expose. Endpoint-level detail is in [`api-reference.md`](./api-reference.md).
 
 **Users:** both humans and agents, via chat interface (no UI).
 **Funds:** real funds.

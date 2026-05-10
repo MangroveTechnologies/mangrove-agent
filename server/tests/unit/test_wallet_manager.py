@@ -485,7 +485,7 @@ class TestSignGuard:
 
     Context: on 2026-04-24 the workshop test wallet was drained $10 via an
     EIP-7702 authorization that delegated code execution to an attacker-
-    deployed contract. The app-in-a-box agent must not be signable for
+    deployed contract. The mangrove-agent agent must not be signable for
     ANY flow other than 1inch swaps, end of story. This is defense in
     depth against SDK compromise, supply-chain attacks, and rogue code
     paths that could otherwise call sign() with a phishing payload.

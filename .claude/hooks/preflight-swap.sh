@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# preflight-swap.sh — PreToolUse hook for mcp__defi-agent__execute_swap.
+# preflight-swap.sh — PreToolUse hook for mcp__mangrove-agent__execute_swap.
 #
 # Refuses the swap if the wallet holds zero of the input token on the target
 # chain. Catches the "did my deposit actually land?" case cleanly BEFORE
@@ -30,7 +30,7 @@ except Exception:
 print(d.get('tool_name', ''))
 " 2>/dev/null)
 
-if [ "$TOOL" != "mcp__defi-agent__execute_swap" ]; then
+if [ "$TOOL" != "mcp__mangrove-agent__execute_swap" ]; then
     exit 0
 fi
 

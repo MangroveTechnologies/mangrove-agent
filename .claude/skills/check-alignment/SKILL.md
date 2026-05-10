@@ -1,6 +1,6 @@
 ---
 name: check-alignment
-description: Check if a proposed change aligns with app-in-a-box's stated principles, architecture, and trading-bot safety invariants. Use when the user describes a change and asks "does this fit", "check alignment", "review this approach", or "/check-alignment <description>". Read-only analysis — does NOT modify anything. Adapted from the Mangrove workspace `check-alignment` skill with trading-bot-specific documents.
+description: Check if a proposed change aligns with mangrove-agent's stated principles, architecture, and trading-bot safety invariants. Use when the user describes a change and asks "does this fit", "check alignment", "review this approach", or "/check-alignment <description>". Read-only analysis — does NOT modify anything. Adapted from the Mangrove workspace `check-alignment` skill with trading-bot-specific documents.
 user_invocable: true
 argument-hint: "<description of proposed change>"
 ---

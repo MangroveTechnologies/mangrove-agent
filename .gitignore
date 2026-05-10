@@ -82,3 +82,6 @@ server/scripts/first_live_swap.py
 /workshop-run-of-show.*
 /workshop-setup-guide.*
 .Rhistory
+.coverage
+**/.coverage
+htmlcov/

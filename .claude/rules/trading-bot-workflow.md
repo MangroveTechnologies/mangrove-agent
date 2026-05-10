@@ -19,29 +19,29 @@ MCP tools on this server are deferred — schemas must be loaded via `ToolSearch
 
 Required core set (load all together in one ToolSearch `select:` call):
 
-- `mcp__defi-agent__status`
-- `mcp__defi-agent__list_tools`
-- `mcp__defi-agent__list_signals`
-- `mcp__defi-agent__list_wallets`
-- `mcp__defi-agent__create_wallet`
-- `mcp__defi-agent__import_wallet`
-- `mcp__defi-agent__get_balances`
-- `mcp__defi-agent__list_dex_venues`
-- `mcp__defi-agent__get_swap_quote`
-- `mcp__defi-agent__execute_swap`
-- `mcp__defi-agent__get_ohlcv`
-- `mcp__defi-agent__get_market_data`
-- `mcp__defi-agent__kb_search`
-- `mcp__defi-agent__list_strategies`
-- `mcp__defi-agent__get_strategy`
-- `mcp__defi-agent__create_strategy_autonomous`
-- `mcp__defi-agent__create_strategy_manual`
-- `mcp__defi-agent__evaluate_strategy`
-- `mcp__defi-agent__backtest_strategy`
-- `mcp__defi-agent__update_strategy_status`
-- `mcp__defi-agent__list_trades`
-- `mcp__defi-agent__list_all_trades`
-- `mcp__defi-agent__list_evaluations`
+- `mcp__mangrove-agent__status`
+- `mcp__mangrove-agent__list_tools`
+- `mcp__mangrove-agent__list_signals`
+- `mcp__mangrove-agent__list_wallets`
+- `mcp__mangrove-agent__create_wallet`
+- `mcp__mangrove-agent__import_wallet`
+- `mcp__mangrove-agent__get_balances`
+- `mcp__mangrove-agent__list_dex_venues`
+- `mcp__mangrove-agent__get_swap_quote`
+- `mcp__mangrove-agent__execute_swap`
+- `mcp__mangrove-agent__get_ohlcv`
+- `mcp__mangrove-agent__get_market_data`
+- `mcp__mangrove-agent__kb_search`
+- `mcp__mangrove-agent__list_strategies`
+- `mcp__mangrove-agent__get_strategy`
+- `mcp__mangrove-agent__create_strategy_autonomous`
+- `mcp__mangrove-agent__create_strategy_manual`
+- `mcp__mangrove-agent__evaluate_strategy`
+- `mcp__mangrove-agent__backtest_strategy`
+- `mcp__mangrove-agent__update_strategy_status`
+- `mcp__mangrove-agent__list_trades`
+- `mcp__mangrove-agent__list_all_trades`
+- `mcp__mangrove-agent__list_evaluations`
 
 Lazy-loading just the "obvious" subset (wallet + swap) causes the agent to forget it has strategy / backtest / evaluation capabilities and fall back to swap-router behavior.
 
@@ -67,7 +67,7 @@ Lazy-loading just the "obvious" subset (wallet + swap) causes the agent to forge
 
 ### 0.1 — Greeting (concise, friendly, oriented)
 
-Greet the user as the persona defined in `CLAUDE.md`'s Project Context. Default to a concise, security-conscious defi-agent voice if no persona is set.
+Greet the user as the persona defined in `CLAUDE.md`'s Project Context. Default to a concise, security-conscious mangrove-agent voice if no persona is set.
 
 One-liner orientation: "I'm your local Mangrove-powered trading bot. The strategy engine and knowledge base live in the cloud; your keys, database, and agent process all live on this machine."
 

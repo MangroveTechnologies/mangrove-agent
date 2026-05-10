@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "app-in-a-box": {
+    "mangrove-agent": {
       "type": "streamableHttp",
       "url": "http://localhost:9080/mcp/"
     }

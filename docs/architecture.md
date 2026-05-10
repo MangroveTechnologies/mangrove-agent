@@ -1,4 +1,4 @@
-# Architecture: defi-agent
+# Architecture: mangrove-agent
 
 **Generated:** 2026-04-17
 **Status:** Draft
@@ -6,7 +6,7 @@
 
 ## Overview
 
-defi-agent is a local FastAPI + MCP service that wraps two Mangrove SDKs and runs strategies on in-process cron jobs. The architecture is deliberately minimal:
+mangrove-agent is a local FastAPI + MCP service that wraps two Mangrove SDKs and runs strategies on in-process cron jobs. The architecture is deliberately minimal:
 
 - **One process.** FastAPI app serves REST + MCP + runs the scheduler in-process.
 - **One datastore.** SQLite for everything — business data and the APScheduler jobstore share a DB file.
@@ -27,7 +27,7 @@ graph TB
         ClaudeCode[Claude Code<br/>or MCP client]
         HTTPClient[Python script / curl /<br/>any HTTP client]
 
-        subgraph "defi-agent process"
+        subgraph "mangrove-agent process"
             subgraph "API Layer"
                 REST[REST routes<br/>/api/v1/agent/*]
                 MCP[MCP tools<br/>/mcp]
@@ -432,7 +432,7 @@ Key properties:
 
 ## Configuration
 
-The agent uses the existing app-in-a-box config pattern — no invented `.env` files, no parallel config layer.
+The agent uses the existing mangrove-agent config pattern — no invented `.env` files, no parallel config layer.
 
 ### How the config system works
 
@@ -442,7 +442,7 @@ The agent uses the existing app-in-a-box config pattern — no invented `.env` f
 - Values can be literal strings/numbers, or `secret:NAME:PROPERTY` references that resolve through GCP Secret Manager (a mechanism that stays in the template but isn't used by local deployments)
 - Local dev: put values directly in `local-config.json` (gitignored)
 
-### Configuration keys for defi-agent
+### Configuration keys for mangrove-agent
 
 Replace the template's `configuration-keys.json` with:
 
@@ -475,7 +475,7 @@ Replace the template's `configuration-keys.json` with:
   "MANGROVE_API_KEY": "dev_...",
   "MANGROVEMARKETS_BASE_URL": "http://localhost:9081",
   "DB_PATH": "./agent.db",
-  "KEYRING_SERVICE_NAME": "defi-agent",
+  "KEYRING_SERVICE_NAME": "mangrove-agent",
   "MASTER_KEY_ENV_FALLBACK": "",
   "BACKTEST_CANDIDATE_COUNT": 7,
   "BACKTEST_MIN_WIN_RATE": 0.51,
@@ -487,7 +487,7 @@ Replace the template's `configuration-keys.json` with:
 
 Secrets (API keys, master key fallback) can optionally be referenced as `"secret:mangrove-api-key:value"` when running in an environment that has Secret Manager configured — the local deployment puts literal values in the file.
 
-The Fernet master key itself is **not** in config. It's stored in the OS Keychain under the service name `defi-agent`. The `MASTER_KEY_ENV_FALLBACK` config key exists for environments without a keychain — if set (non-empty), the agent uses that value instead of the keychain. Local dev leaves it empty.
+The Fernet master key itself is **not** in config. It's stored in the OS Keychain under the service name `mangrove-agent`. The `MASTER_KEY_ENV_FALLBACK` config key exists for environments without a keychain — if set (non-empty), the agent uses that value instead of the keychain. Local dev leaves it empty.
 
 ### Full app keys (empty for v1)
 
@@ -498,7 +498,7 @@ The Fernet master key itself is **not** in config. It's stored in the OS Keychai
 ## Project Structure
 
 ```
-app-in-a-box/
+mangrove-agent/
 ├── .claude/                                    # Development framework
 │   ├── agents/
 │   │   └── product-owner.md                    # Drives build after /plan
@@ -645,7 +645,7 @@ app-in-a-box/
 
 ```mermaid
 graph LR
-    User[User's terminal<br/>Claude Code] -->|MCP/HTTP| Docker[Docker Compose<br/>defi-agent container]
+    User[User's terminal<br/>Claude Code] -->|MCP/HTTP| Docker[Docker Compose<br/>mangrove-agent container]
     Docker -->|mounted volume| Volume[./agent.db]
     Docker -->|reads| Keychain[OS Keychain]
     Docker -->|HTTPS| Mangrove[Mangrove SDKs]

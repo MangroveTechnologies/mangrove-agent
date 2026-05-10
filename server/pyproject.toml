@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "app-in-a-box"
+name = "mangrove-agent"
 version = "0.1.0"
 description = "Local Mangrove-powered AI trading agent — FastAPI + MCP + APScheduler"
 requires-python = ">=3.11"

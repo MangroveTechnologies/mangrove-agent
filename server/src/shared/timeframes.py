@@ -3,7 +3,7 @@
 Mirrors MangroveAI's `SUPPORTED_TIMEFRAMES` (utils/time_utils.py) and the
 docstring contract in `ai_copilot/agentic/prompt_builder.py` that
 declares per-timeframe lookback defaults. This is the single source of
-truth on the app-in-a-box side so strategy creation, backtesting, and
+truth on the mangrove-agent side so strategy creation, backtesting, and
 tool descriptions stay consistent.
 
 Upstream reference (MangroveAI):

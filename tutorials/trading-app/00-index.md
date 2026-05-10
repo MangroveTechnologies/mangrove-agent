@@ -25,7 +25,7 @@ A trading bot that:
 ```
 
 You drive it by chatting with Claude Code in your terminal. Under the
-hood, Claude Code talks to a local FastAPI server (the "defi-agent")
+hood, Claude Code talks to a local FastAPI server (the "mangrove-agent")
 via MCP. The agent talks to Mangrove's hosted API for signals,
 strategy logic, and market data.
 

@@ -321,7 +321,7 @@ If you finished the workshop and want to keep going:
 
 - **Mangrove developer portal** — https://mangrovedeveloper.ai
 - **This repo's issues** —
-  https://github.com/MangroveTechnologies/app-in-a-box/issues
+  https://github.com/MangroveTechnologies/mangrove-agent/issues
 - **In the bot** — `"What tools do you have for X?"` or `"Search the
   KB for Y."` The bot knows its own capabilities.
 

@@ -29,7 +29,7 @@ from fastapi.responses import JSONResponse
 
 
 class AgentError(Exception):
-    """Base class for all domain errors in defi-agent.
+    """Base class for all domain errors in mangrove-agent.
 
     Subclasses set class-level `code` and `http_status`. Instances carry a
     human-readable `message`, an optional `suggestion`, and a `correlation_id`

@@ -3,7 +3,7 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
-    container_name: defi-agent
+    container_name: mangrove-agent
     ports:
       # Host 9080 -> container 8080. Some host environments (VSCode's
       # helper, other dev tools) grab :8080 — binding 9080 externally

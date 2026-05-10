@@ -1,8 +1,8 @@
-# defi-agent Implementation Plan
+# mangrove-agent Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build defi-agent — a local FastAPI + MCP service that wraps `mangroveai` and `mangrovemarkets` SDKs, runs autonomous trading strategies on cron jobs, and logs every evaluation and trade.
+**Goal:** Build mangrove-agent — a local FastAPI + MCP service that wraps `mangroveai` and `mangrovemarkets` SDKs, runs autonomous trading strategies on cron jobs, and logs every evaluation and trade.
 
 **Architecture:** Single-process FastAPI app serves REST (`/api/v1/agent/*`) and MCP (`/mcp`) on port 9080 (externally; container-internal is still 8080). SQLite for all state including the APScheduler jobstore. Wallet keys encrypted with Fernet, master key in OS Keychain. Strategy evaluation delegated entirely to `mangroveai.execution.evaluate()` — the agent never reimplements signal/risk logic. Single execution path (`order_executor`) for both cron-driven and user-initiated swaps.
 
@@ -20,7 +20,7 @@
 
 ## Phase 1 — Foundation & Scaffold Cleanup
 
-Goal: turn the app-in-a-box template into a defi-agent shell. After this phase, the app starts, but no agent endpoints exist yet.
+Goal: turn the mangrove-agent template into a mangrove-agent shell. After this phase, the app starts, but no agent endpoints exist yet.
 
 ### Task 1.1 — Scaffold cleanup
 
@@ -761,7 +761,7 @@ Goal: anyone cloning the repo on workshop day can `docker compose up`, hand Clau
 **Acceptance criterion for this task: a fresh clone on a clean machine produces a working agent in under 5 minutes, verified by a scripted cold run.**
 
 - [ ] **Step 1:** rewrite `README.md` with a **numbered, copy-pasteable quick start** (everything between the numbered steps must be a literal command or config paste — no prose like "then edit your config"):
-  1. `git clone <repo> && cd app-in-a-box`
+  1. `git clone <repo> && cd mangrove-agent`
   2. `cp server/src/config/local-example-config.json server/src/config/local-config.json`
   3. `sed -i '' 's/MANGROVE_API_KEY_PLACEHOLDER/<your key>/' server/src/config/local-config.json` (or manual edit — document both)
   4. `docker compose up -d --build`
@@ -774,7 +774,7 @@ Goal: anyone cloning the repo on workshop day can `docker compose up`, hand Clau
   ```json
   {
     "mcpServers": {
-      "defi-agent": {
+      "mangrove-agent": {
         "transport": "http",
         "url": "http://localhost:9080/mcp",
         "headers": {

@@ -87,7 +87,7 @@ def create_app() -> FastAPI:
         scheduler_shutdown()  # wait=False so we don't block on in-flight ticks
 
     application = FastAPI(
-        title="App-in-a-Box",
+        title="Mangrove Agent",
         description=(
             "FastAPI + MCP service template with three-tier access control.\n\n"
             "## For Agents\n\n"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup.sh — single-command quickstart for the defi-agent.
+# setup.sh — single-command quickstart for the mangrove-agent.
 #
 # Default: bare-metal (venv + uvicorn + OS keychain). The primary path.
 # Alt:     Docker (compose up with ./agent-data/ directory mount +
@@ -273,7 +273,7 @@ if [ "$DO_VERIFY" = "yes" ]; then
 fi
 
 echo
-printf "${GREEN}Done.${CLR} defi-agent is running at $BASE_URL\n\n"
+printf "${GREEN}Done.${CLR} mangrove-agent is running at $BASE_URL\n\n"
 echo "Next:"
 echo "  - Restart Claude Code in this directory. The agent will greet you"
 echo "    and walk through wallet setup + security. It will refuse to"

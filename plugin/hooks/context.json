@@ -1,6 +1,6 @@
 {
   "hookSpecificOutput": {
     "suppressOutput": true,
-    "additionalContext": "App-in-a-Box plugin active. Available commands: /help. MCP server endpoint configured in plugin/.mcp.json. Use /help to see all commands."
+    "additionalContext": "Mangrove Agent plugin active. Available commands: /help. MCP server endpoint configured in plugin/.mcp.json. Use /help to see all commands."
   }
 }

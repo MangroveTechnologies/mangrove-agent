@@ -110,7 +110,7 @@ async def status() -> dict:
     ).fetchall()
     counts = Counter(r["status"] for r in strategy_rows)
 
-    server_version = _pkg_version("app-in-a-box") or "0.1.0"
+    server_version = _pkg_version("mangrove-agent") or "0.1.0"
 
     return {
         "version": server_version,

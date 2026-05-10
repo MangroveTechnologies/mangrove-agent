@@ -1,4 +1,4 @@
-# Technical Specification: defi-agent
+# Technical Specification: mangrove-agent
 
 **Generated:** 2026-04-17
 **Status:** Draft
@@ -6,7 +6,7 @@
 
 ## Overview
 
-defi-agent is a FastAPI + MCP service that wraps the `mangroveai` and `mangrovemarkets` Python SDKs with local state, autonomous strategy generation, cron-based execution, and a full audit trail.
+mangrove-agent is a FastAPI + MCP service that wraps the `mangroveai` and `mangrovemarkets` Python SDKs with local state, autonomous strategy generation, cron-based execution, and a full audit trail.
 
 It exposes the same functionality two ways:
 - **MCP tools at `/mcp`** (Streamable HTTP transport) — preferred for AI agents because of structured tool discovery and typed invocation.
@@ -729,7 +729,7 @@ Client-side configuration example (`.mcp.json` in a Claude Code project):
 ```json
 {
   "mcpServers": {
-    "defi-agent": {
+    "mangrove-agent": {
       "transport": "http",
       "url": "http://localhost:9080/mcp",
       "headers": {
@@ -831,7 +831,7 @@ client = MangroveMarkets(base_url=os.environ["MANGROVEMARKETS_BASE_URL"])
 
 ## Configuration
 
-The agent uses the existing app-in-a-box config system — no invented `.env` files, no parallel layer. Values live in `server/src/config/{environment}-config.json`, with required keys declared in `server/src/config/configuration-keys.json`. The `ENVIRONMENT` env var selects which file to load. Secret values can be referenced using the existing `secret:NAME:PROPERTY` syntax; literal values are fine for local dev.
+The agent uses the existing mangrove-agent config system — no invented `.env` files, no parallel layer. Values live in `server/src/config/{environment}-config.json`, with required keys declared in `server/src/config/configuration-keys.json`. The `ENVIRONMENT` env var selects which file to load. Secret values can be referenced using the existing `secret:NAME:PROPERTY` syntax; literal values are fine for local dev.
 
 ### `configuration-keys.json` (agent + x402, both required)
 
@@ -873,7 +873,7 @@ x402 keys from the template stay required — payment middleware needs them at s
   "MANGROVE_API_KEY": "dev_...",
   "MANGROVEMARKETS_BASE_URL": "http://localhost:9081",
   "DB_PATH": "./agent.db",
-  "KEYRING_SERVICE_NAME": "defi-agent",
+  "KEYRING_SERVICE_NAME": "mangrove-agent",
   "MASTER_KEY_ENV_FALLBACK": "",
   "BACKTEST_CANDIDATE_COUNT": 7,
   "BACKTEST_MIN_WIN_RATE": 0.51,

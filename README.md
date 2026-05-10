@@ -1,9 +1,9 @@
 <div align="center">
-  <a href="https://github.com/MangroveTechnologies/app-in-a-box">
+  <a href="https://github.com/MangroveTechnologies/mangrove-agent">
     <img src="assets/icon.png" alt="Mangrove" width="120" height="112">
   </a>
 
-  <h1>defi-agent</h1>
+  <h1>mangrove-agent</h1>
 
   <p>
     <strong>An AI trading bot built on the Mangrove API.</strong><br>
@@ -11,10 +11,10 @@
   </p>
 
   <p>
-    <a href="https://github.com/MangroveTechnologies/app-in-a-box/actions/workflows/ci.yml">
-      <img src="https://github.com/MangroveTechnologies/app-in-a-box/actions/workflows/ci.yml/badge.svg" alt="CI">
+    <a href="https://github.com/MangroveTechnologies/mangrove-agent/actions/workflows/ci.yml">
+      <img src="https://github.com/MangroveTechnologies/mangrove-agent/actions/workflows/ci.yml/badge.svg" alt="CI">
     </a>
-    <a href="https://github.com/MangroveTechnologies/app-in-a-box/blob/main/LICENSE">
+    <a href="https://github.com/MangroveTechnologies/mangrove-agent/blob/main/LICENSE">
       <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License">
     </a>
   </p>
@@ -63,8 +63,8 @@ Docker is **optional** — see the alternate install path below. Bare-metal is t
 One command. It seeds your config (prompts for the API key), creates a venv, pip-installs dependencies, starts uvicorn in the background, registers the MCP server with Claude Code, and verifies `/health`.
 
 ```bash
-git clone https://github.com/MangroveTechnologies/app-in-a-box.git defi-agent
-cd defi-agent
+git clone https://github.com/MangroveTechnologies/mangrove-agent.git mangrove-agent
+cd mangrove-agent
 ./scripts/setup.sh
 ```
 
@@ -73,7 +73,7 @@ First run takes ~60s (pip install + health wait). Re-runs are idempotent — it 
 When it's finished:
 - Agent runs at `http://localhost:9080` (pid in `agent-data/bare.pid`, logs in `agent-data/bare.log`). We bind 9080 externally because `:8080` is commonly squatted by VSCode Helper and other dev tools.
 - `./scripts/verify_quickstart.sh --bare` passed → the tool catalog returned the expected set.
-- Claude Code's MCP registration now knows about `defi-agent`.
+- Claude Code's MCP registration now knows about `mangrove-agent`.
 
 **Start Claude Code in the repo directory** and the agent runs a short platform tour (status / tools / market data / knowledge base / reference strategies) to prove everything is wired, then offers to help you build a strategy. You can paper-trade without a wallet at all — wallet setup lives in Chapter 06 of the tutorial, right before live trading. See *Your first trade* below.
 
@@ -94,8 +94,8 @@ When it's finished:
 If you can't run Python on the host (corporate restrictions, reproducibility mandate), Docker works the same way. The tradeoff: the container can't reach your OS keychain, so the Fernet master key lives in `./agent-data/master.key` (chmod 600, gitignored) instead of Keychain / Secret Service / Credential Manager.
 
 ```bash
-git clone https://github.com/MangroveTechnologies/app-in-a-box.git defi-agent
-cd defi-agent
+git clone https://github.com/MangroveTechnologies/mangrove-agent.git mangrove-agent
+cd mangrove-agent
 ./scripts/setup.sh --docker
 ```
 
@@ -169,7 +169,7 @@ Every tool has a mirrored REST endpoint at `/api/v1/agent/*`. Both call the same
 │  Claude Code ─MCP──┐                                        │
 │  Python/curl ─REST─┤                                        │
 │                    ▼                                        │
-│  ┌─ defi-agent (single FastAPI process, port 9080) ──┐     │
+│  ┌─ mangrove-agent (single FastAPI process, port 9080) ──┐     │
 │  │   • auth middleware (X-API-Key)                   │     │
 │  │   • service layer (one for REST + MCP)            │     │
 │  │   • APScheduler (in-process cron, SQLite jobstore)│     │
@@ -241,7 +241,7 @@ Local-only for v1 (Docker Compose). Cloud deployment (Cloud Run with persistent 
 ## Project layout
 
 ```
-defi-agent/
+mangrove-agent/
 ├── .claude/                  # Claude Code framework (skills, agents, rules)
 ├── server/
 │   ├── src/

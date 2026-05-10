@@ -243,12 +243,12 @@ This is the first step where you actually use the terminal commands you've been 
    (`cd` means "change directory" — it moves your terminal's "current location.")
 4. Clone the repo:
    ```bash
-   git clone https://github.com/MangroveTechnologies/app-in-a-box.git defi-agent
+   git clone https://github.com/MangroveTechnologies/mangrove-agent.git mangrove-agent
    ```
-   This downloads the entire workshop project into a folder called `defi-agent`. Takes 10–30 seconds.
+   This downloads the entire workshop project into a folder called `mangrove-agent`. Takes 10–30 seconds.
 5. Move into that folder:
    ```bash
-   cd defi-agent
+   cd mangrove-agent
    ```
 6. Open the folder in VS Code so you can see the files:
    ```bash
@@ -264,7 +264,7 @@ You should now see the project's file tree on the left side of VS Code.
 
 This is the one command that wires everything together. It installs the bot's Python dependencies, starts the local server, and registers it with Claude Code.
 
-1. In VS Code's terminal (still inside the `defi-agent` folder), run:
+1. In VS Code's terminal (still inside the `mangrove-agent` folder), run:
    ```bash
    ./scripts/setup.sh
    ```
@@ -285,7 +285,7 @@ If the script errors out, jump to the **Troubleshooting** section below.
 
 Last sanity check.
 
-1. In VS Code's terminal (in the `defi-agent` folder), run:
+1. In VS Code's terminal (in the `mangrove-agent` folder), run:
    ```bash
    claude
    ```
@@ -341,9 +341,9 @@ The bot's MCP server isn't registered with Claude Code. Run:
 claude mcp list
 ```
 
-If you see `defi-agent: ... ✗ Failed to connect`, fix it:
+If you see `mangrove-agent: ... ✗ Failed to connect`, fix it:
 ```bash
-claude mcp remove defi-agent
+claude mcp remove mangrove-agent
 ./scripts/setup.sh --yes --no-verify
 ```
 
@@ -354,7 +354,7 @@ Wipes everything and starts over (you lose any local work):
 ```bash
 kill $(cat agent-data/bare.pid) 2>/dev/null
 rm -rf agent-data/
-claude mcp remove defi-agent 2>/dev/null
+claude mcp remove mangrove-agent 2>/dev/null
 ./scripts/setup.sh
 ```
 
@@ -369,7 +369,7 @@ By the time you arrive at the workshop, you should be able to:
 - [ ] Run `python --version` (or `python3 --version`) and see 3.11 or newer
 - [ ] Run `code --version` and see a version number
 - [ ] Run `claude --version` and see a version number
-- [ ] Run `claude` inside the `defi-agent` folder and see the 5-tool greeter
+- [ ] Run `claude` inside the `mangrove-agent` folder and see the 5-tool greeter
 
 If all six are green, you're ready to build.
 
@@ -392,7 +392,7 @@ Everything below is open and free. Bookmark what's useful.
 
 The Mangrove organization on GitHub: **<https://github.com/MangroveTechnologies>**
 
-- **[app-in-a-box](https://github.com/MangroveTechnologies/app-in-a-box)** — the workshop repo. The thing you cloned in Step 7. Includes the tutorial chapters, docs, and the bot's source code.
+- **[mangrove-agent](https://github.com/MangroveTechnologies/mangrove-agent)** — the workshop repo. The thing you cloned in Step 7. Includes the tutorial chapters, docs, and the bot's source code.
 - **[MangroveKnowledgeBase](https://github.com/MangroveTechnologies/MangroveKnowledgeBase)** — the open-source signal library. 223 trading signals + 40+ technical indicators. Read the code, fork it, contribute.
 - **[MangroveMarkets](https://github.com/MangroveTechnologies/MangroveMarkets)** — the open-source markets infrastructure (the layer behind the `mangrovemarkets` Python SDK).
 - **[mangrove-trader-plugin](https://github.com/MangroveTechnologies/mangrove-trader-plugin)** — Claude Code plugin / TypeScript SDK for connecting to Mangrove via MCP.
@@ -407,33 +407,33 @@ The packages your workshop bot installs into its virtualenv. Each one is open so
 - **[`mangroveai`](https://pypi.org/project/mangroveai/)** — the AI/intelligence SDK. `pip install mangroveai`
 - **[`mangrovemarkets`](https://pypi.org/project/mangrovemarkets/)** — the markets/execution SDK. `pip install mangrovemarkets`
 
-### Inside the workshop repo (`app-in-a-box`)
+### Inside the workshop repo (`mangrove-agent`)
 
-Once you've cloned the repo (Step 7), these are the files worth knowing about. All in your `defi-agent/` folder.
+Once you've cloned the repo (Step 7), these are the files worth knowing about. All in your `mangrove-agent/` folder.
 
 **Top-level orientation:**
-- [`README.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/README.md) — repo intro, quick start, layout overview
-- [`CLAUDE.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/CLAUDE.md) — what Claude Code reads on session start; defines conventions, agent identity, the bot's mental model
-- [`CONTRIBUTING.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/CONTRIBUTING.md) — how to contribute back
+- [`README.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/README.md) — repo intro, quick start, layout overview
+- [`CLAUDE.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/CLAUDE.md) — what Claude Code reads on session start; defines conventions, agent identity, the bot's mental model
+- [`CONTRIBUTING.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/CONTRIBUTING.md) — how to contribute back
 
 **Tutorial walkthrough — `tutorials/trading-app/`:**
-- [`00-index.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/tutorials/trading-app/00-index.md) — overview of the 8-chapter arc
-- [`01-claude-code-and-ai-safety.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/tutorials/trading-app/01-claude-code-and-ai-safety.md) — Claude Code mental model, three safety nets
-- [`02-overview.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/tutorials/trading-app/02-overview.md) — what the bot is, where state lives, the trust boundary
-- [`03-setup.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/tutorials/trading-app/03-setup.md) — long-form version of this setup guide
-- [`04-your-first-strategy.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/tutorials/trading-app/04-your-first-strategy.md) — author + backtest a strategy
-- [`05-paper-mode.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/tutorials/trading-app/05-paper-mode.md) — promote to paper, force a tick, read the audit trail
-- [`06-wallet-setup.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/tutorials/trading-app/06-wallet-setup.md) — create or import a wallet, encryption model, backup gate
-- [`07-going-live.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/tutorials/trading-app/07-going-live.md) — promote to live, watch a real swap, verify on basescan
-- [`08-monitor-troubleshoot-extend.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/tutorials/trading-app/08-monitor-troubleshoot-extend.md) — pause/archive/roll, debug, extend with custom signals + MCP tools + hooks
+- [`00-index.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/tutorials/trading-app/00-index.md) — overview of the 8-chapter arc
+- [`01-claude-code-and-ai-safety.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/tutorials/trading-app/01-claude-code-and-ai-safety.md) — Claude Code mental model, three safety nets
+- [`02-overview.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/tutorials/trading-app/02-overview.md) — what the bot is, where state lives, the trust boundary
+- [`03-setup.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/tutorials/trading-app/03-setup.md) — long-form version of this setup guide
+- [`04-your-first-strategy.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/tutorials/trading-app/04-your-first-strategy.md) — author + backtest a strategy
+- [`05-paper-mode.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/tutorials/trading-app/05-paper-mode.md) — promote to paper, force a tick, read the audit trail
+- [`06-wallet-setup.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/tutorials/trading-app/06-wallet-setup.md) — create or import a wallet, encryption model, backup gate
+- [`07-going-live.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/tutorials/trading-app/07-going-live.md) — promote to live, watch a real swap, verify on basescan
+- [`08-monitor-troubleshoot-extend.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/tutorials/trading-app/08-monitor-troubleshoot-extend.md) — pause/archive/roll, debug, extend with custom signals + MCP tools + hooks
 
 **Reference docs — `docs/`:**
-- [`api-reference.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/docs/api-reference.md) — full REST API surface
-- [`architecture.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/docs/architecture.md) — system diagrams, module layout, design decisions
-- [`specification.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/docs/specification.md) — API contracts and data models
-- [`strategy-lifecycle.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/docs/strategy-lifecycle.md) — deep dive on scheduler, jobstore, cron ticks, signal evaluation
-- [`configuration.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/docs/configuration.md) — config files and environment variables
-- [`workshop-prereqs.md`](https://github.com/MangroveTechnologies/app-in-a-box/blob/main/docs/workshop-prereqs.md) — original short-form prereqs (this guide is the expanded version)
+- [`api-reference.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/docs/api-reference.md) — full REST API surface
+- [`architecture.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/docs/architecture.md) — system diagrams, module layout, design decisions
+- [`specification.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/docs/specification.md) — API contracts and data models
+- [`strategy-lifecycle.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/docs/strategy-lifecycle.md) — deep dive on scheduler, jobstore, cron ticks, signal evaluation
+- [`configuration.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/docs/configuration.md) — config files and environment variables
+- [`workshop-prereqs.md`](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/docs/workshop-prereqs.md) — original short-form prereqs (this guide is the expanded version)
 
 ### Where else to look
 

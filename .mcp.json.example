@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "defi-agent": {
+    "mangrove-agent": {
       "transport": "http",
       "url": "http://localhost:9080/mcp/",
       "headers": {
