@@ -404,8 +404,8 @@ The Mangrove organization on GitHub: **<https://github.com/MangroveTechnologies>
 The packages your workshop bot installs into its virtualenv. Each one is open source — clicking the link below shows the version, the readme, and a link back to the source repo.
 
 - **[`mangrove-kb`](https://pypi.org/project/mangrove-kb/)** — the signal library. `pip install mangrove-kb`
-- **[`mangroveai`](https://pypi.org/project/mangroveai/)** — the AI/intelligence SDK. `pip install mangroveai`
-- **[`mangrovemarkets`](https://pypi.org/project/mangrovemarkets/)** — the markets/execution SDK. `pip install mangrovemarkets`
+- **[`mangroveai`](https://pypi.org/project/mangroveai/)** — the AI/intelligence SDK. `pip install mangrove-ai`
+- **[`mangrovemarkets`](https://pypi.org/project/mangrovemarkets/)** — the markets/execution SDK. `pip install mangrove-markets`
 
 ### Inside the workshop repo (`mangrove-agent`)
 

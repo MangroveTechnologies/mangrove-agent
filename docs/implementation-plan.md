@@ -86,7 +86,7 @@ Goal: turn the mangrove-agent template into a mangrove-agent shell. After this p
   keyring>=24
   ```
 - [ ] **Step 2:** rebuild Docker image: `docker compose build`. Verify install succeeds.
-- [ ] **Step 3:** import smoke test — start container, exec into it, run `python -c "import mangroveai, mangrovemarkets, apscheduler, cryptography, keyring; print('ok')"`.
+- [ ] **Step 3:** import smoke test — start container, exec into it, run `python -c "import mangrove_ai, mangrovemarkets, apscheduler, cryptography, keyring; print('ok')"`.
 - [ ] **Step 4:** commit: `chore(deps): add SDK + scheduler + crypto + keyring`.
 
 **Acceptance:** All five libraries installable and importable in the container.
@@ -122,8 +122,8 @@ Goal: turn the mangrove-agent template into a mangrove-agent shell. After this p
 - [ ] **Step 1:** in `mangrove.py`, define module-level singletons (lazy):
   ```python
   from functools import lru_cache
-  from mangroveai import MangroveAI
-  from mangrovemarkets import MangroveMarkets
+  from mangrove_ai import MangroveAI
+  from mangrove_markets import MangroveMarkets
   from src.config import app_config
 
   @lru_cache(maxsize=1)

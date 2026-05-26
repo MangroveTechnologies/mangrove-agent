@@ -30,7 +30,7 @@ async def list_signals(
     client = mangroveai_client()
     try:
         if search:
-            from mangroveai.models import SearchSignalsRequest
+            from mangrove_ai.models import SearchSignalsRequest
             page = client.signals.search(SearchSignalsRequest(query=search, limit=limit, offset=offset))
         else:
             page = client.signals.list(limit=limit, offset=offset)

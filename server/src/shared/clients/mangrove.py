@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from mangroveai import MangroveAI
-from mangrovemarkets import MangroveMarkets
+from mangrove_ai import MangroveAI
+from mangrove_markets import MangroveMarkets
 
 
 def _get_config():

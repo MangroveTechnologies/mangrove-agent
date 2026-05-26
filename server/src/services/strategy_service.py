@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from mangroveai.models import CreateStrategyRequest
+from mangrove_ai.models import CreateStrategyRequest
 from pydantic import BaseModel, Field
 
 from src.models.domain import Evaluation, OrderIntent

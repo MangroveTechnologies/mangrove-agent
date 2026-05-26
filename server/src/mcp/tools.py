@@ -1011,7 +1011,7 @@ def _register_signals(server: FastMCP) -> None:
         from src.shared.clients.mangrove import mangroveai_client
         client = mangroveai_client()
         if search:
-            from mangroveai.models import SearchSignalsRequest
+            from mangrove_ai.models import SearchSignalsRequest
             page = client.signals.search(SearchSignalsRequest(query=search, limit=limit))
             items = [_dump(s) for s in getattr(page, "items", [])]
         else:
@@ -1109,7 +1109,7 @@ def _register_signals(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from mangroveai.models import SearchSignalsRequest
+            from mangrove_ai.models import SearchSignalsRequest
 
             from src.shared.clients.mangrove import mangroveai_client
             req = SearchSignalsRequest(query=query, limit=limit, offset=offset)

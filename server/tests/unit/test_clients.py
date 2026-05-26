@@ -5,8 +5,8 @@ import os
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
-from mangroveai import MangroveAI
-from mangrovemarkets import MangroveMarkets
+from mangrove_ai import MangroveAI
+from mangrove_markets import MangroveMarkets
 
 from src.shared.clients.mangrove import (
     mangroveai_client,

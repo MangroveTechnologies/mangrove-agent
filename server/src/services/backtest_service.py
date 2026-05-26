@@ -20,7 +20,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from mangroveai.models import BacktestRequest
+from mangrove_ai.models import BacktestRequest
 from pydantic import BaseModel
 
 from src.config import app_config

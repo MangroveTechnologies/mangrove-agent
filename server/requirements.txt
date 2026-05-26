@@ -13,17 +13,17 @@ PyJWT>=2.9.0
 # and minor bumps may carry breaking changes. Revisit pins when either
 # stabilizes to 1.0.
 # Note: there is no `mangrove-kb` package pinned here — all KB access
-# flows through mangroveai.kb.*, which the mangroveai SDK already
+# flows through mangrove_ai.kb.*, which the mangrove-ai SDK already
 # transitively provides. A previous `mangrove-kb>=1.0.0` pin was
 # impossible to resolve (upstream tops out at 0.5.0) and blocked fresh
 # pip installs.
-mangroveai>=0.3.0,<0.4.0
-# mangrovemarkets 0.2.0 moved EVM wallet keypair generation client-side.
+mangrove-ai>=1.0.0,<2.0.0
+# mangrove-markets 1.0.0 moved EVM wallet keypair generation client-side.
 # The agent's wallet_manager.create_wallet() is unaffected — the SDK
 # call signature is unchanged, only the implementation shifted from
-# server-side to local. Pinning to 0.2.x guarantees the leak-surface
+# server-side to local. Pinning to >=1.0.0 guarantees the leak-surface
 # fix is in place. See post-mortem: docs/incidents/2026-04-24-eip7702-drain.md
-mangrovemarkets>=0.2.0,<0.3.0
+mangrove-markets>=1.0.0,<2.0.0
 apscheduler[sqlalchemy]>=3.10
 cryptography>=42
 keyring>=24
