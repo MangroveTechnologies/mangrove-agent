@@ -51,7 +51,7 @@ def stub_keyring(monkeypatch):
 
 @pytest.fixture
 def mock_sdk_create(monkeypatch):
-    """Stub mangrovemarkets_client().wallet.create() to return a fixed EVM wallet."""
+    """Stub mangrove_markets_client().wallet.create() to return a fixed EVM wallet."""
     sdk_result = MagicMock()
     sdk_result.address = _TEST_ADDRESS
     sdk_result.private_key = _TEST_PRIVKEY
@@ -62,7 +62,7 @@ def mock_sdk_create(monkeypatch):
     sdk_client.wallet.create.return_value = sdk_result
 
     monkeypatch.setattr(
-        "src.services.wallet_manager.mangrovemarkets_client",
+        "src.services.wallet_manager.mangrove_markets_client",
         lambda: sdk_client,
     )
     return sdk_client

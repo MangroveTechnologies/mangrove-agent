@@ -5,35 +5,35 @@ import os
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
-from mangroveai import MangroveAI
-from mangrovemarkets import MangroveMarkets
+from mangrove_ai import MangroveAI
+from mangrove_markets import MangroveMarkets
 
 from src.shared.clients.mangrove import (
-    mangroveai_client,
-    mangrovemarkets_client,
+    mangrove_ai_client,
+    mangrove_markets_client,
     reset_clients,
 )
 
 
 def test_mangroveai_singleton_returns_same_instance():
     reset_clients()
-    a = mangroveai_client()
-    b = mangroveai_client()
+    a = mangrove_ai_client()
+    b = mangrove_ai_client()
     assert a is b
     assert isinstance(a, MangroveAI)
 
 
 def test_mangrovemarkets_singleton_returns_same_instance():
     reset_clients()
-    a = mangrovemarkets_client()
-    b = mangrovemarkets_client()
+    a = mangrove_markets_client()
+    b = mangrove_markets_client()
     assert a is b
     assert isinstance(a, MangroveMarkets)
 
 
 def test_reset_clients_creates_new_instance():
     reset_clients()
-    a = mangroveai_client()
+    a = mangrove_ai_client()
     reset_clients()
-    b = mangroveai_client()
+    b = mangrove_ai_client()
     assert a is not b  # reset caused re-instantiation

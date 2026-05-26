@@ -35,7 +35,7 @@ from eth_utils import to_checksum_address
 from pydantic import BaseModel
 
 from src.services.secret_vault import vault
-from src.shared.clients.mangrove import mangrovemarkets_client
+from src.shared.clients.mangrove import mangrove_markets_client
 from src.shared.crypto.fernet import decrypt, encrypt, get_master_key_source
 from src.shared.db.sqlite import get_connection
 from src.shared.errors import (
@@ -341,7 +341,7 @@ def create_wallet(
             suggestion="Supported: evm (with a valid chain_id).",
         )
 
-    result = mangrovemarkets_client().wallet.create(
+    result = mangrove_markets_client().wallet.create(
         chain=chain_normalized, network=network, chain_id=chain_id,
     )
     secret = _extract_secret(result)

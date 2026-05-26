@@ -6,17 +6,17 @@ instantiate clients themselves. That keeps test mocking easy (override the
 @lru_cache'd function) and avoids multiple HTTP pools / auth re-inits.
 
 Usage:
-    from src.shared.clients.mangrove import mangroveai_client, mangrovemarkets_client
+    from src.shared.clients.mangrove import mangrove_ai_client, mangrove_markets_client
 
-    signals = mangroveai_client().signals.list()
-    venues = mangrovemarkets_client().dex.supported_venues()
+    signals = mangrove_ai_client().signals.list()
+    venues = mangrove_markets_client().dex.supported_venues()
 """
 from __future__ import annotations
 
 from functools import lru_cache
 
-from mangroveai import MangroveAI
-from mangrovemarkets import MangroveMarkets
+from mangrove_ai import MangroveAI
+from mangrove_markets import MangroveMarkets
 
 
 def _get_config():
@@ -26,7 +26,7 @@ def _get_config():
 
 
 @lru_cache(maxsize=1)
-def mangroveai_client() -> MangroveAI:
+def mangrove_ai_client() -> MangroveAI:
     """Return the singleton MangroveAI SDK client.
 
     Reads MANGROVE_API_KEY from config. Environment (dev vs prod) is
@@ -49,7 +49,7 @@ def mangroveai_client() -> MangroveAI:
 
 
 @lru_cache(maxsize=1)
-def mangrovemarkets_client() -> MangroveMarkets:
+def mangrove_markets_client() -> MangroveMarkets:
     """Return the singleton MangroveMarkets SDK client.
 
     Reads MANGROVEMARKETS_BASE_URL and MANGROVE_API_KEY from config. The
@@ -65,5 +65,5 @@ def mangrovemarkets_client() -> MangroveMarkets:
 
 def reset_clients() -> None:
     """Clear the cached singletons. Tests use this to re-init with different config."""
-    mangroveai_client.cache_clear()
-    mangrovemarkets_client.cache_clear()
+    mangrove_ai_client.cache_clear()
+    mangrove_markets_client.cache_clear()

@@ -32,7 +32,7 @@ from src.config import app_config
 from src.models.domain import OrderIntent, Trade
 from src.services import trade_log
 from src.services.wallet_manager import sign as wallet_sign
-from src.shared.clients.mangrove import mangroveai_client, mangrovemarkets_client
+from src.shared.clients.mangrove import mangrove_ai_client, mangrove_markets_client
 from src.shared.errors import SdkError, SigningError
 from src.shared.logging import get_logger
 
@@ -45,7 +45,7 @@ _TX_POLL_INTERVAL_S = 2.0
 
 def _fetch_mark_price(symbol: str) -> float:
     """Pull a current mark price via crypto_assets.get_market_data()."""
-    resp = mangroveai_client().crypto_assets.get_market_data(symbol)
+    resp = mangrove_ai_client().crypto_assets.get_market_data(symbol)
     data = getattr(resp, "data", None) or {}
     for key in ("current_price", "price", "usd_price"):
         if key in data and data[key] is not None:
@@ -105,7 +105,7 @@ def _paper_fill(intent: OrderIntent, strategy_id: str, evaluation_id: str | None
 
 def _poll_tx(tx_hash: str, chain_id: int, venue_id: str | None = None) -> dict[str, Any]:
     """Poll dex.tx_status until it's out of 'pending' or timeout."""
-    client = mangrovemarkets_client()
+    client = mangrove_markets_client()
     deadline = time.monotonic() + _TX_POLL_TIMEOUT_S
     last_status: Any = None
     while time.monotonic() < deadline:
@@ -178,7 +178,7 @@ def _live_swap(
             ),
         )
 
-    client = mangrovemarkets_client()
+    client = mangrove_markets_client()
     # Prefer explicit addresses (user-initiated swaps via /dex/swap); fall
     # back to USDC+symbol convention when the intent came from the cron
     # strategy path.

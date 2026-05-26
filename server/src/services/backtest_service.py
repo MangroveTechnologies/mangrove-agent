@@ -20,13 +20,13 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from mangroveai.models import BacktestRequest
+from mangrove_ai.models import BacktestRequest
 from pydantic import BaseModel
 
 from src.config import app_config
 from src.services.candidate_generator import StrategyCandidate
 from src.shared import timeframes
-from src.shared.clients.mangrove import mangroveai_client
+from src.shared.clients.mangrove import mangrove_ai_client
 from src.shared.errors import SdkError
 from src.shared.logging import get_logger
 
@@ -111,7 +111,7 @@ def _get_trading_defaults() -> dict[str, Any]:
 
     Cached for the process lifetime after first successful fetch. Falls
     back to the hardcoded snapshot above on ANY of these failure modes:
-      - mangroveai_client() raises (config not loaded, etc.)
+      - mangrove_ai_client() raises (config not loaded, etc.)
       - .config attribute missing (older SDK without ConfigService — pre-0.3.0)
       - .trading_defaults() raises (network down, 5xx, etc.)
       - .trading_defaults() returns empty/non-dict/missing-required-sections
@@ -130,7 +130,7 @@ def _get_trading_defaults() -> dict[str, Any]:
 
     fetched: dict[str, Any] | None = None
     try:
-        client = mangroveai_client()
+        client = mangrove_ai_client()
         config_svc = getattr(client, "config", None)
         if config_svc is None:
             raise AttributeError("mangroveai client has no `config` service (need SDK >= 0.3.0)")
@@ -369,7 +369,7 @@ def quick_backtest_all(
     if lookback_months is None:
         lookback_months = int(app_config.BACKTEST_DEFAULT_LOOKBACK_MONTHS)
 
-    client = mangroveai_client()
+    client = mangrove_ai_client()
     results: list[CandidateBacktestResult] = []
     for c in candidates:
         try:
@@ -466,7 +466,7 @@ def full_backtest(
         end_date=end_date,
     )
 
-    client = mangroveai_client()
+    client = mangrove_ai_client()
     try:
         raw = client.backtesting.run(
             _build_request(

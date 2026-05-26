@@ -61,8 +61,8 @@ def client(tmp_path, monkeypatch):
         setattr(sdk.portfolio, attr, MagicMock(return_value=m))
     sdk.portfolio.history.return_value = [MagicMock(model_dump=MagicMock(return_value={"tx": "0xabc"}))]
 
-    monkeypatch.setattr("src.services.wallet_manager.mangrovemarkets_client", lambda: sdk)
-    monkeypatch.setattr("src.api.routes.wallet.mangrovemarkets_client", lambda: sdk)
+    monkeypatch.setattr("src.services.wallet_manager.mangrove_markets_client", lambda: sdk)
+    monkeypatch.setattr("src.api.routes.wallet.mangrove_markets_client", lambda: sdk)
 
     from src.app import create_app
     app = create_app()

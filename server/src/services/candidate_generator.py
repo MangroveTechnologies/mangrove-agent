@@ -20,7 +20,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from src.shared.clients.mangrove import mangroveai_client
+from src.shared.clients.mangrove import mangrove_ai_client
 from src.shared.errors import StrategyNoViableCandidates
 from src.shared.logging import get_logger
 
@@ -159,7 +159,7 @@ def _bucket_signals(
 
 def _fetch_catalog() -> list[Any]:
     """Pull the full signal catalog via the SDK (paginated)."""
-    client = mangroveai_client()
+    client = mangrove_ai_client()
     return list(client.signals.list_iter(limit_per_page=100))
 
 

@@ -60,9 +60,9 @@ def client(tmp_path, monkeypatch):
     sdk.execution.evaluate.return_value = eval_resp
 
     for path in (
-        "src.services.candidate_generator.mangroveai_client",
-        "src.services.backtest_service.mangroveai_client",
-        "src.services.strategy_service.mangroveai_client",
+        "src.services.candidate_generator.mangrove_ai_client",
+        "src.services.backtest_service.mangrove_ai_client",
+        "src.services.strategy_service.mangrove_ai_client",
     ):
         monkeypatch.setattr(path, lambda s=sdk: s)
 

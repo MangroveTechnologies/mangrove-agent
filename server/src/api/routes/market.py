@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from src.shared.auth.dependency import require_api_key
-from src.shared.clients.mangrove import mangroveai_client
+from src.shared.clients.mangrove import mangrove_ai_client
 from src.shared.errors import SdkError
 
 router = APIRouter(
@@ -34,7 +34,7 @@ async def ohlcv(
         kwargs: dict[str, Any] = {"symbol": symbol, "days": lookback_days}
         if provider is not None:
             kwargs["provider"] = provider
-        return _dump(mangroveai_client().crypto_assets.get_ohlcv(**kwargs))
+        return _dump(mangrove_ai_client().crypto_assets.get_ohlcv(**kwargs))
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"crypto_assets.get_ohlcv failed: {e}") from e
 
@@ -46,7 +46,7 @@ async def market_data(symbol: str, provider: str | None = None) -> Any:
         kwargs: dict[str, Any] = {"symbol": symbol}
         if provider is not None:
             kwargs["provider"] = provider
-        return _dump(mangroveai_client().crypto_assets.get_market_data(**kwargs))
+        return _dump(mangrove_ai_client().crypto_assets.get_market_data(**kwargs))
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"crypto_assets.get_market_data failed: {e}") from e
 
@@ -54,7 +54,7 @@ async def market_data(symbol: str, provider: str | None = None) -> Any:
 @router.get("/trending", summary="Trending assets")
 async def trending() -> Any:
     try:
-        return _dump(mangroveai_client().crypto_assets.get_trending())
+        return _dump(mangrove_ai_client().crypto_assets.get_trending())
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"crypto_assets.get_trending failed: {e}") from e
 
@@ -62,6 +62,6 @@ async def trending() -> Any:
 @router.get("/global", summary="Global market data (BTC dominance, total cap, 24h change)")
 async def global_market() -> Any:
     try:
-        return _dump(mangroveai_client().crypto_assets.get_global_market())
+        return _dump(mangrove_ai_client().crypto_assets.get_global_market())
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"crypto_assets.get_global_market failed: {e}") from e

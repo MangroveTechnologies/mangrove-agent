@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS evaluations (
     strategy_id TEXT NOT NULL REFERENCES strategies(id),
     timestamp TEXT NOT NULL,
     market_snapshot_json TEXT NOT NULL,           -- data sent to the SDK
-    sdk_response_json TEXT NOT NULL,              -- verbatim response from mangroveai.execution.evaluate()
+    sdk_response_json TEXT NOT NULL,              -- verbatim response from mangrove_ai.execution.evaluate()
     order_intents_json TEXT NOT NULL,             -- extracted from sdk_response for querying
     duration_ms INTEGER NOT NULL,
     status TEXT NOT NULL,                         -- ok | error | skipped

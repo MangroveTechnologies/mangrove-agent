@@ -56,7 +56,7 @@ def _fake_result(
 def mock_sdk(monkeypatch):
     sdk = MagicMock()
     monkeypatch.setattr(
-        "src.services.backtest_service.mangroveai_client",
+        "src.services.backtest_service.mangrove_ai_client",
         lambda: sdk,
     )
     return sdk

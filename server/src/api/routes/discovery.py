@@ -48,8 +48,8 @@ def _fetch_catalog_counts() -> dict:
         "error": None,
     }
     try:
-        from src.shared.clients.mangrove import mangroveai_client
-        client = mangroveai_client()
+        from src.shared.clients.mangrove import mangrove_ai_client
+        client = mangrove_ai_client()
     except Exception as e:  # noqa: BLE001
         counts["error"] = f"client_init_failed: {str(e)[:200]}"
         return counts

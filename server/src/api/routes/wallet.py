@@ -47,7 +47,7 @@ from src.services.wallet_manager import (
     stash_external_secret,
 )
 from src.shared.auth.dependency import require_api_key
-from src.shared.clients.mangrove import mangrovemarkets_client
+from src.shared.clients.mangrove import mangrove_markets_client
 from src.shared.errors import SdkError, SigningError
 
 router = APIRouter(
@@ -226,7 +226,7 @@ async def wallet_list() -> list[WalletListItem]:
 )
 async def wallet_balances(address: str, chain_id: int) -> Any:
     try:
-        result = mangrovemarkets_client().dex.balances(chain_id=chain_id, wallet=address)
+        result = mangrove_markets_client().dex.balances(chain_id=chain_id, wallet=address)
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"dex.balances failed: {e}") from e
     return result.model_dump() if hasattr(result, "model_dump") else result
@@ -238,7 +238,7 @@ async def wallet_balances(address: str, chain_id: int) -> Any:
     description="Combined value + P&L + tokens + DeFi via mangrovemarkets.portfolio.*.",
 )
 async def wallet_portfolio(address: str, chain_id: int | None = None) -> dict:
-    client = mangrovemarkets_client()
+    client = mangrove_markets_client()
     try:
         value = client.portfolio.value(addresses=address, chain_id=chain_id)
         pnl = client.portfolio.pnl(addresses=address, chain_id=chain_id)
@@ -261,7 +261,7 @@ async def wallet_portfolio(address: str, chain_id: int | None = None) -> dict:
 )
 async def wallet_history(address: str, limit: int = 50) -> list[Any]:
     try:
-        items = mangrovemarkets_client().portfolio.history(address=address, limit=limit)
+        items = mangrove_markets_client().portfolio.history(address=address, limit=limit)
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"portfolio.history failed: {e}") from e
     return [i.model_dump() if hasattr(i, "model_dump") else i for i in items]

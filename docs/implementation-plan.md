@@ -86,7 +86,7 @@ Goal: turn the mangrove-agent template into a mangrove-agent shell. After this p
   keyring>=24
   ```
 - [ ] **Step 2:** rebuild Docker image: `docker compose build`. Verify install succeeds.
-- [ ] **Step 3:** import smoke test — start container, exec into it, run `python -c "import mangroveai, mangrovemarkets, apscheduler, cryptography, keyring; print('ok')"`.
+- [ ] **Step 3:** import smoke test — start container, exec into it, run `python -c "import mangrove_ai, mangrovemarkets, apscheduler, cryptography, keyring; print('ok')"`.
 - [ ] **Step 4:** commit: `chore(deps): add SDK + scheduler + crypto + keyring`.
 
 **Acceptance:** All five libraries installable and importable in the container.
@@ -122,26 +122,26 @@ Goal: turn the mangrove-agent template into a mangrove-agent shell. After this p
 - [ ] **Step 1:** in `mangrove.py`, define module-level singletons (lazy):
   ```python
   from functools import lru_cache
-  from mangroveai import MangroveAI
-  from mangrovemarkets import MangroveMarkets
+  from mangrove_ai import MangroveAI
+  from mangrove_markets import MangroveMarkets
   from src.config import app_config
 
   @lru_cache(maxsize=1)
-  def mangroveai_client() -> MangroveAI:
+  def mangrove_ai_client() -> MangroveAI:
       return MangroveAI(api_key=app_config.MANGROVE_API_KEY)
 
   @lru_cache(maxsize=1)
-  def mangrovemarkets_client() -> MangroveMarkets:
+  def mangrove_markets_client() -> MangroveMarkets:
       return MangroveMarkets(
           base_url=app_config.MANGROVEMARKETS_BASE_URL,
           api_key=app_config.MANGROVE_API_KEY,
       )
   ```
 - [ ] **Step 2:** write unit test that calls each accessor twice, asserts the same instance comes back.
-- [ ] **Step 3:** add a smoke test: call `mangroveai_client().status` (or any free SDK call) — confirm a real connection works against dev URL.
+- [ ] **Step 3:** add a smoke test: call `mangrove_ai_client().status` (or any free SDK call) — confirm a real connection works against dev URL.
 - [ ] **Step 4:** commit: `feat(clients): add Mangrove SDK singletons`.
 
-**Acceptance:** Routes and services can `from src.shared.clients.mangrove import mangroveai_client` and call SDK methods.
+**Acceptance:** Routes and services can `from src.shared.clients.mangrove import mangrove_ai_client` and call SDK methods.
 
 ---
 
@@ -234,7 +234,7 @@ Goal: the agent can hold wallets and write to its log tables. After this phase, 
 - [ ] **Step 2:** add `encrypt(plaintext: bytes) -> bytes` and `decrypt(ciphertext: bytes) -> bytes` using Fernet with the master key.
 - [ ] **Step 3:** in `wallet_manager.py`, implement `create_wallet(chain, network, chain_id, label) -> WalletCreateResult`:
   - For chain=`xrpl`: raise `ChainNotSupportedInV1`.
-  - For chain=`evm`: call `mangrovemarkets_client().wallet.create(...)` to get address + secret, encrypt secret, INSERT into `wallets`.
+  - For chain=`evm`: call `mangrove_markets_client().wallet.create(...)` to get address + secret, encrypt secret, INSERT into `wallets`.
   - Return the result with the seed phrase included exactly once + the security warning from the spec.
 - [ ] **Step 4:** implement `list_wallets() -> list[WalletListItem]` (no secrets returned).
 - [ ] **Step 5:** implement `sign(unsigned_tx: dict, wallet_address: str) -> str` — load encrypted seed, decrypt in memory only, sign via web3.py (`eth_account`), zero the secret bytes immediately, return the signed hex string. **The SDK never receives the private key. It only receives `signed_tx` strings for broadcast.**
@@ -336,7 +336,7 @@ Goal: the autonomous strategy creation flow + cron evaluation work end-to-end ag
   ```
 - [ ] **Step 2:** implement `parse_goal(goal: str) -> dict` — detect keywords case-insensitive; default to "momentum" if none match.
 - [ ] **Step 3:** implement `generate(goal, asset, timeframe, n=7) -> list[StrategyCandidate]`:
-  - Fetch signal catalog via `mangroveai_client().signals.list()`
+  - Fetch signal catalog via `mangrove_ai_client().signals.list()`
   - Filter by category buckets from the parsed goal
   - For each of n candidates: random-pick 1 trigger, 0–2 filters for entry; 0–1 trigger + 0+ filters for exit
   - Use sensible default param values from the signal metadata
@@ -359,7 +359,7 @@ Goal: the autonomous strategy creation flow + cron evaluation work end-to-end ag
 - Create: `server/tests/integration/test_backtest_service.py`
 
 - [ ] **Step 1:** implement `quick_backtest_all(candidates, asset, timeframe, lookback_months) -> list[BacktestResult]`:
-  - For each candidate, call `mangroveai_client().backtesting.run(mode="quick", ...)` with the candidate's strategy_json
+  - For each candidate, call `mangrove_ai_client().backtesting.run(mode="quick", ...)` with the candidate's strategy_json
   - Capture per-candidate metrics
 - [ ] **Step 2:** implement `filter_and_rank(results) -> list[BacktestResult]`:
   - Drop any with `win_rate <= 0.51` or `total_trades < 10`
@@ -414,7 +414,7 @@ Goal: the autonomous strategy creation flow + cron evaluation work end-to-end ag
   4. `dex.prepare_swap(quote_id, wallet_address)` → UnsignedTx
   5. `wallet_manager.sign(swap_tx, wallet_address)` (client-side sign) → `dex.broadcast(signed_tx)` → poll `dex.tx_status`
   6. Build `Trade` with `mode="live"`, `tx_hash`, `explorer_url=explorer_url(chain_id, tx_hash)`, `approval_tx_hash`, fill amounts/prices/fees
-- [ ] **Step 4 (paper mode):** fetch current price via `mangroveai_client().crypto_assets.get_market_data(intent.symbol)`, build a `Trade` with `mode="paper"`, `status="simulated"`, `tx_hash=None`, `explorer_url=None`, fill at mid/mark price.
+- [ ] **Step 4 (paper mode):** fetch current price via `mangrove_ai_client().crypto_assets.get_market_data(intent.symbol)`, build a `Trade` with `mode="paper"`, `status="simulated"`, `tx_hash=None`, `explorer_url=None`, fill at mid/mark price.
 - [ ] **Step 5:** call `trade_log.log_trade(trade)` and `trade_log.update_position(...)` based on intent type (enter/exit). Return the `Trade`.
 - [ ] **Step 6:** add `execute_many(intents, mode, wallet_address) -> list[Trade]` — sequential loop, each wrapped in try/except so one failure doesn't stop the batch.
 - [ ] **Step 7:** unit tests with mocked SDK:
@@ -444,21 +444,21 @@ Goal: the autonomous strategy creation flow + cron evaluation work end-to-end ag
   3. `filter_and_rank(...)` → survivors
   4. If empty: raise `StrategyNoViableCandidates` with suggestion
   5. `backtest_service.full_backtest(winner)` → full metrics
-  6. `mangroveai_client().strategies.create(winner)` → mangrove_id
+  6. `mangrove_ai_client().strategies.create(winner)` → mangrove_id
   7. Cache locally in `strategies` table with `generation_report_json`
   8. Return `StrategyDetail`
-- [ ] **Step 2:** implement `create_manual(req)` — validate composition (1 TRIGGER + 0+ FILTERs entry; 0–1 TRIGGER + 0+ FILTERs exit), call `mangroveai_client().strategies.create(...)`, cache locally.
+- [ ] **Step 2:** implement `create_manual(req)` — validate composition (1 TRIGGER + 0+ FILTERs entry; 0–1 TRIGGER + 0+ FILTERs exit), call `mangrove_ai_client().strategies.create(...)`, cache locally.
 - [ ] **Step 3:** implement `list_strategies(status_filter, limit, offset)` and `get_strategy(id)` — read from local cache.
 - [ ] **Step 4:** implement `update_status(id, status, confirm, allocation) -> StrategyDetail`:
   - Validate transition per spec (`StrategyInvalidStatusTransition` if illegal)
   - `confirm=True` required for live activation or live deactivation
-  - On `→ live`: validate allocation block, call `allocation_service.record_allocation()`, call `mangroveai_client().strategies.update_status()`, register cron job via `scheduler_service.register_job(strategy_id, timeframe, "src.services.strategy_service.tick")`
+  - On `→ live`: validate allocation block, call `allocation_service.record_allocation()`, call `mangrove_ai_client().strategies.update_status()`, register cron job via `scheduler_service.register_job(strategy_id, timeframe, "src.services.strategy_service.tick")`
   - On `→ paper`: register cron, no allocation
   - On `→ inactive` or `→ archived`: cancel cron, release allocation if any
 - [ ] **Step 5:** implement `tick(strategy_id) -> Evaluation` — the cron callback. **Runs inside the scheduler threadpool; must never block the request path.** Every tick emits structured logs so external observers can see the fire-and-result sequence:
   1. Generate a `tick_id` (UUID), bind correlation_id to it, emit `strategy.tick.started` with `strategy_id`, `tick_id`, `timeframe`.
   2. Load strategy from local cache to get the `mangrove_id` + mode (`paper` or `live`) + wallet_address (live only).
-  3. Call `mangroveai_client().execution.evaluate(mangrove_id, persist=(mode == "live"))` — the SDK fetches its own market data and applies all signal evaluation, position sizing, and risk gates. Emit `sdk.call.started` / `sdk.call.completed` bracketing. The returned `EvaluateResult` contains any `OrderIntent[]` the strategy generated.
+  3. Call `mangrove_ai_client().execution.evaluate(mangrove_id, persist=(mode == "live"))` — the SDK fetches its own market data and applies all signal evaluation, position sizing, and risk gates. Emit `sdk.call.started` / `sdk.call.completed` bracketing. The returned `EvaluateResult` contains any `OrderIntent[]` the strategy generated.
   4. If order_intents empty: persist evaluation with `status="ok"`, emit `strategy.tick.completed` with `order_count=0`, `duration_ms`.
   5. If order_intents present: dispatch to `order_executor.execute_many(intents, mode, wallet_address)`, persist evaluation with `sdk_response_json` verbatim, emit `strategy.tick.completed` with `order_count=N`, `duration_ms`.
   6. On any exception: persist evaluation with `status="error"`, emit `strategy.tick.errored` with `exception` + `duration_ms`. **Never let the exception propagate out of the tick callback** — that would crash the scheduler worker.
@@ -512,9 +512,9 @@ Goal: every spec endpoint and MCP tool is wired up. After this phase, the agent 
 - [ ] **Step 2:** implement routes:
   - `POST /wallet/create` → `wallet_manager.create_wallet(...)`
   - `GET /wallet/list` → `wallet_manager.list_wallets()`
-  - `GET /wallet/{address}/balances?chain_id` → `mangrovemarkets_client().dex.balances(chain_id, address)` directly
-  - `GET /wallet/{address}/portfolio?chain_id` → `mangrovemarkets_client().portfolio.value/pnl/tokens/defi(...)` directly, aggregate
-  - `GET /wallet/{address}/history?limit` → `mangrovemarkets_client().portfolio.history(...)` directly
+  - `GET /wallet/{address}/balances?chain_id` → `mangrove_markets_client().dex.balances(chain_id, address)` directly
+  - `GET /wallet/{address}/portfolio?chain_id` → `mangrove_markets_client().portfolio.value/pnl/tokens/defi(...)` directly, aggregate
+  - `GET /wallet/{address}/history?limit` → `mangrove_markets_client().portfolio.history(...)` directly
 - [ ] **Step 3:** wire auth via the existing middleware (auth required on all wallet endpoints).
 - [ ] **Step 4:** integration tests for create + list happy paths and `WalletNotFound` error.
 - [ ] **Step 5:** commit: `feat(api): wallet routes`.
@@ -531,9 +531,9 @@ Goal: every spec endpoint and MCP tool is wired up. After this phase, the agent 
 - Create: `server/tests/integration/test_dex_routes.py`
 
 - [ ] **Step 1:** routes that pass through to SDK directly:
-  - `GET /dex/venues` → `mangrovemarkets_client().dex.supported_venues()`
-  - `GET /dex/pairs?venue_id` → `mangrovemarkets_client().dex.supported_pairs(venue_id)`
-  - `POST /dex/quote` → `mangrovemarkets_client().dex.get_quote(...)`
+  - `GET /dex/venues` → `mangrove_markets_client().dex.supported_venues()`
+  - `GET /dex/pairs?venue_id` → `mangrove_markets_client().dex.supported_pairs(venue_id)`
+  - `POST /dex/quote` → `mangrove_markets_client().dex.get_quote(...)`
 - [ ] **Step 2:** `POST /dex/swap`:
   - Require `confirm=True` else raise `ConfirmationRequired`
   - Build `OrderIntent` from request body
@@ -558,19 +558,19 @@ Goal: every spec endpoint and MCP tool is wired up. After this phase, the agent 
 - Create: `server/src/api/routes/kb.py`
 - Create: `server/tests/integration/test_passthrough_routes.py`
 
-- [ ] **Step 1:** market routes — all delegate to `mangroveai_client().crypto_assets.*`:
+- [ ] **Step 1:** market routes — all delegate to `mangrove_ai_client().crypto_assets.*`:
   - `GET /market/ohlcv?symbol&timeframe&lookback_days`
   - `GET /market/data?symbol`
   - `GET /market/trending`
   - `GET /market/global`
-- [ ] **Step 2:** on-chain routes — delegate to `mangroveai_client().on_chain.*`:
+- [ ] **Step 2:** on-chain routes — delegate to `mangrove_ai_client().on_chain.*`:
   - `GET /on-chain/smart-money?symbol&chain`
   - `GET /on-chain/whale-activity?symbol&hours_back`
   - `GET /on-chain/token-holders/{symbol}`
-- [ ] **Step 3:** signals routes — delegate to `mangroveai_client().signals.*`:
+- [ ] **Step 3:** signals routes — delegate to `mangrove_ai_client().signals.*`:
   - `GET /signals?category&search&limit`
   - `GET /signals/{name}`
-- [ ] **Step 4:** KB routes — delegate to `mangroveai_client().kb.*`:
+- [ ] **Step 4:** KB routes — delegate to `mangrove_ai_client().kb.*`:
   - `GET /kb/search?q&limit`
   - `GET /kb/glossary/{term}`
 - [ ] **Step 5:** one integration test per route that just confirms the SDK call succeeds and the response is well-formed (mock the SDK; we're testing the wiring, not the SDK).

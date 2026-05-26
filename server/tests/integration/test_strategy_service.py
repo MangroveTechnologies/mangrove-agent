@@ -53,7 +53,7 @@ def temp_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def mock_ai_sdk(monkeypatch):
-    """Stub mangroveai_client used by strategy_service + candidate_generator + backtest_service."""
+    """Stub mangrove_ai_client used by strategy_service + candidate_generator + backtest_service."""
     from tests.unit.test_candidate_generator import _catalog
 
     client = MagicMock()
@@ -104,9 +104,9 @@ def mock_ai_sdk(monkeypatch):
     client.execution.evaluate.return_value = eval_resp
 
     for path in (
-        "src.services.candidate_generator.mangroveai_client",
-        "src.services.backtest_service.mangroveai_client",
-        "src.services.strategy_service.mangroveai_client",
+        "src.services.candidate_generator.mangrove_ai_client",
+        "src.services.backtest_service.mangrove_ai_client",
+        "src.services.strategy_service.mangrove_ai_client",
     ):
         monkeypatch.setattr(path, lambda c=client: c)
     return client
@@ -316,7 +316,7 @@ def test_tick_paper_mode_logs_simulated_trade(temp_db, mock_ai_sdk, monkeypatch)
     md = MagicMock()
     md.data = {"current_price": 2500.0}
     mock_ai_sdk.crypto_assets.get_market_data.return_value = md
-    monkeypatch.setattr("src.services.order_executor.mangroveai_client",
+    monkeypatch.setattr("src.services.order_executor.mangrove_ai_client",
                         lambda: mock_ai_sdk)
 
     s = create_manual(StrategyManualRequest(

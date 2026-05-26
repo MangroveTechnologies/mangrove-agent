@@ -91,8 +91,8 @@ def client(tmp_path, monkeypatch):
     }
     sdk.dex.gas_price.return_value = gas_price
 
-    monkeypatch.setattr("src.api.routes.dex.mangrovemarkets_client", lambda: sdk)
-    monkeypatch.setattr("src.services.order_executor.mangrovemarkets_client", lambda: sdk)
+    monkeypatch.setattr("src.api.routes.dex.mangrove_markets_client", lambda: sdk)
+    monkeypatch.setattr("src.services.order_executor.mangrove_markets_client", lambda: sdk)
     monkeypatch.setattr(
         "src.services.order_executor.wallet_sign",
         lambda payload, wallet_address, chain_id=None: "0xSIGNED",

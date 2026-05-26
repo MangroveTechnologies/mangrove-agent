@@ -313,7 +313,7 @@ If you finished the workshop and want to keep going:
    anything that catches your eye. If you find a signal you want
    to build around, ask the bot: `"Tell me how <signal> works and
    build a strategy around it for ETH."`
-6. **Read the SDK.** `from mangroveai import ...` in a Python REPL
+6. **Read the SDK.** `from mangrove_ai import ...` in a Python REPL
    — the SDK is introspectable and well-typed. You'll find
    capabilities you didn't know the bot had.
 
