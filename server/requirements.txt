@@ -13,17 +13,24 @@ PyJWT>=2.9.0
 # and minor bumps may carry breaking changes. Revisit pins when either
 # stabilizes to 1.0.
 # Note: there is no `mangrove-kb` package pinned here — all KB access
-# flows through mangrove_ai.kb.*, which the mangrove-ai SDK already
+# flows through mangrove_ai.kb.*, which the mangroveai SDK already
 # transitively provides. A previous `mangrove-kb>=1.0.0` pin was
 # impossible to resolve (upstream tops out at 0.5.0) and blocked fresh
 # pip installs.
-mangrove-ai>=1.0.0,<2.0.0
-# mangrove-markets 1.0.0 moved EVM wallet keypair generation client-side.
+#
+# Note: PyPI distribution name is `mangroveai` (no hyphen); the import
+# path is `from mangrove_ai import ...`. Distribution-name-≠-import-name
+# is normal Python packaging (Pillow/PIL, beautifulsoup4/bs4, etc.).
+# An attempted PyPI rename to `mangrove-ai` was rejected by PyPI's
+# similarity check — that's why we kept the dist name as-is.
+mangroveai>=1.0.2,<2.0.0
+# mangrovemarkets 1.0.0 moved EVM wallet keypair generation client-side.
 # The agent's wallet_manager.create_wallet() is unaffected — the SDK
 # call signature is unchanged, only the implementation shifted from
-# server-side to local. Pinning to >=1.0.0 guarantees the leak-surface
+# server-side to local. Pinning to >=1.0.2 guarantees the leak-surface
 # fix is in place. See post-mortem: docs/incidents/2026-04-24-eip7702-drain.md
-mangrove-markets>=1.0.0,<2.0.0
+# Same dist-name-vs-import-name story as mangroveai above.
+mangrovemarkets>=1.0.2,<2.0.0
 apscheduler[sqlalchemy]>=3.10
 cryptography>=42
 keyring>=24
