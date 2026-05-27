@@ -61,10 +61,10 @@ def client(tmp_path, monkeypatch):
     sdk.kb.glossary.get.return_value = _resp({"term": "rsi", "definition": "relative strength index"})
 
     for path in (
-        "src.api.routes.market.mangroveai_client",
-        "src.api.routes.on_chain.mangroveai_client",
-        "src.api.routes.signals.mangroveai_client",
-        "src.api.routes.kb.mangroveai_client",
+        "src.api.routes.market.mangrove_ai_client",
+        "src.api.routes.on_chain.mangrove_ai_client",
+        "src.api.routes.signals.mangrove_ai_client",
+        "src.api.routes.kb.mangrove_ai_client",
     ):
         monkeypatch.setattr(path, lambda s=sdk: s)
 

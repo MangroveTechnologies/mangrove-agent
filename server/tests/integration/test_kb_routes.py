@@ -52,7 +52,7 @@ def client(monkeypatch):
     tag.model_dump.return_value = {"name": "momentum", "count": 12}
     sdk.kb.tags.list.return_value = [tag]
 
-    monkeypatch.setattr("src.api.routes.kb.mangroveai_client", lambda: sdk)
+    monkeypatch.setattr("src.api.routes.kb.mangrove_ai_client", lambda: sdk)
 
     from src.app import create_app
     app = create_app()
@@ -108,8 +108,8 @@ def test_indicators_list_with_category_filter(client):
     r = client.get("/api/v1/agent/kb/indicators?category=momentum", headers=_auth())
     assert r.status_code == 200
     # Verify the filter was passed through to the SDK.
-    from src.api.routes.kb import mangroveai_client
-    sdk = mangroveai_client()
+    from src.api.routes.kb import mangrove_ai_client
+    sdk = mangrove_ai_client()
     sdk.kb.indicators.list.assert_called_with(category="momentum")
 
 

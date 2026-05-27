@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from mangroveai.models import CreateStrategyRequest
+from mangrove_ai.models import CreateStrategyRequest
 from pydantic import BaseModel, Field
 
 from src.models.domain import Evaluation, OrderIntent
@@ -33,7 +33,7 @@ from src.services import (
     trade_log,
 )
 from src.shared import timeframes
-from src.shared.clients.mangrove import mangroveai_client
+from src.shared.clients.mangrove import mangrove_ai_client
 from src.shared.db.sqlite import get_connection
 from src.shared.errors import (
     SdkError,
@@ -264,7 +264,7 @@ def create_autonomous(req: StrategyAutonomousRequest) -> tuple[StrategyDetailRes
 
     # Build the SDK request from the winning candidate.
     try:
-        detail = mangroveai_client().strategies.create(
+        detail = mangrove_ai_client().strategies.create(
             CreateStrategyRequest(
                 name=winner.candidate.name,
                 asset=winner.candidate.asset,
@@ -327,7 +327,7 @@ def create_manual(req: StrategyManualRequest) -> StrategyDetailResponse:
     _validate_composition(req.entry, req.exit)
 
     try:
-        detail = mangroveai_client().strategies.create(
+        detail = mangrove_ai_client().strategies.create(
             CreateStrategyRequest(
                 name=req.name, asset=req.asset,
                 entry=req.entry, exit=req.exit,
@@ -423,7 +423,7 @@ def update_status(strategy_id: str, update: StrategyStatusUpdate) -> StrategyDet
 
     # Sync status upstream.
     try:
-        mangroveai_client().strategies.update_status(row["mangrove_id"], target)
+        mangrove_ai_client().strategies.update_status(row["mangrove_id"], target)
     except Exception as e:  # noqa: BLE001
         # If we already recorded an allocation, roll it back.
         if target == "live":
@@ -490,7 +490,7 @@ def tick(strategy_id: str) -> None:
 
         try:
             persist = mode == "live"
-            sdk_resp = mangroveai_client().execution.evaluate(
+            sdk_resp = mangrove_ai_client().execution.evaluate(
                 row["mangrove_id"], persist=persist,
             )
         except Exception as e:  # noqa: BLE001

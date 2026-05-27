@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from src.models.domain import OrderIntent
 from src.services.order_executor import execute_one
 from src.shared.auth.dependency import require_api_key
-from src.shared.clients.mangrove import mangrovemarkets_client
+from src.shared.clients.mangrove import mangrove_markets_client
 from src.shared.errors import ConfirmationRequired, SdkError
 
 router = APIRouter(
@@ -32,7 +32,7 @@ router = APIRouter(
 @router.get("/venues", summary="List DEX venues")
 async def dex_venues() -> list[Any]:
     try:
-        venues = mangrovemarkets_client().dex.supported_venues()
+        venues = mangrove_markets_client().dex.supported_venues()
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"dex.supported_venues failed: {e}") from e
     return [v.model_dump() if hasattr(v, "model_dump") else v for v in venues]
@@ -41,7 +41,7 @@ async def dex_venues() -> list[Any]:
 @router.get("/pairs", summary="List trading pairs for a venue")
 async def dex_pairs(venue_id: str) -> list[Any]:
     try:
-        pairs = mangrovemarkets_client().dex.supported_pairs(venue_id=venue_id)
+        pairs = mangrove_markets_client().dex.supported_pairs(venue_id=venue_id)
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"dex.supported_pairs failed: {e}") from e
     return [p.model_dump() if hasattr(p, "model_dump") else p for p in pairs]
@@ -58,7 +58,7 @@ class QuoteRequest(BaseModel):
 @router.post("/quote", summary="Get a swap quote")
 async def dex_quote(req: QuoteRequest) -> dict:
     try:
-        quote = mangrovemarkets_client().dex.get_quote(
+        quote = mangrove_markets_client().dex.get_quote(
             input_token=req.input_token,
             output_token=req.output_token,
             amount=req.amount,
@@ -178,7 +178,7 @@ async def tx_status(
     venue_id: str | None = None,
 ) -> Any:
     try:
-        return _dump(mangrovemarkets_client().dex.tx_status(
+        return _dump(mangrove_markets_client().dex.tx_status(
             tx_hash=tx_hash, chain_id=chain_id, venue_id=venue_id,
         ))
     except Exception as e:  # noqa: BLE001
@@ -196,7 +196,7 @@ async def tx_status(
 )
 async def token_info(chain_id: int, address: str) -> Any:
     try:
-        return _dump(mangrovemarkets_client().dex.token_info(
+        return _dump(mangrove_markets_client().dex.token_info(
             chain_id=chain_id, address=address,
         ))
     except Exception as e:  # noqa: BLE001
@@ -213,7 +213,7 @@ async def token_info(chain_id: int, address: str) -> Any:
 )
 async def spot_price(chain_id: int, tokens: str) -> Any:
     try:
-        return _dump(mangrovemarkets_client().dex.spot_price(
+        return _dump(mangrove_markets_client().dex.spot_price(
             chain_id=chain_id, tokens=tokens,
         ))
     except Exception as e:  # noqa: BLE001
@@ -231,6 +231,6 @@ async def spot_price(chain_id: int, tokens: str) -> Any:
 )
 async def gas_price(chain_id: int) -> Any:
     try:
-        return _dump(mangrovemarkets_client().dex.gas_price(chain_id=chain_id))
+        return _dump(mangrove_markets_client().dex.gas_price(chain_id=chain_id))
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"dex.gas_price failed: {e}") from e

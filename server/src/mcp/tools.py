@@ -87,6 +87,7 @@ def register(server: FastMCP):
     _register_strategy(server)
     _register_logs(server)
     _register_kb(server)
+    _register_oracle(server)
     _register_hello_mangrove(server)
 
 
@@ -244,8 +245,8 @@ def _register_wallet(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrovemarkets_client
-            result = mangrovemarkets_client().dex.balances(chain_id=chain_id, wallet=address)
+            from src.shared.clients.mangrove import mangrove_markets_client
+            result = mangrove_markets_client().dex.balances(chain_id=chain_id, wallet=address)
             return json.dumps(_dump(result))
         except AgentError as e:
             return _handle_agent_error(e)
@@ -278,8 +279,8 @@ def _register_wallet(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrovemarkets_client
-            result = mangrovemarkets_client().portfolio.value(
+            from src.shared.clients.mangrove import mangrove_markets_client
+            result = mangrove_markets_client().portfolio.value(
                 addresses=addresses, chain_id=chain_id,
             )
             return json.dumps(_dump(result))
@@ -310,8 +311,8 @@ def _register_wallet(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrovemarkets_client
-            result = mangrovemarkets_client().portfolio.pnl(
+            from src.shared.clients.mangrove import mangrove_markets_client
+            result = mangrove_markets_client().portfolio.pnl(
                 addresses=addresses, chain_id=chain_id,
             )
             return json.dumps(_dump(result))
@@ -341,8 +342,8 @@ def _register_wallet(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrovemarkets_client
-            result = mangrovemarkets_client().portfolio.tokens(
+            from src.shared.clients.mangrove import mangrove_markets_client
+            result = mangrove_markets_client().portfolio.tokens(
                 addresses=addresses, chain_id=chain_id,
             )
             return json.dumps(_dump(result))
@@ -368,8 +369,8 @@ def _register_wallet(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrovemarkets_client
-            result = mangrovemarkets_client().portfolio.defi(
+            from src.shared.clients.mangrove import mangrove_markets_client
+            result = mangrove_markets_client().portfolio.defi(
                 addresses=addresses, chain_id=chain_id,
             )
             return json.dumps(_dump(result))
@@ -400,8 +401,8 @@ def _register_wallet(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrovemarkets_client
-            items = mangrovemarkets_client().portfolio.history(
+            from src.shared.clients.mangrove import mangrove_markets_client
+            items = mangrove_markets_client().portfolio.history(
                 address=address, limit=limit,
             )
             return json.dumps([_dump(i) for i in items])
@@ -431,8 +432,8 @@ def _register_dex(server: FastMCP) -> None:
         """List supported DEX venues."""
         if not _require(api_key):
             return _auth_error()
-        from src.shared.clients.mangrove import mangrovemarkets_client
-        venues = mangrovemarkets_client().dex.supported_venues()
+        from src.shared.clients.mangrove import mangrove_markets_client
+        venues = mangrove_markets_client().dex.supported_venues()
         return json.dumps([_dump(v) for v in venues])
 
     register_tool(ToolEntry(
@@ -459,7 +460,7 @@ def _register_dex(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrovemarkets_client
+            from src.shared.clients.mangrove import mangrove_markets_client
             kwargs: dict[str, Any] = {
                 "input_token": input_token,
                 "output_token": output_token,
@@ -469,7 +470,7 @@ def _register_dex(server: FastMCP) -> None:
             }
             if mode is not None:
                 kwargs["mode"] = mode
-            q = mangrovemarkets_client().dex.get_quote(**kwargs)
+            q = mangrove_markets_client().dex.get_quote(**kwargs)
             return json.dumps(_dump(q))
         except AgentError as e:
             return _handle_agent_error(e)
@@ -576,8 +577,8 @@ def _register_dex(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrovemarkets_client
-            result = mangrovemarkets_client().dex.tx_status(
+            from src.shared.clients.mangrove import mangrove_markets_client
+            result = mangrove_markets_client().dex.tx_status(
                 tx_hash=tx_hash, chain_id=chain_id, venue_id=venue_id,
             )
             return json.dumps(_dump(result))
@@ -618,8 +619,8 @@ def _register_dex(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrovemarkets_client
-            result = mangrovemarkets_client().dex.token_info(
+            from src.shared.clients.mangrove import mangrove_markets_client
+            result = mangrove_markets_client().dex.token_info(
                 chain_id=chain_id, address=address,
             )
             return json.dumps(_dump(result))
@@ -656,8 +657,8 @@ def _register_dex(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrovemarkets_client
-            result = mangrovemarkets_client().dex.spot_price(
+            from src.shared.clients.mangrove import mangrove_markets_client
+            result = mangrove_markets_client().dex.spot_price(
                 chain_id=chain_id, tokens=tokens,
             )
             return json.dumps(_dump(result))
@@ -695,8 +696,8 @@ def _register_dex(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrovemarkets_client
-            result = mangrovemarkets_client().dex.gas_price(chain_id=chain_id)
+            from src.shared.clients.mangrove import mangrove_markets_client
+            result = mangrove_markets_client().dex.gas_price(chain_id=chain_id)
             return json.dumps(_dump(result))
         except Exception as e:  # noqa: BLE001
             return _err("DEX_GAS_PRICE_FAILED", str(e))
@@ -725,8 +726,8 @@ def _register_dex(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrovemarkets_client
-            results = mangrovemarkets_client().dex.token_search(
+            from src.shared.clients.mangrove import mangrove_markets_client
+            results = mangrove_markets_client().dex.token_search(
                 chain_id=chain_id, query=query,
             )
             return json.dumps([_dump(r) for r in results])
@@ -765,8 +766,8 @@ def _register_dex(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrovemarkets_client
-            result = mangrovemarkets_client().dex.chart(
+            from src.shared.clients.mangrove import mangrove_markets_client
+            result = mangrove_markets_client().dex.chart(
                 chain_id=chain_id, token0=token0, token1=token1, period=period,
             )
             return json.dumps([_dump(c) for c in result])
@@ -798,8 +799,8 @@ def _register_dex(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrovemarkets_client
-            result = mangrovemarkets_client().dex.allowances(
+            from src.shared.clients.mangrove import mangrove_markets_client
+            result = mangrove_markets_client().dex.allowances(
                 chain_id=chain_id, wallet=wallet, spender=spender,
             )
             return json.dumps(_dump(result))
@@ -840,11 +841,11 @@ def _register_market(server: FastMCP) -> None:
         """
         if not _require(api_key):
             return _auth_error()
-        from src.shared.clients.mangrove import mangroveai_client
+        from src.shared.clients.mangrove import mangrove_ai_client
         kwargs: dict[str, Any] = {"symbol": symbol, "days": lookback_days}
         if provider is not None:
             kwargs["provider"] = provider
-        result = mangroveai_client().crypto_assets.get_ohlcv(**kwargs)
+        result = mangrove_ai_client().crypto_assets.get_ohlcv(**kwargs)
         return json.dumps(_dump(result))
 
     register_tool(ToolEntry(
@@ -876,11 +877,11 @@ def _register_market(server: FastMCP) -> None:
         """
         if not _require(api_key):
             return _auth_error()
-        from src.shared.clients.mangrove import mangroveai_client
+        from src.shared.clients.mangrove import mangrove_ai_client
         kwargs: dict[str, Any] = {"symbol": symbol}
         if provider is not None:
             kwargs["provider"] = provider
-        return json.dumps(_dump(mangroveai_client().crypto_assets.get_market_data(**kwargs)))
+        return json.dumps(_dump(mangrove_ai_client().crypto_assets.get_market_data(**kwargs)))
 
     register_tool(ToolEntry(
         name="get_market_data",
@@ -903,8 +904,8 @@ def _register_market(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangroveai_client
-            return json.dumps(_dump(mangroveai_client().crypto_assets.get_trending()))
+            from src.shared.clients.mangrove import mangrove_ai_client
+            return json.dumps(_dump(mangrove_ai_client().crypto_assets.get_trending()))
         except Exception as e:  # noqa: BLE001
             return _err("CRYPTO_TRENDING_FAILED", str(e))
 
@@ -928,11 +929,11 @@ def _register_market(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangroveai_client
+            from src.shared.clients.mangrove import mangrove_ai_client
             kwargs: dict[str, Any] = {"approved_only": True, "limit": limit}
             if min_score is not None:
                 kwargs["min_score"] = min_score
-            items = mangroveai_client().crypto_assets.list(**kwargs)
+            items = mangrove_ai_client().crypto_assets.list(**kwargs)
             return json.dumps([_dump(i) for i in items])
         except Exception as e:  # noqa: BLE001
             return _err("CRYPTO_LIST_FAILED", str(e))
@@ -958,8 +959,8 @@ def _register_market(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangroveai_client
-            return json.dumps(_dump(mangroveai_client().crypto_assets.get(symbol)))
+            from src.shared.clients.mangrove import mangrove_ai_client
+            return json.dumps(_dump(mangrove_ai_client().crypto_assets.get(symbol)))
         except Exception as e:  # noqa: BLE001
             return _err("CRYPTO_GET_FAILED", str(e))
 
@@ -983,8 +984,8 @@ def _register_market(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangroveai_client
-            return json.dumps(_dump(mangroveai_client().crypto_assets.get_global_market()))
+            from src.shared.clients.mangrove import mangrove_ai_client
+            return json.dumps(_dump(mangrove_ai_client().crypto_assets.get_global_market()))
         except Exception as e:  # noqa: BLE001
             return _err("CRYPTO_GLOBAL_FAILED", str(e))
 
@@ -1008,10 +1009,10 @@ def _register_signals(server: FastMCP) -> None:
         """List available signals (optionally filtered by category or search)."""
         if not _require(api_key):
             return _auth_error()
-        from src.shared.clients.mangrove import mangroveai_client
-        client = mangroveai_client()
+        from src.shared.clients.mangrove import mangrove_ai_client
+        client = mangrove_ai_client()
         if search:
-            from mangroveai.models import SearchSignalsRequest
+            from mangrove_ai.models import SearchSignalsRequest
             page = client.signals.search(SearchSignalsRequest(query=search, limit=limit))
             items = [_dump(s) for s in getattr(page, "items", [])]
         else:
@@ -1044,8 +1045,8 @@ def _register_signals(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangroveai_client
-            return json.dumps(_dump(mangroveai_client().signals.get(signal_name)))
+            from src.shared.clients.mangrove import mangrove_ai_client
+            return json.dumps(_dump(mangrove_ai_client().signals.get(signal_name)))
         except Exception as e:  # noqa: BLE001
             return _err("SIGNAL_GET_FAILED", str(e))
 
@@ -1076,8 +1077,8 @@ def _register_signals(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangroveai_client
-            r = mangroveai_client().signals.match(
+            from src.shared.clients.mangrove import mangrove_ai_client
+            r = mangrove_ai_client().signals.match(
                 description=description, top_k=top_k,
                 similarity_threshold=similarity_threshold,
             )
@@ -1109,11 +1110,11 @@ def _register_signals(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from mangroveai.models import SearchSignalsRequest
+            from mangrove_ai.models import SearchSignalsRequest
 
-            from src.shared.clients.mangrove import mangroveai_client
+            from src.shared.clients.mangrove import mangrove_ai_client
             req = SearchSignalsRequest(query=query, limit=limit, offset=offset)
-            page = mangroveai_client().signals.search(req)
+            page = mangrove_ai_client().signals.search(req)
             items = [_dump(s) for s in getattr(page, "items", [])]
             return json.dumps({
                 "items": items,
@@ -1148,7 +1149,7 @@ def _register_on_chain(server: FastMCP) -> None:
     intelligence" rule — they provide the 'why now' evidence for a
     candidate strategy.
     """
-    from src.shared.clients.mangrove import mangroveai_client
+    from src.shared.clients.mangrove import mangrove_ai_client
 
     @server.tool()
     async def get_whale_activity(
@@ -1158,7 +1159,7 @@ def _register_on_chain(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            r = mangroveai_client().on_chain.get_whale_activity(
+            r = mangrove_ai_client().on_chain.get_whale_activity(
                 symbol=symbol, hours_back=hours_back,
             )
             return json.dumps(_dump(r))
@@ -1190,7 +1191,7 @@ def _register_on_chain(server: FastMCP) -> None:
             }
             if symbol is not None:
                 kwargs["symbol"] = symbol
-            r = mangroveai_client().on_chain.get_whale_transactions(**kwargs)
+            r = mangrove_ai_client().on_chain.get_whale_transactions(**kwargs)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
             return _err("ONCHAIN_WHALE_TXS_FAILED", str(e))
@@ -1226,7 +1227,7 @@ def _register_on_chain(server: FastMCP) -> None:
             kwargs: dict[str, Any] = {"symbol": symbol}
             if chain is not None:
                 kwargs["chain"] = chain
-            r = mangroveai_client().on_chain.get_smart_money_sentiment(**kwargs)
+            r = mangrove_ai_client().on_chain.get_smart_money_sentiment(**kwargs)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
             return _err("ONCHAIN_SMART_MONEY_FAILED", str(e))
@@ -1254,7 +1255,7 @@ def _register_on_chain(server: FastMCP) -> None:
             kwargs: dict[str, Any] = {"timeframe": timeframe, "limit": limit}
             if chains is not None:
                 kwargs["chains"] = chains
-            r = mangroveai_client().on_chain.screen_smart_money(**kwargs)
+            r = mangrove_ai_client().on_chain.screen_smart_money(**kwargs)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
             return _err("ONCHAIN_SMART_MONEY_SCREEN_FAILED", str(e))
@@ -1277,7 +1278,7 @@ def _register_on_chain(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            r = mangroveai_client().on_chain.get_token_holders(symbol=symbol)
+            r = mangrove_ai_client().on_chain.get_token_holders(symbol=symbol)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
             return _err("ONCHAIN_HOLDERS_FAILED", str(e))
@@ -1306,7 +1307,7 @@ def _register_on_chain(server: FastMCP) -> None:
             kwargs: dict[str, Any] = {"hours_back": hours_back}
             if symbol is not None:
                 kwargs["symbol"] = symbol
-            r = mangroveai_client().on_chain.get_exchange_flows(**kwargs)
+            r = mangrove_ai_client().on_chain.get_exchange_flows(**kwargs)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
             return _err("ONCHAIN_EXCHANGE_FLOWS_FAILED", str(e))
@@ -1330,7 +1331,7 @@ def _register_on_chain(server: FastMCP) -> None:
 
 def _register_defi(server: FastMCP) -> None:
     """Macro DeFi metrics (TVL, stablecoin supply)."""
-    from src.shared.clients.mangrove import mangroveai_client
+    from src.shared.clients.mangrove import mangrove_ai_client
 
     @server.tool()
     async def get_chain_tvl(chain: str, api_key: str = "") -> str:
@@ -1338,7 +1339,7 @@ def _register_defi(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            return json.dumps(_dump(mangroveai_client().defi.get_chain_tvl(chain=chain)))
+            return json.dumps(_dump(mangrove_ai_client().defi.get_chain_tvl(chain=chain)))
         except Exception as e:  # noqa: BLE001
             return _err("DEFI_CHAIN_TVL_FAILED", str(e))
 
@@ -1358,7 +1359,7 @@ def _register_defi(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            return json.dumps(_dump(mangroveai_client().defi.get_protocol_tvl(protocol=protocol)))
+            return json.dumps(_dump(mangrove_ai_client().defi.get_protocol_tvl(protocol=protocol)))
         except Exception as e:  # noqa: BLE001
             return _err("DEFI_PROTOCOL_TVL_FAILED", str(e))
 
@@ -1378,7 +1379,7 @@ def _register_defi(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            return json.dumps(_dump(mangroveai_client().defi.get_stablecoin_metrics()))
+            return json.dumps(_dump(mangrove_ai_client().defi.get_stablecoin_metrics()))
         except Exception as e:  # noqa: BLE001
             return _err("DEFI_STABLECOIN_FAILED", str(e))
 
@@ -1397,7 +1398,7 @@ def _register_defi(server: FastMCP) -> None:
 
 def _register_social(server: FastMCP) -> None:
     """Twitter/X sentiment + influence + mentions. Experimental context."""
-    from src.shared.clients.mangrove import mangroveai_client
+    from src.shared.clients.mangrove import mangrove_ai_client
 
     @server.tool()
     async def get_sentiment(
@@ -1407,7 +1408,7 @@ def _register_social(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            r = mangroveai_client().social.get_sentiment(topic=topic, hours_back=hours_back)
+            r = mangrove_ai_client().social.get_sentiment(topic=topic, hours_back=hours_back)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
             return _err("SOCIAL_SENTIMENT_FAILED", str(e))
@@ -1431,7 +1432,7 @@ def _register_social(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            r = mangroveai_client().social.get_mentions(
+            r = mangrove_ai_client().social.get_mentions(
                 topic=topic, hours_back=hours_back, limit=limit,
             )
             return json.dumps(_dump(r))
@@ -1456,7 +1457,7 @@ def _register_social(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            r = mangroveai_client().social.get_influence_score(username=username)
+            r = mangrove_ai_client().social.get_influence_score(username=username)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
             return _err("SOCIAL_INFLUENCE_FAILED", str(e))
@@ -1479,7 +1480,7 @@ def _register_social(server: FastMCP) -> None:
 
 def _register_docs(server: FastMCP) -> None:
     """MangroveAI developer docs (API reference + guides)."""
-    from src.shared.clients.mangrove import mangroveai_client
+    from src.shared.clients.mangrove import mangrove_ai_client
 
     @server.tool()
     async def list_docs(api_key: str = "") -> str:
@@ -1493,7 +1494,7 @@ def _register_docs(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            items = mangroveai_client().docs.list()
+            items = mangrove_ai_client().docs.list()
             return json.dumps([_dump(i) for i in items])
         except Exception as e:  # noqa: BLE001
             return _err("DOCS_LIST_FAILED", str(e))
@@ -1516,7 +1517,7 @@ def _register_docs(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            return json.dumps(_dump(mangroveai_client().docs.get_content(path=path)))
+            return json.dumps(_dump(mangrove_ai_client().docs.get_content(path=path)))
         except Exception as e:  # noqa: BLE001
             return _err("DOCS_GET_FAILED", str(e))
 
@@ -1908,13 +1909,13 @@ def _register_strategy(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangroveai_client
+            from src.shared.clients.mangrove import mangrove_ai_client
             kwargs: dict[str, Any] = {"skip": skip, "limit": limit}
             if account_id is not None:
                 kwargs["account_id"] = account_id
             if status is not None:
                 kwargs["status"] = status
-            items = mangroveai_client().execution.list_positions(**kwargs)
+            items = mangrove_ai_client().execution.list_positions(**kwargs)
             return json.dumps([_dump(i) for i in items])
         except Exception as e:  # noqa: BLE001
             return _err("EXECUTION_POSITIONS_FAILED", str(e))
@@ -1938,8 +1939,8 @@ def _register_strategy(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangroveai_client
-            return json.dumps(_dump(mangroveai_client().execution.get_position(position_id)))
+            from src.shared.clients.mangrove import mangrove_ai_client
+            return json.dumps(_dump(mangrove_ai_client().execution.get_position(position_id)))
         except Exception as e:  # noqa: BLE001
             return _err("EXECUTION_POSITION_GET_FAILED", str(e))
 
@@ -1971,7 +1972,7 @@ def _register_strategy(server: FastMCP) -> None:
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangroveai_client
+            from src.shared.clients.mangrove import mangrove_ai_client
             kwargs: dict[str, Any] = {"skip": skip, "limit": limit}
             if account_id is not None:
                 kwargs["account_id"] = account_id
@@ -1979,7 +1980,7 @@ def _register_strategy(server: FastMCP) -> None:
                 kwargs["asset"] = asset
             if outcome is not None:
                 kwargs["outcome"] = outcome
-            items = mangroveai_client().execution.list_trades(**kwargs)
+            items = mangrove_ai_client().execution.list_trades(**kwargs)
             return json.dumps([_dump(i) for i in items])
         except Exception as e:  # noqa: BLE001
             return _err("EXECUTION_TRADES_FAILED", str(e))
@@ -2013,10 +2014,10 @@ def _register_strategy(server: FastMCP) -> None:
             return _auth_error()
         try:
             from src.services.strategy_service import get_strategy
-            from src.shared.clients.mangrove import mangroveai_client
+            from src.shared.clients.mangrove import mangrove_ai_client
             # Look up the mangrove_id from our local cache.
             detail = get_strategy(strategy_id)
-            r = mangroveai_client().strategies.delete(detail.mangrove_id)
+            r = mangrove_ai_client().strategies.delete(detail.mangrove_id)
             return json.dumps(_dump(r))
         except AgentError as e:
             return _handle_agent_error(e)
@@ -2120,8 +2121,8 @@ def _register_kb(server: FastMCP) -> None:
         """Full-text search the knowledge base."""
         if not _require(api_key):
             return _auth_error()
-        from src.shared.clients.mangrove import mangroveai_client
-        return json.dumps(_dump(mangroveai_client().kb.search.query(q=q, limit=limit)))
+        from src.shared.clients.mangrove import mangrove_ai_client
+        return json.dumps(_dump(mangrove_ai_client().kb.search.query(q=q, limit=limit)))
 
     register_tool(ToolEntry(
         name="kb_search",
@@ -2144,9 +2145,9 @@ def _register_kb(server: FastMCP) -> None:
         """
         if not _require(api_key):
             return _auth_error()
-        from src.shared.clients.mangrove import mangroveai_client
+        from src.shared.clients.mangrove import mangrove_ai_client
         try:
-            return json.dumps(_dump(mangroveai_client().kb.glossary.get(term)))
+            return json.dumps(_dump(mangrove_ai_client().kb.glossary.get(term)))
         except Exception as e:  # noqa: BLE001
             return _err("KB_GLOSSARY_FAILED", str(e))
 
@@ -2172,9 +2173,9 @@ def _register_kb(server: FastMCP) -> None:
         """
         if not _require(api_key):
             return _auth_error()
-        from src.shared.clients.mangrove import mangroveai_client
+        from src.shared.clients.mangrove import mangrove_ai_client
         try:
-            return json.dumps(_dump(mangroveai_client().kb.documents.get(slug)))
+            return json.dumps(_dump(mangrove_ai_client().kb.documents.get(slug)))
         except Exception as e:  # noqa: BLE001
             return _err("KB_DOCUMENT_NOT_FOUND", str(e))
 
@@ -2207,12 +2208,12 @@ def _register_kb(server: FastMCP) -> None:
         """
         if not _require(api_key):
             return _auth_error()
-        from src.shared.clients.mangrove import mangroveai_client
+        from src.shared.clients.mangrove import mangrove_ai_client
         kwargs: dict[str, Any] = {}
         if category is not None:
             kwargs["category"] = category
         try:
-            return json.dumps([_dump(i) for i in mangroveai_client().kb.indicators.list(**kwargs)])
+            return json.dumps([_dump(i) for i in mangrove_ai_client().kb.indicators.list(**kwargs)])
         except Exception as e:  # noqa: BLE001
             return _err("KB_INDICATORS_FAILED", str(e))
 
@@ -2231,9 +2232,9 @@ def _register_kb(server: FastMCP) -> None:
         """List all KB tags — useful for navigation or kb_search filtering."""
         if not _require(api_key):
             return _auth_error()
-        from src.shared.clients.mangrove import mangroveai_client
+        from src.shared.clients.mangrove import mangrove_ai_client
         try:
-            return json.dumps([_dump(t) for t in mangroveai_client().kb.tags.list()])
+            return json.dumps([_dump(t) for t in mangrove_ai_client().kb.tags.list()])
         except Exception as e:  # noqa: BLE001
             return _err("KB_TAGS_FAILED", str(e))
 
@@ -2242,6 +2243,156 @@ def _register_kb(server: FastMCP) -> None:
         description="List KB tags (navigation + kb_search filtering).",
         access="auth",
         parameters=[_APIKEY],
+    ))
+
+
+# ---------------------------------------------------------------------------
+# Oracle (auth) — SIEVE + data query + Oracle backtest
+# ---------------------------------------------------------------------------
+
+
+def _register_oracle(server: FastMCP) -> None:
+    """SIEVE scoring + curated corpus query + Oracle backtest tools.
+
+    All three are auth-gated. The agent forwards to the mangrove-ai SDK's
+    `client.oracle.*` surface, which proxies through MangroveAI's
+    `/api/v1/oracle/*` to MangroveOracle.
+    """
+
+    @server.tool()
+    async def sieve_score(
+        strategies: list[dict[str, Any]],
+        api_key: str = "",
+    ) -> str:
+        """Score up to 99 candidate strategies through the Mangrove SIEVE
+        classifier. Returns binary go/no-go and 4-class outcome
+        probabilities per strategy, with `model_version` + `code_version`
+        for provenance.
+
+        Use BEFORE paying for backtests: SIEVE cheaply rules out
+        strategies the model predicts will produce no trades, win nothing,
+        or lose. Then backtest only the survivors.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            from src.services.oracle import SieveScoreInput
+            from src.services.oracle import sieve_score as svc
+            result = svc(SieveScoreInput(strategies=strategies))
+            return json.dumps(result)
+        except AgentError as e:
+            return _handle_agent_error(e)
+
+    register_tool(ToolEntry(
+        name="sieve_score",
+        description=(
+            "Score 1-99 strategies through Mangrove SIEVE before paying for "
+            "backtests. Returns binary + 4-class probabilities per item, "
+            "with model + code provenance."
+        ),
+        access="auth",
+        parameters=[
+            ToolParam(
+                name="strategies",
+                type="array<Strategy>",
+                required=True,
+                description="MangroveAI-shaped Strategy objects (1-99 items).",
+            ),
+            _APIKEY,
+        ],
+    ))
+
+    @server.tool()
+    async def oracle_data_query(
+        table: str,
+        select: list[str],
+        filters: list[dict[str, Any]] | None = None,
+        order_by: list[str] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        api_key: str = "",
+    ) -> str:
+        """Query the curated Oracle corpus (results / ohlcv) through the
+        BigQuery proxy. Columns and filter operators are whitelisted
+        server-side. Tenancy is enforced: `WHERE org_id = <caller's org>`
+        is injected by Oracle — you can never read another tenant's rows.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            from src.services.oracle import DataQueryInput
+            from src.services.oracle import data_query as svc
+            result = svc(DataQueryInput(
+                table=table,
+                select=select,
+                filters=filters or [],
+                order_by=order_by,
+                limit=limit,
+                offset=offset,
+            ))
+            return json.dumps(result)
+        except AgentError as e:
+            return _handle_agent_error(e)
+
+    register_tool(ToolEntry(
+        name="oracle_data_query",
+        description=(
+            "Query the curated Oracle corpus (results / ohlcv). Whitelist-"
+            "enforced columns + filter ops; tenancy injected server-side."
+        ),
+        access="auth",
+        parameters=[
+            ToolParam(name="table", type="string", required=True, description="'results' | 'ohlcv'"),
+            ToolParam(name="select", type="array<string>", required=True, description="Columns to return."),
+            ToolParam(name="filters", type="array<{col,op,value}>", required=False, description="Filter clauses."),
+            ToolParam(name="order_by", type="array<string>", required=False, description="Optional ORDER BY clauses."),
+            ToolParam(name="limit", type="integer", required=False, description="Default 100, max 1000."),
+            ToolParam(name="offset", type="integer", required=False, description="Default 0."),
+            _APIKEY,
+        ],
+    ))
+
+    @server.tool()
+    async def oracle_backtest(
+        asset: str,
+        interval: str,
+        strategy_json: str,
+        lookback_months: int | None = 12,
+        api_key: str = "",
+    ) -> str:
+        """Backtest a single strategy synchronously through Oracle's engine.
+        Blocks until the engine finishes (30-120s on multi-month windows).
+        Returns metrics + trade history. For batch work, prefer the SDK's
+        backtest_async / backtest_bulk directly.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            from src.services.oracle import OracleBacktestInput
+            from src.services.oracle import backtest as svc
+            result = svc(OracleBacktestInput(
+                asset=asset,
+                interval=interval,
+                strategy_json=strategy_json,
+                lookback_months=lookback_months,
+            ))
+            return json.dumps(result)
+        except AgentError as e:
+            return _handle_agent_error(e)
+
+    register_tool(ToolEntry(
+        name="oracle_backtest",
+        description=(
+            "Backtest one strategy through Oracle's engine (synchronous)."
+        ),
+        access="auth",
+        parameters=[
+            ToolParam(name="asset", type="string", required=True, description="e.g. BTC, ETH"),
+            ToolParam(name="interval", type="string", required=True, description="e.g. 1h, 4h, 1d"),
+            ToolParam(name="strategy_json", type="string", required=True, description="Strategy JSON (MangroveAI shape)."),
+            ToolParam(name="lookback_months", type="integer", required=False, description="Default 12."),
+            _APIKEY,
+        ],
     ))
 
 

@@ -109,10 +109,10 @@ def client(tmp_path, monkeypatch):
     sdk.crypto_assets.get_market_data.return_value = md
 
     for path in (
-        "src.services.candidate_generator.mangroveai_client",
-        "src.services.backtest_service.mangroveai_client",
-        "src.services.strategy_service.mangroveai_client",
-        "src.services.order_executor.mangroveai_client",
+        "src.services.candidate_generator.mangrove_ai_client",
+        "src.services.backtest_service.mangrove_ai_client",
+        "src.services.strategy_service.mangrove_ai_client",
+        "src.services.order_executor.mangrove_ai_client",
     ):
         monkeypatch.setattr(path, lambda s=sdk: s)
 

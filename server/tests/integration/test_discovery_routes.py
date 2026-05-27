@@ -112,7 +112,7 @@ def test_status_reports_catalog_counts_when_sdk_reachable(client, monkeypatch):
 
     discovery.reset_catalog_cache()
     monkeypatch.setattr(
-        "src.shared.clients.mangrove.mangroveai_client",
+        "src.shared.clients.mangrove.mangrove_ai_client",
         lambda: _StubClient(),
     )
 
@@ -133,7 +133,7 @@ def test_status_catalog_is_resilient_when_sdk_unreachable(client, monkeypatch):
 
     discovery.reset_catalog_cache()
     monkeypatch.setattr(
-        "src.shared.clients.mangrove.mangroveai_client",
+        "src.shared.clients.mangrove.mangrove_ai_client",
         _raise,
     )
 

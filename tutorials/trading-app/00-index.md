@@ -41,8 +41,9 @@ strategy logic, and market data.
 | 06 | [Wallet setup](06-wallet-setup.md) | yes (~$5 USDC) | 15 min |
 | 07 | [Going live](07-going-live.md) | yes | 20 min |
 | 08 | [Monitor, troubleshoot, extend](08-monitor-troubleshoot-extend.md) | no | 20 min |
+| 09 | [Score strategies with SIEVE before backtesting](09-oracle-strategies.md) | no | 20 min |
 
-**Total if you do everything: ~2 hours.**
+**Total if you do everything: ~2 hr 20 min.**
 
 ## Before you start
 

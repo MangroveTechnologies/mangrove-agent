@@ -43,7 +43,7 @@ def _catalog() -> list[_FakeSignal]:
 
 @pytest.fixture
 def mock_sdk_catalog(monkeypatch):
-    """Stub mangroveai_client().signals.list_iter() with our fake catalog."""
+    """Stub mangrove_ai_client().signals.list_iter() with our fake catalog."""
     client = MagicMock()
     client.signals.list_iter.return_value = iter(_catalog())
 
@@ -53,7 +53,7 @@ def mock_sdk_catalog(monkeypatch):
     client.signals.list_iter.side_effect = _fresh_iter
 
     monkeypatch.setattr(
-        "src.services.candidate_generator.mangroveai_client",
+        "src.services.candidate_generator.mangrove_ai_client",
         lambda: client,
     )
     return client
@@ -160,7 +160,7 @@ def test_generate_raises_when_no_trigger_signals(monkeypatch):
     empty_client = MagicMock()
     empty_client.signals.list_iter.side_effect = lambda **kw: iter([])
     monkeypatch.setattr(
-        "src.services.candidate_generator.mangroveai_client",
+        "src.services.candidate_generator.mangrove_ai_client",
         lambda: empty_client,
     )
 

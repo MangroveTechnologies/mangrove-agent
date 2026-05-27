@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from src.shared.auth.dependency import require_api_key
-from src.shared.clients.mangrove import mangroveai_client
+from src.shared.clients.mangrove import mangrove_ai_client
 from src.shared.errors import SdkError
 
 router = APIRouter(
@@ -27,10 +27,10 @@ async def list_signals(
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
-    client = mangroveai_client()
+    client = mangrove_ai_client()
     try:
         if search:
-            from mangroveai.models import SearchSignalsRequest
+            from mangrove_ai.models import SearchSignalsRequest
             page = client.signals.search(SearchSignalsRequest(query=search, limit=limit, offset=offset))
         else:
             page = client.signals.list(limit=limit, offset=offset)
@@ -53,6 +53,6 @@ async def list_signals(
 @router.get("/{name}", summary="Signal detail with parameter spec")
 async def get_signal(name: str) -> Any:
     try:
-        return _dump(mangroveai_client().signals.get(name))
+        return _dump(mangrove_ai_client().signals.get(name))
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"signals.get failed: {e}") from e

@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from src.shared.auth.dependency import require_api_key
-from src.shared.clients.mangrove import mangroveai_client
+from src.shared.clients.mangrove import mangrove_ai_client
 from src.shared.errors import SdkError
 
 router = APIRouter(
@@ -23,7 +23,7 @@ def _dump(obj: Any) -> Any:
 @router.get("/search", summary="Full-text search the knowledge base")
 async def search(q: str, limit: int = 20) -> Any:
     try:
-        return _dump(mangroveai_client().kb.search.query(q=q, limit=limit))
+        return _dump(mangrove_ai_client().kb.search.query(q=q, limit=limit))
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"kb.search.query failed: {e}") from e
 
@@ -31,7 +31,7 @@ async def search(q: str, limit: int = 20) -> Any:
 @router.get("/glossary/{term}", summary="Glossary term lookup with backlinks")
 async def glossary(term: str) -> Any:
     try:
-        return _dump(mangroveai_client().kb.glossary.get(term))
+        return _dump(mangrove_ai_client().kb.glossary.get(term))
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"kb.glossary.get failed: {e}") from e
 
@@ -39,7 +39,7 @@ async def glossary(term: str) -> Any:
 @router.get("/documents", summary="List all KB documents (summary only)")
 async def documents_list() -> Any:
     try:
-        return [_dump(d) for d in mangroveai_client().kb.documents.list()]
+        return [_dump(d) for d in mangrove_ai_client().kb.documents.list()]
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"kb.documents.list failed: {e}") from e
 
@@ -47,7 +47,7 @@ async def documents_list() -> Any:
 @router.get("/documents/{slug}", summary="Full KB document by slug")
 async def documents_get(slug: str) -> Any:
     try:
-        return _dump(mangroveai_client().kb.documents.get(slug))
+        return _dump(mangrove_ai_client().kb.documents.get(slug))
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"kb.documents.get failed: {e}") from e
 
@@ -58,7 +58,7 @@ async def indicators_list(category: str | None = None) -> Any:
         kwargs: dict[str, Any] = {}
         if category is not None:
             kwargs["category"] = category
-        return [_dump(i) for i in mangroveai_client().kb.indicators.list(**kwargs)]
+        return [_dump(i) for i in mangrove_ai_client().kb.indicators.list(**kwargs)]
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"kb.indicators.list failed: {e}") from e
 
@@ -66,6 +66,6 @@ async def indicators_list(category: str | None = None) -> Any:
 @router.get("/tags", summary="List all KB tags")
 async def tags_list() -> Any:
     try:
-        return [_dump(t) for t in mangroveai_client().kb.tags.list()]
+        return [_dump(t) for t in mangrove_ai_client().kb.tags.list()]
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"kb.tags.list failed: {e}") from e

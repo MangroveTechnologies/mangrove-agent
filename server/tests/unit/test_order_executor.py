@@ -51,18 +51,18 @@ def temp_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def mock_mangroveai(monkeypatch):
-    """Stub mangroveai_client (used by _fetch_mark_price in paper mode)."""
+    """Stub mangrove_ai_client (used by _fetch_mark_price in paper mode)."""
     client = MagicMock()
     market_resp = MagicMock()
     market_resp.data = {"current_price": 2500.0}
     client.crypto_assets.get_market_data.return_value = market_resp
-    monkeypatch.setattr("src.services.order_executor.mangroveai_client", lambda: client)
+    monkeypatch.setattr("src.services.order_executor.mangrove_ai_client", lambda: client)
     return client
 
 
 @pytest.fixture
 def mock_markets(monkeypatch):
-    """Stub mangrovemarkets_client (used in live mode)."""
+    """Stub mangrove_markets_client (used in live mode)."""
     client = MagicMock()
 
     quote = MagicMock()
@@ -91,7 +91,7 @@ def mock_markets(monkeypatch):
     status.error_message = None
     client.dex.tx_status.return_value = status
 
-    monkeypatch.setattr("src.services.order_executor.mangrovemarkets_client", lambda: client)
+    monkeypatch.setattr("src.services.order_executor.mangrove_markets_client", lambda: client)
     return client
 
 
