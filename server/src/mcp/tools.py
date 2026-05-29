@@ -1323,6 +1323,235 @@ def _register_on_chain(server: FastMCP) -> None:
         ],
     ))
 
+    # ----------------------------------------------------------------- #
+    # Nansen Pro coverage (5 endpoints added in mangroveai 1.1.0)
+    # All take optional `filters` / `order_by` dicts passed straight
+    # through to Nansen — give agents the full Pro plan reach (Fund-
+    # labelled wallets, side-filtered DEX trades, etc.).
+    # ----------------------------------------------------------------- #
+
+    @server.tool()
+    async def get_smart_money_historical_holdings(
+        chains: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        filters: dict[str, Any] | None = None,
+        order_by: list[dict[str, str]] | None = None,
+        page: int = 1,
+        per_page: int = 100,
+        api_key: str = "",
+    ) -> str:
+        """Date-stamped Smart Money holdings snapshots across chains (Nansen).
+
+        Show how Fund/VC/CEX-labelled wallets shifted positions over a
+        window. Use with `filters={"include_smart_money_labels": ["Fund"]}`
+        to restrict to a single label class.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            kwargs: dict[str, Any] = {"page": page, "per_page": per_page}
+            for k, v in (("chains", chains), ("date_from", date_from), ("date_to", date_to),
+                         ("filters", filters), ("order_by", order_by)):
+                if v is not None:
+                    kwargs[k] = v
+            r = mangrove_ai_client().on_chain.get_smart_money_historical_holdings(**kwargs)
+            return json.dumps(_dump(r))
+        except Exception as e:  # noqa: BLE001
+            return _err("ONCHAIN_SM_HISTORICAL_HOLDINGS_FAILED", str(e))
+
+    register_tool(ToolEntry(
+        name="get_smart_money_historical_holdings",
+        description="Smart Money historical holdings snapshots across chains (Nansen).",
+        access="auth",
+        parameters=[
+            ToolParam(name="chains", type="array", required=False, description="Chain filter, e.g. ['ethereum', 'solana']. Default ['ethereum']."),
+            ToolParam(name="date_from", type="string", required=False, description="ISO date 'YYYY-MM-DD'."),
+            ToolParam(name="date_to", type="string", required=False, description="ISO date 'YYYY-MM-DD'."),
+            ToolParam(name="filters", type="object", required=False, description="Nansen filter dict (include_smart_money_labels, etc.)"),
+            ToolParam(name="order_by", type="array", required=False, description="Sort spec, e.g. [{'field': 'block_timestamp', 'direction': 'DESC'}]"),
+            ToolParam(name="page", type="integer", required=False, description="Page (default 1)"),
+            ToolParam(name="per_page", type="integer", required=False, description="Items per page (default 100)"),
+            _APIKEY,
+        ],
+    ))
+
+    @server.tool()
+    async def get_smart_money_dex_trades(
+        chains: list[str] | None = None,
+        filters: dict[str, Any] | None = None,
+        order_by: list[dict[str, str]] | None = None,
+        page: int = 1,
+        per_page: int = 100,
+        api_key: str = "",
+    ) -> str:
+        """Recent DEX trades from Smart Money wallets (Nansen).
+
+        Filters accept: ``include_smart_money_labels``, ``token_address``,
+        ``side`` ('buy' | 'sell'), ``min_amount_usd``.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            kwargs: dict[str, Any] = {"page": page, "per_page": per_page}
+            for k, v in (("chains", chains), ("filters", filters), ("order_by", order_by)):
+                if v is not None:
+                    kwargs[k] = v
+            r = mangrove_ai_client().on_chain.get_smart_money_dex_trades(**kwargs)
+            return json.dumps(_dump(r))
+        except Exception as e:  # noqa: BLE001
+            return _err("ONCHAIN_SM_DEX_TRADES_FAILED", str(e))
+
+    register_tool(ToolEntry(
+        name="get_smart_money_dex_trades",
+        description="Recent DEX trades from Smart Money wallets (Nansen).",
+        access="auth",
+        parameters=[
+            ToolParam(name="chains", type="array", required=False, description="Chain filter."),
+            ToolParam(name="filters", type="object", required=False, description="Nansen filter dict."),
+            ToolParam(name="order_by", type="array", required=False, description="Sort spec."),
+            ToolParam(name="page", type="integer", required=False, description="Page (default 1)."),
+            ToolParam(name="per_page", type="integer", required=False, description="Items per page (default 100)."),
+            _APIKEY,
+        ],
+    ))
+
+    @server.tool()
+    async def get_smart_money_perp_trades(
+        filters: dict[str, Any] | None = None,
+        order_by: list[dict[str, str]] | None = None,
+        page: int = 1,
+        per_page: int = 100,
+        api_key: str = "",
+    ) -> str:
+        """Perpetual-futures trades from Smart Money on Hyperliquid (Nansen).
+
+        Hyperliquid-only; upstream doesn't accept a chain filter.
+
+        Filters accept: ``action``, ``side`` ('Long' | 'Short'),
+        ``token_symbol``, ``type`` ('Market' | 'Limit'),
+        ``value_usd`` ({min, max}), ``only_new_positions``.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            kwargs: dict[str, Any] = {"page": page, "per_page": per_page}
+            for k, v in (("filters", filters), ("order_by", order_by)):
+                if v is not None:
+                    kwargs[k] = v
+            r = mangrove_ai_client().on_chain.get_smart_money_perp_trades(**kwargs)
+            return json.dumps(_dump(r))
+        except Exception as e:  # noqa: BLE001
+            return _err("ONCHAIN_SM_PERP_TRADES_FAILED", str(e))
+
+    register_tool(ToolEntry(
+        name="get_smart_money_perp_trades",
+        description="Smart Money perp trades on Hyperliquid (Nansen).",
+        access="auth",
+        parameters=[
+            ToolParam(name="filters", type="object", required=False, description="Nansen filter dict."),
+            ToolParam(name="order_by", type="array", required=False, description="Sort spec."),
+            ToolParam(name="page", type="integer", required=False, description="Page (default 1)."),
+            ToolParam(name="per_page", type="integer", required=False, description="Items per page (default 100)."),
+            _APIKEY,
+        ],
+    ))
+
+    @server.tool()
+    async def get_token_dex_trades(
+        symbol: str,
+        chain: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        filters: dict[str, Any] | None = None,
+        order_by: list[dict[str, str]] | None = None,
+        page: int = 1,
+        per_page: int = 100,
+        api_key: str = "",
+    ) -> str:
+        """All DEX trades on a single token in a date window (Nansen).
+
+        Token-scoped (not wallet-scoped) — sees every counterparty, not
+        just Smart Money. Useful for liquidity / activity diagnostics.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            kwargs: dict[str, Any] = {"page": page, "per_page": per_page}
+            for k, v in (("chain", chain), ("date_from", date_from), ("date_to", date_to),
+                         ("filters", filters), ("order_by", order_by)):
+                if v is not None:
+                    kwargs[k] = v
+            r = mangrove_ai_client().on_chain.get_token_dex_trades(symbol, **kwargs)
+            return json.dumps(_dump(r))
+        except Exception as e:  # noqa: BLE001
+            return _err("ONCHAIN_TOKEN_DEX_TRADES_FAILED", str(e))
+
+    register_tool(ToolEntry(
+        name="get_token_dex_trades",
+        description="All DEX trades for a single token in a date window (Nansen).",
+        access="auth",
+        parameters=[
+            ToolParam(name="symbol", type="string", required=True, description="Token symbol (e.g. 'uniswap')."),
+            ToolParam(name="chain", type="string", required=False, description="Chain (default 'ethereum')."),
+            ToolParam(name="date_from", type="string", required=False, description="ISO 'YYYY-MM-DD'."),
+            ToolParam(name="date_to", type="string", required=False, description="ISO 'YYYY-MM-DD'."),
+            ToolParam(name="filters", type="object", required=False, description="Nansen filter dict."),
+            ToolParam(name="order_by", type="array", required=False, description="Sort spec."),
+            ToolParam(name="page", type="integer", required=False, description="Page (default 1)."),
+            ToolParam(name="per_page", type="integer", required=False, description="Items per page (default 100)."),
+            _APIKEY,
+        ],
+    ))
+
+    @server.tool()
+    async def get_token_flows(
+        symbol: str,
+        chain: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        filters: dict[str, Any] | None = None,
+        order_by: list[dict[str, str]] | None = None,
+        page: int = 1,
+        per_page: int = 100,
+        api_key: str = "",
+    ) -> str:
+        """Per-wallet-category flow data for a token in a date window (Nansen).
+
+        Aggregates trades by trader category (Fund, CEX, Smart Trader,
+        etc.) over each date. **Stablecoins are not supported** — Nansen
+        returns 404.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            kwargs: dict[str, Any] = {"page": page, "per_page": per_page}
+            for k, v in (("chain", chain), ("date_from", date_from), ("date_to", date_to),
+                         ("filters", filters), ("order_by", order_by)):
+                if v is not None:
+                    kwargs[k] = v
+            r = mangrove_ai_client().on_chain.get_token_flows(symbol, **kwargs)
+            return json.dumps(_dump(r))
+        except Exception as e:  # noqa: BLE001
+            return _err("ONCHAIN_TOKEN_FLOWS_FAILED", str(e))
+
+    register_tool(ToolEntry(
+        name="get_token_flows",
+        description="Per-wallet-category flow data for a token across a date window (Nansen).",
+        access="auth",
+        parameters=[
+            ToolParam(name="symbol", type="string", required=True, description="Token symbol (non-stablecoin)."),
+            ToolParam(name="chain", type="string", required=False, description="Chain (default 'ethereum')."),
+            ToolParam(name="date_from", type="string", required=False, description="ISO 'YYYY-MM-DD'."),
+            ToolParam(name="date_to", type="string", required=False, description="ISO 'YYYY-MM-DD'."),
+            ToolParam(name="filters", type="object", required=False, description="Nansen filter dict."),
+            ToolParam(name="order_by", type="array", required=False, description="Sort spec."),
+            ToolParam(name="page", type="integer", required=False, description="Page (default 1)."),
+            ToolParam(name="per_page", type="integer", required=False, description="Items per page (default 100)."),
+            _APIKEY,
+        ],
+    ))
+
 
 # ---------------------------------------------------------------------------
 # DeFi (auth)
