@@ -36,6 +36,8 @@ A local AI trading bot that:
 
 ## Workshop attendee? Start here.
 
+**First time here?** Follow **[`SETUP.md`](SETUP.md)** first — it walks through installing Git, Python, Node.js, and Claude Code in order (Mac and Windows), clones the repo, and gets the bot running. Come back here once setup is done.
+
 The full guided walkthrough lives in **[`tutorials/trading-app/`](tutorials/trading-app/00-index.md)** — 8 chapters that take you from "I just cloned this" to "I have a paper strategy running" to (optionally) "I made a live swap."
 
 Chapters 01–05 are **fund-free**. Chapters 06–08 are optional and need a small amount of USDC. Budget ~2 hours for the whole path.
