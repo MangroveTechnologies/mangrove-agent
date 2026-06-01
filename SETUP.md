@@ -1,9 +1,9 @@
 # Setup Guide
 
-Get from zero to a running trading bot. Every step has Mac and Windows instructions. Every command has a verification step so you know it worked before moving on.
+Get from zero to a running trading agent. Every step has Mac and Windows instructions. Every command has a verification step so you know it worked before moving on.
 
 **What you will end up with:**
-- A local trading bot running at `http://localhost:9080`
+- A local trading agent running at `http://localhost:9080`
 - Claude Code connected to it with 41 trading tools
 - A working paper strategy you can watch evaluate in real time
 
@@ -22,7 +22,7 @@ One command installs everything automatically — Git, Python, Node.js, VS Code,
 
 > **Before you run:** you will need a Mangrove API key. Get one at [mangrovedeveloper.ai](https://mangrovedeveloper.ai) and have it ready — the script will pause and ask for it.
 
-> **What does this command actually do?** It downloads the install script directly from the [official Mangrove repo on GitHub](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/scripts/install-mac.sh) and runs it. Nothing is hidden — you can open that link and read every line before running. The script only installs standard developer tools (Git, Python, Node.js, VS Code) and the Mangrove bot. It does not collect any personal data.
+> **What does this command actually do?** It downloads the install script directly from the [official Mangrove repo on GitHub](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/scripts/install-mac.sh) and runs it. Nothing is hidden — you can open that link and read every line before running. The script only installs standard developer tools (Git, Python, Node.js, VS Code) and the Mangrove agent. It does not collect any personal data.
 
 **Mac** — open Terminal (`Cmd + Space`, type "terminal", press Enter) and run:
 
@@ -38,7 +38,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/Man
 
 ## Already set up and coming back?
 
-Everything is already installed — you just need to restart the bot server. This happens after a reboot, waking your laptop, or coming back the next day.
+Everything is already installed — you just need to restart the agent server. This happens after a reboot, waking your laptop, or coming back the next day.
 
 Open your terminal (Mac) or Git Bash (Windows) and run:
 
@@ -55,14 +55,14 @@ Once it finishes, run `claude` from the same folder to start a session.
 
 ## Before you start — what you need
 
-Here is how all the pieces fit together: **Claude Code** is an AI assistant that runs in your terminal. You talk to it in plain English — "build me a strategy on ETH" — and it calls the **Mangrove bot** running on your machine to do the actual work (fetching market data, running backtests, placing paper trades). VS Code is just the window you work in. Git, Python, and Node.js are background requirements that the bot and Claude Code need to run.
+Here is how all the pieces fit together: **Claude Code** is an AI assistant that runs in your terminal. You talk to it in plain English — "build me a strategy on ETH" — and it calls the **Mangrove agent** running on your machine to do the actual work (fetching market data, running backtests, placing paper trades). VS Code is just the window you work in. Git, Python, and Node.js are background requirements that the agent and Claude Code need to run.
 
 | Tool | Why | Required? |
 |---|---|---|
 | **Git** | Downloads the repo. On Windows it also installs Git Bash, the terminal you will use. | Yes |
-| **Python 3.11+** | The trading bot is built in Python. Versions older than 3.11 will not work. | Yes |
+| **Python 3.11+** | The trading agent is built in Python. Versions older than 3.11 will not work. | Yes |
 | **Node.js 18+** | Required by the Claude Code CLI to run. | Yes |
-| **Claude Code CLI** | The AI chat interface you use to talk to the bot. | Yes |
+| **Claude Code CLI** | The AI chat interface you use to talk to the agent. | Yes |
 | **Claude Pro subscription** | Claude Code requires a paid Claude plan (Pro, Max, Team, or Enterprise). | Yes |
 | **VS Code** | Recommended editor with a built-in terminal. Not strictly required but makes everything easier. | Recommended |
 | **Mangrove API key** | Needed for market data, signals, and backtesting. Free at [mangrovedeveloper.ai](https://mangrovedeveloper.ai). | Yes |
@@ -309,7 +309,7 @@ code --version
 
 ## Step 5 — Install Claude Code CLI
 
-Claude Code is the terminal-based AI assistant you will use to drive the bot.
+Claude Code is the terminal-based AI assistant you will use to drive the agent.
 
 ### Mac and Windows
 
@@ -465,7 +465,7 @@ mangrove-agent: http://localhost:9080/mcp/ (HTTP) - ✓ Connected
 claude
 ```
 
-Wait 10–20 seconds. The bot should run a **platform tour automatically** — five live tool calls (status, list_tools, market data, KB search, reference strategies) followed by an offer to build a strategy. This is your signal that everything is wired correctly.
+Wait 10–20 seconds. The agent should run a **platform tour automatically** — five live tool calls (status, list_tools, market data, KB search, reference strategies) followed by an offer to build a strategy. This is your signal that everything is wired correctly.
 
 **If you see the tour → setup is complete. You are ready.**
 
@@ -513,7 +513,7 @@ The prompt during setup did not capture your key. Fix it manually:
 
 ### Port 9080 is already in use
 
-Another program on your machine is already using the port the bot needs. These commands find it and stop it:
+Another program on your machine is already using the port the agent needs. These commands find it and stop it:
 
 **Mac** — finds whatever is using port 9080 and force-stops it:
 
@@ -537,7 +537,7 @@ Then rerun `./scripts/setup.sh`
 
 ### `claude mcp list` shows "Failed to connect"
 
-The bot's address is registered incorrectly with Claude Code. These commands remove the bad registration and add the correct one:
+The agent's address is registered incorrectly with Claude Code. These commands remove the bad registration and add the correct one:
 
 ```bash
 claude mcp remove mangrove-agent
@@ -553,14 +553,14 @@ Three possible causes:
 
 1. **MCP not connected** — run `claude mcp list`. If it shows "Failed to connect", fix the registration (see above).
 2. **Already onboarded** — the tour only runs once. If you have run `claude` here before, it is suppressed. To reset it, run `rm .claude/.onboarded` then restart Claude Code.
-3. **Wrong directory** — Claude Code only connects to the bot when you are inside the `mangrove-agent` folder. Make sure you ran `cd ~/Desktop/mangrove-agent` first.
+3. **Wrong directory** — Claude Code only connects to the agent when you are inside the `mangrove-agent` folder. Make sure you ran `cd ~/Desktop/mangrove-agent` first.
 
 ### Nuclear reset — wipe everything and start over
 
-Use this only if nothing else works. It deletes all your strategies and trades and returns the bot to a clean state. Run these commands one at a time:
+Use this only if nothing else works. It deletes all your strategies and trades and returns the agent to a clean state. Run these commands one at a time:
 
 ```bash
-# 1. Stop the running bot
+# 1. Stop the running agent
 kill $(cat agent-data/bare.pid) 2>/dev/null
 
 # 2. Delete the local data folder (strategies, trades, logs — this cannot be undone)
