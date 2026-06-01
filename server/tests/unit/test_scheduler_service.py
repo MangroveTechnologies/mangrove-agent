@@ -102,3 +102,28 @@ def test_event_listener_emits_scheduler_job_errored_on_failure():
     event.job_id = "eval-abc-123"
     event.exception = RuntimeError("boom")
     _on_job_event(event)  # should not raise
+
+
+def test_reset_scheduler_cache_logs_warning_on_shutdown_failure(monkeypatch):
+    """If shutdown raises, a warning is logged and cache_clear still runs."""
+    from unittest.mock import MagicMock
+
+    from src.services import scheduler_service as ss
+
+    mock_sched = MagicMock()
+    mock_sched.running = True
+    mock_sched.shutdown.side_effect = RuntimeError("forced shutdown failure")
+
+    mock_get_scheduler = MagicMock(return_value=mock_sched)
+    mock_get_scheduler.cache_clear = MagicMock()
+    monkeypatch.setattr(ss, "get_scheduler", mock_get_scheduler)
+
+    mock_log = MagicMock()
+    monkeypatch.setattr(ss, "_log", mock_log)
+
+    ss.reset_scheduler_cache()
+
+    mock_log.warning.assert_called_once_with(
+        "scheduler.shutdown.failed", error="forced shutdown failure"
+    )
+    mock_get_scheduler.cache_clear.assert_called_once()

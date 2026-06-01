@@ -57,8 +57,8 @@ def reset_connection() -> None:
     """Close + clear the cached connection. Used by tests to flip DB_PATH."""
     try:
         get_connection().close()
-    except Exception:
-        pass
+    except sqlite3.Error as exc:
+        _log.warning("db.connection.close_failed", error=str(exc))
     get_connection.cache_clear()
 
 
