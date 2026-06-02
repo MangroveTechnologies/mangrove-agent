@@ -532,7 +532,14 @@ def tick(strategy_id: str) -> None:
             elif isinstance(o, dict):
                 try:
                     order_intents.append(OrderIntent.model_validate(o))
-                except Exception:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001
+                    _log.warning(
+                        "strategy.tick.order_intent.skipped",
+                        strategy_id=strategy_id,
+                        tick_id=tick_id,
+                        reason=str(e),
+                        payload_keys=sorted(o.keys()),
+                    )
                     continue
 
         # Find the wallet + chain_id for live execution (allocation provides it).
