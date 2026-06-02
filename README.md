@@ -7,7 +7,7 @@
 
   <p>
     <strong>An AI trading bot built on the Mangrove API.</strong><br>
-    FastAPI + MCP. Autonomous strategy generation, cron-driven execution, full audit trail.
+    FastAPI + MCP. Autonomous strategy generation, validation, and execution with risk management & policy enforcement built-in.
   </p>
 
   <p>
