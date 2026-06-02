@@ -1,10 +1,13 @@
 """GCP Secret Manager utilities."""
 import json
-import sys
 from typing import Optional
 
 from google.api_core import exceptions as google_exceptions
 from google.cloud import secretmanager
+
+
+class SecretResolutionError(Exception):
+    """Raised when a GCP secret cannot be resolved."""
 
 
 class SecretUtils:
@@ -16,23 +19,25 @@ class SecretUtils:
         version_id: str = "latest",
     ) -> Optional[str]:
         if not secret_id or not secret_property:
-            print("Secret ID or property not supplied.")
-            sys.exit(1)
+            raise SecretResolutionError("Secret ID or property not supplied.")
+
+        if not project_id:
+            raise SecretResolutionError("GCP project id not supplied.")
 
         try:
             client = secretmanager.SecretManagerServiceClient()
-            if not project_id:
-                print("GCP project id not supplied.")
-                sys.exit(1)
-
             name = f"projects/{project_id}/secrets/{secret_id}/versions/{version_id}"
             response = client.access_secret_version(request={"name": name})
             payload = response.payload.data.decode("UTF-8")
             return json.loads(payload)[secret_property]
 
         except google_exceptions.NotFound:
-            print(f"Secret '{secret_id}' not found in project '{project_id}'.")
-            sys.exit(1)
+            raise SecretResolutionError(
+                f"Secret '{secret_id}' not found in project '{project_id}'."
+            )
+        except SecretResolutionError:
+            raise
         except Exception as e:
-            print(f"Error accessing secret {secret_id}: {e}.")
-            sys.exit(1)
+            raise SecretResolutionError(
+                f"Error accessing secret '{secret_id}': {e}."
+            ) from e

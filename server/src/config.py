@@ -14,7 +14,7 @@ import json
 import os
 import sys
 
-from src.shared.gcp_secret_utils import SecretUtils
+from src.shared.gcp_secret_utils import SecretResolutionError, SecretUtils
 
 
 class _Config:
@@ -106,7 +106,11 @@ class _Config:
                 sys.exit(1)
             secret_id = parts[1]
             secret_property = parts[2]
-            value = SecretUtils.get_secret(project_id, secret_id, secret_property)
+            try:
+                value = SecretUtils.get_secret(project_id, secret_id, secret_property)
+            except SecretResolutionError as e:
+                print(f"Secret resolution failed for '{key}': {e}")
+                sys.exit(1)
         return value
 
 
