@@ -59,6 +59,87 @@ _TRANSITIONS: dict[str, set[str]] = {
 _VALID_STATUSES = {"draft", "inactive", "paper", "live", "archived"}
 
 
+def _validate_status_transition(current: str, target: str) -> None:
+    """Raise StrategyInvalidStatusTransition if the transition is not in _TRANSITIONS."""
+    if target not in _TRANSITIONS.get(current, set()):
+        raise StrategyInvalidStatusTransition(
+            f"Cannot transition from {current} to {target}.",
+            suggestion=f"Valid transitions from {current}: {sorted(_TRANSITIONS.get(current, set()))}",
+        )
+
+
+def _apply_scheduler_effects(strategy_id: str, row: dict, target: str, current: str) -> None:
+    """Register or cancel the cron job and release allocation based on target status."""
+    if target in {"paper", "live"}:
+        scheduler_service.register_job(
+            strategy_id, row["timeframe"],
+            "src.services.strategy_service:tick",
+        )
+    else:
+        scheduler_service.cancel_job(strategy_id)
+        if current == "live":
+            allocation_service.release_allocation(strategy_id)
+
+
+def _extract_order_intents(
+    sdk_resp: Any, *, strategy_id: str, tick_id: str
+) -> list[OrderIntent]:
+    """Pull OrderIntents out of an SDK evaluate response.
+
+    The shape varies by SDK / upstream version — be defensive. Current
+    canonical key is `new_orders`; older variants used `order_intents` or
+    `orders`. Missing this key is a silent data loss: every tick logs an
+    evaluation but zero orders, which looks like "strategy didn't fire"
+    when in fact it did.
+
+    A malformed intent dict is skipped, but never silently: we emit a
+    structured `strategy.tick.order_intent.skipped` warning (keys only,
+    no values — see PR #87) so a dropped trade is diagnosable instead of
+    looking identical to "strategy didn't fire". `strategy_id`/`tick_id`
+    make the warning correlatable.
+    """
+    raw_orders = (
+        getattr(sdk_resp, "new_orders", None)
+        or getattr(sdk_resp, "order_intents", None)
+        or getattr(sdk_resp, "orders", None)
+        or (sdk_resp.model_dump().get("new_orders") if hasattr(sdk_resp, "model_dump") else None)
+        or (sdk_resp.model_dump().get("order_intents") if hasattr(sdk_resp, "model_dump") else None)
+        or []
+    )
+    order_intents: list[OrderIntent] = []
+    for o in raw_orders:
+        if isinstance(o, OrderIntent):
+            order_intents.append(o)
+        elif isinstance(o, dict):
+            try:
+                order_intents.append(OrderIntent.model_validate(o))
+            except Exception as e:  # noqa: BLE001
+                _log.warning(
+                    "strategy.tick.order_intent.skipped",
+                    strategy_id=strategy_id,
+                    tick_id=tick_id,
+                    reason=str(e),
+                    payload_keys=sorted(o.keys()),
+                )
+                continue
+    return order_intents
+
+
+def _get_live_allocation(strategy_id: str) -> tuple[str | None, int | None, float | None]:
+    """Return (wallet_address, chain_id, slippage_pct) from the active allocation, or Nones."""
+    active_alloc = allocation_service.get_active_allocation(strategy_id)
+    if not active_alloc:
+        return None, None, None
+    wallet_address = active_alloc.wallet_address
+    slippage_pct = active_alloc.slippage_pct
+    wrow = get_connection().execute(
+        "SELECT chain_id FROM wallets WHERE address = ?",
+        (wallet_address,),
+    ).fetchone()
+    chain_id = wrow["chain_id"] if wrow else None
+    return wallet_address, chain_id, slippage_pct
+
+
 # -- Pydantic request/response models ---------------------------------------
 
 
@@ -382,11 +463,7 @@ def update_status(strategy_id: str, update: StrategyStatusUpdate) -> StrategyDet
         raise StrategyInvalidStatusTransition(f"Unknown status '{target}'.")
     if target == current:
         return _row_to_response(row)  # no-op
-    if target not in _TRANSITIONS.get(current, set()):
-        raise StrategyInvalidStatusTransition(
-            f"Cannot transition from {current} to {target}.",
-            suggestion=f"Valid transitions from {current}: {sorted(_TRANSITIONS.get(current, set()))}",
-        )
+    _validate_status_transition(current, target)
 
     # Gate transitions that move real money or stop live execution.
     needs_confirm = (
@@ -430,17 +507,7 @@ def update_status(strategy_id: str, update: StrategyStatusUpdate) -> StrategyDet
             allocation_service.release_allocation(strategy_id)
         raise SdkError(f"strategies.update_status failed: {e}") from e
 
-    # Side effects by target.
-    if target in {"paper", "live"}:
-        scheduler_service.register_job(
-            strategy_id, row["timeframe"],
-            "src.services.strategy_service:tick",
-        )
-    else:  # inactive, archived
-        scheduler_service.cancel_job(strategy_id)
-        if current == "live":
-            allocation_service.release_allocation(strategy_id)
-
+    _apply_scheduler_effects(strategy_id, row, target, current)
     _set_status(strategy_id, target)
     new_row = _get_row(strategy_id)
     _log.info("strategy.status_changed",
@@ -508,55 +575,18 @@ def tick(strategy_id: str) -> None:
                        exception=str(e), duration_ms=duration_ms)
             return
 
-        # Extract OrderIntents from SDK response. The shape varies by SDK
-        # / upstream version — be defensive. Current canonical key is
-        # `new_orders` (MangroveAI SDK `EvaluateResult.new_orders` +
-        # upstream `managers/services.py` response payload). Older
-        # variants used `order_intents` or `orders`; keep both as
-        # fallbacks for cross-version compatibility. Missing this key is
-        # a silent data loss: every tick logs an evaluation but zero
-        # orders, which looks like "strategy didn't fire" when in fact
-        # it did.
-        raw_orders = (
-            getattr(sdk_resp, "new_orders", None)
-            or getattr(sdk_resp, "order_intents", None)
-            or getattr(sdk_resp, "orders", None)
-            or (sdk_resp.model_dump().get("new_orders") if hasattr(sdk_resp, "model_dump") else None)
-            or (sdk_resp.model_dump().get("order_intents") if hasattr(sdk_resp, "model_dump") else None)
-            or []
+        # Extract OrderIntents from the SDK response (defensive about
+        # response shape; logs — never silently drops — malformed intents).
+        order_intents = _extract_order_intents(
+            sdk_resp, strategy_id=strategy_id, tick_id=tick_id
         )
-        order_intents: list[OrderIntent] = []
-        for o in raw_orders:
-            if isinstance(o, OrderIntent):
-                order_intents.append(o)
-            elif isinstance(o, dict):
-                try:
-                    order_intents.append(OrderIntent.model_validate(o))
-                except Exception as e:  # noqa: BLE001
-                    _log.warning(
-                        "strategy.tick.order_intent.skipped",
-                        strategy_id=strategy_id,
-                        tick_id=tick_id,
-                        reason=str(e),
-                        payload_keys=sorted(o.keys()),
-                    )
-                    continue
 
         # Find the wallet + chain_id for live execution (allocation provides it).
         wallet_address = None
         chain_id = None
         slippage_pct = None
         if mode == "live":
-            active_alloc = allocation_service.get_active_allocation(strategy_id)
-            if active_alloc:
-                wallet_address = active_alloc.wallet_address
-                slippage_pct = active_alloc.slippage_pct
-                # We don't track chain_id on allocation; pull from wallet row.
-                wrow = get_connection().execute(
-                    "SELECT chain_id FROM wallets WHERE address = ?",
-                    (wallet_address,),
-                ).fetchone()
-                chain_id = wrow["chain_id"] if wrow else None
+            wallet_address, chain_id, slippage_pct = _get_live_allocation(strategy_id)
 
         # Log the evaluation FIRST so trades can FK-reference it. The
         # evaluation describes the SDK call outcome, not the downstream

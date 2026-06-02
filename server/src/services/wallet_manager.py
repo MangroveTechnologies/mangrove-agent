@@ -682,6 +682,21 @@ _INT_FIELDS = {
 }
 
 
+def _apply_tx_type(out: dict) -> None:
+    """Mutate `out` to enforce consistent EIP-1559 vs legacy tx type fields."""
+    has_eip1559 = (
+        out.get("maxFeePerGas") is not None
+        and out.get("maxPriorityFeePerGas") is not None
+    )
+    if has_eip1559:
+        out.setdefault("type", 2)
+        out.pop("gasPrice", None)
+    elif "gasPrice" in out:
+        out.pop("maxFeePerGas", None)
+        out.pop("maxPriorityFeePerGas", None)
+        out.pop("type", None)
+
+
 def _normalize_payload(payload: dict, chain_id: int | None = None) -> dict:
     out: dict = {}
     for k, v in payload.items():
@@ -697,18 +712,7 @@ def _normalize_payload(payload: dict, chain_id: int | None = None) -> dict:
     if chain_id is not None and "chainId" not in out:
         out["chainId"] = chain_id
 
-    has_eip1559 = (
-        out.get("maxFeePerGas") is not None
-        and out.get("maxPriorityFeePerGas") is not None
-    )
-    if has_eip1559:
-        out.setdefault("type", 2)
-        out.pop("gasPrice", None)
-    elif "gasPrice" in out:
-        out.pop("maxFeePerGas", None)
-        out.pop("maxPriorityFeePerGas", None)
-        out.pop("type", None)
-
+    _apply_tx_type(out)
     return out
 
 

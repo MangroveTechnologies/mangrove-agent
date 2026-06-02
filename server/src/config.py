@@ -36,7 +36,11 @@ class _Config:
         if not gcp_project_id:
             print("GCP_PROJECT_ID not set. Secret Manager lookups will fail.")
 
-        # Validate and load required keys -- fail if any missing
+        self._load_required_keys(required_keys, gcp_project_id)
+        self._load_full_app_keys(full_app_keys, gcp_project_id)
+
+    def _load_required_keys(self, required_keys: set, gcp_project_id: str) -> None:
+        """Validate and set all required config keys. Exits on missing or null values."""
         for key in required_keys:
             if key not in self._raw_config:
                 print(f"Required configuration key '{key}' missing from config file.")
@@ -46,8 +50,8 @@ class _Config:
                 key_value = None
             setattr(self, key, key_value)
 
-        # Load full_app_keys only if present in config file.
-        # If present, validate they have non-empty values (preflight check).
+    def _load_full_app_keys(self, full_app_keys: set, gcp_project_id: str) -> None:
+        """Load full_app_keys only if present. Exits if present but empty (preflight check)."""
         for key in full_app_keys:
             if key in self._raw_config:
                 value = self._raw_config[key]

@@ -91,23 +91,60 @@ def _load_all() -> list[ReferenceStrategy]:
     return parsed
 
 
+_CATEGORY_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("mean_reversion", ("mean revers", "bollinger", "oversold", "bounce", "buy the dip")),
+    ("breakout",       ("breakout", "donchian", "channel", "range expansion", "ichimoku")),
+    ("momentum",       ("momentum", "macd", "roc", "stochastic", "rsi cross")),
+    ("volatility",     ("volatility", "atr", "squeeze", "high vol", "vol expansion")),
+    ("trend_following", ("trend", "ema cross", "sma cross", "golden cross", "adx", "supertrend")),
+]
+
+
 def _detect_category(text: str) -> str | None:
     """Auto-detect intended strategy category from a user-supplied goal/style string.
 
     Mirrors ai_copilot's `_detect_strategy_type` in shape.
     """
     t = (text or "").lower()
-    if any(k in t for k in ("mean revers", "bollinger", "oversold", "bounce", "buy the dip")):
-        return "mean_reversion"
-    if any(k in t for k in ("breakout", "donchian", "channel", "range expansion", "ichimoku")):
-        return "breakout"
-    if any(k in t for k in ("momentum", "macd", "roc", "stochastic", "rsi cross")):
-        return "momentum"
-    if any(k in t for k in ("volatility", "atr", "squeeze", "high vol", "vol expansion")):
-        return "volatility"
-    if any(k in t for k in ("trend", "ema cross", "sma cross", "golden cross", "adx", "supertrend")):
-        return "trend_following"
+    for category, keywords in _CATEGORY_KEYWORDS:
+        if any(k in t for k in keywords):
+            return category
     return None
+
+
+def _score_reference(
+    r: ReferenceStrategy,
+    asset_u: str,
+    tf: str | None,
+    cat: str | None,
+) -> int:
+    """Score a reference strategy by how specifically it matches the filters.
+
+    Higher = better match. Used for ranking in search().
+    """
+    s = 0
+    if asset_u and r.asset.upper() == asset_u:
+        s += 8
+    if tf and timeframes.canonicalize_timeframe(r.timeframe) == tf:
+        s += 4
+    if cat and r.category.lower() == cat:
+        s += 2
+    return s
+
+
+def _pad_results(
+    ranked: list[ReferenceStrategy],
+    top: list[ReferenceStrategy],
+    limit: int,
+) -> list[ReferenceStrategy]:
+    """Fill `top` with lower-scored entries from `ranked` until `limit` is reached."""
+    seen = {r.id for r in top}
+    for r in ranked:
+        if r.id not in seen:
+            top.append(r)
+            if len(top) >= limit:
+                break
+    return top[:limit]
 
 
 def search(
@@ -137,31 +174,13 @@ def search(
 
     all_refs = _load_all()
 
-    # Score each ref by specificity. Higher = better match.
-    def score(r: ReferenceStrategy) -> int:
-        s = 0
-        if asset_u and r.asset.upper() == asset_u:
-            s += 8
-        if tf and timeframes.canonicalize_timeframe(r.timeframe) == tf:
-            s += 4
-        if cat and r.category.lower() == cat:
-            s += 2
-        return s
-
-    ranked = sorted(all_refs, key=lambda r: (-score(r), r.id))
+    ranked = sorted(all_refs, key=lambda r: (-_score_reference(r, asset_u, tf, cat), r.id))
     # Drop any with score 0 ONLY if we have better matches; otherwise fall
     # through to show something rather than nothing.
-    top = [r for r in ranked if score(r) > 0]
+    top = [r for r in ranked if _score_reference(r, asset_u, tf, cat) > 0]
     if len(top) >= limit:
         return top[:limit]
-    # Pad with the rest (preserves ordering).
-    seen = {r.id for r in top}
-    for r in ranked:
-        if r.id not in seen:
-            top.append(r)
-            if len(top) >= limit:
-                break
-    return top[:limit]
+    return _pad_results(ranked, top, limit)
 
 
 def get(reference_id: str) -> ReferenceStrategy | None:
