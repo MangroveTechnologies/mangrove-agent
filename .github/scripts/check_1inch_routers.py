@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""
+Scan the @1inch/fusion-sdk npm package for AggregationRouter addresses
+not present in _ONEINCH_ROUTERS.
+
+1inch uses deterministic CREATE2 deploys with a vanity prefix (0x111111...)
+on every supported chain, so scanning the published JS/TS package is a
+reliable way to detect a new router version before swaps start failing.
+
+Outputs:
+  - new_found=true/false  written to $GITHUB_OUTPUT
+  - /tmp/1inch-router-alert.md  written only when new_found=true
+
+Exit code is always 0 — this is a monitoring job, not a hard CI gate.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+import tarfile
+import tempfile
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+WALLET_MANAGER = Path("server/src/services/wallet_manager.py")
+ALERT_FILE = Path("/tmp/1inch-router-alert.md")
+GITHUB_OUTPUT = Path(os.environ.get("GITHUB_OUTPUT", "/dev/null"))
+
+# Try packages in order; stop at the first one that resolves on npm.
+NPM_CANDIDATES = [
+    "@1inch/fusion-sdk",
+    "@1inch/limit-order-sdk",
+]
+
+# All 1inch AggregationRouter addresses start with 0x111111 and are 42 chars
+# total (0x + 40 hex), leaving 34 hex chars after the 0x111111 prefix.
+VANITY_RE = re.compile(r"\b(0x111111[0-9a-fA-F]{34})\b", re.IGNORECASE)
+
+# Known 0x111111* addresses that are NOT AggregationRouters (e.g. the 1INCH
+# token). Excluded from the "new router" comparison to avoid false positives.
+KNOWN_NON_ROUTERS: set[str] = {
+    "0x111111111117dc0aa78b770fa6a738034120c302",  # 1INCH ERC-20 token
+}
+
+SCANNABLE = re.compile(r"\.(js|ts|json|d\.ts|mjs|cjs)$", re.IGNORECASE)
+
+
+def set_output(key: str, value: str) -> None:
+    with GITHUB_OUTPUT.open("a") as fh:
+        fh.write(f"{key}={value}\n")
+
+
+def get_current_allowlist() -> set[str]:
+    content = WALLET_MANAGER.read_text()
+    m = re.search(
+        r"_ONEINCH_ROUTERS\s*:\s*set\[str\]\s*=\s*\{([^}]+)\}",
+        content,
+        re.DOTALL,
+    )
+    if not m:
+        raise ValueError("_ONEINCH_ROUTERS block not found in wallet_manager.py")
+    return {a.lower() for a in re.findall(r'"(0x[0-9a-fA-F]+)"', m.group(1))}
+
+
+def scan_npm_package(package: str) -> set[str] | None:
+    """Download the latest tarball for *package* and return every 0x111111*
+    address found in its JS/TS/JSON files. Returns None if the package does
+    not exist on npm."""
+    registry_url = f"https://registry.npmjs.org/{package}/latest"
+    try:
+        with urllib.request.urlopen(registry_url, timeout=30) as resp:
+            meta = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+
+    version: str = meta["version"]
+    tarball_url: str = meta["dist"]["tarball"]
+    print(f"  Scanning {package}@{version} ...")
+
+    addresses: set[str] = set()
+    with tempfile.TemporaryDirectory() as tmp:
+        tarball = Path(tmp) / "pkg.tgz"
+        with urllib.request.urlopen(tarball_url, timeout=60) as resp:
+            tarball.write_bytes(resp.read())
+        with tarfile.open(tarball, "r:gz") as tar:
+            for member in tar.getmembers():
+                if not member.isfile() or not SCANNABLE.search(member.name):
+                    continue
+                fobj = tar.extractfile(member)
+                if fobj is None:
+                    continue
+                try:
+                    text = fobj.read().decode("utf-8", errors="ignore")
+                except Exception:
+                    continue
+                for addr in VANITY_RE.findall(text):
+                    addresses.add(addr.lower())
+
+    return addresses
+
+
+def build_alert(new_routers: set[str], known: set[str], package: str) -> str:
+    rows = "\n".join(
+        f"| `{a}` | :red_circle: Not in allowlist |" for a in sorted(new_routers)
+    )
+    known_block = "\n".join(f'    "{a}",' for a in sorted(known))
+    return f"""\
+## New 1inch AggregationRouter detected
+
+The automated watcher found 1inch router address(es) **not** in `_ONEINCH_ROUTERS`.
+Review and add them before the next swap attempt routes through the new contract.
+
+| Address | Status |
+|---------|--------|
+{rows}
+
+Detected by scanning the `{package}` npm package.
+
+---
+
+### Current allowlist (`server/src/services/wallet_manager.py:70-73`)
+
+```python
+_ONEINCH_ROUTERS: set[str] = {{
+{known_block}
+}}
+```
+
+### Required action
+
+1. **Verify** the new address is a legitimate 1inch AggregationRouter — check
+   [1inch docs](https://docs.1inch.io) and the Base block explorer.
+2. **Add** the confirmed address to `_ONEINCH_ROUTERS` with a version comment.
+3. **Confirm** `_validate_sign_target()` still runs **before** `_load_secret()`
+   in `wallet_manager.sign()` after the change.
+4. **Add a test** covering a tx sent to the new router address.
+
+> Do not expand the allowlist without human review.
+> This guard prevented the 2026-04-24 EIP-7702 workshop wallet drain.
+> Per `docs/audits/security.md` LOW-4: allowlist expansion requires explicit review.
+
+_Generated by `.github/workflows/1inch-router-watcher.yml`_
+"""
+
+
+def main() -> None:
+    print("=== 1inch Router Allowlist Watcher ===\n")
+
+    known = get_current_allowlist()
+    print(f"Current allowlist ({len(known)} addresses):")
+    for a in sorted(known):
+        print(f"  {a}")
+    print()
+
+    found: set[str] = set()
+    scanned_package: str | None = None
+
+    for pkg in NPM_CANDIDATES:
+        print(f"Trying {pkg} ...")
+        try:
+            result = scan_npm_package(pkg)
+        except Exception as exc:
+            print(f"  Error: {exc}")
+            continue
+        if result is None:
+            print(f"  Not found on npm, skipping")
+            continue
+        found = result
+        scanned_package = pkg
+        break
+
+    if scanned_package is None:
+        print("\nWARNING: No npm package could be scanned. Flagging for manual check.")
+        set_output("new_found", "false")
+        set_output("scan_failed", "true")
+        return
+
+    print(f"\nAddresses found in {scanned_package} ({len(found)}):")
+    for a in sorted(found):
+        print(f"  {a}")
+
+    # Sanity check: at least one known router must appear in the package.
+    # Older routers (V5) may have been dropped from newer SDK versions, so we
+    # don't require all — but if none match, the scan can't be trusted and we
+    # flag it so the workflow opens a "watcher is blind" issue.
+    if not (known & found):
+        print(f"\nWARNING: No known allowlist addresses found in {scanned_package}.")
+        print("Data source may be unreliable — flagging for manual check.")
+        set_output("new_found", "false")
+        set_output("scan_failed", "true")
+        return
+
+    new_routers = (found - known) - KNOWN_NON_ROUTERS
+    if not new_routers:
+        print("\n✓ No new 1inch routers detected. Allowlist is current.")
+        set_output("new_found", "false")
+        set_output("scan_failed", "false")
+        return
+
+    print(f"\n⚠️  NEW ROUTERS DETECTED ({len(new_routers)}):")
+    for a in sorted(new_routers):
+        print(f"  {a}")
+
+    ALERT_FILE.write_text(build_alert(new_routers, known, scanned_package))
+    set_output("new_found", "true")
+    set_output("scan_failed", "false")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        set_output("new_found", "false")
+        set_output("scan_failed", "true")
+        sys.exit(0)
