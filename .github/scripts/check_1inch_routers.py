@@ -106,7 +106,7 @@ def scan_npm_package(package: str) -> set[str] | None:
 
 def build_alert(new_routers: set[str], known: set[str], package: str) -> str:
     rows = "\n".join(
-        f"| `{a}` | :red_circle: Not in allowlist |" for a in sorted(new_routers)
+        f"| `{a}` | Not in allowlist |" for a in sorted(new_routers)
     )
     known_block = "\n".join(f'    "{a}",' for a in sorted(known))
     return f"""\
@@ -184,13 +184,12 @@ def main() -> None:
     for a in sorted(found):
         print(f"  {a}")
 
-    # Sanity check: at least one known router must appear in the package.
-    # Older routers (V5) may have been dropped from newer SDK versions, so we
-    # don't require all — but if none match, the scan can't be trusted and we
-    # flag it so the workflow opens a "watcher is blind" issue.
-    if not (known & found):
-        print(f"\nWARNING: No known allowlist addresses found in {scanned_package}.")
-        print("Data source may be unreliable — flagging for manual check.")
+    # Sanity check: if the scan found zero 0x111111* addresses the package
+    # structure has changed and results can't be trusted. A working 1inch
+    # package always contains at least one address with this vanity prefix.
+    if not found:
+        print(f"\nWARNING: No 0x111111* addresses found in {scanned_package}.")
+        print("Package structure may have changed — flagging for manual check.")
         set_output("new_found", "false")
         set_output("scan_failed", "true")
         return

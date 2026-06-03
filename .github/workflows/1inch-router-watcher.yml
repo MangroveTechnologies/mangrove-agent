@@ -51,7 +51,7 @@ jobs:
             const { data: issue } = await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: '⚠️ New 1inch router version detected — update _ONEINCH_ROUTERS',
+              title: 'New 1inch router version detected — update _ONEINCH_ROUTERS',
               body,
               labels: ['audit-finding'],
             });
@@ -82,13 +82,10 @@ jobs:
             const body = [
               '## 1inch router watcher is blind — manual check required',
               '',
-              'The weekly watcher ran but could not verify the scan results:',
-              'none of the known `_ONEINCH_ROUTERS` addresses were found in the',
-              '`@1inch/fusion-sdk` npm package.',
+              'The weekly watcher was unable to complete its scan and could not',
+              'determine whether new 1inch router versions have been deployed.',
               '',
-              'This means the package has been restructured or renamed and the',
-              'automated check is no longer reliable. **Until this is fixed, new',
-              '1inch router versions will not be detected automatically.**',
+              '**Until this is resolved, new routers will not be detected automatically.**',
               '',
               '### Required action',
               '',
@@ -105,7 +102,7 @@ jobs:
             const { data: issue } = await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: '⚠️ 1inch router watcher broken — manual verification needed',
+              title: '1inch router watcher broken — manual verification needed',
               body,
               labels: ['audit-finding'],
             });
