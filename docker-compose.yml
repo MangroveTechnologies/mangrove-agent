@@ -24,3 +24,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    container_name: mangrove-agent-ui
+    ports:
+      - "8001:8001"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MANGROVE_AGENT_URL=http://mangrove-agent:8080
+      - MANGROVE_AGENT_API_KEY=dev-key-1
+    depends_on:
+      app:
+        condition: service_healthy

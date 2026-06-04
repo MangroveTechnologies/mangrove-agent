@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="460" height="110" viewBox="0 0 460 110">
+  <text x="0" y="46"
+    font-family="-apple-system, BlinkMacSystemFont, Inter, sans-serif"
+    font-size="44" font-weight="700" fill="#0f172a">Mangrove</text>
+  <text x="254" y="46"
+    font-family="-apple-system, BlinkMacSystemFont, Inter, sans-serif"
+    font-size="44" font-weight="300" fill="#94a3b8"> · </text>
+  <text x="300" y="46"
+    font-family="-apple-system, BlinkMacSystemFont, Inter, sans-serif"
+    font-size="44" font-weight="700" fill="#2563eb">Sage</text>
+  <text x="2" y="74"
+    font-family="-apple-system, BlinkMacSystemFont, Inter, sans-serif"
+    font-size="17" font-weight="400" fill="#94a3b8">Your AI-powered trading agent.</text>
+  <text x="2" y="96"
+    font-family="-apple-system, BlinkMacSystemFont, Inter, sans-serif"
+    font-size="17" font-weight="400" fill="#94a3b8">Build strategies, backtest, and go live when ready.</text>
+</svg>

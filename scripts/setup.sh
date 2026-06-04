@@ -272,12 +272,85 @@ if [ "$DO_VERIFY" = "yes" ]; then
   fi
 fi
 
+# -- 8. UI setup (optional) --------------------------------------------------
+
+UI_PID_FILE="agent-data/ui.pid"
+UI_LOG_FILE="agent-data/ui.log"
+CHOSE_UI="no"
+
+if [ "$MODE" != "docker" ] && [ "$FOREGROUND" != "yes" ]; then
+  if [ "$ASSUME_YES" = "yes" ]; then
+    info "skipping UI prompt (--yes)"
+  else
+    echo
+    echo "How do you want to use Sage?"
+    echo "  [1] Terminal  — open Claude Code in this directory (default)"
+    echo "  [2] Web UI    — chat in browser at http://localhost:8001 (needs Anthropic API key)"
+    echo "  [3] Both      — Claude Code + Web UI"
+    printf "Choice [1]: "
+    read -r UI_CHOICE
+    UI_CHOICE="${UI_CHOICE:-1}"
+    if [ "$UI_CHOICE" = "2" ] || [ "$UI_CHOICE" = "3" ]; then
+      CHOSE_UI="yes"
+    fi
+  fi
+fi
+
+
+if [ "$CHOSE_UI" = "yes" ] && [ "$MODE" != "docker" ]; then
+  step "8. Web UI"
+
+  # Install UI deps into the same venv (only chainlit needed — auth goes
+  # through the local claude CLI, no separate Anthropic API key required)
+  python3 -m pip install --quiet -r "$REPO_ROOT/ui/requirements.txt"
+  ok "UI deps installed"
+
+  # Start Chainlit (stale-PID safe)
+  if [ -f "$REPO_ROOT/$UI_PID_FILE" ] && kill -0 "$(cat "$REPO_ROOT/$UI_PID_FILE")" 2>/dev/null; then
+    info "UI already running (pid $(cat "$REPO_ROOT/$UI_PID_FILE"))"
+  else
+    rm -f "$REPO_ROOT/$UI_PID_FILE"
+    cd "$REPO_ROOT/ui"
+    nohup env MANGROVE_AGENT_URL="http://localhost:9080" \
+      chainlit run app.py --port 8001 --host 0.0.0.0 \
+      > "$REPO_ROOT/$UI_LOG_FILE" 2>&1 &
+    echo $! > "$REPO_ROOT/$UI_PID_FILE"
+    cd "$REPO_ROOT"
+    info "UI started in background (pid $(cat "$REPO_ROOT/$UI_PID_FILE"))"
+    info "logs: tail -f $UI_LOG_FILE"
+  fi
+  ok "Web UI → http://localhost:8001"
+fi
+
+# -- Final message -----------------------------------------------------------
+
 echo
 printf "${GREEN}Done.${CLR} mangrove-agent is running at $BASE_URL\n\n"
 echo "Next:"
-echo "  - Restart Claude Code in this directory. The agent will greet you"
-echo "    and walk through wallet setup + security. It will refuse to"
-echo "    accept pasted private keys in chat — if you want to import an"
-echo "    existing wallet, the agent will tell you to run"
-echo "    ./scripts/stash-secret.sh first."
+
+if [ "$CHOSE_UI" = "yes" ] && [ "$MODE" = "docker" ]; then
+  echo "  - Run 'docker compose up' then open http://localhost:8001"
+  echo ""
+elif [ "$CHOSE_UI" = "yes" ]; then
+  echo "  - Open http://localhost:8001 in your browser to chat with Sage"
+  echo ""
+  if [ "${UI_CHOICE:-1}" = "3" ]; then
+    echo "  - Or restart Claude Code in this directory for terminal access"
+    echo ""
+  fi
+else
+  echo "  - Restart Claude Code in this directory. The agent will greet you"
+  echo "    and walk through wallet setup + security. It will refuse to"
+  echo "    accept pasted private keys in chat — if you want to import an"
+  echo "    existing wallet, the agent will tell you to run"
+  echo "    ./scripts/stash-secret.sh first."
+  echo ""
+fi
+
+echo "  - To start everything again later:  ./start.sh"
+echo "  - To stop everything:               ./stop.sh"
+echo "  - Server logs: tail -f $LOG_FILE"
+if [ "$CHOSE_UI" = "yes" ] && [ "$MODE" != "docker" ]; then
+  echo "  - UI logs:     tail -f $UI_LOG_FILE"
+fi
 echo

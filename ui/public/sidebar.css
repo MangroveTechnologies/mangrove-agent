@@ -1,0 +1,193 @@
+/* ── Mangrove strategy sidebar ─────────────────────────────────────────── */
+
+#mgv-tab {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  left: auto;
+  transform: none;
+  z-index: 10000;
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 7px 14px;
+  cursor: pointer;
+  writing-mode: horizontal-tb;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  transition: background 0.2s;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#mgv-tab:hover { background: #1d4ed8; }
+
+#mgv-sidebar {
+  position: fixed;
+  right: -310px;
+  left: auto;
+  top: 0;
+  width: 290px;
+  height: 100vh;
+  background: #0f172a;
+  z-index: 9999;
+  transition: right 0.28s cubic-bezier(0.4,0,0.2,1);
+  overflow-y: auto;
+  box-shadow: -4px 0 16px rgba(0,0,0,0.4);
+  padding: 20px 14px;
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#mgv-sidebar.open { right: 0; }
+
+#mgv-sidebar h2 {
+  color: #f1f5f9;
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: 0.5px;
+}
+
+#mgv-sidebar-meta {
+  font-size: 11px;
+  color: #64748b;
+}
+
+/* ── asset group sections ─────────────────────────────────────────────── */
+
+.mgv-section {
+  margin-bottom: 10px;
+}
+
+.mgv-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  background: #1e3a5f;
+  border-radius: 8px;
+  user-select: none;
+  margin-bottom: 4px;
+}
+
+.mgv-section-header:hover { background: #1e4a7a; }
+
+.mgv-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #93c5fd;
+  flex: 1;
+  letter-spacing: 0.3px;
+}
+
+.mgv-section-count {
+  font-size: 10px;
+  background: #0c1a3a;
+  color: #60a5fa;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.mgv-section-body {
+  display: none;
+  padding-left: 6px;
+}
+
+.mgv-section.open > .mgv-section-body { display: block; }
+
+.mgv-section.open > .mgv-section-header .mgv-chevron { transform: rotate(180deg); }
+
+/* ── accordion cards ───────────────────────────────────────────────────── */
+
+.mgv-card {
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.mgv-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  cursor: pointer;
+  background: #1e293b;
+  user-select: none;
+  gap: 8px;
+}
+
+.mgv-card-header:hover { background: #263347; }
+
+.mgv-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e2e8f0;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mgv-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.mgv-badge-live     { background: #052e16; color: #4ade80; }
+.mgv-badge-paper    { background: #0c1a3a; color: #60a5fa; }
+.mgv-badge-draft    { background: #2d1b00; color: #fbbf24; }
+.mgv-badge-inactive { background: #1a1a1a; color: #6b7280; }
+.mgv-badge-archived { background: #1a1a1a; color: #6b7280; }
+
+.mgv-chevron {
+  color: #64748b;
+  font-size: 10px;
+  flex-shrink: 0;
+  transition: transform 0.2s;
+}
+
+.mgv-card.open .mgv-chevron { transform: rotate(180deg); }
+
+.mgv-card-body {
+  display: none;
+  padding: 10px 12px;
+  background: #0a111e;
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.7;
+}
+
+.mgv-card.open .mgv-card-body { display: block; }
+
+.mgv-eval-ok      { color: #4ade80; }
+.mgv-eval-error   { color: #f87171; }
+.mgv-eval-skipped { color: #94a3b8; }
+
+@keyframes mgv-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+#mgv-refresh.spinning .mgv-refresh-icon {
+  animation: mgv-spin 0.6s linear;
+  display: inline-block;
+}
+
+.mgv-empty {
+  font-size: 12px;
+  color: #475569;
+  text-align: center;
+  padding: 24px 0;
+}

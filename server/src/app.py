@@ -12,6 +12,7 @@ All config loaded from per-environment JSON via app_config singleton.
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from x402.http.middleware.fastapi import payment_middleware
 
 from src.api.router import api_router, x402_router
@@ -122,6 +123,16 @@ def create_app() -> FastAPI:
 
     application.add_exception_handler(AgentError, agent_error_handler)
     application.add_middleware(CorrelationIdMiddleware)
+    # Permissive CORS for local UI (localhost only in practice).
+    # allow_origins=["*"] is required because the x402 BaseHTTPMiddleware
+    # is evaluated before CORSMiddleware for requests without an API key,
+    # which can cause the specific-origin matching to fail on preflight.
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
     application.include_router(api_router)
     application.include_router(x402_router)

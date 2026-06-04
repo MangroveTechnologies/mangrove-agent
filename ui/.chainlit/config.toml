@@ -1,0 +1,17 @@
+[project]
+enable_telemetry = false
+
+[features]
+prompt_playground = false
+multi_modal = false
+
+[UI]
+name = "Sage"
+description = "Your local Mangrove trading bot"
+default_collapse_content = true
+hide_cot = false
+custom_css = "/public/sidebar.css"
+custom_js = "/public/sidebar.js"
+
+[meta]
+generated_by = "1.1.0"
