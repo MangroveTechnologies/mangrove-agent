@@ -17,6 +17,7 @@ from typing import Any
 from mangrove_ai.models.oracle import (
     DataQueryRequest,
     OracleBacktestRequest,
+    OracleBulkBacktestRequest,
     SieveScoreRequest,
 )
 from pydantic import BaseModel, Field
@@ -160,3 +161,185 @@ def backtest(payload: OracleBacktestInput) -> dict[str, Any]:
         },
     )
     return result.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Async + bulk backtest wrappers
+# ---------------------------------------------------------------------------
+
+
+def backtest_async(payload: OracleBacktestInput) -> dict[str, Any]:
+    """Submit a backtest for async execution.
+
+    Returns ``{backtest_id, status}`` immediately. Customers poll
+    ``backtest_poll(backtest_id)`` to retrieve the full result once
+    the engine finishes. Use this for long windows / heavy parameters
+    where the 30-120s sync block is unworkable.
+    """
+    client = mangrove_ai_client()
+    result = client.oracle.backtest_async(
+        OracleBacktestRequest(
+            asset=payload.asset,
+            interval=payload.interval,
+            strategy_json=payload.strategy_json,
+            lookback_months=payload.lookback_months,
+            initial_balance=payload.initial_balance,
+            max_risk_per_trade=payload.max_risk_per_trade,
+            execution_config=payload.execution_config,
+            mode=payload.mode,
+        )
+    )
+    _log.info("oracle.backtest_async", extra={"backtest_id": result.backtest_id})
+    return result.model_dump()
+
+
+def backtest_poll(backtest_id: str) -> dict[str, Any]:
+    """Poll status / result of an async backtest."""
+    client = mangrove_ai_client()
+    result = client.oracle.backtest_poll(backtest_id)
+    _log.info(
+        "oracle.backtest_poll",
+        extra={"backtest_id": backtest_id, "status": result.status},
+    )
+    return result.model_dump()
+
+
+def backtest_bulk(payload: dict[str, Any]) -> dict[str, Any]:
+    """Evaluate many strategies over a shared date range in one call.
+
+    Payload mirrors ``mangrove_ai.models.oracle.OracleBulkBacktestRequest``
+    — supply ``strategy_ids`` (DB lookups), ``strategy_configs`` (inline
+    dicts), or both, plus the shared date range / risk parameters. The
+    server fetches OHLCV once per unique ``(asset, timeframe)`` and
+    re-uses it across all strategies that need it.
+    """
+    client = mangrove_ai_client()
+    result = client.oracle.backtest_bulk(OracleBulkBacktestRequest(**payload))
+    _log.info(
+        "oracle.backtest_bulk",
+        extra={
+            "success": result.success,
+            "data_fetches": result.data_fetches,
+            "n_results": len(result.results),
+        },
+    )
+    return result.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Experiment lifecycle wrappers
+# ---------------------------------------------------------------------------
+
+def create_experiment(config: dict[str, Any]) -> dict[str, Any]:
+    """Create a draft experiment from a config dict. Returns experiment_id."""
+    client = mangrove_ai_client()
+    result = client.oracle.create_experiment(config)
+    _log.info("oracle.create_experiment", extra={"experiment_id": result.experiment_id})
+    return result.model_dump()
+
+
+def list_experiments() -> list[dict[str, Any]]:
+    """List all experiments for the calling org (summary view)."""
+    client = mangrove_ai_client()
+    items = client.oracle.list_experiments()
+    return [item.model_dump() for item in items]
+
+
+def get_experiment(experiment_id: str) -> dict[str, Any]:
+    """Fetch full experiment config including current progress."""
+    client = mangrove_ai_client()
+    return client.oracle.get_experiment(experiment_id)
+
+
+def update_experiment(experiment_id: str, config: dict[str, Any]) -> dict[str, Any]:
+    """Replace a draft experiment's config (PUT semantics).
+
+    Only ``draft``-status experiments can be updated; validated /
+    launched / paused experiments reject mutation with HTTP 400.
+    """
+    client = mangrove_ai_client()
+    result = client.oracle.update_experiment(experiment_id, config)
+    _log.info("oracle.update_experiment", extra={"experiment_id": experiment_id})
+    return result.model_dump()
+
+
+def delete_experiment(experiment_id: str) -> dict[str, Any]:
+    """Delete an experiment + cancel any in-flight child backtests."""
+    client = mangrove_ai_client()
+    result = client.oracle.delete_experiment(experiment_id)
+    _log.info("oracle.delete_experiment", extra={"experiment_id": experiment_id})
+    return result.model_dump()
+
+
+def validate_experiment(experiment_id: str) -> dict[str, Any]:
+    """Validate a draft → required before launch."""
+    client = mangrove_ai_client()
+    result = client.oracle.validate_experiment(experiment_id)
+    _log.info(
+        "oracle.validate_experiment",
+        extra={"experiment_id": experiment_id, "status": result.status},
+    )
+    return result.model_dump()
+
+
+def launch_experiment(experiment_id: str) -> dict[str, Any]:
+    """Fan out a validated experiment into up to 99 child backtests."""
+    client = mangrove_ai_client()
+    result = client.oracle.launch_experiment(experiment_id)
+    _log.info(
+        "oracle.launch_experiment",
+        extra={"experiment_id": experiment_id, "status": result.status},
+    )
+    return result.model_dump()
+
+
+def pause_experiment(experiment_id: str) -> dict[str, Any]:
+    """Halt a running experiment without losing completed results."""
+    client = mangrove_ai_client()
+    result = client.oracle.pause_experiment(experiment_id)
+    _log.info(
+        "oracle.pause_experiment",
+        extra={"experiment_id": experiment_id, "status": result.status},
+    )
+    return result.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Results pagination
+# ---------------------------------------------------------------------------
+
+def list_results(
+    experiment_id: str, *, limit: int = 100, offset: int = 0,
+) -> dict[str, Any]:
+    """Read backtest results materializing under an experiment, paginated.
+
+    ``experiment_id`` is required — Oracle rejects unfiltered reads at
+    the proxy layer to prevent cross-tenant fan-out.
+    """
+    client = mangrove_ai_client()
+    result = client.oracle.list_results(
+        experiment_id=experiment_id, limit=limit, offset=offset,
+    )
+    return result.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Metadata catalogs (free / non-billable)
+# ---------------------------------------------------------------------------
+
+def list_datasets() -> list[dict[str, Any]]:
+    """List the OHLCV datasets the engine can run experiments against."""
+    client = mangrove_ai_client()
+    return client.oracle.list_datasets()
+
+
+def list_signals() -> list[dict[str, Any]]:
+    """List signals with typed param specs available to experiments."""
+    client = mangrove_ai_client()
+    return client.oracle.list_signals()
+
+
+def list_templates() -> list[dict[str, Any]]:
+    """List predefined strategy templates to seed experiments from."""
+    client = mangrove_ai_client()
+    return client.oracle.list_templates()

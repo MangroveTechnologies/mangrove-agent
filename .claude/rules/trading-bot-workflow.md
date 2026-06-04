@@ -17,7 +17,7 @@ MCP tools are deferred. On any session, eagerly load the full core toolset on fi
 
 Required core set:
 ```
-mcp__mangrove-agent__status, list_tools, list_signals, list_wallets, create_wallet, import_wallet, get_balances, list_dex_venues, get_swap_quote, execute_swap, get_ohlcv, get_market_data, kb_search, list_strategies, get_strategy, create_strategy_autonomous, create_strategy_manual, evaluate_strategy, backtest_strategy, update_strategy_status, list_trades, list_all_trades, list_evaluations
+mcp__mangrove-agent__status, list_tools, list_signals, list_wallets, create_wallet, import_wallet, get_balances, list_dex_venues, get_swap_quote, execute_swap, get_ohlcv, get_market_data, kb_search, list_strategies, get_strategy, create_strategy_autonomous, create_strategy_manual, evaluate_strategy, backtest_strategy, update_strategy_status, list_trades, list_all_trades, list_evaluations, get_smart_money_historical_holdings, get_smart_money_dex_trades, get_smart_money_perp_trades, get_token_dex_trades, get_token_flows, oracle_list_datasets, oracle_list_signals, oracle_create_experiment, oracle_validate_experiment, oracle_launch_experiment, oracle_list_results
 ```
 
 ## Operating principles
