@@ -6,8 +6,8 @@
   <h1>mangrove-agent</h1>
 
   <p>
-    <strong>An AI trading bot built on the Mangrove API.</strong><br>
-    FastAPI + MCP. Autonomous strategy generation, validation, and execution with risk management & policy enforcement built-in.
+    <strong>An AI trading agent built on the Mangrove API.</strong><br>
+    FastAPI + MCP. Autonomous strategy generation, cron-driven execution, full audit trail.
   </p>
 
   <p>
@@ -24,7 +24,7 @@
 
 ## What this is
 
-A local AI trading bot that:
+A local AI trading agent that:
 - Turns natural-language goals ("momentum on ETH") into backtested, ranked trading strategies via the [MangroveAI API](https://mangrovedeveloper.ai).
 - Runs live strategies on APScheduler cron jobs. Same evaluator path for paper and live.
 - Executes live swaps through [MangroveMarkets](https://github.com/MangroveTechnologies/MangroveMarkets). Client-side signing; SDK never touches your keys.
@@ -35,6 +35,8 @@ A local AI trading bot that:
 ---
 
 ## Workshop attendee? Start here.
+
+**First time here?** Follow **[`SETUP.md`](SETUP.md)** first — it walks through installing Git, Python, Node.js, and Claude Code in order (Mac and Windows), clones the repo, and gets the agent running. Come back here once setup is done.
 
 The full guided walkthrough lives in **[`tutorials/trading-app/`](tutorials/trading-app/00-index.md)** — 8 chapters that take you from "I just cloned this" to "I have a paper strategy running" to (optionally) "I made a live swap."
 
