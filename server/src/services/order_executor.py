@@ -128,6 +128,83 @@ def _poll_tx(tx_hash: str, chain_id: int, venue_id: str | None = None) -> dict[s
     }
 
 
+def _validate_slippage(slippage_pct: float | None) -> None:
+    """Raise SigningError if slippage_pct is missing or out of range."""
+    if slippage_pct is None:
+        raise SigningError(
+            "slippage_pct is required for live swaps.",
+            suggestion=(
+                "Direct swap callers pass slippage_pct in the request body "
+                "(decimal, e.g. 0.002 = 0.2%). Cron-driven swaps pull it "
+                "from the active allocation — re-promote the strategy to "
+                "live with an allocation block that includes slippage_pct."
+            ),
+        )
+    if slippage_pct <= 0 or slippage_pct > 0.0025:
+        raise SigningError(
+            f"slippage_pct {slippage_pct} outside allowed range (0, 0.0025].",
+            suggestion=(
+                "Max allowed slippage is 0.25% (0.0025 decimal). Tighter "
+                "values trade off fewer fills for better prices; looser "
+                "values are refused to prevent rekt-on-illiquid-pair "
+                "execution."
+            ),
+        )
+
+
+def _resolve_tokens(intent: OrderIntent) -> tuple[str, str, float]:
+    """Determine input/output token addresses and amount from an OrderIntent.
+
+    Prefers explicit token addresses (user-initiated swaps via /dex/swap);
+    falls back to USDC+symbol convention for cron strategy intents.
+    """
+    if intent.input_token_address and intent.output_token_address:
+        return intent.input_token_address, intent.output_token_address, intent.amount
+    if intent.side == "buy":
+        return "USDC", intent.symbol, intent.amount
+    return intent.symbol, "USDC", intent.amount
+
+
+def _handle_approval(
+    client: Any,
+    input_token: str,
+    chain_id: int,
+    wallet_address: str,
+    venue_id: str | None,
+) -> str | None:
+    """Steps 2-3: approve token + sign/broadcast + poll. Returns approval tx_hash or None."""
+    try:
+        approval_tx = client.dex.approve_token(
+            token_address=input_token,
+            chain_id=chain_id,
+            wallet_address=wallet_address,
+        )
+    except Exception as e:  # noqa: BLE001
+        raise SdkError(f"dex.approve_token failed: {e}") from e
+
+    if approval_tx is None:
+        return None
+
+    signed_approval = wallet_sign(
+        getattr(approval_tx, "payload", {}), wallet_address, chain_id=chain_id,
+    )
+    _log.info("order.live.signed", kind="approval", wallet=wallet_address)
+    try:
+        broadcast_result = client.dex.broadcast(signed_tx=signed_approval, chain_id=chain_id, venue_id=venue_id)
+    except Exception as e:  # noqa: BLE001
+        raise SdkError(f"dex.broadcast(approval) failed: {e}") from e
+
+    approval_tx_hash = getattr(broadcast_result, "tx_hash", None)
+    _log.info("order.live.broadcast", kind="approval", tx_hash=approval_tx_hash)
+    if approval_tx_hash:
+        poll_result = _poll_tx(approval_tx_hash, chain_id, venue_id)
+        if poll_result["status"] not in ("confirmed", "success"):
+            raise SdkError(
+                f"Approval tx did not confirm: {poll_result['status']} ({poll_result.get('error')})",
+            )
+    return approval_tx_hash
+
+
 def _live_swap(
     intent: OrderIntent,
     strategy_id: str,
@@ -157,41 +234,10 @@ def _live_swap(
             suggestion="Pass chain_id in the OrderIntent metadata or strategy config.",
         )
 
-    if slippage_pct is None:
-        raise SigningError(
-            "slippage_pct is required for live swaps.",
-            suggestion=(
-                "Direct swap callers pass slippage_pct in the request body "
-                "(decimal, e.g. 0.002 = 0.2%). Cron-driven swaps pull it "
-                "from the active allocation — re-promote the strategy to "
-                "live with an allocation block that includes slippage_pct."
-            ),
-        )
-    if slippage_pct <= 0 or slippage_pct > 0.0025:
-        raise SigningError(
-            f"slippage_pct {slippage_pct} outside allowed range (0, 0.0025].",
-            suggestion=(
-                "Max allowed slippage is 0.25% (0.0025 decimal). Tighter "
-                "values trade off fewer fills for better prices; looser "
-                "values are refused to prevent rekt-on-illiquid-pair "
-                "execution."
-            ),
-        )
+    _validate_slippage(slippage_pct)
 
     client = mangrove_markets_client()
-    # Prefer explicit addresses (user-initiated swaps via /dex/swap); fall
-    # back to USDC+symbol convention when the intent came from the cron
-    # strategy path.
-    if intent.input_token_address and intent.output_token_address:
-        input_token = intent.input_token_address
-        output_token = intent.output_token_address
-        input_amount = intent.amount
-    elif intent.side == "buy":
-        input_token, output_token = "USDC", intent.symbol
-        input_amount = intent.amount  # treat as USDC notional for now
-    else:
-        input_token, output_token = intent.symbol, "USDC"
-        input_amount = intent.amount
+    input_token, output_token, input_amount = _resolve_tokens(intent)
 
     # 1. Quote
     try:
@@ -215,35 +261,8 @@ def _live_swap(
         "price_impact_percent": getattr(quote, "price_impact_percent", 0.0),
     }
 
-    # 2. Conditional token approval
-    approval_tx_hash: str | None = None
-    try:
-        approval_tx = client.dex.approve_token(
-            token_address=input_token,
-            chain_id=chain_id,
-            wallet_address=wallet_address,
-        )
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"dex.approve_token failed: {e}") from e
-
-    if approval_tx is not None:
-        # 3. Sign + broadcast the approval
-        signed_approval = wallet_sign(
-            getattr(approval_tx, "payload", {}), wallet_address, chain_id=chain_id,
-        )
-        _log.info("order.live.signed", kind="approval", wallet=wallet_address)
-        try:
-            broadcast_result = client.dex.broadcast(signed_tx=signed_approval, chain_id=chain_id, venue_id=venue_id)
-        except Exception as e:  # noqa: BLE001
-            raise SdkError(f"dex.broadcast(approval) failed: {e}") from e
-        approval_tx_hash = getattr(broadcast_result, "tx_hash", None)
-        _log.info("order.live.broadcast", kind="approval", tx_hash=approval_tx_hash)
-        if approval_tx_hash:
-            poll_result = _poll_tx(approval_tx_hash, chain_id, venue_id)
-            if poll_result["status"] not in ("confirmed", "success"):
-                raise SdkError(
-                    f"Approval tx did not confirm: {poll_result['status']} ({poll_result.get('error')})",
-                )
+    # 2-3. Conditional token approval
+    approval_tx_hash = _handle_approval(client, input_token, chain_id, wallet_address, venue_id)
 
     # 4. Prepare swap
     # Upstream `dex.prepare_swap` takes slippage as a PERCENTAGE
@@ -251,7 +270,7 @@ def _live_swap(
     # Our API convention is DECIMAL (0.005 = 0.5%) to match the rest of
     # the trading stack (trading_defaults.backtest_defaults.slippage_pct
     # = 0.004 = 0.4%). Convert at the boundary.
-    sdk_slippage = slippage_pct * 100.0
+    sdk_slippage = slippage_pct * 100.0  # type: ignore[operator]
     try:
         swap_tx = client.dex.prepare_swap(
             quote_id=quote.quote_id,

@@ -163,6 +163,42 @@ def _fetch_catalog() -> list[Any]:
     return list(client.signals.list_iter(limit_per_page=100))
 
 
+def _build_entry(
+    rng: random.Random,
+    trigger_pool: list[Any],
+    filter_pool: list[Any],
+    timeframe: str,
+) -> tuple[list[dict[str, Any]], Any]:
+    """Pick one trigger + 0-2 filters for the entry side. Returns (rules, trigger)."""
+    entry_trigger = rng.choice(trigger_pool)
+    n_filters = rng.randint(0, min(2, len(filter_pool)))
+    filter_picks = rng.sample(filter_pool, n_filters) if n_filters else []
+    rules = [_signal_rule(entry_trigger, timeframe)]
+    rules += [_signal_rule(s, timeframe) for s in filter_picks]
+    return rules, entry_trigger
+
+
+def _build_exit(
+    rng: random.Random,
+    trigger_pool: list[Any],
+    filter_pool: list[Any],
+    timeframe: str,
+    entry_trigger: Any,
+) -> list[dict[str, Any]]:
+    """Pick 0-1 trigger + 0-2 filters for the exit side, avoiding entry trigger duplication."""
+    exit_rules: list[dict[str, Any]] = []
+    if rng.random() < 0.5 and trigger_pool:
+        exit_trigger = rng.choice(trigger_pool)
+        # Avoid picking the exact same signal we used for entry.
+        if exit_trigger.name == entry_trigger.name and len(trigger_pool) > 1:
+            alt_triggers = [s for s in trigger_pool if s.name != entry_trigger.name]
+            exit_trigger = rng.choice(alt_triggers)
+        exit_rules.append(_signal_rule(exit_trigger, timeframe))
+    n_filters = rng.randint(0, min(2, len(filter_pool)))
+    exit_rules += [_signal_rule(s, timeframe) for s in rng.sample(filter_pool, n_filters)] if n_filters else []
+    return exit_rules
+
+
 def generate(
     goal: str,
     asset: str,
@@ -199,24 +235,8 @@ def generate(
 
     candidates: list[StrategyCandidate] = []
     for i in range(n):
-        entry_trigger = rng.choice(trigger_pool)
-        n_entry_filters = rng.randint(0, min(2, len(filter_pool)))
-        entry_filter_picks = rng.sample(filter_pool, n_entry_filters) if n_entry_filters else []
-
-        entry = [_signal_rule(entry_trigger, timeframe)]
-        entry += [_signal_rule(s, timeframe) for s in entry_filter_picks]
-
-        # Exit is shorter — 50% chance of an exit trigger, 0-2 filters.
-        exit_rules: list[dict[str, Any]] = []
-        if rng.random() < 0.5 and trigger_pool:
-            exit_trigger = rng.choice(trigger_pool)
-            # Avoid picking the exact same signal we used for entry.
-            if exit_trigger.name == entry_trigger.name and len(trigger_pool) > 1:
-                candidates_t = [s for s in trigger_pool if s.name != entry_trigger.name]
-                exit_trigger = rng.choice(candidates_t)
-            exit_rules.append(_signal_rule(exit_trigger, timeframe))
-        n_exit_filters = rng.randint(0, min(2, len(filter_pool)))
-        exit_rules += [_signal_rule(s, timeframe) for s in rng.sample(filter_pool, n_exit_filters)] if n_exit_filters else []
+        entry, entry_trigger = _build_entry(rng, trigger_pool, filter_pool, timeframe)
+        exit_rules = _build_exit(rng, trigger_pool, filter_pool, timeframe, entry_trigger)
 
         candidates.append(StrategyCandidate(
             name=f"auto-{goal[:20].replace(' ', '-')}-{i+1}",
