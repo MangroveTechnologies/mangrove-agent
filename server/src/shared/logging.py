@@ -19,7 +19,8 @@ subagents + log-tailers can grep for them consistently):
 
     # strategy
     "strategy.created", "strategy.status_changed",
-    "strategy.tick.started", "strategy.tick.completed", "strategy.tick.errored"
+    "strategy.tick.started", "strategy.tick.completed", "strategy.tick.errored",
+    "strategy.tick.order_intent.skipped"
 
     # order execution
     "order.executing", "order.live.signed", "order.live.broadcast",

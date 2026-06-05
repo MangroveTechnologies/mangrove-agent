@@ -9,7 +9,7 @@ rather than unit.
 from __future__ import annotations
 
 import os
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
@@ -389,3 +389,204 @@ def test_get_missing_strategy_raises(temp_db, mock_ai_sdk):
 
     with pytest.raises(StrategyNotFound):
         get_strategy("does-not-exist")
+
+
+# ---------------------------------------------------------------------------
+# order intent validation warning (issue #71)
+# ---------------------------------------------------------------------------
+
+
+def _paper_strategy(mock_ai_sdk, create_manual, update_status, StrategyManualRequest, StrategyStatusUpdate):
+    """Create and promote a strategy to paper — shared setup for tick tests."""
+    s = create_manual(StrategyManualRequest(
+        name="tick-test", asset="ETH", timeframe="1h",
+        entry=[{"name": "rsi_oversold", "signal_type": "TRIGGER", "timeframe": "1h"}],
+    ))
+    update_status(s.id, StrategyStatusUpdate(status="inactive"))
+    update_status(s.id, StrategyStatusUpdate(status="paper"))
+    return s
+
+
+def test_tick_logs_warning_when_order_intent_fails_validation(temp_db, mock_ai_sdk):
+    """
+    passed: SDK returns a dict missing required 'action' field
+    expected: _log.warning called with event="strategy.tick.order_intent.skipped",
+              reason contains the Pydantic error, payload_keys lists fields present in dict
+    """
+    from src.services.strategy_service import (
+        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+    )
+
+    eval_resp = MagicMock()
+    eval_resp.new_orders = None
+    eval_resp.order_intents = [{"side": "buy", "symbol": "ETH", "amount": 100.0}]  # missing 'action'
+    eval_resp.orders = None
+    eval_resp.model_dump.return_value = {}
+    mock_ai_sdk.execution.evaluate.return_value = eval_resp
+
+    s = _paper_strategy(mock_ai_sdk, create_manual, update_status, StrategyManualRequest, StrategyStatusUpdate)
+
+    with patch("src.services.strategy_service._log.warning") as mock_warn:
+        tick(s.id)
+
+    mock_warn.assert_called_once()
+    event, kwargs = mock_warn.call_args[0][0], mock_warn.call_args[1]
+    assert event == "strategy.tick.order_intent.skipped"
+    assert kwargs["strategy_id"] == s.id
+    assert "action" in kwargs["reason"].lower() or "missing" in kwargs["reason"].lower()
+    assert "payload_keys" in kwargs
+
+
+def test_tick_warning_log_contains_only_keys_not_values(temp_db, mock_ai_sdk):
+    """
+    passed: SDK returns a dict with amount=99999.0 and input_token_address="0xSensitive..."
+    expected: kwargs logged do NOT contain those values — only key names (PII/financial scrubbed)
+    """
+    import json as _json
+    from src.services.strategy_service import (
+        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+    )
+
+    sensitive_amount = 99999.0
+    sensitive_address = "0xSensitiveTokenAddress"
+
+    eval_resp = MagicMock()
+    eval_resp.new_orders = None
+    eval_resp.order_intents = [{
+        "side": "buy",
+        "symbol": "ETH",
+        "amount": sensitive_amount,
+        "input_token_address": sensitive_address,
+        # missing 'action' — will fail validation
+    }]
+    eval_resp.orders = None
+    eval_resp.model_dump.return_value = {}
+    mock_ai_sdk.execution.evaluate.return_value = eval_resp
+
+    s = _paper_strategy(mock_ai_sdk, create_manual, update_status, StrategyManualRequest, StrategyStatusUpdate)
+
+    with patch("src.services.strategy_service._log.warning") as mock_warn:
+        tick(s.id)
+
+    mock_warn.assert_called_once()
+    serialised = _json.dumps(mock_warn.call_args[1])  # only the kwargs
+
+    assert str(sensitive_amount) not in serialised
+    assert sensitive_address not in serialised
+
+
+def test_tick_warning_payload_keys_lists_field_names(temp_db, mock_ai_sdk):
+    """
+    passed: malformed dict with keys ["amount", "side", "symbol"] (no 'action')
+    expected: payload_keys in logged kwargs is exactly ["amount", "side", "symbol"] (sorted) —
+              key names only, zero values
+    """
+    from src.services.strategy_service import (
+        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+    )
+
+    eval_resp = MagicMock()
+    eval_resp.new_orders = None
+    eval_resp.order_intents = [{"amount": 50.0, "side": "buy", "symbol": "ETH"}]  # missing 'action'
+    eval_resp.orders = None
+    eval_resp.model_dump.return_value = {}
+    mock_ai_sdk.execution.evaluate.return_value = eval_resp
+
+    s = _paper_strategy(mock_ai_sdk, create_manual, update_status, StrategyManualRequest, StrategyStatusUpdate)
+
+    with patch("src.services.strategy_service._log.warning") as mock_warn:
+        tick(s.id)
+
+    assert mock_warn.call_args[1]["payload_keys"] == ["amount", "side", "symbol"]
+
+
+def test_tick_mixed_valid_and_invalid_intents_processes_only_valid(temp_db, mock_ai_sdk, monkeypatch):
+    """
+    passed: SDK returns two dicts — one valid, one missing 'action'
+    expected: warning fired once for the invalid one, one trade recorded for the valid one,
+              evaluation logged as ok
+    """
+    from src.services.strategy_service import (
+        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+    )
+    from src.services.trade_log import list_evaluations, list_trades
+
+    md = MagicMock()
+    md.data = {"current_price": 2500.0}
+    mock_ai_sdk.crypto_assets.get_market_data.return_value = md
+    monkeypatch.setattr("src.services.order_executor.mangrove_ai_client", lambda: mock_ai_sdk)
+
+    eval_resp = MagicMock()
+    eval_resp.new_orders = None
+    eval_resp.order_intents = [
+        {"action": "enter", "side": "buy", "symbol": "ETH", "amount": 0.1, "reason": "rsi fired"},  # valid
+        {"side": "sell", "symbol": "ETH", "amount": 0.1},  # invalid — missing 'action'
+    ]
+    eval_resp.orders = None
+    eval_resp.model_dump.return_value = {}
+    mock_ai_sdk.execution.evaluate.return_value = eval_resp
+
+    s = _paper_strategy(mock_ai_sdk, create_manual, update_status, StrategyManualRequest, StrategyStatusUpdate)
+
+    with patch("src.services.strategy_service._log.warning") as mock_warn:
+        tick(s.id)
+
+    assert mock_warn.call_count == 1
+    assert mock_warn.call_args[0][0] == "strategy.tick.order_intent.skipped"
+    assert len(list_trades(s.id)) == 1
+    assert list_evaluations(s.id)[0].status == "ok"
+
+
+def test_tick_all_malformed_intents_still_completes_with_ok_evaluation(temp_db, mock_ai_sdk):
+    """
+    passed: SDK returns two dicts both failing validation — one missing fields, one bad enum
+    expected: warning fired twice, zero trades, evaluation status=ok (tick didn't error out)
+    """
+    from src.services.strategy_service import (
+        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+    )
+    from src.services.trade_log import list_evaluations, list_trades
+
+    eval_resp = MagicMock()
+    eval_resp.new_orders = None
+    eval_resp.order_intents = [
+        {"side": "buy", "symbol": "ETH"},                                         # missing 'action' and 'amount'
+        {"action": "bad-value", "side": "buy", "symbol": "ETH", "amount": 0.1},  # invalid 'action' enum
+    ]
+    eval_resp.orders = None
+    eval_resp.model_dump.return_value = {}
+    mock_ai_sdk.execution.evaluate.return_value = eval_resp
+
+    s = _paper_strategy(mock_ai_sdk, create_manual, update_status, StrategyManualRequest, StrategyStatusUpdate)
+
+    with patch("src.services.strategy_service._log.warning") as mock_warn:
+        tick(s.id)
+
+    assert mock_warn.call_count == 2
+    assert all(c[0][0] == "strategy.tick.order_intent.skipped" for c in mock_warn.call_args_list)
+    assert list_trades(s.id) == []
+    assert list_evaluations(s.id)[0].status == "ok"
+
+
+def test_tick_warning_includes_strategy_id_for_correlation(temp_db, mock_ai_sdk):
+    """
+    passed: malformed order intent during tick for a known strategy
+    expected: strategy_id in warning kwargs matches the strategy — enables log correlation
+    """
+    from src.services.strategy_service import (
+        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+    )
+
+    eval_resp = MagicMock()
+    eval_resp.new_orders = None
+    eval_resp.order_intents = [{"side": "buy", "symbol": "ETH"}]  # missing 'action' and 'amount'
+    eval_resp.orders = None
+    eval_resp.model_dump.return_value = {}
+    mock_ai_sdk.execution.evaluate.return_value = eval_resp
+
+    s = _paper_strategy(mock_ai_sdk, create_manual, update_status, StrategyManualRequest, StrategyStatusUpdate)
+
+    with patch("src.services.strategy_service._log.warning") as mock_warn:
+        tick(s.id)
+
+    assert mock_warn.call_args[1]["strategy_id"] == s.id
