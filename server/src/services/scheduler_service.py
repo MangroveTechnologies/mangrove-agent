@@ -87,8 +87,8 @@ def reset_scheduler_cache() -> None:
         sched = get_scheduler()
         if sched.running:
             sched.shutdown(wait=False)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.warning("scheduler.shutdown.failed", error=str(exc))
     get_scheduler.cache_clear()
 
 

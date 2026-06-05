@@ -118,3 +118,28 @@ def test_insert_and_query_roundtrip(temp_db):
     assert row["address"] == "0xabc"
     assert row["encrypted_secret"] == b"ciphertext"
     assert row["chain"] == "evm"
+
+
+def test_reset_connection_logs_warning_on_close_failure(monkeypatch):
+    """If close() raises a sqlite3.Error, a warning is logged and cache_clear still runs."""
+    import sqlite3
+    from unittest.mock import MagicMock
+
+    from src.shared.db import sqlite as db_mod
+
+    mock_conn = MagicMock()
+    mock_conn.close.side_effect = sqlite3.Error("forced close failure")
+
+    mock_get_connection = MagicMock(return_value=mock_conn)
+    mock_get_connection.cache_clear = MagicMock()
+    monkeypatch.setattr(db_mod, "get_connection", mock_get_connection)
+
+    mock_log = MagicMock()
+    monkeypatch.setattr(db_mod, "_log", mock_log)
+
+    db_mod.reset_connection()
+
+    mock_log.warning.assert_called_once_with(
+        "db.connection.close_failed", error="forced close failure"
+    )
+    mock_get_connection.cache_clear.assert_called_once()
