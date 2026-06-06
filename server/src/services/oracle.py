@@ -272,14 +272,30 @@ def delete_experiment(experiment_id: str) -> dict[str, Any]:
 
 
 def validate_experiment(experiment_id: str) -> dict[str, Any]:
-    """Validate a draft → required before launch."""
+    """Validate a draft → required before launch.
+
+    Returns the server's validation result:
+        {"valid": bool, "total_runs": int, "errors": [...], "warnings": [...]}
+
+    NOTE — SDK contract bug (mangroveai <= 1.5.0): the SDK types this
+    endpoint's response as ``ExperimentStatus`` (``experiment_id`` +
+    ``status``), but the server returns the ``{valid, total_runs,
+    errors, warnings}`` shape above. ``client.oracle.validate_experiment``
+    therefore raises a pydantic ``ValidationError`` while parsing an
+    otherwise-successful 200. We call the transport directly and return
+    the raw validation result until the SDK ships a correct
+    ``ExperimentValidation`` model. Tracked: MangroveAI-SDK contract fix.
+    """
     client = mangrove_ai_client()
-    result = client.oracle.validate_experiment(experiment_id)
+    raw = client.oracle._core.request(
+        "POST", f"/oracle/experiments/{experiment_id}/validate"
+    ).json()
     _log.info(
         "oracle.validate_experiment",
-        extra={"experiment_id": experiment_id, "status": result.status},
+        extra={"experiment_id": experiment_id, "valid": raw.get("valid"),
+               "total_runs": raw.get("total_runs")},
     )
-    return result.model_dump()
+    return raw
 
 
 def launch_experiment(experiment_id: str) -> dict[str, Any]:
@@ -294,14 +310,27 @@ def launch_experiment(experiment_id: str) -> dict[str, Any]:
 
 
 def pause_experiment(experiment_id: str) -> dict[str, Any]:
-    """Halt a running experiment without losing completed results."""
+    """Halt a running experiment without losing completed results.
+
+    Returns the server's `{"status": "paused"}` body.
+
+    NOTE — same SDK contract bug as `validate_experiment` (mangroveai
+    <= 1.5.0): the pause endpoint returns `{"status": "paused"}` with NO
+    `experiment_id`, but the SDK types it as `ExperimentStatus`
+    (`experiment_id` + `status`, both required), so
+    `client.oracle.pause_experiment` raises a pydantic `ValidationError`
+    on an otherwise-successful 200. We call the transport directly until
+    the SDK ships a tolerant model. Tracked: MangroveAI-SDK contract fix.
+    """
     client = mangrove_ai_client()
-    result = client.oracle.pause_experiment(experiment_id)
+    raw = client.oracle._core.request(
+        "POST", f"/oracle/experiments/{experiment_id}/pause"
+    ).json()
     _log.info(
         "oracle.pause_experiment",
-        extra={"experiment_id": experiment_id, "status": result.status},
+        extra={"experiment_id": experiment_id, "status": raw.get("status")},
     )
-    return result.model_dump()
+    return raw
 
 
 # ---------------------------------------------------------------------------

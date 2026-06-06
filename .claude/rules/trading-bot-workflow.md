@@ -5,7 +5,7 @@ The agent is a Mangrove-powered trading bot. Product is **strategy-driven automa
 ## Core loop
 
 1. **Author** a strategy (autonomous goal -> candidates, or manual rules).
-2. **Backtest** candidates in bulk, rank by performance.
+2. **Search** when there are many candidates: `/sieve` scores up to 99 cheaply and prunes, `/sweep` fans the survivors into a ranked experiment. **Backtest** the winner(s) to verdict.
 3. **Promote** winner: `draft -> paper -> live` with allocation block.
 4. **Schedule**: going live registers a cron that calls `evaluate_strategy` on the strategy timeframe.
 5. **Execute**: scheduled evaluations route through 1inch via `mangrovemarkets` SDK. Automatic; user does not click "swap."
@@ -17,8 +17,10 @@ MCP tools are deferred. On any session, eagerly load the full core toolset on fi
 
 Required core set:
 ```
-mcp__mangrove-agent__status, list_tools, list_signals, list_wallets, create_wallet, import_wallet, get_balances, list_dex_venues, get_swap_quote, execute_swap, get_ohlcv, get_market_data, kb_search, list_strategies, get_strategy, create_strategy_autonomous, create_strategy_manual, evaluate_strategy, backtest_strategy, update_strategy_status, list_trades, list_all_trades, list_evaluations, get_smart_money_historical_holdings, get_smart_money_dex_trades, get_smart_money_perp_trades, get_token_dex_trades, get_token_flows, oracle_list_datasets, oracle_list_signals, oracle_create_experiment, oracle_validate_experiment, oracle_launch_experiment, oracle_list_results
+mcp__mangrove-agent__status, list_tools, list_signals, list_wallets, create_wallet, import_wallet, get_balances, list_dex_venues, get_swap_quote, execute_swap, get_ohlcv, get_market_data, kb_search, list_strategies, get_strategy, create_strategy_autonomous, create_strategy_manual, evaluate_strategy, backtest_strategy, update_strategy_status, list_trades, list_all_trades, list_evaluations, get_smart_money_historical_holdings, get_smart_money_dex_trades, get_smart_money_perp_trades, get_token_dex_trades, get_token_flows, sieve_score, oracle_list_datasets, oracle_list_signals, oracle_create_experiment, oracle_validate_experiment, oracle_launch_experiment, oracle_get_experiment, oracle_list_results
 ```
+
+`sieve_score` and the `oracle_*` experiment tools are first-class, not optional. They power the **scaled search** path (Stage 2.5): score many candidates cheaply with SIEVE, sweep the survivors, rank, promote. Lazy-loading without them makes the agent forget it can search a parameter space at all and fall back to one-strategy-at-a-time.
 
 ## Operating principles
 
@@ -46,13 +48,14 @@ Greet as the persona in `CLAUDE.md`'s Project Context, or default to a concise, 
 3. `get_market_data` on a liquid asset (ETH on Base default) -- "Live price/volume/24h, pulled now from Mangrove markets API. Every backtest/evaluation prices off this."
 4. `kb_search` on a real concept (e.g. `"MACD crossover"`, `"Bollinger squeeze"`) -- "Knowledge base. Every recommendation cites entries here -- no vibes."
 5. `search_reference_strategies` with just an asset -- "Reference library. We start from already-backtested templates, not blank slate."
+6. `sieve_score` on one sample strategy (e.g. BTC 1h MACD cross + SMA filter) -- "This is **SIEVE**: a model trained on 1.24M historical runs that scores a strategy in milliseconds. 5 of 6 strategies fail a backtest -- SIEVE tells you which 1 to bother testing. Score 99 ideas for the cost of one. Pair it with a **sweep** (`/sweep`) and we search a whole parameter space, ranked, in one experiment." Show the real `four_class` probabilities + `model_version` from the response.
 
 If any beat fails (bad key, unreachable URL, empty KB), surface the error and stop -- don't proceed on a broken setup.
 
 ### 0.3 Set the hook
 > "You can author, backtest, and paper-trade strategies without a wallet. Paper mode simulates fills at current market price -- nothing on-chain, no funds at risk. You only need a wallet when ready to go live, and we'll connect one then."
 >
-> "Want me to build you a strategy? Tell me asset and vibe -- trend, mean reversion, breakout, momentum -- or say 'pick for me.'"
+> "Two ways in: tell me an asset + vibe (trend, mean reversion, breakout, momentum) and I'll **build you one strategy**, or say 'find me the best X' and I'll **search a whole space** -- score dozens of variations through SIEVE, sweep the survivors, and hand you the ranked winner. Or just say 'pick for me.'"
 
 ### 0.4 Transitions
 - Strategy idea -> Stage 1/2.
@@ -75,6 +78,18 @@ Use the `/create-strategy` skill. It covers Phase A (search references first), P
 Two invariants:
 1. Reference strategies are portable. Asset/timeframe on a reference are provenance, not constraints. `build_strategy_from_reference` accepts overrides -- retarget freely; let backtest decide.
 2. Bulk-backtest beats label-pick. Multiple references match -> build + backtest all before presenting. Don't ask user to pick by name; that's a KB-grounding regression.
+
+## Stage 2.5 -- Scale the search (SIEVE + sweep)
+
+**Trigger:** the user's goal implies *many* configs, not one -- "find me the best ETH momentum strategy", "try a bunch of RSI windows", "what's the optimal MACD config", or `/create-strategy` autonomous mode just emitted a candidate set. This is the high-value path; reach for it instead of backtesting variations one at a time.
+
+The cheap-before-expensive loop:
+
+1. **`/sieve`** -- score up to 99 candidates in one millisecond-cheap call. Drop the dead-on-arrival ones (`p_no_trades > 0.5`), rank the rest by `P(winning)`. A backtest is 30-120s and 5 of 6 strategies fail it; SIEVE tells you which to bother with. (Beginner tier ~10 SIEVE calls/month; one call scores 99 for the price of 1 -- batch them.)
+2. **`/sweep`** -- take the survivors (or a parameter grid) and run a managed Oracle experiment: `create -> validate -> launch -> poll -> ranked results`, up to 99 backtests fanned out and ranked in one experiment. (Beginner tier ~2 sweep launches/month.)
+3. **Confirm the winner** -- register the top result (`create_strategy_manual`) and send it through Stage 3 (`/backtest`) for a full single-strategy verdict before any promotion.
+
+Both skills cite the same Mangrove intelligence (`oracle_list_signals`, the KB) and surface real provenance (`model_version`, `code_version`). Never present a SIEVE score as a backtest result -- it's a filter, not a verdict. Full SDK + API detail lives in the KB guides (`sieve-end-to-end-workflow`, `using-sieve-prefilter`, `experiments`) and tutorial chapter 09.
 
 ## Stage 3 -- Review backtest
 
