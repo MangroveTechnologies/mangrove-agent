@@ -18,12 +18,20 @@ from src.services.oracle import (  # noqa: E402
     DataQueryInput,
     OracleBacktestInput,
     SieveScoreInput,
+)
+from src.services.oracle import (
     backtest as svc_backtest,
+)
+from src.services.oracle import (
     data_query as svc_data_query,
+)
+from src.services.oracle import (
     sieve_score as svc_sieve_score,
 )
+from src.services.oracle import (
+    validate_experiment as svc_validate_experiment,
+)
 from src.shared.errors import SdkError  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -164,3 +172,54 @@ class TestBacktest:
         assert result["success"] is True
         assert result["metrics"]["sharpe_ratio"] == pytest.approx(1.5)
         assert result["trade_count"] == 12
+
+
+# ---------------------------------------------------------------------------
+# validate_experiment — must return the server's {valid, total_runs, ...}
+# shape directly, NOT route through the SDK's ExperimentStatus model
+# (mangroveai <= 1.5.0 mistypes this endpoint and crashes on a 200).
+# ---------------------------------------------------------------------------
+
+class TestValidateExperiment:
+    def test_returns_raw_validation_result_via_transport(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = MagicMock()
+        # Real server shape (verified live against Oracle v0.15.3):
+        client.oracle._core.request.return_value.json.return_value = {
+            "valid": True,
+            "total_runs": 12,
+            "errors": [],
+            "warnings": [],
+        }
+        monkeypatch.setattr("src.services.oracle.mangrove_ai_client", lambda: client)
+
+        result = svc_validate_experiment("exp_20260606T011615775405Z")
+
+        # The service must NOT call the mistyped SDK method...
+        client.oracle.validate_experiment.assert_not_called()
+        # ...and must POST straight to the validate endpoint via the transport.
+        client.oracle._core.request.assert_called_once_with(
+            "POST", "/oracle/experiments/exp_20260606T011615775405Z/validate"
+        )
+        assert result == {
+            "valid": True,
+            "total_runs": 12,
+            "errors": [],
+            "warnings": [],
+        }
+
+    def test_surfaces_invalid_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = MagicMock()
+        client.oracle._core.request.return_value.json.return_value = {
+            "valid": False,
+            "total_runs": 0,
+            "errors": ["No entry filter signals selected"],
+            "warnings": [],
+        }
+        monkeypatch.setattr("src.services.oracle.mangrove_ai_client", lambda: client)
+
+        result = svc_validate_experiment("exp_x")
+
+        assert result["valid"] is False
+        assert "No entry filter signals selected" in result["errors"]

@@ -137,12 +137,21 @@ the model is overconfident. Always backtest before promoting to paper.
 
 ## Going further
 
-- The API reference for `client.oracle.*` lives in the
-  [mangrove-ai SDK docs](https://docs.mangrovedeveloper.ai/sdks/mangroveai).
-- For batch / async / bulk backtest variants (long-running, many-
-  strategy work), see the `backtest_async` / `backtest_bulk` SDK
-  methods — not yet exposed through the agent's MCP surface, but
-  reachable via `client.oracle.backtest_async(...)` if you script
+- **Search a whole parameter space, not one strategy at a time.** The
+  agent exposes the full managed sweep lifecycle as MCP tools
+  (`oracle_create_experiment` → `oracle_validate_experiment` →
+  `oracle_launch_experiment` → `oracle_get_experiment` →
+  `oracle_list_results`). Just ask: *"sweep the MACD windows on BTC 1h
+  and rank them."* The guided flow is the **`/sweep`** skill; the cheap
+  pre-screen is the **`/sieve`** skill.
+- The async / bulk single-strategy backtest variants are also on the
+  agent's MCP surface now (`oracle_backtest_async`, `oracle_backtest_poll`,
+  `oracle_backtest_bulk`) in addition to `client.oracle.*` if you script
   against the SDK directly.
+- The API reference for `client.oracle.*` lives in the
+  [mangrove-ai SDK docs](https://docs.mangrovedeveloper.ai/sdks/mangroveai),
+  and the worked SDK walkthroughs are the KB guides
+  [SIEVE end-to-end](https://docs.mangrovedeveloper.ai/guides/sieve-end-to-end-workflow)
+  and [Experiments](https://docs.mangrovedeveloper.ai/api-reference/experiments).
 - The full corpus schema (98 fields on the `results` table) is
   documented at `MangroveOracle/infra/terraform/schemas/results.json`.
