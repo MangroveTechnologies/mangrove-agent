@@ -23,7 +23,12 @@ PyJWT>=2.9.0
 # is normal Python packaging (Pillow/PIL, beautifulsoup4/bs4, etc.).
 # An attempted PyPI rename to `mangrove-ai` was rejected by PyPI's
 # similarity check — that's why we kept the dist name as-is.
-mangroveai>=1.4.0,<2.0.0
+# Floor raised to 1.5.1: that release fixed the Oracle experiment
+# validate/pause response models (ExperimentValidation; experiment_id
+# optional on ExperimentStatus). The agent's oracle service reads those
+# two endpoints via the transport directly as a version-independent
+# safeguard, so it works on >=1.5.1 without depending on the typed model.
+mangroveai>=1.5.1,<2.0.0
 # mangrovemarkets 1.0.0 moved EVM wallet keypair generation client-side.
 # The agent's wallet_manager.create_wallet() is unaffected — the SDK
 # call signature is unchanged, only the implementation shifted from
