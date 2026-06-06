@@ -26,6 +26,9 @@ from src.services.oracle import (
     data_query as svc_data_query,
 )
 from src.services.oracle import (
+    pause_experiment as svc_pause_experiment,
+)
+from src.services.oracle import (
     sieve_score as svc_sieve_score,
 )
 from src.services.oracle import (
@@ -223,3 +226,29 @@ class TestValidateExperiment:
 
         assert result["valid"] is False
         assert "No entry filter signals selected" in result["errors"]
+
+
+# ---------------------------------------------------------------------------
+# pause_experiment — same SDK contract bug as validate: the server returns
+# {"status": "paused"} with NO experiment_id, but the SDK types it as
+# ExperimentStatus (experiment_id required) and crashes. The service must
+# read the body via the transport directly.
+# ---------------------------------------------------------------------------
+
+class TestPauseExperiment:
+    def test_returns_raw_status_via_transport(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = MagicMock()
+        client.oracle._core.request.return_value.json.return_value = {"status": "paused"}
+        monkeypatch.setattr("src.services.oracle.mangrove_ai_client", lambda: client)
+
+        result = svc_pause_experiment("exp_20260606T011615775405Z")
+
+        # Must NOT route through the mistyped SDK method...
+        client.oracle.pause_experiment.assert_not_called()
+        # ...and must POST straight to the pause endpoint via the transport.
+        client.oracle._core.request.assert_called_once_with(
+            "POST", "/oracle/experiments/exp_20260606T011615775405Z/pause"
+        )
+        assert result == {"status": "paused"}
