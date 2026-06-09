@@ -28,7 +28,13 @@ PyJWT>=2.9.0
 # optional on ExperimentStatus). The agent's oracle service reads those
 # two endpoints via the transport directly as a version-independent
 # safeguard, so it works on >=1.5.1 without depending on the typed model.
-mangroveai>=1.5.1,<2.0.0
+# Floor raised to 1.5.2: fixed the Oracle data_query response model
+# (DataQueryResponse.table now optional + total_bytes_billed/
+# cost_estimate_usd/next_page_token added) and DataQueryRequest.order_by
+# ([{col,dir}] not [str]) — the agent's oracle_data_query MCP tool parses
+# the typed DataQueryResponse, so it crashed on <1.5.2 against the live
+# (v0.15.7) Oracle. Also corrected SimulateRunResponse to the real shape.
+mangroveai>=1.5.2,<2.0.0
 # mangrovemarkets 1.0.0 moved EVM wallet keypair generation client-side.
 # The agent's wallet_manager.create_wallet() is unaffected — the SDK
 # call signature is unchanged, only the implementation shifted from
