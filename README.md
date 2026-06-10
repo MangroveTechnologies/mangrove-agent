@@ -157,8 +157,18 @@ Wallet setup and live trading are in Chapters 06 and 07 of the tutorial. The sum
 | Logs | `list_evaluations`, `list_trades`, `list_all_trades` |
 | Knowledge Base | `kb_search`, `list_docs`, `get_doc` |
 | DeFi | `get_protocol_tvl` |
+| Oracle research | `sieve_score`, `oracle_create_experiment`, `oracle_validate_experiment`, `oracle_launch_experiment`, `oracle_pause_experiment`, `oracle_get_experiment`, `oracle_list_experiments`, `oracle_data_query`, `oracle_backtest`, `oracle_backtest_async`, `oracle_backtest_poll`, `oracle_backtest_bulk`, `oracle_list_results`, `oracle_list_datasets`, `oracle_list_signals`, `oracle_list_templates` |
 
 Every tool has a mirrored REST endpoint at `/api/v1/agent/*`. Both call the same service layer — pick whichever fits your caller.
+
+**SIEVE + Sweep — screen many ideas, then find the best config.** Two of those Oracle tools are the research workhorses:
+
+| Tool | What it does | When |
+|---|---|---|
+| **SIEVE** (`sieve_score`) | Scores up to 99 strategy ideas in milliseconds and tells you which are worth testing. | You have *many* ideas and want to skip the duds. |
+| **Sweep** (`oracle_*_experiment`) | Runs many backtests in one managed experiment (`create → validate → launch → results`) and ranks them. | You want the *best* config out of many. |
+
+Example asks: *"Score these 40 variations and tell me which are worth testing"* (`/sieve`), *"Sweep the RSI window from 7 to 21 on BTC 1h and rank them"* (`/sweep`). Full walkthrough: [`docs/getting-started.md`](docs/getting-started.md); deeper dives in the KB [SIEVE guide](https://docs.mangrovedeveloper.ai/guides/using-sieve-prefilter) and [Experiments reference](https://docs.mangrovedeveloper.ai/api-reference/experiments).
 
 ---
 
