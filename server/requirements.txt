@@ -34,7 +34,7 @@ PyJWT>=2.9.0
 # ([{col,dir}] not [str]) — the agent's oracle_data_query MCP tool parses
 # the typed DataQueryResponse, so it crashed on <1.5.2 against the live
 # (v0.15.7) Oracle. Also corrected SimulateRunResponse to the real shape.
-mangroveai>=1.5.2,<2.0.0
+mangroveai>=1.6.0,<2.0.0
 # mangrovemarkets 1.0.0 moved EVM wallet keypair generation client-side.
 # The agent's wallet_manager.create_wallet() is unaffected — the SDK
 # call signature is unchanged, only the implementation shifted from
