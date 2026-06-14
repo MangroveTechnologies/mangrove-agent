@@ -17,6 +17,9 @@
     <a href="https://github.com/MangroveTechnologies/mangrove-agent/blob/main/LICENSE">
       <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License">
     </a>
+    <a href="https://discord.gg/xUcn4R6zJR">
+      <img src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white" alt="Discord">
+    </a>
   </p>
 </div>
 
