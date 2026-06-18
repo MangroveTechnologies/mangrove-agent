@@ -7,10 +7,12 @@ description: >-
   my candidates", "rank these MACD variations". Also the natural next
   step after /create-strategy or /custom-signal produces a candidate
   set. Scores up to 99 candidates in ONE millisecond-cheap call through
-  the Mangrove SIEVE classifier, drops the dead-on-arrival ones, and
-  ranks the survivors by P(winning) before any expensive backtest.
-  Wraps `sieve_score` + `oracle_list_signals`, hands off to /backtest
-  (one winner) or /sweep (managed many).
+  the Mangrove SIEVE classifier, drops the dead-on-arrival ones (binary
+  head), and ranks the survivors by P(winning) (4-class head) — a cheap
+  SCREEN, never a verdict. Wraps `sieve_score` + `oracle_list_signals`,
+  hands the shortlist to /backtest (one winner) or /backtest/bulk
+  (several). This screens a FIXED candidate list; for a parameter-space
+  SEARCH that generates its own candidates, use /sweep instead.
 ---
 
 # SIEVE Skill
@@ -25,16 +27,27 @@ to find the 1 good one is wasteful.
 classifier trained on 1.24M historical Mangrove sweep runs. It scores a
 candidate in milliseconds and returns two things:
 
-- **binary** — `{p_no_trades, p_trades}`. The go/no-go gate: if SIEVE
-  thinks the strategy will never fire on real data, you skip the
-  backtest entirely.
+- **binary (2-class)** — `{p_no_trades, p_trades}`. The go/no-go gate: if
+  SIEVE thinks the strategy will never fire on real data, you skip the
+  backtest entirely. (This is the same head the `/sweep` engine uses as
+  its inline pre-filter — but that's a *different* mechanism; see below.)
 - **four_class** — `{losing, no_trades, wash, winning}`. A softmax over
-  outcomes. Rank survivors by `P(winning)` and only spend backtest
-  compute on the top slice.
+  outcomes. Rank survivors by `P(winning)` to order the shortlist.
 
-A 99-candidate search compresses to ~5 backtests. Same signal quality at
-~10% of the cost. **SIEVE is a fast filter, not a backtest** — it never
-replaces the real thing (see Prohibited).
+Use **both** heads: binary to drop the dead, 4-class to rank what's left.
+
+**SIEVE is a SCREEN, not a verdict.** Both heads are cheap *predictions*
+over an aggregate of millions of runs — they tell you what's worth paying
+to backtest, never whether a strategy is actually good. Only a real
+backtest decides. A 99-candidate screen compresses to ~5 backtests: same
+signal quality at ~10% of the cost (see Prohibited).
+
+**Two different SIEVE uses — don't confuse them:**
+- **This skill** = offline screen of a fixed shortlist via the
+  `sieve_score` endpoint (≤99 per call), then hand survivors to a backtest.
+- **`/sweep`'s pre-filter** = the binary head running *inside* the engine
+  during a parameter search, skipping dead configs as they're generated.
+  That's part of `/sweep`, not this skill — and it never uses the 4-class head.
 
 ## Trigger
 
@@ -52,8 +65,9 @@ Activate when the user:
 Do NOT activate for:
 
 - A single known strategy the user wants to evaluate → `/backtest`
-- A managed, ranked sweep over a parameter grid with persisted results
-  → `/sweep` (SIEVE feeds it; this skill is the cheap pre-screen)
+- A parameter-space SEARCH where the engine generates and backtests its
+  own candidates → `/sweep` (a separate workflow — this skill does NOT
+  feed it; `/sweep` has its own built-in binary pre-filter)
 - Authoring new strategies from scratch → `/create-strategy`
 
 ## Phase A — Assemble candidates (≤ 99)
@@ -81,10 +95,11 @@ Where the candidates come from:
 
 - **From `/create-strategy` or `/custom-signal`** — the candidate set is
   already built; carry it straight in.
-- **From a parameter sweep the user describes** — generate the
-  variations yourself. "Sweep entry-window 8→20, exit-window 20→40"
-  means build the cross-product of those param values into N candidate
-  objects.
+- **From a set of variations the user wants screened** — generate the
+  variations yourself into N candidate objects (≤99) and score them.
+  (If the user instead wants a *managed* parameter search — the engine
+  generating + backtesting + ranking candidates with persisted results —
+  that's `/sweep`, not this. Screening a list ≠ searching a space.)
 
 **Get the signal names + param specs right.** Call `oracle_list_signals`
 once and use it to validate every `name`, `signal_type` (`TRIGGER` /
@@ -132,14 +147,20 @@ to delete the strategy. Say so rather than reporting "everything died."
 
 ## Phase D — Handoff
 
-The shortlist is now ready for real evaluation. Route it:
+The shortlist is now ready for real evaluation — a **backtest**, which is
+the actual verdict SIEVE only screened for. Route it:
 
 - **One clear winner, or the user wants a careful single verdict** →
   `/backtest` on that candidate (register it first with
   `create_strategy_manual` if it isn't a strategy yet).
-- **Several survivors worth comparing head-to-head with ranked,
-  persisted results** → `/sweep` — feed the shortlist as the experiment's
-  signal mix.
+- **Several survivors to backtest together** → `/backtest/bulk`
+  (`oracle_backtest_bulk`) — one call backtests the shortlist with shared
+  OHLCV fetches and returns all results.
+
+Do NOT route the shortlist into `/sweep`. A sweep is a parameter-space
+search that generates its own candidates; it does not consume a
+pre-screened list. (If the user wants to *search* rather than *screen a
+list*, that was a `/sweep` job from the start.)
 
 Always carry the provenance forward: log `model_version` +
 `code_version` next to the shortlist, so when SIEVE is retrained you can
@@ -159,6 +180,9 @@ tell which snapshot produced the ranking.
   It's a filter signal, full stop.
 - **Never** delete a whole batch because `p_no_trades ≈ 1.0` — that's a
   "widen the params and re-score" signal, not a dead end.
+- **Never** feed a SIEVE shortlist into `/sweep` — a sweep generates its
+  own candidates from a parameter space; this skill screens a fixed list
+  and hands it to `/backtest` / `/backtest/bulk`.
 
 ## Summary — Decision Tree
 
@@ -178,7 +202,8 @@ User has many candidates / wants to try many variations
 │     → rank survivors by P(winning), keep top 5–10 / top ~10%
 │     → p_no_trades ≈ 1.0 everywhere → widen params, re-score
 │
-└─ Phase D: handoff (NEVER promote from here)
+└─ Phase D: handoff (NEVER promote from here; a backtest is the verdict)
       → one winner / careful verdict → /backtest
-      → several to compare, ranked + persisted → /sweep
+      → several survivors to backtest together → /backtest/bulk
+      → (NOT /sweep — that searches a space, it doesn't take a screened list)
 ```
