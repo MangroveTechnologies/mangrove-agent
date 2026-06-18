@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mangrove Sweep Config Builder</title>
+<!--
+  Lightweight, self-contained sweep-experiment config builder for the Mangrove Oracle engine.
+  It makes NO API calls (avoids CORS + keeps your API key out of the browser): it only BUILDS
+  the ExperimentConfig JSON. Flow:
+    1. The agent fetches /api/v1/oracle/signals + /datasets and fills the CATALOG block below
+       (or you load a catalog.json the agent saved next to this file).
+    2. You pick a dataset, signals (filter by category), and a parameter space.
+    3. Download config.json (or copy it).
+    4. Hand it back to the agent: it validates -> reports total_runs + cost -> confirms -> launches.
+  Field shapes mirror MangroveOracle src/models/experiment.py (ExperimentConfig).
+-->
+<style>
+  :root{
+    --bg:#f5f8f9; --panel:#fff; --line:#e2e8ec; --line2:#eef2f5; --ink:#16242e;
+    --muted:#647480; --brand:#2f93b3; --brand-deep:#1f6f88; --brand-soft:#e9f4f8;
+    --good:#1f9d57; --warn:#d9831a; --bad:#e0431a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.5}
+  header{background:var(--brand-deep);color:#fff;padding:14px 20px}
+  header h1{margin:0;font-size:17px;font-weight:650}
+  header p{margin:3px 0 0;font-size:12.5px;opacity:.85}
+  .wrap{max-width:980px;margin:18px auto;padding:0 16px;display:flex;flex-direction:column;gap:14px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 17px}
+  .panel h2{margin:0 0 10px;font-size:14px;font-weight:650;color:var(--brand-deep)}
+  label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
+  input[type=text],input[type=number],select,textarea{
+    width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:#fff;font:inherit;color:var(--ink)}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--brand)}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .row>div{flex:1;min-width:140px}
+  .pill{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;background:var(--brand-soft);color:var(--brand-deep);margin-left:6px}
+  .sig{border:1px solid var(--line2);border-radius:9px;padding:10px 12px;margin:8px 0;background:#fbfdfe}
+  .sig .hd{display:flex;align-items:center;gap:8px;justify-content:space-between}
+  .sig .nm{font-weight:600}
+  .param{display:grid;grid-template-columns:150px 110px 1fr;gap:8px;align-items:center;margin-top:6px}
+  .param .pn{font-size:12.5px;color:var(--ink)}
+  button{font:inherit;border:0;border-radius:8px;padding:8px 13px;cursor:pointer;background:var(--brand);color:#fff;font-weight:600}
+  button.ghost{background:#fff;color:var(--brand-deep);border:1px solid var(--line)}
+  button.sm{padding:4px 9px;font-size:12px}
+  .muted{color:var(--muted);font-size:12px}
+  .est{font-size:13px;background:var(--brand-soft);border:1px solid var(--line);border-radius:8px;padding:9px 12px}
+  .est b{color:var(--brand-deep)}
+  .warnbox{background:#fff7ea;border:1px solid #f3d9a8;color:#7a4d05;border-radius:8px;padding:8px 11px;font-size:12.5px}
+  pre{background:#0f1c24;color:#cfe6ef;padding:12px;border-radius:9px;overflow:auto;font-size:12px;max-height:340px}
+  .cat-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+  .cat-tabs button{background:#fff;color:var(--muted);border:1px solid var(--line);font-weight:500}
+  .cat-tabs button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .checkrow{display:flex;align-items:center;gap:8px;margin-top:6px}
+  .checkrow input{width:auto}
+</style>
+</head>
+<body>
+<header>
+  <h1>Mangrove Sweep Config Builder</h1>
+  <p>Builds an Oracle <code>ExperimentConfig</code> JSON. No API calls — download it and hand it back to the agent to validate &amp; launch.</p>
+</header>
+
+<div class="wrap">
+
+  <div class="panel" id="catalogPanel">
+    <h2>Catalog</h2>
+    <p class="muted" id="catStatus">Waiting for catalog. The agent embeds it in this file, or load a <code>catalog.json</code> the agent saved.</p>
+    <input type="file" id="catFile" accept="application/json" />
+  </div>
+
+  <div class="panel">
+    <h2>Experiment</h2>
+    <div class="row">
+      <div><label>Name</label><input type="text" id="name" placeholder="BTC 1h MACD momentum sweep" /></div>
+    </div>
+    <label>Description</label><input type="text" id="description" placeholder="Grid over MACD windows; one entry trigger, one exit trigger." />
+    <div class="row">
+      <div>
+        <label>Search mode</label>
+        <select id="search_mode">
+          <option value="grid">grid (enumerate combinations, capped)</option>
+          <option value="random">random (Monte-Carlo sample)</option>
+        </select>
+      </div>
+      <div id="sizeGrid">
+        <label>Grid: max param combos (<code>n_param_combos</code>)</label>
+        <input type="number" id="n_param_combos" value="24" min="1" />
+      </div>
+      <div id="sizeRandom" style="display:none">
+        <label>Random: samples (<code>n_random</code>)</label>
+        <input type="number" id="n_random" value="50" min="1" />
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Dataset</h2>
+    <div class="row">
+      <div><label>Asset</label><select id="dsAsset"></select></div>
+      <div><label>Timeframe</label><select id="dsTf"></select></div>
+      <div style="flex:2"><label>Dataset (most recent first)</label><select id="dsPick"></select></div>
+    </div>
+    <p class="muted" id="dsInfo"></p>
+  </div>
+
+  <div class="panel">
+    <h2>Signals <span class="muted">— filter by category, add to a bucket</span></h2>
+    <div class="cat-tabs" id="catTabs"></div>
+    <div class="row">
+      <div><label>Signal</label><select id="sigPick"></select></div>
+      <div style="max-width:170px"><label>Add to</label>
+        <select id="sigBucket">
+          <option value="entry_triggers">Entry trigger</option>
+          <option value="entry_filters">Entry filter</option>
+          <option value="exit_triggers">Exit trigger</option>
+          <option value="exit_filters">Exit filter</option>
+        </select>
+      </div>
+      <div style="max-width:120px;display:flex;align-items:flex-end"><button class="sm" id="addSig">+ Add</button></div>
+    </div>
+    <div class="grid2" style="margin-top:10px">
+      <div><div class="muted">Entry triggers</div><div id="b_entry_triggers"></div></div>
+      <div><div class="muted">Entry filters (≥1 required)</div><div id="b_entry_filters"></div></div>
+      <div><div class="muted">Exit triggers</div><div id="b_exit_triggers"></div></div>
+      <div><div class="muted">Exit filters</div><div id="b_exit_filters"></div></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>SIEVE pre-filter <span class="pill">binary head</span></h2>
+    <div class="checkrow">
+      <input type="checkbox" id="pf_enabled" checked />
+      <label style="margin:0">Skip configs predicted not to trade (recommended)</label>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <div style="max-width:240px"><label>Skip if P(no_trades) &gt; threshold</label>
+        <input type="number" id="pf_threshold" value="0.8" min="0" max="1" step="0.05" /></div>
+    </div>
+    <p class="muted">Binary go/no-go gate only. The 4-class head is post-hoc and not used in sweeps.</p>
+  </div>
+
+  <div class="panel">
+    <h2>Review &amp; export</h2>
+    <div class="est" id="estimate">—</div>
+    <div id="warnings"></div>
+    <div style="margin:10px 0;display:flex;gap:10px;flex-wrap:wrap">
+      <button id="dlBtn">Download config.json</button>
+      <button class="ghost" id="copyBtn">Copy JSON</button>
+    </div>
+    <pre id="out">{}</pre>
+  </div>
+
+</div>
+
+<script>
+/* ===== CATALOG: the agent fills this. Shape:
+   { signals:[{name,type,params:{p:{type,min,max,default,optional}},category,requires}],
+     datasets:[{asset,timeframe,file,hash,rows,start_date,end_date}],
+     execDefaults:{...} }
+   Leave empty to load via the file picker (catalog.json). ===== */
+let CATALOG = { signals: [], datasets: [], execDefaults: {} };
+
+const $ = id => document.getElementById(id);
+const CATS = ["momentum","trend","volume","volatility","patterns"];
+let activeCat = "all";
+const buckets = { entry_triggers:[], entry_filters:[], exit_triggers:[], exit_filters:[] };
+
+function bootstrap(){
+  const ok = (CATALOG.signals||[]).length && (CATALOG.datasets||[]).length;
+  $("catStatus").innerHTML = ok
+    ? `Loaded <b>${CATALOG.signals.length}</b> signals, <b>${CATALOG.datasets.length}</b> datasets.`
+    : "No catalog yet — embed it in this file or load catalog.json below.";
+  if(!ok) return;
+  buildCatTabs(); buildDatasetPickers(); buildSignalPicker(); render();
+}
+
+/* ---- dataset pickers ---- */
+function buildDatasetPickers(){
+  const assets = [...new Set(CATALOG.datasets.map(d=>d.asset))].sort();
+  $("dsAsset").innerHTML = assets.map(a=>`<option>${a}</option>`).join("");
+  refreshTf();
+  $("dsAsset").onchange = refreshTf;
+  $("dsTf").onchange = refreshDsPick;
+  $("dsPick").onchange = ()=>{ showDsInfo(); render(); };
+}
+function refreshTf(){
+  const a=$("dsAsset").value;
+  const tfs=[...new Set(CATALOG.datasets.filter(d=>d.asset===a).map(d=>d.timeframe))].sort();
+  $("dsTf").innerHTML=tfs.map(t=>`<option>${t}</option>`).join(""); refreshDsPick();
+}
+function refreshDsPick(){
+  const a=$("dsAsset").value,t=$("dsTf").value;
+  const ds=CATALOG.datasets.filter(d=>d.asset===a&&d.timeframe===t)
+    .sort((x,y)=>(y.end_date||"").localeCompare(x.end_date||""));
+  $("dsPick").innerHTML=ds.map((d,i)=>`<option value="${d.file}">${d.start_date} → ${d.end_date} (${d.file})</option>`).join("");
+  showDsInfo(); render();
+}
+function currentDataset(){
+  const f=$("dsPick").value; return CATALOG.datasets.find(d=>d.file===f)||null;
+}
+function showDsInfo(){ const d=currentDataset(); $("dsInfo").textContent = d?`Window: ${d.start_date} → ${d.end_date}`:""; }
+
+/* ---- signal catalog ---- */
+function buildCatTabs(){
+  const tabs=["all",...CATS];
+  $("catTabs").innerHTML=tabs.map(c=>`<button data-c="${c}" class="${c===activeCat?'on':''}">${c}</button>`).join("");
+  $("catTabs").querySelectorAll("button").forEach(b=>b.onclick=()=>{activeCat=b.dataset.c;buildCatTabs();buildSignalPicker();});
+}
+function buildSignalPicker(){
+  const sigs=CATALOG.signals.filter(s=>activeCat==="all"||s.category===activeCat)
+    .sort((a,b)=>a.name.localeCompare(b.name));
+  $("sigPick").innerHTML=sigs.map(s=>`<option value="${s.name}">${s.name} — ${s.type} · ${s.category||"?"}</option>`).join("");
+}
+$("addSig").onclick=()=>{
+  const name=$("sigPick").value, bucket=$("sigBucket").value;
+  const meta=CATALOG.signals.find(s=>s.name===name); if(!meta) return;
+  const isFilter=bucket.endsWith("filters");
+  const entry={ name, signal_type: isFilter?"FILTER":"TRIGGER", timeframe:"1h",
+    params:{}, params_sweep:{}, _spec:meta.params||{}, _modes:{} };
+  for(const [p,spec] of Object.entries(meta.params||{})){
+    entry._modes[p]="fixed";
+    entry.params[p]= spec.default!=null?spec.default:(spec.min!=null?spec.min:0);
+  }
+  buckets[bucket].push(entry); renderBuckets(); render();
+};
+
+function renderBuckets(){
+  for(const b of Object.keys(buckets)){
+    const host=$("b_"+b);
+    host.innerHTML = buckets[b].length? "" : `<span class="muted">none</span>`;
+    buckets[b].forEach((e,idx)=>host.appendChild(sigCard(b,e,idx)));
+  }
+}
+function sigCard(bucket,e,idx){
+  const wrap=document.createElement("div"); wrap.className="sig";
+  const hd=document.createElement("div"); hd.className="hd";
+  hd.innerHTML=`<span class="nm">${e.name} <span class="pill">${e.signal_type}</span></span>`;
+  const rm=document.createElement("button"); rm.className="ghost sm"; rm.textContent="remove";
+  rm.onclick=()=>{buckets[bucket].splice(idx,1);renderBuckets();render();};
+  hd.appendChild(rm); wrap.appendChild(hd);
+  for(const [p,spec] of Object.entries(e._spec)){
+    const row=document.createElement("div"); row.className="param";
+    const lo=spec.min!=null?` [${spec.min}–${spec.max}]`:"";
+    row.innerHTML=`<span class="pn">${p}<span class="muted">${lo}</span></span>`;
+    const mode=document.createElement("select");
+    mode.innerHTML=`<option value="fixed">fixed</option><option value="values">sweep: values</option><option value="range">sweep: min/max/step</option>`;
+    mode.value=e._modes[p]||"fixed";
+    const val=document.createElement("div");
+    const draw=()=>{
+      e._modes[p]=mode.value;
+      if(mode.value==="fixed"){
+        val.innerHTML=`<input type="number" value="${e.params[p]??0}">`;
+        val.querySelector("input").oninput=ev=>{e.params[p]=num(ev.target.value);render();};
+      }else if(mode.value==="values"){
+        const cur=(e.params_sweep[p]&&e.params_sweep[p].values||[]).join(",");
+        val.innerHTML=`<input type="text" placeholder="e.g. 8,12,16" value="${cur}">`;
+        val.querySelector("input").oninput=ev=>{e.params_sweep[p]={values:parseList(ev.target.value)};render();};
+      }else{
+        const s=e.params_sweep[p]||{};
+        val.innerHTML=`<div class="row" style="gap:6px">
+          <input type="number" placeholder="min" value="${s.min??''}" data-k="min" style="min-width:60px">
+          <input type="number" placeholder="max" value="${s.max??''}" data-k="max" style="min-width:60px">
+          <input type="number" placeholder="step" value="${s.step??''}" data-k="step" style="min-width:60px"></div>`;
+        val.querySelectorAll("input").forEach(inp=>inp.oninput=()=>{
+          const o={}; val.querySelectorAll("input").forEach(x=>{if(x.value!=="")o[x.dataset.k]=num(x.value);});
+          e.params_sweep[p]=o; render();
+        });
+      }
+    };
+    mode.onchange=()=>{ if(mode.value!=="fixed"){delete e.params[p];} else {delete e.params_sweep[p];e.params[p]=0;} draw(); render(); };
+    draw();
+    row.appendChild(mode); row.appendChild(val); wrap.appendChild(row);
+  }
+  return wrap;
+}
+
+/* ---- helpers ---- */
+const num=v=>{const n=Number(v);return Number.isInteger(n)?n:(isNaN(n)?0:n);};
+const parseList=s=>s.split(",").map(x=>x.trim()).filter(Boolean).map(num);
+function rangeCount(o){ if(o.min==null||o.max==null||!o.step) return o.min!=null?1:0; return Math.floor((o.max-o.min)/o.step+1e-9)+1; }
+function spaceSize(){
+  let prod=1, swept=0;
+  for(const b of Object.values(buckets)) for(const e of b)
+    for(const [p,mode] of Object.entries(e._modes||{})){
+      if(mode==="values"){const v=(e.params_sweep[p]||{}).values||[]; if(v.length){prod*=v.length;swept++;}}
+      else if(mode==="range"){const c=rangeCount(e.params_sweep[p]||{}); if(c>1){prod*=c;swept++;}}
+    }
+  return swept?prod:1;
+}
+
+/* ---- mode toggle ---- */
+$("search_mode").onchange=()=>{
+  const g=$("search_mode").value==="grid";
+  $("sizeGrid").style.display=g?"":"none"; $("sizeRandom").style.display=g?"none":""; render();
+};
+["name","description","n_param_combos","n_random","pf_enabled","pf_threshold","dsPick"].forEach(id=>{
+  const el=$(id); if(el) el.addEventListener("input",render);
+});
+
+/* ---- build config + estimate ---- */
+function buildConfig(){
+  const ds=currentDataset();
+  const mode=$("search_mode").value;
+  const mapBucket=arr=>arr.map(e=>{
+    const o={name:e.name,signal_type:e.signal_type,timeframe:e.timeframe};
+    if(Object.keys(e.params).length) o.params={...e.params};
+    if(Object.keys(e.params_sweep).length) o.params_sweep={...e.params_sweep};
+    return o;
+  });
+  const cfg={
+    name:$("name").value||"untitled sweep",
+    description:$("description").value||"",
+    search_mode:mode,
+    kind:"single",
+    datasets: ds?[ds]:[],
+    entry_signals:{ triggers:mapBucket(buckets.entry_triggers), filters:mapBucket(buckets.entry_filters), min_filters:1, max_filters:Math.max(1,buckets.entry_filters.length) },
+    exit_signals:{ triggers:mapBucket(buckets.exit_triggers), filters:mapBucket(buckets.exit_filters) },
+    execution_config:{ base:{}, sweep_axes:[] },
+    pre_filter:{ enabled:$("pf_enabled").checked, confidence_threshold:Number($("pf_threshold").value) }
+  };
+  if(mode==="grid") cfg.grid_signals={ n_param_combos:parseInt($("n_param_combos").value||"24",10) };
+  else cfg.n_random=parseInt($("n_random").value||"50",10);
+  return cfg;
+}
+function render(){
+  const cfg=buildConfig();
+  $("out").textContent=JSON.stringify(cfg,null,2);
+  // estimate
+  const full=spaceSize();
+  const mode=cfg.search_mode;
+  let runs;
+  if(mode==="grid"){ const cap=cfg.grid_signals.n_param_combos; runs=Math.min(full,cap);
+    $("estimate").innerHTML=`Parameter space ≈ <b>${full}</b> combos · grid cap <b>${cap}</b> → will run <b>${runs}</b> backtests. <span class="muted">(grid samples up to the cap; raise n_param_combos for more.)</span>`;
+  } else { runs=cfg.n_random;
+    $("estimate").innerHTML=`Random/Monte-Carlo: <b>${runs}</b> samples from a space of ≈ <b>${full}</b> combos.`;
+  }
+  // warnings
+  const w=[];
+  if(!cfg.datasets.length) w.push("Pick a dataset.");
+  if(!cfg.entry_signals.triggers.length) w.push("Add at least one entry trigger.");
+  if(!cfg.entry_signals.filters.length) w.push("Entry requires ≥1 filter (engine rejects otherwise).");
+  w.push("Sweep size is bounded by your tier's max_backtests_per_sweep at validate — there is no fixed 99 limit.");
+  $("warnings").innerHTML = w.map((m,i)=>`<div class="${i<w.length-1?'warnbox':'muted'}" style="margin-top:6px">${m}</div>`).join("");
+}
+
+/* ---- export ---- */
+$("dlBtn").onclick=()=>{
+  const blob=new Blob([JSON.stringify(buildConfig(),null,2)],{type:"application/json"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="config.json"; a.click();
+};
+$("copyBtn").onclick=()=>navigator.clipboard.writeText(JSON.stringify(buildConfig(),null,2));
+
+/* ---- catalog.json loader (file://-safe) ---- */
+$("catFile").onchange=ev=>{
+  const f=ev.target.files[0]; if(!f) return;
+  const r=new FileReader(); r.onload=()=>{ try{ CATALOG=JSON.parse(r.result); bootstrap(); }catch(e){ alert("Bad catalog.json: "+e); } }; r.readAsText(f);
+};
+
+bootstrap();
+</script>
+</body>
+</html>
