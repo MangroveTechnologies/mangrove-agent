@@ -62,6 +62,10 @@ CORE_TOOLS = {
     "list_evaluations", "list_trades", "list_all_trades",
     # kb
     "kb_search",
+    # defi (DeFiLlama; the Pro tools require a Pro/Startup/Enterprise plan)
+    "get_protocol_tvl", "get_chain_tvl", "get_stablecoin_metrics",
+    "get_token_unlocks", "get_perp_funding", "get_treasuries",
+    "get_etf_flows", "get_lending_borrow_rates",
     # x402 demo
     "hello_mangrove",
 }

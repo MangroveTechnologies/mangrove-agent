@@ -159,7 +159,8 @@ Wallet setup and live trading are in Chapters 06 and 07 of the tutorial. The sum
 | Execution | `list_positions`, `get_position`, `list_trade_history` |
 | Logs | `list_evaluations`, `list_trades`, `list_all_trades` |
 | Knowledge Base | `kb_search`, `list_docs`, `get_doc` |
-| DeFi | `get_protocol_tvl` |
+| DeFi | `get_protocol_tvl`, `get_chain_tvl`, `get_stablecoin_metrics` |
+| DeFi Pro (Pro/Startup/Enterprise) | `get_token_unlocks`, `get_perp_funding`, `get_treasuries`, `get_etf_flows`, `get_lending_borrow_rates` |
 | Oracle research | `sieve_score`, `oracle_create_experiment`, `oracle_validate_experiment`, `oracle_launch_experiment`, `oracle_pause_experiment`, `oracle_get_experiment`, `oracle_list_experiments`, `oracle_data_query`, `oracle_backtest`, `oracle_backtest_async`, `oracle_backtest_poll`, `oracle_backtest_bulk`, `oracle_list_results`, `oracle_list_datasets`, `oracle_list_signals`, `oracle_list_templates` |
 
 Every tool has a mirrored REST endpoint at `/api/v1/agent/*`. Both call the same service layer — pick whichever fits your caller.
