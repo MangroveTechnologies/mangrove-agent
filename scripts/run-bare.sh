@@ -34,19 +34,32 @@ ok()   { printf "${GREEN}  ✓${CLR} %s\n" "$1"; }
 fail() { printf "${RED}  ✗${CLR} %s\n" "$1" >&2; exit 1; }
 info() { printf "${DIM}    %s${CLR}\n" "$1"; }
 
-# -- 1. python3 version -----------------------------------------------------
+# pick_python [MIN_MINOR]  — echo the first interpreter that is >= 3.MIN_MINOR
+# (default 10). On stock macOS, bare `python3` can still be the system 3.9 even
+# after Homebrew installs python@3.12 — Homebrew lands it as `python3.12`, not
+# as `python3` on PATH — so prefer versioned names before falling back. (#100)
+pick_python() {
+  local min_minor="${1:-10}" cmd
+  for cmd in python3.13 python3.12 python3.11 python3.10 python3 python; do
+    if command -v "$cmd" >/dev/null 2>&1 \
+       && "$cmd" -c "import sys; sys.exit(0 if sys.version_info >= (3, $min_minor) else 1)" 2>/dev/null; then
+      printf '%s\n' "$cmd"
+      return 0
+    fi
+  done
+  return 1
+}
 
-step "1. python3 ≥ 3.11"
-if ! command -v python3 >/dev/null 2>&1; then
-  fail "python3 not on PATH. Install Python 3.11+: https://www.python.org/downloads/"
-fi
-PY_VER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-PY_MAJOR="$(python3 -c 'import sys; print(sys.version_info.major)')"
-PY_MINOR="$(python3 -c 'import sys; print(sys.version_info.minor)')"
-if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 11 ]; }; then
-  fail "python3 $PY_VER found; need ≥ 3.11. Install a newer Python."
-fi
-ok "python3 $PY_VER"
+# -- 1. python version ------------------------------------------------------
+
+step "1. python ≥ 3.11"
+# Select a >=3.11 interpreter by name (python3.12, …), not bare `python3`:
+# on stock macOS the latter is still the system 3.9 even after python@3.12
+# is installed. This same PY is reused for the venv below so it inherits the
+# right interpreter. (#100)
+PY="$(pick_python 11)" || fail "Python ≥ 3.11 not found. On macOS: 'brew install python@3.12' (Homebrew installs it as python3.12, not python3). Otherwise: https://www.python.org/downloads/"
+PY_VER="$("$PY" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+ok "python $PY_VER ($PY)"
 
 # -- 2. config file present + has real API key -----------------------------
 
@@ -78,8 +91,8 @@ ok "agent-data/ ready"
 
 step "4. $VENV_DIR"
 if [ ! -d "$VENV_DIR" ]; then
-  python3 -m venv "$VENV_DIR"
-  info "created $VENV_DIR"
+  "$PY" -m venv "$VENV_DIR"
+  info "created $VENV_DIR ($PY -> $("$PY" --version 2>&1))"
 fi
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
