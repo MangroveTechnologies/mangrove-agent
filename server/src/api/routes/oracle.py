@@ -280,10 +280,13 @@ async def post_validate_experiment(experiment_id: str) -> dict[str, Any]:
     "/experiments/{experiment_id}/launch",
     summary="Fan out a validated experiment into child backtests",
     description=(
-        "Up to 99 child backtests per launch. Returns immediately with "
-        "``status: 'launched'`` — the fan-out is asynchronous. Poll "
-        "``GET /experiments/{id}`` for completion progress or "
-        "``GET /results?experiment_id={id}`` for materializing results."
+        "Up to 99 child backtests per launch. The fan-out is asynchronous — "
+        "poll ``GET /experiments/{id}`` for completion progress or "
+        "``GET /results?experiment_id={id}`` for materializing results. "
+        "Launch is non-idempotent and may take several seconds; this endpoint "
+        "confirms the launch took effect (polling on an upstream gateway "
+        "timeout) before returning, so a success response means the sweep is "
+        "running — do not re-launch."
     ),
 )
 async def post_launch_experiment(experiment_id: str) -> dict[str, Any]:

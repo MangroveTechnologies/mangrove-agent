@@ -12,8 +12,10 @@ forward.
 """
 from __future__ import annotations
 
+import time
 from typing import Any
 
+from mangrove_ai.exceptions import APIError
 from mangrove_ai.models.oracle import (
     DataQueryRequest,
     OracleBacktestRequest,
@@ -299,14 +301,61 @@ def validate_experiment(experiment_id: str) -> dict[str, Any]:
 
 
 def launch_experiment(experiment_id: str) -> dict[str, Any]:
-    """Fan out a validated experiment into up to 99 child backtests."""
+    """Fan out a validated experiment into up to 99 child backtests.
+
+    Launch is asynchronous and non-idempotent. The call can return a gateway 504
+    even though the launch SUCCEEDED server-side (MangroveOracle#296); we do NOT
+    re-send it (a retry would hit the single-flight 409 / concurrent-cap 429). On
+    a gateway 5xx we confirm by polling ``get_experiment`` until the experiment
+    leaves ``validated``/``draft``. Returns the launch status body; callers keep
+    polling ``get_experiment`` for completion.
+    """
     client = mangrove_ai_client()
-    result = client.oracle.launch_experiment(experiment_id)
+    try:
+        body = client.oracle.launch_experiment(experiment_id).model_dump()
+    except APIError as exc:
+        if getattr(exc, "status_code", None) not in (502, 503, 504):
+            raise
+        _log.warning(
+            "oracle.launch_experiment gateway_timeout — confirming via poll",
+            extra={"experiment_id": experiment_id, "status_code": exc.status_code},
+        )
+        body = _confirm_launch(client, experiment_id)
     _log.info(
         "oracle.launch_experiment",
-        extra={"experiment_id": experiment_id, "status": result.status},
+        extra={"experiment_id": experiment_id, "status": body.get("status")},
     )
-    return result.model_dump()
+    return body
+
+
+def _confirm_launch(
+    client: Any,
+    experiment_id: str,
+    *,
+    poll_interval: float = 3.0,
+    timeout: float = 120.0,
+) -> dict[str, Any]:
+    """Confirm a launch that returned a gateway 5xx actually took effect.
+
+    Polls ``get_experiment`` until the experiment leaves ``validated``/``draft``
+    (proof the launch ran), returning a normalized status body. Raises
+    ``TimeoutError`` if the status never advances within ``timeout``.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        exp = client.oracle.get_experiment(experiment_id)
+        if exp.get("status") not in ("validated", "draft", None):
+            return {
+                "experiment_id": experiment_id,
+                "status": exp.get("status"),
+                "total_runs": exp.get("total_runs"),
+                "confirmed_via": "poll",
+            }
+        time.sleep(poll_interval)
+    raise TimeoutError(
+        f"Experiment {experiment_id} did not leave 'validated' within {timeout:.0f}s "
+        f"after launch"
+    )
 
 
 def pause_experiment(experiment_id: str) -> dict[str, Any]:

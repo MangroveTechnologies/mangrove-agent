@@ -252,3 +252,55 @@ class TestPauseExperiment:
             "POST", "/oracle/experiments/exp_20260606T011615775405Z/pause"
         )
         assert result == {"status": "paused"}
+
+
+class TestLaunchExperimentPollOn504:
+    """WS4 (MangroveOracle#296): launch is non-idempotent; a gateway 504 may have
+    succeeded server-side, so the service confirms via polling instead of failing
+    or re-launching."""
+
+    def test_happy_path_returns_status_without_polling(self, monkeypatch):
+        from src.services.oracle import launch_experiment
+
+        client = MagicMock()
+        result = MagicMock()
+        result.model_dump.return_value = {"status": "preparing", "experiment_id": "e1", "total_runs": 72}
+        client.oracle.launch_experiment.return_value = result
+        monkeypatch.setattr("src.services.oracle.mangrove_ai_client", lambda: client)
+
+        body = launch_experiment("e1")
+        assert body["status"] == "preparing"
+        client.oracle.get_experiment.assert_not_called()  # no poll on success
+
+    def test_gateway_504_confirms_via_poll(self, monkeypatch):
+        from mangrove_ai.exceptions import APIError
+
+        from src.services.oracle import launch_experiment
+
+        client = MagicMock()
+        client.oracle.launch_experiment.side_effect = APIError(504, "timeout", "gw", "GATEWAY_TIMEOUT")
+        # first poll still validated, then advanced to preparing
+        client.oracle.get_experiment.side_effect = [
+            {"status": "validated"},
+            {"status": "preparing", "total_runs": 72},
+        ]
+        monkeypatch.setattr("src.services.oracle.mangrove_ai_client", lambda: client)
+        monkeypatch.setattr("src.services.oracle.time.sleep", lambda *_: None)
+
+        body = launch_experiment("e1")
+        assert body["status"] == "preparing"
+        assert body["confirmed_via"] == "poll"
+        assert client.oracle.launch_experiment.call_count == 1  # never re-launched
+
+    def test_non_gateway_error_reraises(self, monkeypatch):
+        from mangrove_ai.exceptions import APIError
+
+        from src.services.oracle import launch_experiment
+
+        client = MagicMock()
+        client.oracle.launch_experiment.side_effect = APIError(400, "bad", "nope", "BAD")
+        monkeypatch.setattr("src.services.oracle.mangrove_ai_client", lambda: client)
+
+        with pytest.raises(APIError):
+            launch_experiment("e1")
+        client.oracle.get_experiment.assert_not_called()

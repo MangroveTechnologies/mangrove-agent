@@ -2882,10 +2882,12 @@ def _register_oracle(server: FastMCP) -> None:
     async def oracle_launch_experiment(experiment_id: str, api_key: str = "") -> str:
         """Fan out a validated experiment into child backtests.
 
-        Up to 99 children per launch. Returns immediately with
-        ``status: 'launched'`` — the fan-out is asynchronous. Poll
+        Up to 99 children per launch. The fan-out is asynchronous — poll
         ``oracle_get_experiment(id)`` for progress or
         ``oracle_list_results(experiment_id=id)`` for materializing rows.
+        Launch is non-idempotent; a success here means the sweep is running
+        (confirmed even if the upstream gateway timed out) — do NOT re-launch,
+        just poll.
 
         Bills: 1 unit per HTTP call (children not billed individually).
         """
