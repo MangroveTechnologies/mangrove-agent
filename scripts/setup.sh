@@ -56,6 +56,23 @@ ok()   { printf "${GREEN}  ✓${CLR} %s\n" "$1"; }
 fail() { printf "${RED}  ✗${CLR} %s\n" "$1" >&2; exit 1; }
 info() { printf "${DIM}    %s${CLR}\n" "$1"; }
 
+# pick_python [MIN_MINOR]  — echo the first interpreter that is >= 3.MIN_MINOR
+# (default 10; x402 requires >= 3.10). On stock macOS, bare `python3` can still
+# be the system 3.9 even after Homebrew installs python@3.12 — Homebrew lands it
+# as `python3.12`, not as `python3` on PATH — so prefer versioned names before
+# falling back to python3/python. (#100)
+pick_python() {
+  local min_minor="${1:-10}" cmd
+  for cmd in python3.13 python3.12 python3.11 python3.10 python3 python; do
+    if command -v "$cmd" >/dev/null 2>&1 \
+       && "$cmd" -c "import sys; sys.exit(0 if sys.version_info >= (3, $min_minor) else 1)" 2>/dev/null; then
+      printf '%s\n' "$cmd"
+      return 0
+    fi
+  done
+  return 1
+}
+
 usage() {
   cat <<EOF
 Usage: $0 [options]
@@ -197,8 +214,9 @@ if [ "$MODE" = "docker" ]; then
 else
   step "3. venv + pip install"
   if [ ! -d .venv ]; then
-    python3 -m venv .venv
-    info "created .venv"
+    PY="$(pick_python)" || fail "Python >= 3.10 is required (x402 needs it) but none was found. Install it (e.g. 'brew install python@3.12') and re-run."
+    "$PY" -m venv .venv
+    info "created .venv ($PY -> $("$PY" --version 2>&1))"
   fi
   # shellcheck disable=SC1091
   source .venv/bin/activate
