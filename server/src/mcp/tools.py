@@ -1559,7 +1559,13 @@ def _register_on_chain(server: FastMCP) -> None:
 
 
 def _register_defi(server: FastMCP) -> None:
-    """Macro DeFi metrics (TVL, stablecoin supply)."""
+    """Macro DeFi metrics (TVL, stablecoin supply) + DeFiLlama Pro signals.
+
+    The Pro tools (token unlocks, perp funding, treasuries, ETF flows, lending
+    rates) require the caller's plan to include DeFi Pro (Pro / Startup /
+    Enterprise). On an unentitled plan the underlying call returns 403 and the
+    tool surfaces a structured error advising an upgrade.
+    """
     from src.shared.clients.mangrove import mangrove_ai_client
 
     @server.tool()
@@ -1615,6 +1621,93 @@ def _register_defi(server: FastMCP) -> None:
     register_tool(ToolEntry(
         name="get_stablecoin_metrics",
         description="Stablecoin supply + flow metrics (macro liquidity proxy).",
+        access="auth",
+        parameters=[_APIKEY],
+    ))
+
+    # --- DeFiLlama Pro (require a Pro / Startup / Enterprise plan) -----------
+
+    @server.tool()
+    async def get_token_unlocks(api_key: str = "") -> str:
+        """Token unlock schedules + supply metrics (supply-shock signal). Pro plan."""
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            return json.dumps(_dump(mangrove_ai_client().defi.get_token_unlocks()))
+        except Exception as e:  # noqa: BLE001
+            return _err("DEFI_TOKEN_UNLOCKS_FAILED", str(e))
+
+    register_tool(ToolEntry(
+        name="get_token_unlocks",
+        description="Token unlock schedules + supply metrics across tokens (tradeable supply-shock signal). Requires a Pro/Startup/Enterprise plan.",
+        access="auth",
+        parameters=[_APIKEY],
+    ))
+
+    @server.tool()
+    async def get_perp_funding(api_key: str = "") -> str:
+        """Aggregated DeFi perpetual funding rates across venues. Pro plan."""
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            return json.dumps(_dump(mangrove_ai_client().defi.get_perp_funding()))
+        except Exception as e:  # noqa: BLE001
+            return _err("DEFI_PERP_FUNDING_FAILED", str(e))
+
+    register_tool(ToolEntry(
+        name="get_perp_funding",
+        description="Aggregated DeFi perpetual funding rates across venues. Requires a Pro/Startup/Enterprise plan.",
+        access="auth",
+        parameters=[_APIKEY],
+    ))
+
+    @server.tool()
+    async def get_treasuries(api_key: str = "") -> str:
+        """Protocol treasury holdings (crowd-positioning signal). Pro plan."""
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            return json.dumps(_dump(mangrove_ai_client().defi.get_treasuries()))
+        except Exception as e:  # noqa: BLE001
+            return _err("DEFI_TREASURIES_FAILED", str(e))
+
+    register_tool(ToolEntry(
+        name="get_treasuries",
+        description="Protocol treasury holdings (crowd-positioning signal). Requires a Pro/Startup/Enterprise plan.",
+        access="auth",
+        parameters=[_APIKEY],
+    ))
+
+    @server.tool()
+    async def get_etf_flows(api_key: str = "") -> str:
+        """Crypto ETF net flows (institutional flow signal). Pro plan."""
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            return json.dumps(_dump(mangrove_ai_client().defi.get_etf_flows()))
+        except Exception as e:  # noqa: BLE001
+            return _err("DEFI_ETF_FLOWS_FAILED", str(e))
+
+    register_tool(ToolEntry(
+        name="get_etf_flows",
+        description="Crypto ETF net flows (institutional flow signal; daily BTC ETF flows correlate with spot). Requires a Pro/Startup/Enterprise plan.",
+        access="auth",
+        parameters=[_APIKEY],
+    ))
+
+    @server.tool()
+    async def get_lending_borrow_rates(api_key: str = "") -> str:
+        """Lending-pool borrow rates (rate-spread features). Pro plan."""
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            return json.dumps(_dump(mangrove_ai_client().defi.get_lending_borrow_rates()))
+        except Exception as e:  # noqa: BLE001
+            return _err("DEFI_LENDING_RATES_FAILED", str(e))
+
+    register_tool(ToolEntry(
+        name="get_lending_borrow_rates",
+        description="DeFi lending-pool borrow rates (rate-spread features). Requires a Pro/Startup/Enterprise plan.",
         access="auth",
         parameters=[_APIKEY],
     ))
