@@ -91,10 +91,20 @@ If everything went well, the last thing you see is:
 misfired. Edit `server/src/config/local-config.json` and paste your
 key into the `MANGROVE_API_KEY` field.
 
-**"/health did not respond"** — the server started but failed to
-come up. Check `agent-data/bare.log` for a traceback. Common causes:
-port conflict (something else on 9080), missing Python dependency,
-or a syntax error in the config file.
+**"/health did not respond"** (or `Health did not respond within 30s`)
+— the uvicorn process failed to bind its port, so nothing is serving
+`/health`. **First step: read the daemon log** —
+`tail -50 agent-data/bare.log` — the real cause (a traceback or a
+warning) is there, not in the script output. Common causes: port
+conflict (something else on 9080), a missing Python dependency, or a
+bad value in `local-config.json`.
+
+> Note: the agent no longer needs to reach the external x402 payment
+> facilitator just to start. If outbound access to it is blocked, you'll
+> see a one-line `x402.hello_mangrove.facilitator_unavailable` **warning**
+> in `bare.log` and the paid demo tool is disabled — but `/health` and
+> every free + API-key feature still come up normally. That warning is
+> informational, not the cause of a failed start.
 
 **Port 9080 is already taken** — if some other dev tool is using 9080
 too, bind somewhere else:
