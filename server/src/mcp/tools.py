@@ -21,6 +21,9 @@ from mcp.server.fastmcp import FastMCP
 from src.mcp.registry import ToolEntry, ToolParam, clear_tools, register_tool
 from src.shared.auth.middleware import has_valid_api_key
 from src.shared.errors import AgentError
+from src.shared.logging import get_logger
+
+_log = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -3131,6 +3134,32 @@ def _register_oracle(server: FastMCP) -> None:
 # ---------------------------------------------------------------------------
 
 
+# Bound on the one-time x402 facilitator handshake performed while registering
+# the hello_mangrove demo tool. The facilitator is an EXTERNAL service; this cap
+# guarantees a slow/unreachable one can't stall startup past the ~30s window the
+# setup/verify scripts wait on /health. See issue #106.
+_X402_STARTUP_INIT_TIMEOUT_S = 6.0
+
+
+def _run_bounded(fn, timeout_s: float) -> Any:
+    """Run ``fn()`` but give up after ``timeout_s`` seconds.
+
+    Used so a slow/unreachable external dependency can't stall import-time
+    startup. On timeout the worker thread is abandoned (it finishes or errors
+    harmlessly on its own); we never block the port bind waiting on it.
+    """
+    import concurrent.futures
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(fn)
+    try:
+        return future.result(timeout=timeout_s)
+    finally:
+        # Don't wait on the worker — if it's still blocked on the network we
+        # must let registration (and the port bind) proceed regardless.
+        executor.shutdown(wait=False)
+
+
 def _register_hello_mangrove(server: FastMCP) -> None:
     """Register hello_mangrove via the x402 library's MCP payment wrapper.
 
@@ -3138,6 +3167,17 @@ def _register_hello_mangrove(server: FastMCP) -> None:
     and settles via the shared x402ResourceServer, and attaches the settlement
     receipt to the result's ``_meta``. Clients using ``x402.mcp.x402MCPClient``
     auto-handle the empty-payment -> sign -> retry round-trip.
+
+    Building the payment wrapper requires a one-time handshake with the EXTERNAL
+    x402 facilitator (``initialize()`` fetches ``/supported`` over the network).
+    That handshake must NEVER gate app startup: the free + auth tiers (health,
+    discovery, wallets, strategies, backtests, KB) have to come up even when the
+    facilitator is unreachable, slow, or firewalled. Previously this ran eagerly
+    and un-guarded at import time, so an unreachable facilitator crashed/stalled
+    ``create_app()`` before uvicorn bound its port and ``/health`` never answered
+    (issue #106). We bound the attempt and degrade gracefully: if the facilitator
+    can't be reached the tool is still registered, but returns a clear error
+    instead of taking the whole agent down with it.
     """
     from x402 import ResourceConfig
     from x402.mcp import create_payment_wrapper
@@ -3147,32 +3187,64 @@ def _register_hello_mangrove(server: FastMCP) -> None:
     from src.shared.x402.config import get_network, get_pay_to
     from src.shared.x402.server import _ensure_initialized
 
-    resource_server = _ensure_initialized()
-    accepts = resource_server.build_payment_requirements(
-        ResourceConfig(
-            scheme="exact",
-            network=get_network(),
-            pay_to=get_pay_to(),
-            price="$0.05",
+    def _build_payment_wrapper():
+        resource_server = _ensure_initialized()  # external facilitator /supported fetch
+        accepts = resource_server.build_payment_requirements(
+            ResourceConfig(
+                scheme="exact",
+                network=get_network(),
+                pay_to=get_pay_to(),
+                price="$0.05",
+            )
         )
-    )
+        return create_payment_wrapper(
+            resource_server,
+            accepts=accepts,
+            resource=X402ResourceInfo(
+                url="mcp://hello_mangrove",
+                description="hello_mangrove message — $0.05 USDC donation",
+            ),
+        )
 
-    wrapper = create_payment_wrapper(
-        resource_server,
-        accepts=accepts,
-        resource=X402ResourceInfo(
-            url="mcp://hello_mangrove",
-            description="hello_mangrove message — $0.05 USDC donation",
-        ),
-    )
+    wrapper = None
+    try:
+        wrapper = _run_bounded(_build_payment_wrapper, _X402_STARTUP_INIT_TIMEOUT_S)
+    except Exception as exc:  # facilitator unreachable / slow / errored
+        _log.warning(
+            "x402.hello_mangrove.facilitator_unavailable",
+            error_type=type(exc).__name__,  # e.g. TimeoutError, ConnectError
+            error=str(exc),
+            facilitator_timeout_s=_X402_STARTUP_INIT_TIMEOUT_S,
+            detail="x402 payment demo disabled this run; free + auth tiers unaffected",
+        )
 
-    @server.tool(
-        name="hello_mangrove",
-        description="x402 demo: $0.05 USDC on Base. Smoke test for the payment path.",
-    )
-    @wrapper
-    async def hello_mangrove() -> str:
-        return json.dumps(_impl())
+    if wrapper is not None:
+        @server.tool(
+            name="hello_mangrove",
+            description="x402 demo: $0.05 USDC on Base. Smoke test for the payment path.",
+        )
+        @wrapper
+        async def hello_mangrove() -> str:
+            return json.dumps(_impl())
+    else:
+        # Degraded registration: keep the tool in the catalog so discovery is
+        # stable, but make the call return an actionable error rather than
+        # silently giving away the paid resource or 500-ing.
+        @server.tool(
+            name="hello_mangrove",
+            description="x402 demo (payment facilitator was unreachable at startup).",
+        )
+        async def hello_mangrove() -> str:
+            return json.dumps({
+                "error": True,
+                "code": "X402_FACILITATOR_UNAVAILABLE",
+                "message": (
+                    "The x402 payment facilitator was unreachable when the agent "
+                    "started, so the paid demo is disabled in this environment. "
+                    "Restart the agent once outbound access to the facilitator is "
+                    "available. The agent's free and API-key tiers are unaffected."
+                ),
+            })
 
     register_tool(ToolEntry(
         name="hello_mangrove",

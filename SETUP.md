@@ -511,6 +511,27 @@ The prompt during setup did not capture your key. Fix it manually:
 4. Save the file.
 5. Rerun: `./scripts/setup.sh --yes --no-mcp --no-verify`
 
+### "Health did not respond within 30s"
+
+The setup/verify scripts wait up to 30s for the agent to answer on
+`http://localhost:9080/health`. This message means the uvicorn process
+never bound the port — so the cause is in the **daemon log**, not the
+script output. Read it first:
+
+```bash
+tail -50 agent-data/bare.log
+```
+
+Look for a Python traceback (most common: port already in use, a missing
+dependency, or a bad value in `local-config.json`). Fix what the
+traceback names, then rerun `./scripts/setup.sh`.
+
+> The agent does **not** depend on reaching the external x402 payment
+> facilitator to start. If your network blocks it you'll see a harmless
+> `x402.hello_mangrove.facilitator_unavailable` warning in `bare.log`
+> (the paid demo tool is disabled), but `/health` and all free + API-key
+> features still come up. That warning is not a startup failure.
+
 ### Port 9080 is already in use
 
 Another program on your machine is already using the port the agent needs. These commands find it and stop it:
