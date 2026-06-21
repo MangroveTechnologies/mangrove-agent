@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from src.models.domain import OrderIntent
+from src.services import dex_service
 from src.services.order_executor import execute_one
 from src.shared.auth.dependency import require_api_key
 from src.shared.clients.mangrove import mangrove_markets_client
@@ -50,24 +51,31 @@ async def dex_pairs(venue_id: str) -> list[Any]:
 class QuoteRequest(BaseModel):
     input_token: str
     output_token: str
-    amount: float
+    amount: float = Field(
+        ...,
+        gt=0,
+        description=(
+            "Amount of input_token to swap, in HUMAN units (e.g. 0.001 = "
+            "0.001 ETH, 25 = 25 USDC). Converted to the token's smallest "
+            "units (base units / wei) before the upstream call."
+        ),
+    )
     chain_id: int
     venue_id: str | None = None
 
 
 @router.post("/quote", summary="Get a swap quote")
 async def dex_quote(req: QuoteRequest) -> dict:
-    try:
-        quote = mangrove_markets_client().dex.get_quote(
-            input_token=req.input_token,
-            output_token=req.output_token,
-            amount=req.amount,
-            chain_id=req.chain_id,
-            venue_id=req.venue_id,
-        )
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"dex.get_quote failed: {e}") from e
-    return quote.model_dump() if hasattr(quote, "model_dump") else quote
+    # dex_service converts the human amount to the token's base units (what
+    # the backend/1inch expects) and converts the returned amounts back to
+    # human units. AgentError subclasses propagate to the central handler.
+    return dex_service.get_quote(
+        input_token=req.input_token,
+        output_token=req.output_token,
+        amount=req.amount,
+        chain_id=req.chain_id,
+        venue_id=req.venue_id,
+    )
 
 
 class SwapRequest(BaseModel):
