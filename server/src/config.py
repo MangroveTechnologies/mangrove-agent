@@ -9,6 +9,10 @@ Key validation:
   for full-stack deployments with DB + Redis). If a full_app_key is present
   in the config but has an empty value, startup fails -- this catches
   misconfiguration early.
+- "optional" keys: loaded if present (secret-ref capable), default to None
+  when absent. Never fail startup. For feature knobs that are off by
+  default, e.g. SLACK_WEBHOOK_URL — `app_config.<KEY>` is always defined
+  (None when unset) so callers can read it without `getattr`.
 """
 import json
 import os
@@ -29,7 +33,7 @@ class _Config:
             sys.exit(1)
         setattr(self, "ENVIRONMENT", environment)
 
-        required_keys, full_app_keys = self.get_configuration_keys()
+        required_keys, full_app_keys, optional_keys = self.get_configuration_keys()
         self.load_config_file()
 
         gcp_project_id = os.getenv("GCP_PROJECT_ID")
@@ -38,6 +42,7 @@ class _Config:
 
         self._load_required_keys(required_keys, gcp_project_id)
         self._load_full_app_keys(full_app_keys, gcp_project_id)
+        self._load_optional_keys(optional_keys, gcp_project_id)
 
     def _load_required_keys(self, required_keys: set, gcp_project_id: str) -> None:
         """Validate and set all required config keys. Exits on missing or null values."""
@@ -63,9 +68,21 @@ class _Config:
                 key_value = self.get_key_value(key, gcp_project_id)
                 setattr(self, key, key_value)
 
+    def _load_optional_keys(self, optional_keys: set, gcp_project_id: str) -> None:
+        """Load optional keys. Set from config (secret-ref capable) when present,
+        else default to None. Never exits — these are off-by-default knobs."""
+        for key in optional_keys:
+            if key in self._raw_config:
+                key_value = self.get_key_value(key, gcp_project_id)
+                if str(key_value).strip().lower() in {"none", "null"}:
+                    key_value = None
+            else:
+                key_value = None
+            setattr(self, key, key_value)
+
     @staticmethod
-    def get_configuration_keys() -> tuple[set, set]:
-        """Load required and full_app_keys from configuration-keys.json."""
+    def get_configuration_keys() -> tuple[set, set, set]:
+        """Load required, full_app_keys, and optional keys from configuration-keys.json."""
         try:
             config_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
             keys_path = os.path.join(config_dir, "configuration-keys.json")
@@ -73,7 +90,8 @@ class _Config:
                 keys_data = json.load(f)
                 required = set(keys_data.get("required", []))
                 full_app = set(keys_data.get("full_app_keys", []))
-                return required, full_app
+                optional = set(keys_data.get("optional", []))
+                return required, full_app, optional
         except (FileNotFoundError, json.JSONDecodeError) as e:
             print(f"Failed to load configuration-keys.json: {e}")
             sys.exit(1)
