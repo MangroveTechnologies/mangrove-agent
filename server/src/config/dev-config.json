@@ -19,5 +19,7 @@
   "X402_USDC_CONTRACT": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   "X402_HELLO_MANGROVE_PRICE": "50000",
   "X402_CDP_API_KEY_ID": "secret:app-config-dev:cdp_api_key_id",
-  "X402_CDP_API_KEY_SECRET": "secret:app-config-dev:cdp_api_key_secret"
+  "X402_CDP_API_KEY_SECRET": "secret:app-config-dev:cdp_api_key_secret",
+  "SLACK_WEBHOOK_URL": "",
+  "SLACK_QUIET_IF_EMPTY": true
 }

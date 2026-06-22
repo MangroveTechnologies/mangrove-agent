@@ -65,6 +65,32 @@ Validated only if present in your config file. If a key is present but has an em
 | `CLOUD_SQL_CONNECTION_NAME` | Cloud SQL instance connection name |
 | `REDIS_URL` | Redis connection URL |
 
+### Optional Keys
+
+Loaded if present in your config file (secret-reference capable), and default to
+`None` when absent. They never fail startup -- they back off-by-default feature
+knobs. Because the loader always defines the attribute, `app_config.<KEY>` is
+safe to read directly (it is `None` when unset).
+
+| Key | Description |
+|:----|:-----------|
+| `SLACK_WEBHOOK_URL` | Slack [incoming-webhook](https://api.slack.com/messaging/webhooks) URL for scheduler-tick notifications. Empty/absent disables Slack (the default). |
+| `SLACK_QUIET_IF_EMPTY` | When `true` (default), only post on a fire (new orders / closed trades) or an evaluation error -- quiet ticks are silent. Set `false` to post a heartbeat on every tick. |
+
+When a paper/live strategy's scheduled evaluation fires (or errors), the agent
+posts a consolidated OPEN/CLOSE block to Slack (`notification_service`). A failed
+Slack POST is logged, never fatal to the tick.
+
+To enable in dev/prod, add a `slack_webhook_url` field to the env's app-config
+secret and point the key at it:
+
+```json
+"SLACK_WEBHOOK_URL": "secret:app-config-prod:slack_webhook_url"
+```
+
+(Leaving it `""`, as the committed dev/prod configs do, keeps Slack off so startup
+never depends on a not-yet-provisioned secret.)
+
 ## Environments
 
 ### Local Development

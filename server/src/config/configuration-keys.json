@@ -22,5 +22,9 @@
     "X402_CDP_API_KEY_ID",
     "X402_CDP_API_KEY_SECRET"
   ],
-  "full_app_keys": []
+  "full_app_keys": [],
+  "optional": [
+    "SLACK_WEBHOOK_URL",
+    "SLACK_QUIET_IF_EMPTY"
+  ]
 }
