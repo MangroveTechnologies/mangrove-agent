@@ -17,6 +17,9 @@
 
 set -uo pipefail
 
+# Shared footer: names this hook's absolute path + the don't-bypass rule.
+source "$(dirname "${BASH_SOURCE[0]}")/_hooklib.sh" 2>/dev/null || block_footer() { :; }
+
 INPUT="$(cat)"
 
 # Fast path: only fire on the execute_swap MCP tool. All other tools pass through.
@@ -148,6 +151,7 @@ If you expected this wallet to be funded:
 
 Re-run execute_swap once the deposit is confirmed on the target chain.
 EOF
+    block_footer "${BASH_SOURCE[0]}"
     exit 2
 fi
 
