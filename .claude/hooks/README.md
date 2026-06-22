@@ -1,4 +1,4 @@
-# app-in-a-box — Claude Code guardrail hooks
+# mangrove-agent — Claude Code guardrail hooks
 
 These hooks are **harness-enforced guardrails**: Claude Code runs them automatically (wired in [`.claude/settings.json`](../settings.json)) and the agent cannot disable them mid-session. They exist so the agent can't — by accident or by a prompt-injection — commit to `main`, leak wallet secrets into the transcript, or fire a doomed/unfunded swap.
 
