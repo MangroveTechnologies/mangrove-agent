@@ -31,6 +31,9 @@
 
 set -uo pipefail
 
+# Shared footer: names this hook's absolute path + the don't-bypass rule.
+source "$(dirname "${BASH_SOURCE[0]}")/_hooklib.sh" 2>/dev/null || block_footer() { :; }
+
 MODE=""
 for arg in "$@"; do
     case "$arg" in
@@ -119,4 +122,5 @@ the plaintext should go through the SecretVault + reveal-secret.sh CLI.
 If this was a false positive (not a real key/mnemonic), rephrase to
 avoid the 0x + 64-hex or 12/24-lowercase-word structure.
 EOF
+block_footer "${BASH_SOURCE[0]}"
 exit 2

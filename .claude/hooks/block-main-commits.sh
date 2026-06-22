@@ -31,6 +31,10 @@
 
 set -uo pipefail
 
+# Shared footer: names this hook's absolute path + the don't-bypass rule.
+# Degrades to a no-op if the lib is somehow absent (never breaks the guard).
+source "$(dirname "${BASH_SOURCE[0]}")/_hooklib.sh" 2>/dev/null || block_footer() { :; }
+
 INPUT="$(cat)"
 
 # Extract tool_name + the command payload. The PreToolUse JSON shape is
@@ -117,6 +121,7 @@ Fix:
 If you intended to rebase, merge, or reset main to track origin, do it
 from a throwaway branch or via the GitHub UI so the history is reviewed.
 EOF
+                block_footer "${BASH_SOURCE[0]}"
                 exit 2
                 ;;
         esac
@@ -144,6 +149,7 @@ branch and open a PR:
   git push -u origin feature/<short-description>
   gh pr create
 EOF
+        block_footer "${BASH_SOURCE[0]}"
         exit 2
         ;;
 esac
