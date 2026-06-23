@@ -11,11 +11,20 @@
 # the agent must not disable/delete the hook to route around it — only the human
 # edits or removes it. Keep this dependency co-located in .claude/hooks/.
 
+# Capture the hooks dir at SOURCE time (top of the hook, before it may `cd`
+# elsewhere). The hook and this lib are co-located, so this dir + the hook's
+# basename is its true path regardless of the cwd when block_footer runs.
+_HOOKLIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+
 # block_footer <hook-path>  — emit the standard "which guardrail + don't-bypass"
 # footer to stderr (the channel Claude Code surfaces back to the agent/user).
 block_footer() {
     local src="${1:-${BASH_SOURCE[0]}}" abs
-    abs="$(cd "$(dirname "$src")" 2>/dev/null && pwd)/$(basename "$src")"
+    if [ -n "${_HOOKLIB_DIR:-}" ]; then
+        abs="$_HOOKLIB_DIR/$(basename "$src")"
+    else
+        abs="$(cd "$(dirname "$src")" 2>/dev/null && pwd)/$(basename "$src")"
+    fi
     cat >&2 <<EOF
 
 ──────────────────────────────────────────────────────────────────────────
