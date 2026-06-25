@@ -17,7 +17,11 @@ from x402.http.middleware.fastapi import payment_middleware
 from src.api.router import api_router, x402_router
 from src.config import app_config
 from src.health import health_payload
-from src.shared.auth.middleware import has_valid_api_key
+from src.shared.auth.middleware import (
+    has_valid_api_key,
+    reset_request_api_key,
+    set_request_api_key,
+)
 from src.shared.errors import AgentError, agent_error_handler
 from src.shared.logging import CorrelationIdMiddleware, get_logger
 from src.shared.logging import configure as configure_logging
@@ -56,6 +60,37 @@ x402_handler = _setup_x402()
 
 
 from src.mcp.server import create_mcp_server, reset_mcp_server  # noqa: E402
+
+
+class _MCPApiKeyHeaderMiddleware:
+    """Bridge the ``X-API-Key`` HTTP header into a ContextVar for MCP tools.
+
+    The MCP server is mounted as an ASGI sub-app whose tools authenticate on an
+    ``api_key`` value but only ever receive JSON-RPC params — never HTTP
+    headers. Claude Code registers the server with the key as a header
+    (``claude mcp add --header "X-API-Key: <key>"``), so without this bridge
+    every auth-tier tool returns ``AUTH_INVALID_API_KEY`` even though the client
+    is authenticated. We capture the header here (closest to the tool call) and
+    expose it via ``src.shared.auth.middleware`` so ``_require()`` honours it.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        api_key = ""
+        for name, value in scope.get("headers", []):
+            if name == b"x-api-key":  # ASGI lowercases header names
+                api_key = value.decode("latin-1")
+                break
+        token = set_request_api_key(api_key)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            reset_request_api_key(token)
 
 
 def create_app() -> FastAPI:
@@ -125,7 +160,7 @@ def create_app() -> FastAPI:
 
     application.include_router(api_router)
     application.include_router(x402_router)
-    application.mount("/mcp", mcp_app)
+    application.mount("/mcp", _MCPApiKeyHeaderMiddleware(mcp_app))
 
     @application.get(
         "/health",

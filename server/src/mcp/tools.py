@@ -19,7 +19,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from src.mcp.registry import ToolEntry, ToolParam, clear_tools, register_tool
-from src.shared.auth.middleware import has_valid_api_key
+from src.shared.auth.middleware import get_request_api_key, has_valid_api_key
 from src.shared.errors import AgentError
 from src.shared.logging import get_logger
 
@@ -62,8 +62,15 @@ def _dump(obj: Any) -> Any:
 
 
 def _require(api_key: str) -> bool:
-    """Return True if api_key is valid, False otherwise."""
-    return has_valid_api_key(api_key)
+    """Return True if the call is authenticated, False otherwise.
+
+    Accepts the key either as the explicit `api_key` tool parameter OR via the
+    request's `X-API-Key` HTTP header. Claude Code registers this server with
+    the key as a header (`claude mcp add --header "X-API-Key: <key>"`), which
+    FastMCP tools never receive as a param — src/app.py bridges that header into
+    a ContextVar that we consult here. The explicit param wins when supplied.
+    """
+    return has_valid_api_key(api_key or get_request_api_key())
 
 
 # Shorthand for the "api_key required" parameter in the discovery catalog.
@@ -840,7 +847,9 @@ def _register_market(server: FastMCP) -> None:
         endpoint returns the provider's native bar granularity (1h for
         most). A previous version of this tool advertised a `timeframe`
         parameter; it was silently dropped by the SDK. Removed to stop
-        misleading callers.
+        misleading callers. To backtest at a *specific* timeframe, use the
+        Oracle datasets / backtest tools (`oracle_list_datasets`,
+        `oracle_backtest`, `backtest_strategy`), which are timeframe-aware.
         """
         if not _require(api_key):
             return _auth_error()

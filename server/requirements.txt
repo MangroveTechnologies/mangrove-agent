@@ -1,3 +1,6 @@
+# Ranges below give development flexibility (esp. for the fast-moving Alpha
+# Mangrove SDKs). For a REPRODUCIBLE install pinned to known-good versions,
+# install from the generated lockfile instead:  pip install -r requirements.lock
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 pydantic>=2.0.0

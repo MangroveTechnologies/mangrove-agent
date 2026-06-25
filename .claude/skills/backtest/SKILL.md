@@ -70,6 +70,13 @@ timeframe:
 | 4h | 6 | **12–30 months** (default: 18mo) |
 | 1d | 1 | **5–14 years** (default: 5y, capped by provider history) |
 
+> **Upstream timeout ceiling.** A single backtest runs against the cloud
+> engine under `MANGROVE_SDK_TIMEOUT_SECONDS` (default 180s). Very long
+> intraday windows can exceed it and return a `504`/`SDK_ERROR` — e.g. a
+> **12-month 1h** run (~8,760 bars) reliably times out. Staying in the table's
+> ranges (≤~6mo on 1h) keeps you well under it; for longer spans use
+> `oracle_backtest_async` + poll, or walk several shorter windows.
+
 The table is the default. Override reasons:
 
 - **Data availability caps.** If the asset launched 8 months ago, a 5y

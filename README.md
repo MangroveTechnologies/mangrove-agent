@@ -146,7 +146,7 @@ Wallet setup and live trading are in Chapters 06 and 07 of the tutorial. The sum
 
 ## What the agent can do
 
-41 MCP tools (plus the `hello_mangrove` x402 demo). Rough grouping:
+95 MCP tools (including the `hello_mangrove` x402 demo). Rough grouping:
 
 | Category | Tools |
 |---|---|

@@ -6,6 +6,7 @@ tests/integration/ and require a real API key + the live proxy.
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 from unittest.mock import MagicMock
@@ -304,3 +305,69 @@ class TestLaunchExperimentPollOn504:
         with pytest.raises(APIError):
             launch_experiment("e1")
         client.oracle.get_experiment.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# oracle_backtest execution_config canon merge
+# Regression: a minimal/empty execution_config previously 500-ed with
+# "position_size_calc is required in execution_config" (MangroveAI v3.8.0).
+# The raw oracle backtest path must merge canonical defaults like the
+# registered-strategy path does.
+# ---------------------------------------------------------------------------
+
+class TestBacktestExecutionConfigMerge:
+    def _force_fallback_canon(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Avoid a live trading-defaults fetch; use the hardcoded fallback,
+        # which now carries position_size_calc.
+        from src.services import backtest_service as bs
+        monkeypatch.setattr(bs, "_get_trading_defaults", lambda: bs._FALLBACK_TRADING_DEFAULTS)
+
+    def _mock_client(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        client = MagicMock()
+        client.oracle.backtest.return_value = _BACKTEST_RESPONSE_MOCK
+        monkeypatch.setattr("src.services.oracle.mangrove_ai_client", lambda: client)
+        return client
+
+    def test_empty_config_gets_canon_position_size_calc(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._force_fallback_canon(monkeypatch)
+        client = self._mock_client(monkeypatch)
+
+        svc_backtest(OracleBacktestInput(
+            asset="XRP", interval="1h",
+            strategy_json=json.dumps(_strategy()),
+            execution_config={},
+        ))
+
+        sent = client.oracle.backtest.call_args.args[0]
+        assert sent.execution_config["position_size_calc"] == "v2"
+        assert "max_risk_per_trade" in sent.execution_config  # full canon merged
+
+    def test_none_config_merges_canon(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._force_fallback_canon(monkeypatch)
+        client = self._mock_client(monkeypatch)
+
+        svc_backtest(OracleBacktestInput(
+            asset="XRP", interval="1h",
+            strategy_json=json.dumps(_strategy()),
+        ))
+
+        sent = client.oracle.backtest.call_args.args[0]
+        assert sent.execution_config["position_size_calc"] == "v2"
+
+    def test_caller_override_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._force_fallback_canon(monkeypatch)
+        client = self._mock_client(monkeypatch)
+
+        svc_backtest(OracleBacktestInput(
+            asset="XRP", interval="1h",
+            strategy_json=json.dumps(_strategy()),
+            execution_config={"position_size_calc": "v9", "reward_factor": 5},
+        ))
+
+        sent = client.oracle.backtest.call_args.args[0]
+        assert sent.execution_config["position_size_calc"] == "v9"
+        assert sent.execution_config["reward_factor"] == 5
+
+    def test_fallback_canon_includes_position_size_calc(self) -> None:
+        from src.services.backtest_service import _FALLBACK_TRADING_DEFAULTS
+        assert _FALLBACK_TRADING_DEFAULTS["risk_management"]["position_size_calc"] == "v2"

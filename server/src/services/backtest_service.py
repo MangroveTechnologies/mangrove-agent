@@ -63,6 +63,10 @@ _FALLBACK_TRADING_DEFAULTS: dict[str, Any] = {
     "risk_management": {
         "max_risk_per_trade": 0.01,
         "reward_factor": 2,
+        # Required in execution_config since MangroveAI v3.8.0 (no silent
+        # default). The live canon ships it; this keeps the offline fallback
+        # valid so backtests don't 500 when the canon fetch is unavailable.
+        "position_size_calc": "v2",
         "atr_period": 14,
         "atr_volatility_factor": 2.0,
         "atr_short_weight": 0.95,

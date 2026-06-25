@@ -5,7 +5,31 @@ When AUTH_ENABLED is false, all requests pass without validation.
 API key holders bypass x402 payment requirements.
 """
 import secrets
+from contextvars import ContextVar
 from typing import Optional
+
+# Per-request X-API-Key captured from the HTTP header for the mounted MCP
+# sub-app. FastMCP tools receive their arguments as JSON-RPC params and never
+# see HTTP headers, so the `X-API-Key` header Claude Code sends (registered via
+# `claude mcp add --header "X-API-Key: <key>"`) is bridged into this ContextVar
+# by the MCP ASGI middleware (src/app.py) and consulted by the tools' auth gate
+# (src/mcp/tools.py::_require) whenever no explicit api_key param is supplied.
+_request_api_key: ContextVar[str] = ContextVar("request_api_key", default="")
+
+
+def set_request_api_key(api_key: Optional[str]):
+    """Store the current request's X-API-Key. Returns a token for reset()."""
+    return _request_api_key.set(api_key or "")
+
+
+def reset_request_api_key(token) -> None:
+    """Reset the per-request X-API-Key (call in a finally after the request)."""
+    _request_api_key.reset(token)
+
+
+def get_request_api_key() -> str:
+    """The X-API-Key captured from the current request's header, or ''."""
+    return _request_api_key.get()
 
 
 def _get_config():

@@ -203,6 +203,15 @@ if [ ! -d agent-data ]; then
   chmod 700 agent-data
   info "created agent-data/ (chmod 700)"
 fi
+# Bare-metal only: a prior Docker run bind-mounts agent-data/ as root, which a
+# non-root bare-metal run then can't write. (Docker mode legitimately owns it as
+# root, so skip the check there.) Fail with a clear reclaim path, not an opaque
+# SQLite permission error.
+if [ "$MODE" != "docker" ] && [ -d agent-data ] && [ ! -w agent-data ]; then
+  fail "agent-data/ exists but is not writable by $(id -un). A previous Docker run likely created it as root. Reclaim it with:
+      docker run --rm -v \"\$PWD\":/r alpine chown -R $(id -u):$(id -g) /r/agent-data
+    (or: sudo chown -R $(id -u):$(id -g) agent-data), then re-run."
+fi
 ok "agent-data/ ready"
 
 # -- 3. install + start the server ------------------------------------------

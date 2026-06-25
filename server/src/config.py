@@ -33,8 +33,17 @@ class _Config:
         self.load_config_file()
 
         gcp_project_id = os.getenv("GCP_PROJECT_ID")
-        if not gcp_project_id:
-            print("GCP_PROJECT_ID not set. Secret Manager lookups will fail.")
+        # Only warn when Secret Manager will actually be used — i.e. a config
+        # value is a `secret:name:property` reference. Local configs use plain
+        # values, so an unconditional warning here just alarms local/workshop
+        # users for a lookup that never happens.
+        uses_secret_refs = any(
+            isinstance(v, str) and v.startswith("secret:")
+            for v in self._raw_config.values()
+        )
+        if not gcp_project_id and uses_secret_refs:
+            print("GCP_PROJECT_ID not set but config has secret: references; "
+                  "Secret Manager lookups will fail.")
 
         self._load_required_keys(required_keys, gcp_project_id)
         self._load_full_app_keys(full_app_keys, gcp_project_id)

@@ -85,6 +85,14 @@ if [ ! -d agent-data ]; then
   chmod 700 agent-data
   info "created agent-data/ (chmod 700)"
 fi
+# Docker bind-mounts create agent-data/ as root; a later bare-metal run then
+# can't write the DB / master key. Catch it here with a clear fix instead of an
+# opaque permission error deep inside uvicorn/SQLite.
+if [ -d agent-data ] && [ ! -w agent-data ]; then
+  fail "agent-data/ exists but is not writable by $(id -un). A previous Docker run likely created it as root. Reclaim it with:
+      docker run --rm -v \"\$PWD\":/r alpine chown -R $(id -u):$(id -g) /r/agent-data
+    (or: sudo chown -R $(id -u):$(id -g) agent-data), then re-run."
+fi
 ok "agent-data/ ready"
 
 # -- 4. venv ----------------------------------------------------------------

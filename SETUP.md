@@ -4,7 +4,7 @@ Get from zero to a running trading agent. Every step has Mac and Windows instruc
 
 **What you will end up with:**
 - A local trading agent running at `http://localhost:9080`
-- Claude Code connected to it with 41 trading tools
+- Claude Code connected to it with 95 trading tools
 - A working paper strategy you can watch evaluate in real time
 
 ---
@@ -427,7 +427,7 @@ When it finishes successfully you will see:
     PID:   12345  (agent-data/bare.pid)
     Logs:  agent-data/bare.log
 
-    Restart Claude Code in this directory to load the 41 mangrove-agent
+    Restart Claude Code in this directory to load the 95 mangrove-agent
     tools. Then try: "Status check. List my wallets and strategies."
 ```
 
@@ -473,7 +473,7 @@ Wait 10–20 seconds. The agent should run a **platform tour automatically** —
 
 ## You are all set
 
-If you made it this far and the tour fired, everything is working — the server is running, Claude Code is connected, and all 41 trading tools are loaded.
+If you made it this far and the tour fired, everything is working — the server is running, Claude Code is connected, and all 95 trading tools are loaded.
 
 Here is what you can do right now:
 
@@ -575,6 +575,31 @@ Three possible causes:
 1. **MCP not connected** — run `claude mcp list`. If it shows "Failed to connect", fix the registration (see above).
 2. **Already onboarded** — the tour only runs once. If you have run `claude` here before, it is suppressed. To reset it, run `rm .claude/.onboarded` then restart Claude Code.
 3. **Wrong directory** — Claude Code only connects to the agent when you are inside the `mangrove-agent` folder. Make sure you ran `cd ~/Desktop/mangrove-agent` first.
+
+### Setup fails: "agent-data/ exists but is not writable"
+
+You ran the agent under Docker before and are now using bare-metal (the default). Docker creates `agent-data/` owned by `root`, which a non-root bare-metal process can't write. Reclaim it (no sudo needed) with a throwaway container, then re-run setup:
+
+```bash
+docker run --rm -v "$PWD":/r alpine chown -R $(id -u):$(id -g) /r/agent-data
+./scripts/setup.sh
+```
+
+(Or `sudo chown -R $(id -u):$(id -g) agent-data` if you have sudo.)
+
+### Claude Code feels sluggish / keypresses lag (Anaconda + AppMap)
+
+If your `python3` is an Anaconda/Miniconda interpreter, check its `site-packages` for an `appmap.pth`:
+
+```bash
+python3 -c "import site,glob,os; [print(p) for sp in site.getsitepackages() for p in glob.glob(os.path.join(sp,'appmap.pth'))]"
+```
+
+A `.pth` file runs code on *every* Python startup, so AppMap auto-initializes for every hook and subprocess Claude Code spawns (and steadily grows an `appmap.log`) — even when AppMap itself is disabled. Compare `time python3 -c pass` vs `time python3 -S -c pass` to see the tax. To stop the auto-import without uninstalling the package, rename the file:
+
+```bash
+mv "$(python3 -c "import site,glob,os;print(next(p for sp in site.getsitepackages() for p in glob.glob(os.path.join(sp,'appmap.pth'))))")"{,.disabled}
+```
 
 ### Nuclear reset — wipe everything and start over
 
