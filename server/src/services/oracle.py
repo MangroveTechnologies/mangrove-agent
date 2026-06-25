@@ -134,6 +134,21 @@ def data_query(payload: DataQueryInput) -> dict[str, Any]:
     return result.model_dump()
 
 
+def _merge_execution_config(execution_config: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge the caller's execution_config over the canonical trading defaults.
+
+    Oracle's engine requires a full flat execution_config (incl.
+    ``position_size_calc``, mandatory since MangroveAI v3.8.0). The
+    registered-strategy backtest path already merges canon via
+    ``backtest_service.flattened_defaults()``; the raw oracle backtest path
+    historically passed ``execution_config`` through unmerged and 500-ed on a
+    minimal or empty config. Mirror the working path here. Local import avoids
+    an import cycle (backtest_service must not import this module).
+    """
+    from src.services.backtest_service import flattened_defaults
+    return {**flattened_defaults(), **(execution_config or {})}
+
+
 def backtest(payload: OracleBacktestInput) -> dict[str, Any]:
     """Run a single-strategy backtest synchronously through Oracle's engine.
 
@@ -150,7 +165,7 @@ def backtest(payload: OracleBacktestInput) -> dict[str, Any]:
             lookback_months=payload.lookback_months,
             initial_balance=payload.initial_balance,
             max_risk_per_trade=payload.max_risk_per_trade,
-            execution_config=payload.execution_config,
+            execution_config=_merge_execution_config(payload.execution_config),
             mode=payload.mode,
         )
     )
@@ -187,7 +202,7 @@ def backtest_async(payload: OracleBacktestInput) -> dict[str, Any]:
             lookback_months=payload.lookback_months,
             initial_balance=payload.initial_balance,
             max_risk_per_trade=payload.max_risk_per_trade,
-            execution_config=payload.execution_config,
+            execution_config=_merge_execution_config(payload.execution_config),
             mode=payload.mode,
         )
     )
@@ -215,6 +230,8 @@ def backtest_bulk(payload: dict[str, Any]) -> dict[str, Any]:
     server fetches OHLCV once per unique ``(asset, timeframe)`` and
     re-uses it across all strategies that need it.
     """
+    if isinstance(payload, dict) and payload.get("execution_config") is not None:
+        payload = {**payload, "execution_config": _merge_execution_config(payload["execution_config"])}
     client = mangrove_ai_client()
     result = client.oracle.backtest_bulk(OracleBulkBacktestRequest(**payload))
     _log.info(
