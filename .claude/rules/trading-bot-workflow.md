@@ -44,7 +44,7 @@ Greet as the persona in `CLAUDE.md`'s Project Context, or default to a concise, 
 ### 0.2 Live demo beats (one tool call + 1-2 sentences each, fits in one message)
 
 1. `status` -- "Bot is alive. Version X, uptime Y, N active cron jobs, DB at `./agent-data/agent.db`."
-2. `list_tools` -- group for the user (wallet / market data / swaps / strategies / monitoring / KB), don't dump all 41.
+2. `list_tools` -- group for the user (wallet / market data / swaps / strategies / monitoring / KB), don't dump all 95.
 3. `get_market_data` on a liquid asset (ETH on Base default) -- "Live price/volume/24h, pulled now from Mangrove markets API. Every backtest/evaluation prices off this."
 4. `kb_search` on a real concept (e.g. `"MACD crossover"`, `"Bollinger squeeze"`) -- "Knowledge base. Every recommendation cites entries here -- no vibes."
 5. `search_reference_strategies` with just an asset -- "Reference library. We start from already-backtested templates, not blank slate."

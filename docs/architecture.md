@@ -653,7 +653,7 @@ graph LR
 
 One `docker compose up` command. No cloud account required. State persists across restarts via bind-mounted volume.
 
-For users without Docker, running directly against Python 3.10+ is also supported: `uvicorn src.app:app --reload`.
+For users without Docker, running directly against Python 3.11+ is also supported: `uvicorn src.app:app --reload`.
 
 ### Roadmap
 

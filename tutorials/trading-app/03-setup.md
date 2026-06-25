@@ -79,7 +79,7 @@ If everything went well, the last thing you see is:
     PID:   12345  (agent-data/bare.pid)
     Logs:  agent-data/bare.log
 
-    Restart Claude Code in this directory to load the 41 mangrove-agent
+    Restart Claude Code in this directory to load the 95 mangrove-agent
     tools. Then try: "Status check. List my wallets and strategies."
 ```
 
@@ -183,7 +183,7 @@ claude
 ```
 
 Claude Code detects the `.mcp.json` and the local registration, loads
-the 41 tools, and runs a **platform tour** automatically. The tour is
+the 95 tools, and runs a **platform tour** automatically. The tour is
 a sequence of five live tool calls with one-sentence commentary each —
 the bot is showing you the product works before asking you to do
 anything. You'll see roughly:
@@ -249,7 +249,7 @@ Usually one of three things:
    registrations are keyed to the project directory. Make sure
    you're in `~/Desktop/mangrove-agent` (or wherever you cloned).
 
-### "I see fewer than 41 tools"
+### "I see fewer than 95 tools"
 
 You're on an older version of the repo. `git pull` to sync with
 the branch you cloned from, then restart the server:
