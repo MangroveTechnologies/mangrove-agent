@@ -222,7 +222,7 @@
 - 27: Client / server / transport · 90 sec
 - 28: `claude mcp add` example · 90 sec
 - 29: Learn more · 30 sec
-- ● **Land:** "Claude Code doesn't know about trading out of the box. MCP is how it gets to. One register command = 41 new tools."
+- ● **Land:** "Claude Code doesn't know about trading out of the box. MCP is how it gets to. One register command = 95 new tools."
 
 #### Slides 30–34 — PLUGINS (5 slides, ~5 min)
 - 30: Section divider · 30 sec
