@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import MagicMock
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
@@ -51,21 +50,18 @@ def stub_keyring(monkeypatch):
 
 @pytest.fixture
 def mock_sdk_create(monkeypatch):
-    """Stub mangrove_markets_client().wallet.create() to return a fixed EVM wallet."""
-    sdk_result = MagicMock()
-    sdk_result.address = _TEST_ADDRESS
-    sdk_result.private_key = _TEST_PRIVKEY
-    sdk_result.seed_phrase = None
-    sdk_result.secret = None
+    """Pin create_wallet's LOCAL key generation to a fixed EVM keypair.
 
-    sdk_client = MagicMock()
-    sdk_client.wallet.create.return_value = sdk_result
-
+    create_wallet now generates keys in-process via eth_account (no SDK / no
+    network), so we patch Account.create() to a deterministic key — tests that
+    reference _TEST_ADDRESS / _TEST_PRIVKEY downstream stay stable.
+    """
+    fixed = Account.from_key(_TEST_PRIVKEY)
     monkeypatch.setattr(
-        "src.services.wallet_manager.mangrove_markets_client",
-        lambda: sdk_client,
+        "src.services.wallet_manager.Account.create",
+        lambda *a, **k: fixed,
     )
-    return sdk_client
+    return fixed
 
 
 # -- crypto/fernet -----------------------------------------------------------
@@ -147,6 +143,25 @@ def test_create_wallet_evm_persists_encrypted(temp_db, stub_keyring, mock_sdk_cr
     assert row["encryption_method"] == "fernet-v1"
     # Fresh wallet: backup not confirmed yet.
     assert row["backup_confirmed_at"] is None
+
+
+def test_create_wallet_generates_locally_no_markets_client(temp_db, stub_keyring):
+    """create_wallet mints the keypair in-process via eth_account — no SDK, no
+    network. Runs WITHOUT mock_sdk_create so it exercises real local generation:
+    two calls yield distinct, valid keys, and wallet_manager no longer even
+    imports a markets client (the custody invariant)."""
+    import src.services.wallet_manager as wm
+    from src.services.wallet_manager import create_wallet
+
+    r1 = create_wallet(chain="evm", network="testnet", chain_id=84532)
+    r2 = create_wallet(chain="evm", network="testnet", chain_id=84532)
+
+    assert r1.address != r2.address  # real randomness, not a fixture
+    for r in (r1, r2):
+        assert r.address.startswith("0x") and len(r.address) == 42
+        assert r.vault_token
+    # No remote key-gen path exists in the wallet service at all.
+    assert not hasattr(wm, "mangrove_markets_client")
 
 
 def test_create_wallet_xrpl_raises(temp_db, stub_keyring, mock_sdk_create):

@@ -141,7 +141,6 @@ def client(tmp_path, monkeypatch):
         "src.api.routes.kb.mangrove_ai_client",
         "src.api.routes.wallet.mangrove_markets_client",
         "src.api.routes.dex.mangrove_markets_client",
-        "src.services.wallet_manager.mangrove_markets_client",
         "src.services.candidate_generator.mangrove_ai_client",
         "src.services.backtest_service.mangrove_ai_client",
         "src.services.strategy_service.mangrove_ai_client",
