@@ -3,6 +3,7 @@
   "API_KEYS": "dev-key-1",
   "MANGROVE_API_KEY": "REPLACE_WITH_YOUR_DEV_OR_PROD_KEY",
   "MANGROVEMARKETS_BASE_URL": "http://localhost:9081",
+  "LOCAL_AGENT_URL": "http://localhost:9080",
   "DB_PATH": "./agent-data/agent.db",
   "MASTER_KEY_PATH": "./agent-data/master.key",
   "KEYRING_SERVICE_NAME": "mangrove-agent",

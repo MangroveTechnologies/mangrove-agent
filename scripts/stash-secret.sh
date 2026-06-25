@@ -24,7 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-BASE_URL="${BASE_URL:-http://localhost:9080}"
+LOCAL_AGENT_URL="${LOCAL_AGENT_URL:-http://localhost:9080}"
 CONFIG_FILE="server/src/config/local-config.json"
 
 GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; DIM="\033[2m"; CLR="\033[0m"
@@ -49,8 +49,8 @@ if [ -z "$API_KEY" ]; then
   fail "No API key in $CONFIG_FILE (API_KEYS field)."
 fi
 
-if ! curl -fsS -m 5 "$BASE_URL/health" >/dev/null 2>&1; then
-  fail "$BASE_URL/health not responding. Is the agent running? (./setup.sh)"
+if ! curl -fsS -m 5 "$LOCAL_AGENT_URL/health" >/dev/null 2>&1; then
+  fail "$LOCAL_AGENT_URL/health not responding. Is the agent running? (./setup.sh)"
 fi
 
 # -- prompt for secret (hidden) ---------------------------------------------
@@ -78,12 +78,12 @@ step "Stashing in the agent's in-process vault"
 # contains characters that would break a shell-quoted curl data arg.
 # Export so the heredoc (run in a subshell via python3 - <<'PY') can
 # read via os.environ.
-export SECRET API_KEY BASE_URL
+export SECRET API_KEY LOCAL_AGENT_URL
 RESPONSE="$(python3 - <<'PY'
 import json, urllib.request, os, sys
 body = json.dumps({"secret": os.environ["SECRET"]}).encode()
 req = urllib.request.Request(
-    os.environ["BASE_URL"] + "/api/v1/agent/wallet/stash-secret",
+    os.environ["LOCAL_AGENT_URL"] + "/api/v1/agent/wallet/stash-secret",
     data=body,
     method="POST",
     headers={"Content-Type": "application/json", "X-API-Key": os.environ["API_KEY"]},

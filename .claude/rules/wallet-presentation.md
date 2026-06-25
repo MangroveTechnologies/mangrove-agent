@@ -2,6 +2,20 @@
 
 Rules for `create_wallet`, `import_wallet`, `get_balances`, and any future wallet tooling.
 
+## Core invariant -- keys are generated, stored, and signed with LOCALLY
+
+Wallet **key generation, storage, and signing all happen on this machine, in
+the agent process** -- the private key never crosses the network:
+
+- `create_wallet` mints the keypair **in-process via `eth_account`** (see
+  `wallet_manager.create_wallet`). It does NOT call a remote server to generate
+  keys. (`sign()` likewise decrypts + signs locally.)
+- **`LOCAL_AGENT_URL`** (default `http://localhost:9080`) is this agent's own
+  surface -- wallet/secret ops (the SecretVault + `reveal`/`stash`/`confirm`
+  scripts) live here. It is distinct from **`MANGROVEMARKETS_BASE_URL`**, the
+  *remote, keyless* MangroveMarkets server used only for DEX quotes / routing /
+  balances / broadcast. The markets server never receives a private key.
+
 ## Core invariant -- agent NEVER sees plaintext keys
 
 After phase-2 security rework, wallet secrets flow out-of-band:

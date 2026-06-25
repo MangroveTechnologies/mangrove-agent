@@ -27,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-BASE_URL="${BASE_URL:-http://localhost:9080}"
+LOCAL_AGENT_URL="${LOCAL_AGENT_URL:-http://localhost:9080}"
 CONFIG_FILE="server/src/config/local-config.json"
 
 GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; DIM="\033[2m"; CLR="\033[0m"
@@ -75,14 +75,14 @@ if [ -z "$API_KEY" ]; then
   fail "No API key in $CONFIG_FILE (API_KEYS field)."
 fi
 
-if ! curl -fsS -m 5 "$BASE_URL/health" >/dev/null 2>&1; then
-  fail "$BASE_URL/health not responding. Is the agent running?"
+if ! curl -fsS -m 5 "$LOCAL_AGENT_URL/health" >/dev/null 2>&1; then
+  fail "$LOCAL_AGENT_URL/health not responding. Is the agent running?"
 fi
 
 if [ "$MODE" = "id" ]; then
-  URL="$BASE_URL/api/v1/agent/wallet/reveal-secret/$ARG"
+  URL="$LOCAL_AGENT_URL/api/v1/agent/wallet/reveal-secret/$ARG"
 else
-  URL="$BASE_URL/api/v1/agent/wallet/$ARG/reveal"
+  URL="$LOCAL_AGENT_URL/api/v1/agent/wallet/$ARG/reveal"
 fi
 
 # Export so the Python heredoc can read via os.environ.
