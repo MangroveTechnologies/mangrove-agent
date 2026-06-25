@@ -49,7 +49,7 @@ mangroveai>=1.7.2,<2.0.0
 mangrovemarkets>=1.0.2,<2.0.0
 apscheduler[sqlalchemy]>=3.10
 cryptography>=42
-keyring>=24
+keyring>=25.7.0
 structlog>=24
 
 # Dev/test
