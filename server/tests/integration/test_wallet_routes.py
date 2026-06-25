@@ -61,7 +61,9 @@ def client(tmp_path, monkeypatch):
         setattr(sdk.portfolio, attr, MagicMock(return_value=m))
     sdk.portfolio.history.return_value = [MagicMock(model_dump=MagicMock(return_value={"tx": "0xabc"}))]
 
-    monkeypatch.setattr("src.services.wallet_manager.mangrove_markets_client", lambda: sdk)
+    # create_wallet now generates the keypair locally (eth_account) — there is
+    # no markets-SDK call on the create path to patch. The route-level client
+    # below still backs the keyless read endpoints (balances/portfolio/history).
     monkeypatch.setattr("src.api.routes.wallet.mangrove_markets_client", lambda: sdk)
 
     from src.app import create_app
@@ -85,7 +87,8 @@ def test_create_wallet_happy_path(client):
     )
     assert r.status_code == 201
     body = r.json()
-    assert body["address"] == _TEST_ADDRESS
+    # Locally generated EVM address (no fixed SDK address to assert against).
+    assert body["address"].startswith("0x") and len(body["address"]) == 42
     assert body["chain"] == "evm"
     # Phase-2 contract: the plaintext key MUST NOT appear in the response.
     assert "seed_phrase" not in body
@@ -139,10 +142,11 @@ def test_reveal_secret_is_single_read(client):
     )
     sid = r.json()["vault_token"]
 
-    # First reveal: 200 + plaintext.
+    # First reveal: 200 + plaintext (a locally generated 0x + 64-hex key).
     r1 = client.get(f"/api/v1/agent/wallet/reveal-secret/{sid}", headers=_auth())
     assert r1.status_code == 200
-    assert r1.json()["secret"] == _TEST_PRIVKEY
+    secret = r1.json()["secret"]
+    assert secret.startswith("0x") and len(secret) == 66
 
     # Second reveal: rejected (vault consumed the entry).
     r2 = client.get(f"/api/v1/agent/wallet/reveal-secret/{sid}", headers=_auth())
@@ -151,19 +155,20 @@ def test_reveal_secret_is_single_read(client):
 
 
 def test_confirm_backup_flips_flag(client):
-    client.post(
+    created = client.post(
         "/api/v1/agent/wallet/create",
         headers=_auth(),
         json={"chain": "evm", "network": "testnet", "chain_id": 84532},
     )
+    addr = created.json()["address"]  # locally generated, capture it
     r = client.post(
-        f"/api/v1/agent/wallet/{_TEST_ADDRESS}/confirm-backup",
+        f"/api/v1/agent/wallet/{addr}/confirm-backup",
         headers=_auth(),
         json={},
     )
     assert r.status_code == 200
     body = r.json()
-    assert body["address"] == _TEST_ADDRESS
+    assert body["address"] == addr
     assert body["backup_confirmed_at"]
     assert "unlocked" in body["message"].lower() or "confirmed" in body["message"].lower()
 

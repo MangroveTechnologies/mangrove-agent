@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Literal
 
 from eth_account import Account
 from eth_account.datastructures import SignedTransaction
@@ -35,7 +35,6 @@ from eth_utils import to_checksum_address
 from pydantic import BaseModel
 
 from src.services.secret_vault import vault
-from src.shared.clients.mangrove import mangrove_markets_client
 from src.shared.crypto.fernet import decrypt, encrypt, get_master_key_source
 from src.shared.db.sqlite import get_connection
 from src.shared.errors import (
@@ -263,22 +262,6 @@ def _derive_address(secret: str) -> str:
     return Account.from_mnemonic(s).address
 
 
-def _extract_secret(create_result: Any) -> str:
-    """Pull whichever sensitive field the SDK populated.
-
-    SDK's WalletCreateResult can have any of: seed_phrase, private_key, secret.
-    We store whichever is present, in priority order (seed_phrase > private_key > secret).
-    """
-    for attr in ("seed_phrase", "private_key", "secret"):
-        val = getattr(create_result, attr, None)
-        if val:
-            return str(val)
-    raise SigningError(
-        "SDK wallet.create() returned no seed_phrase, private_key, or secret.",
-        suggestion="Check the mangrovemarkets SDK version and the target chain's supported wallet_creation mode.",
-    )
-
-
 def _safety_note(secret_type: SecretType, master_key_source: str) -> str:
     src_blurb = {
         "keyfile": "your local keyfile (./agent-data/master.key, chmod 600)",
@@ -341,12 +324,18 @@ def create_wallet(
             suggestion="Supported: evm (with a valid chain_id).",
         )
 
-    result = mangrove_markets_client().wallet.create(
-        chain=chain_normalized, network=network, chain_id=chain_id,
-    )
-    secret = _extract_secret(result)
-    address = str(result.address)
-    secret_type = _detect_secret_type(secret)
+    # Generate the keypair LOCALLY, in-process — the private key is never
+    # requested from or transmitted to any remote server. eth_account is the
+    # same library sign() uses. This is the custody invariant: wallet keys are
+    # born, stored, and signed with entirely on this machine; the MangroveMarkets
+    # server only ever sees keyless routing/quotes (see MANGROVEMARKETS_BASE_URL).
+    # EVM-only in v1 (guarded above); a fresh secp256k1 private key is chain-agnostic.
+    acct = Account.create()
+    secret = acct.key.hex()
+    if not secret.startswith("0x"):
+        secret = "0x" + secret
+    address = acct.address
+    secret_type: SecretType = "private_key"
 
     conn = get_connection()
     existing = conn.execute(

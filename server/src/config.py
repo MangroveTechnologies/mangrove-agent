@@ -48,6 +48,13 @@ class _Config:
         self._load_required_keys(required_keys, gcp_project_id)
         self._load_full_app_keys(full_app_keys, gcp_project_id)
 
+        # LOCAL_AGENT_URL — this agent's own local surface. Wallet/secret ops
+        # (key generation, the SecretVault, reveal/stash/confirm) live HERE, on
+        # the client machine, and must never be a remote host. Distinct from
+        # MANGROVEMARKETS_BASE_URL (the remote, keyless DEX-routing server).
+        # Defaulted (not required) so existing configs without the key still boot.
+        self.LOCAL_AGENT_URL = self._raw_config.get("LOCAL_AGENT_URL") or "http://localhost:9080"
+
     def _load_required_keys(self, required_keys: set, gcp_project_id: str) -> None:
         """Validate and set all required config keys. Exits on missing or null values."""
         for key in required_keys:
