@@ -11,8 +11,8 @@
 #   2. Ensure MANGROVE_API_KEY is set (prompt if missing, unless --yes)
 #   3. Ensure agent-data/ directory exists (keyfile + DB live there)
 #   4. Install deps into .venv (pip install)
-#   5. Start uvicorn in the background (via run-bare.sh under nohup,
-#      unless --foreground)
+#   5. Start uvicorn in the background (honors BARE_PORT; default 9080),
+#      unless --foreground
 #   6. Wait for /health
 #   7. Register the MCP server with Claude Code (unless --no-mcp)
 #   8. Run verify_quickstart.sh (unless --no-verify)
@@ -34,7 +34,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-BASE_URL="${BASE_URL:-http://localhost:9080}"
+PORT="${BARE_PORT:-9080}"
+# Exported so the child scripts (setup-mcp.sh, verify_quickstart.sh) target the
+# SAME port. Honors BARE_PORT so a busy 9080 (e.g. squatted by VSCode/Code
+# Helper) can be sidestepped end-to-end with one env var.
+export BASE_URL="${BASE_URL:-http://localhost:$PORT}"
 CONFIG_FILE="server/src/config/local-config.json"
 EXAMPLE_CONFIG="server/src/config/local-example-config.json"
 PID_FILE="agent-data/bare.pid"
@@ -240,13 +244,20 @@ else
   if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
     info "uvicorn already running (pid $(cat "$PID_FILE"))"
   else
+    # Refuse to start if $PORT is already occupied. Otherwise uvicorn fails to
+    # bind, and we'd fall through to the /health check and verify against the
+    # DIFFERENT process already on $PORT — a false success. (This is the
+    # squatted-9080 case the README warns about, e.g. macOS "Code Helper".)
+    if python3 -c "import socket,sys; s=socket.socket(); s.settimeout(1); rc=s.connect_ex(('127.0.0.1', $PORT)); s.close(); sys.exit(0 if rc==0 else 1)" 2>/dev/null; then
+      fail "port $PORT is already in use — refusing to start. Stop whatever holds it (a stale agent, another service, or a squatter), or re-run with BARE_PORT=<free port>."
+    fi
     if [ "$FOREGROUND" = "yes" ]; then
       info "running in foreground (Ctrl+C to stop)"
       exec env ENVIRONMENT=local PYTHONPATH="$PYTHONPATH" python3 -m uvicorn src.app:app \
-        --host 0.0.0.0 --port 9080 --workers 1 --timeout-keep-alive 120
+        --host 0.0.0.0 --port "$PORT" --workers 1 --timeout-keep-alive 120
     else
       nohup env ENVIRONMENT=local PYTHONPATH="$PYTHONPATH" python3 -m uvicorn src.app:app \
-        --host 0.0.0.0 --port 9080 --workers 1 --timeout-keep-alive 120 \
+        --host 0.0.0.0 --port "$PORT" --workers 1 --timeout-keep-alive 120 \
         > "$REPO_ROOT/$LOG_FILE" 2>&1 &
       echo $! > "$REPO_ROOT/$PID_FILE"
       info "uvicorn started in background (pid $(cat "$PID_FILE"))"
