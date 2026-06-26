@@ -74,8 +74,36 @@ def test_resolve_decimals_address_uses_token_info():
 def test_resolve_decimals_raises_on_lookup_failure():
     client = MagicMock()
     client.dex.token_info.side_effect = RuntimeError("upstream 500")
+    # The raw-payload fallback can't recover decimals from a bare mock
+    # (non-dict), so the lookup still surfaces a clear SdkError.
     with pytest.raises(SdkError):
         dex_service.resolve_decimals(client, 8453, _USDC)
+
+
+def test_resolve_decimals_falls_back_to_raw_when_model_rejects():
+    """If the SDK's typed TokenInfo rejects the response over an unrelated
+    field (e.g. live server returns `tags` as objects vs the SDK's
+    `list[str]`), decimals must still resolve from the raw tool payload —
+    a swap can't fail on a metadata schema mismatch.
+    """
+    client = MagicMock()
+    client.dex.token_info.side_effect = ValueError(
+        "8 validation errors for TokenInfo: tags.0 Input should be a valid string"
+    )
+    client.dex._call_tool.return_value = {
+        "token": {"address": _USDC, "symbol": "USDC", "decimals": 6,
+                  "tags": [{"provider": "1inch", "value": "bluechip"}]}
+    }
+    assert dex_service.resolve_decimals(client, 8453, _USDC) == 6
+    client.dex._call_tool.assert_called_once()
+
+
+def test_resolve_decimals_fallback_handles_unwrapped_payload():
+    """Fallback also reads decimals when the server doesn't wrap in `token`."""
+    client = MagicMock()
+    client.dex.token_info.side_effect = ValueError("validation error")
+    client.dex._call_tool.return_value = {"decimals": 18, "symbol": "WETH"}
+    assert dex_service.resolve_decimals(client, 8453, _WETH) == 18
 
 
 # -- get_quote end-to-end (mocked client) ----------------------------------

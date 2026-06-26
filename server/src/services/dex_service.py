@@ -72,18 +72,40 @@ def resolve_decimals(client: Any, chain_id: int, token: str) -> int:
         return _NATIVE_DECIMALS
 
     if _is_address(t):
+        # We need ONLY decimals here. The SDK's strongly-typed TokenInfo can
+        # reject an otherwise-fine response over an unrelated field — e.g. the
+        # live markets server returns `tags` as {provider, value} objects while
+        # the SDK models `tags: list[str]` (root cause fixed upstream in the
+        # MangroveMarkets SDK). A swap must not fail because a metadata field's
+        # schema drifted, so if the typed lookup fails we fall back to the raw
+        # tool payload for the decimals field only.
+        dec: Any = None
         try:
             info = client.dex.token_info(chain_id=chain_id, address=t)
+            dec = getattr(info, "decimals", None)
         except Exception as e:  # noqa: BLE001
-            raise SdkError(
-                f"Could not look up token decimals for {t} on chain {chain_id}: {e}",
-                suggestion=(
-                    "The amount must be converted to the token's smallest "
-                    "units, which needs its decimals. Verify the token "
-                    "address + chain_id are correct."
-                ),
-            ) from e
-        dec = getattr(info, "decimals", None)
+            try:
+                raw = client.dex._call_tool(
+                    "oneinch_token_info", {"chain_id": chain_id, "address": t}
+                )
+                tok = raw.get("token", raw) if isinstance(raw, dict) else {}
+                dec = tok.get("decimals")
+            except Exception:  # noqa: BLE001
+                dec = None
+            if dec is None:
+                raise SdkError(
+                    f"Could not look up token decimals for {t} on chain {chain_id}: {e}",
+                    suggestion=(
+                        "The amount must be converted to the token's smallest "
+                        "units, which needs its decimals. Verify the token "
+                        "address + chain_id are correct."
+                    ),
+                ) from e
+            _log.warning(
+                "token_info model rejected the response for %s on chain %s "
+                "(%s); fell back to raw decimals=%s",
+                t, chain_id, e, dec,
+            )
         if dec is None:
             raise SdkError(f"token_info for {t} returned no decimals.")
         return int(dec)
