@@ -2,7 +2,7 @@
   "AUTH_ENABLED": true,
   "API_KEYS": "secret:app-config-prod:api_keys",
   "MANGROVE_API_KEY": "secret:app-config-prod:mangrove_api_key",
-  "MANGROVEMARKETS_BASE_URL": "http://localhost:9081",
+  "MANGROVEMARKETS_BASE_URL": "https://mangrovemarkets-pcqgpciucq-uc.a.run.app",
   "LOCAL_AGENT_URL": "http://localhost:9080",
   "DB_PATH": "./agent-data/agent.db",
   "MASTER_KEY_PATH": "./agent-data/master.key",
