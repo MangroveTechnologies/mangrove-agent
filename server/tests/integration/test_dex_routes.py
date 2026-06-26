@@ -71,12 +71,25 @@ def client(tmp_path, monkeypatch):
     tx_status.error_message = None
     sdk.dex.tx_status.return_value = tx_status
 
-    token_info = MagicMock()
-    token_info.model_dump.return_value = {
-        "address": "0x" + "a" * 40, "symbol": "USDC", "name": "USD Coin",
-        "decimals": 6, "chain_id": 8453,
+    # token_info is now consulted by dex_service.get_quote to convert the
+    # human amount -> base units, so return realistic per-address decimals.
+    _DECIMALS = {
+        ("0x" + "a" * 40): ("USDC", 6),
+        "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": ("USDC", 6),   # USDC on Base
+        "0x4200000000000000000000000000000000000006": ("WETH", 18),  # WETH on Base
     }
-    sdk.dex.token_info.return_value = token_info
+
+    def _token_info(chain_id, address):
+        symbol, decimals = _DECIMALS.get(address.lower(), ("TKN", 18))
+        ti = MagicMock()
+        ti.decimals = decimals
+        ti.model_dump.return_value = {
+            "address": address, "symbol": symbol, "name": symbol,
+            "decimals": decimals, "chain_id": chain_id,
+        }
+        return ti
+
+    sdk.dex.token_info.side_effect = _token_info
 
     spot_price = MagicMock()
     spot_price.model_dump.return_value = {
@@ -92,6 +105,7 @@ def client(tmp_path, monkeypatch):
     sdk.dex.gas_price.return_value = gas_price
 
     monkeypatch.setattr("src.api.routes.dex.mangrove_markets_client", lambda: sdk)
+    monkeypatch.setattr("src.services.dex_service.mangrove_markets_client", lambda: sdk)
     monkeypatch.setattr("src.services.order_executor.mangrove_markets_client", lambda: sdk)
     monkeypatch.setattr(
         "src.services.order_executor.wallet_sign",
@@ -108,6 +122,7 @@ def client(tmp_path, monkeypatch):
     from src.app import create_app
     app = create_app()
     with TestClient(app) as c:
+        c.app_sdk = sdk  # expose the mock so tests can assert/reconfigure calls
         yield c
     ss.reset_scheduler_cache()
     db_mod.reset_connection()
@@ -131,16 +146,66 @@ def test_pairs(client):
     assert r.json()[0]["from_token"] == "USDC"
 
 
-def test_quote(client):
+_WETH_BASE = "0x4200000000000000000000000000000000000006"
+_USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+
+def test_quote_converts_human_amount_to_base_units(client):
+    """Regression for the INSUFFICIENT_LIQUIDITY blocker.
+
+    A human amount (0.001 WETH) must reach the backend as base units
+    (0.001 * 1e18 = 1e15 wei). The pre-fix code forwarded 0.001 verbatim,
+    which the backend read as sub-wei dust and rejected with
+    INSUFFICIENT_LIQUIDITY for every pair/chain.
+    """
+    # Backend echoes/returns amounts in base units (wei).
+    quote = MagicMock()
+    quote.model_dump.return_value = {
+        "quote_id": "q-weth", "venue_id": "1inch",
+        "input_amount": 1_000_000_000_000_000,   # 0.001 WETH in wei
+        "output_amount": 2_500_000,               # 2.5 USDC in base units (6 dp)
+        "exchange_rate": 2500.0,
+    }
+    client.app_sdk.dex.get_quote.return_value = quote
+    client.app_sdk.dex.get_quote.side_effect = None
+
     r = client.post(
         "/api/v1/agent/dex/quote",
         headers=_auth(),
-        json={"input_token": "USDC", "output_token": "ETH", "amount": 100.0, "chain_id": 84532},
+        json={
+            "input_token": _WETH_BASE, "output_token": _USDC_BASE,
+            "amount": 0.001, "chain_id": 8453,
+        },
     )
-    assert r.status_code == 200
+    assert r.status_code == 200, r.text
+
+    # The SDK was called with the BASE-unit amount, not the human float.
+    _, kwargs = client.app_sdk.dex.get_quote.call_args
+    assert kwargs["amount"] == 1_000_000_000_000_000
+
     body = r.json()
-    assert body["quote_id"] == "q-1"
-    assert body["output_amount"] == 0.04
+    assert body["quote_id"] == "q-weth"
+    # Returned amounts are converted back to human units for display.
+    assert body["input_amount"] == 0.001
+    assert body["output_amount"] == 2.5
+    assert body["input_amount_base_units"] == 1_000_000_000_000_000
+    assert body["input_token_decimals"] == 18
+    assert body["output_token_decimals"] == 6
+
+
+def test_quote_rejects_dust_amount(client):
+    """An amount that rounds to 0 base units gets a clear client error,
+    not a confusing upstream INSUFFICIENT_LIQUIDITY."""
+    r = client.post(
+        "/api/v1/agent/dex/quote",
+        headers=_auth(),
+        json={
+            "input_token": _USDC_BASE, "output_token": _WETH_BASE,
+            "amount": 0.0000001, "chain_id": 8453,  # < 1e-6 USDC -> 0 base units
+        },
+    )
+    assert r.status_code == 400
+    assert r.json()["code"] == "VALIDATION_ERROR"
 
 
 def test_swap_requires_confirm(client):

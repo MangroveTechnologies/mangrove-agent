@@ -97,9 +97,24 @@ def _stub_sdk() -> MagicMock:
     sdk.dex.supported_pairs.return_value = [
         MagicMock(model_dump=MagicMock(return_value={"from_token": "USDC", "to_token": "ETH"})),
     ]
+    # Backend echoes/returns base units; dex_service converts to human.
     sdk.dex.get_quote.return_value = _resp({
-        "quote_id": "q-1", "input_amount": 1, "output_amount": 0.0004, "exchange_rate": 2500.0,
+        "quote_id": "q-1",
+        "input_amount": 100_000_000_000_000_000_000,  # 100 WETH in wei
+        "output_amount": 250_000_000,                 # 250 USDC base units
+        "exchange_rate": 2500.0,
     })
+
+    # dex_service resolves token decimals via token_info to convert the
+    # human amount -> base units; .decimals must be a real int.
+    def _token_info(chain_id, address):
+        dec = 6 if address.lower() == "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" else 18
+        return MagicMock(decimals=dec, model_dump=MagicMock(return_value={
+            "address": address, "symbol": "TKN", "name": "TKN",
+            "decimals": dec, "chain_id": chain_id,
+        }))
+
+    sdk.dex.token_info.side_effect = _token_info
     sdk.dex.balances.return_value = _resp({"balances": []})
 
     for attr, payload in [
@@ -141,6 +156,7 @@ def client(tmp_path, monkeypatch):
         "src.api.routes.kb.mangrove_ai_client",
         "src.api.routes.wallet.mangrove_markets_client",
         "src.api.routes.dex.mangrove_markets_client",
+        "src.services.dex_service.mangrove_markets_client",
         "src.services.candidate_generator.mangrove_ai_client",
         "src.services.backtest_service.mangrove_ai_client",
         "src.services.strategy_service.mangrove_ai_client",
@@ -192,7 +208,9 @@ _SMOKE_ENDPOINTS = [
     ("GET", "/api/v1/agent/dex/venues", None, None, False),
     ("GET", "/api/v1/agent/dex/pairs", None, {"venue_id": "uniswap-v2"}, False),
     ("POST", "/api/v1/agent/dex/quote",
-     {"input_token": "USDC", "output_token": "ETH", "amount": 100.0, "chain_id": 8453}, None, False),
+     {"input_token": "0x4200000000000000000000000000000000000006",
+      "output_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "amount": 100.0, "chain_id": 8453}, None, False),
     # Strategies (auth-gated; autonomous + list + get via smoke)
     ("GET", "/api/v1/agent/strategies", None, None, False),
     # Logs (auth-gated; tolerates empty)

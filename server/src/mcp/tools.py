@@ -462,26 +462,28 @@ def _register_dex(server: FastMCP) -> None:
     ) -> str:
         """Get a DEX swap quote.
 
-        Mirrors `mangrovemarkets.dex.get_quote(input_token, output_token,
-        amount, venue_id, chain_id, mode)`. `mode` is an optional
-        routing hint recognized by some venues (e.g. 1inch supports
-        modes that bias for gas-cost vs price-improvement).
+        `amount` is the quantity of `input_token` in HUMAN units (e.g.
+        0.001 = 0.001 ETH, 25 = 25 USDC) — NOT base units. The agent
+        converts it to the token's smallest units (base units / wei)
+        before calling the backend, and converts the returned
+        input_amount/output_amount back to human units (raw values kept
+        as input_amount_base_units / output_amount_base_units). `mode` is
+        an optional routing hint recognized by some venues (e.g. 1inch
+        supports modes that bias for gas-cost vs price-improvement).
         """
         if not _require(api_key):
             return _auth_error()
         try:
-            from src.shared.clients.mangrove import mangrove_markets_client
-            kwargs: dict[str, Any] = {
-                "input_token": input_token,
-                "output_token": output_token,
-                "amount": amount,
-                "chain_id": chain_id,
-                "venue_id": venue_id,
-            }
-            if mode is not None:
-                kwargs["mode"] = mode
-            q = mangrove_markets_client().dex.get_quote(**kwargs)
-            return json.dumps(_dump(q))
+            from src.services import dex_service
+            q = dex_service.get_quote(
+                input_token=input_token,
+                output_token=output_token,
+                amount=amount,
+                chain_id=chain_id,
+                venue_id=venue_id,
+                mode=mode,
+            )
+            return json.dumps(q)
         except AgentError as e:
             return _handle_agent_error(e)
 
@@ -490,9 +492,9 @@ def _register_dex(server: FastMCP) -> None:
         description="Get a DEX swap quote. Optionally pin a venue + mode.",
         access="auth",
         parameters=[
-            ToolParam(name="input_token", type="string", required=True, description="Input token"),
-            ToolParam(name="output_token", type="string", required=True, description="Output token"),
-            ToolParam(name="amount", type="number", required=True, description="Input amount"),
+            ToolParam(name="input_token", type="string", required=True, description="Input token (contract address; native ETH = 0xEeee…EEeE)"),
+            ToolParam(name="output_token", type="string", required=True, description="Output token (contract address)"),
+            ToolParam(name="amount", type="number", required=True, description="Input amount in HUMAN units (e.g. 0.001 = 0.001 ETH, 25 = 25 USDC). Converted to base units internally."),
             ToolParam(name="chain_id", type="integer", required=True, description="EVM chain id"),
             ToolParam(name="venue_id", type="string", required=False, description="Optional specific venue"),
             ToolParam(name="mode", type="string", required=False, description="Optional routing hint (venue-specific)"),

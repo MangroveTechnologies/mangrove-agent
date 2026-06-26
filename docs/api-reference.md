@@ -201,6 +201,13 @@ Get all token balances for a wallet on an EVM chain.
 
 Get the best swap quote across all venues or from a specific venue.
 
+> **Units note.** This is the **raw backend tool**, whose `amount` is in the
+> token's **smallest units** (wei / base units), as shown below. The agent's
+> own `get_swap_quote` tool and `POST /api/v1/agent/dex/quote` route instead
+> take `amount` in **human units** (e.g. `0.001` = 0.001 ETH) and convert to
+> base units for you — passing a human float (e.g. `0.001`) straight to the
+> raw tool reads as sub-wei dust and returns `INSUFFICIENT_LIQUIDITY`.
+
 **Parameters:**
 
 | Param | Type | Required | Description |
