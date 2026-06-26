@@ -534,7 +534,17 @@ traceback names, then rerun `./scripts/setup.sh`.
 
 ### Port 9080 is already in use
 
-Another program on your machine is already using the port the agent needs. These commands find it and stop it:
+`setup.sh` now **refuses to start** (instead of silently failing or reporting a false success) when 9080 is taken. You have two options.
+
+**Option 1 — use a different port** (easiest; e.g. if 9080 is squatted by VSCode/"Code Helper"):
+
+```bash
+BARE_PORT=9085 ./scripts/setup.sh
+```
+
+`BARE_PORT` is honored end-to-end — the server, the `/health` check, the MCP registration, and the verify pass all target it.
+
+**Option 2 — free up 9080** by stopping whatever holds it:
 
 **Mac** — finds whatever is using port 9080 and force-stops it:
 

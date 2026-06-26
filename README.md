@@ -90,7 +90,10 @@ When it's finished:
 ./scripts/setup.sh --no-mcp                        # skip Claude Code registration
 ./scripts/setup.sh --no-verify                     # skip the post-start verify pass
 ./scripts/setup.sh --docker                        # use Docker instead of bare-metal
+BARE_PORT=9085 ./scripts/setup.sh                  # use a different port (9080 busy/squatted)
 ```
+
+`BARE_PORT` is honored end-to-end (server + health check + MCP registration + verify). If 9080 is occupied, `setup.sh` refuses to start and tells you to free it or set `BARE_PORT` — it will not silently bind-fail or report a false success.
 
 ---
 
