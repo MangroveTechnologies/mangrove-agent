@@ -7,10 +7,10 @@
 #   .claude/hooks/block-wallet-secrets.sh --mode tool   # context-aware (PostToolUse)
 #
 # --mode user:
-#   A 0x+64-hex or 12/24-word lowercase-mnemonic anywhere in the user's
-#   message is blocked. User input doesn't contain tx hashes (those come
-#   from tool output), so a bare pattern match is safe and catches the
-#   common case of an attendee pasting their key.
+#   A 0x+64-hex or a real BIP39 mnemonic anywhere in the user's message is
+#   blocked. User input doesn't contain tx hashes (those come from tool
+#   output), so a bare pattern match is safe and catches the common case of
+#   an attendee pasting their key.
 #
 # --mode tool:
 #   Tool responses routinely contain tx hashes that match the 0x+64-hex
@@ -58,12 +58,44 @@ INPUT="$(cat)"
 # Pattern: EVM private-key-shaped string (0x + exactly 64 hex chars, word-bounded).
 EVM_KEY_RE='(^|[^0-9a-fA-F])0x[0-9a-fA-F]{64}([^0-9a-fA-F]|$)'
 
-# Pattern: BIP39 mnemonic — 12 or 24 lowercase words, 3-8 chars each.
-MNEMONIC_12_RE='(^|[^a-z])([a-z]{3,8} ){11}[a-z]{3,8}([^a-z]|$)'
-MNEMONIC_24_RE='(^|[^a-z])([a-z]{3,8} ){23}[a-z]{3,8}([^a-z]|$)'
-
 # Key-context field names (for tool-mode context check).
 KEY_FIELD_RE='"(private_key|seed_phrase|secret|mnemonic|wallet_secret|master_key|key)"[[:space:]]*:'
+
+# BIP39 mnemonic detection.
+#
+# A real mnemonic is a run of >=12 consecutive words ALL drawn from the
+# 2048-word BIP39 list. The previous version matched ANY 12 consecutive
+# lowercase 3-8 char words and never consulted the wordlist — so it
+# false-positived on ordinary prose (and on this codebase's normal chatter),
+# blocking the user's regular messages. We now require wordlist membership.
+# This is sound because common English stopwords (the/and/of/to/is/for/that...)
+# are NOT in the BIP39 list, so real prose cannot sustain a 12-word run, while
+# a genuine 12/15/18/21/24-word mnemonic will.
+WORDLIST="$(dirname "${BASH_SOURCE[0]}")/bip39-english.txt"
+
+# Returns 0 (true) if "$1" contains a run of >=12 consecutive BIP39 words.
+# The text is passed via env var (NOT stdin), because `python3 - <<'PY'` already
+# uses stdin to read the program — piping data in would be silently discarded.
+# Fail-open (exit 1 = "no mnemonic") if the wordlist is unreadable, so a missing
+# list never wedges every message — the EVM-key check is independent.
+mnemonic_present() {
+    MNEMONIC_TEXT="$1" WORDLIST="$WORDLIST" python3 - <<'PY'
+import os, re, sys
+try:
+    words = {w.strip() for w in open(os.environ["WORDLIST"]) if w.strip()}
+except Exception:
+    sys.exit(1)
+if not words:
+    sys.exit(1)
+toks = re.findall(r"[a-z]+", os.environ.get("MNEMONIC_TEXT", "").lower())
+run = 0
+for t in toks:
+    run = run + 1 if t in words else 0
+    if run >= 12:
+        sys.exit(0)   # mnemonic-shaped run of real BIP39 words found
+sys.exit(1)
+PY
+}
 
 HIT=""
 
@@ -71,8 +103,7 @@ if [ "$MODE" = "user" ]; then
     # Strict: any pattern match blocks.
     if printf '%s' "$INPUT" | grep -qE "$EVM_KEY_RE"; then
         HIT="evm_private_key"
-    elif printf '%s' "$INPUT" | grep -qE "$MNEMONIC_12_RE" \
-      || printf '%s' "$INPUT" | grep -qE "$MNEMONIC_24_RE"; then
+    elif mnemonic_present "$INPUT"; then
         HIT="bip39_mnemonic"
     fi
 else
@@ -84,8 +115,7 @@ else
     if printf '%s' "$INPUT" | grep -qE "$KEY_FIELD_RE"; then
         if printf '%s' "$INPUT" | grep -qE "$EVM_KEY_RE"; then
             HIT="evm_private_key_in_named_field"
-        elif printf '%s' "$INPUT" | grep -qE "$MNEMONIC_12_RE" \
-          || printf '%s' "$INPUT" | grep -qE "$MNEMONIC_24_RE"; then
+        elif mnemonic_present "$INPUT"; then
             HIT="bip39_mnemonic_in_named_field"
         fi
     fi
@@ -120,7 +150,7 @@ plaintext key material. Tool responses should carry a vault_token only;
 the plaintext should go through the SecretVault + reveal-secret.sh CLI.
 
 If this was a false positive (not a real key/mnemonic), rephrase to
-avoid the 0x + 64-hex or 12/24-lowercase-word structure.
+avoid the 0x + 64-hex structure.
 EOF
 block_footer "${BASH_SOURCE[0]}"
 exit 2
