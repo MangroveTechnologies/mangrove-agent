@@ -453,6 +453,113 @@ def _register_dex(server: FastMCP) -> None:
         parameters=[_APIKEY],
     ))
 
+    # -- CEX (Kraken) BYOK tools --------------------------------------------
+    def _cex_err(e: Exception) -> str:
+        return json.dumps({"error": True, "code": "CEX_ERROR", "message": str(e)})
+
+    @server.tool()
+    async def cex_status(api_key: str = "") -> str:
+        """Is a Kraken (CEX) account connected on this machine? Free of Kraken key."""
+        if not _require(api_key):
+            return _auth_error()
+        from src.services import cex_service
+        return json.dumps(cex_service.status())
+
+    register_tool(ToolEntry(
+        name="cex_status", description="Whether a Kraken account is connected (BYOK).",
+        access="auth", parameters=[_APIKEY],
+    ))
+
+    @server.tool()
+    async def cex_connect_kraken(vault_token: str, api_key: str = "") -> str:
+        """Connect Kraken by consuming a vault_token from scripts/stash-kraken-secret.sh.
+        The key is persisted ENCRYPTED at rest; it never enters this chat."""
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            from src.services import cex_service
+            return json.dumps(cex_service.connect_from_vault(vault_token))
+        except Exception as e:  # noqa: BLE001
+            return _cex_err(e)
+
+    register_tool(ToolEntry(
+        name="cex_connect_kraken",
+        description="Connect Kraken via a vault_token (creds stashed out-of-band, stored encrypted).",
+        access="auth",
+        parameters=[
+            ToolParam(name="vault_token", type="string", required=True, description="From scripts/stash-kraken-secret.sh"),
+            _APIKEY,
+        ],
+    ))
+
+    @server.tool()
+    async def cex_balances(api_key: str = "") -> str:
+        """Kraken balances (BYOK — talks to Kraken directly with the local key)."""
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            from src.services import cex_service
+            return json.dumps({"balances": cex_service.get_balances()})
+        except Exception as e:  # noqa: BLE001
+            return _cex_err(e)
+
+    register_tool(ToolEntry(
+        name="cex_balances", description="Kraken balances (BYOK).",
+        access="auth", parameters=[_APIKEY],
+    ))
+
+    @server.tool()
+    async def cex_validate_order(
+        pair: str, side: str, volume: float,
+        ordertype: str = "market", price: float | None = None, api_key: str = "",
+    ) -> str:
+        """Dry-run a Kraken order (validate=true) — no fill. Use before any live order."""
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            from src.services import cex_service
+            return json.dumps(cex_service.validate_order(
+                pair=pair, side=side, volume=volume, ordertype=ordertype, price=price,
+            ))
+        except Exception as e:  # noqa: BLE001
+            return _cex_err(e)
+
+    register_tool(ToolEntry(
+        name="cex_validate_order",
+        description="Dry-run a Kraken order (validate=true, no fill).",
+        access="auth",
+        parameters=[
+            ToolParam(name="pair", type="string", required=True, description="Kraken pair, e.g. XBTUSD"),
+            ToolParam(name="side", type="string", required=True, description="buy | sell"),
+            ToolParam(name="volume", type="number", required=True, description="Order volume in base units"),
+            ToolParam(name="ordertype", type="string", required=False, description="market (default) | limit"),
+            ToolParam(name="price", type="number", required=False, description="Limit price (for limit orders)"),
+            _APIKEY,
+        ],
+    ))
+
+    @server.tool()
+    async def cex_sync_fills(mode: str = "live", api_key: str = "") -> str:
+        """Pull the user's Kraken fills and emit them to telemetry (authed by the
+        Mangrove key). The Kraken key never leaves this machine."""
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            from src.services import cex_service
+            return json.dumps(cex_service.sync_fills(mode=mode))
+        except Exception as e:  # noqa: BLE001
+            return _cex_err(e)
+
+    register_tool(ToolEntry(
+        name="cex_sync_fills",
+        description="Pull Kraken fills and emit them to per-user telemetry.",
+        access="auth",
+        parameters=[
+            ToolParam(name="mode", type="string", required=False, description="live (default) | paper | validate"),
+            _APIKEY,
+        ],
+    ))
+
     @server.tool()
     async def get_swap_quote(
         input_token: str, output_token: str, amount: float,
