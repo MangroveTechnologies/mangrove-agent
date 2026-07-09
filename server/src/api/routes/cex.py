@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from src.config import app_config
-from src.services import cex_service
+from src.services import cex_oauth_service, cex_service
 from src.services.secret_vault import vault
 from src.shared.auth.dependency import require_api_key
 from src.shared.errors import SdkError
@@ -97,3 +97,59 @@ async def sync_fills(req: SyncFillsRequest) -> dict:
         return cex_service.sync_fills(mode=req.mode)
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"cex sync-fills failed: {e}") from e
+
+
+# --- OAuth (keyless) path: /cex/oauth/* -------------------------------------
+# The sibling to BYOK. No key ever handled locally — the platform holds the
+# OAuth grant and executes; we proxy through the MangroveMarkets MCP server
+# authed by the user's Mangrove key. See .claude/skills/connect-kraken.
+
+
+class OAuthConnectRequest(BaseModel):
+    mode: str = Field("view", description="view (read-only) | execute (+trading)")
+
+
+class OAuthOrderRequest(BaseModel):
+    base: str
+    quote: str
+    side: str  # buy | sell
+    volume: str
+    order_type: str = "market"
+    limit_price: str | None = None
+    validate_only: bool = False
+
+
+@router.post("/oauth/connect-start", summary="Begin keyless Kraken OAuth connect (returns authorize URL)")
+async def oauth_connect_start(req: OAuthConnectRequest) -> dict:
+    try:
+        return cex_oauth_service.connect_start(mode=req.mode)
+    except Exception as e:  # noqa: BLE001
+        raise SdkError(f"cex oauth connect-start failed: {e}") from e
+
+
+@router.get("/oauth/status", summary="Keyless connection status (mode: view|execute)")
+async def oauth_status() -> dict:
+    try:
+        return cex_oauth_service.connect_status()
+    except Exception as e:  # noqa: BLE001
+        raise SdkError(f"cex oauth status failed: {e}") from e
+
+
+@router.get("/oauth/balances", summary="Kraken balances via the platform (keyless)")
+async def oauth_balances() -> dict:
+    try:
+        return cex_oauth_service.get_balances()
+    except Exception as e:  # noqa: BLE001
+        raise SdkError(f"cex oauth balances failed: {e}") from e
+
+
+@router.post("/oauth/orders", summary="Place/validate a Kraken order via the platform (keyless)")
+async def oauth_place_order(req: OAuthOrderRequest) -> dict:
+    try:
+        return cex_oauth_service.place_order(
+            base=req.base, quote=req.quote, side=req.side, volume=req.volume,
+            order_type=req.order_type, limit_price=req.limit_price,
+            validate_only=req.validate_only,
+        )
+    except Exception as e:  # noqa: BLE001
+        raise SdkError(f"cex oauth place-order failed: {e}") from e
