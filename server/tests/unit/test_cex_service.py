@@ -78,7 +78,7 @@ class _FakeTelemetry:
 
 def test_balances_and_validate_use_byok_client(tmp_env):
     cex_credentials.save("kraken", "K", "S")
-    factory = lambda k, s: _FakeKraken(k, s)  # noqa: E731
+    factory = _FakeKraken
     assert cex_service.get_balances(client_factory=factory)["ZUSD"] == "100.0"
     out = cex_service.validate_order(pair="XBTUSD", side="buy", volume=0.01, client_factory=factory)
     assert "descr" in out
@@ -87,7 +87,7 @@ def test_balances_and_validate_use_byok_client(tmp_env):
 def test_sync_fills_emits_to_telemetry(tmp_env):
     cex_credentials.save("kraken", "K", "S")
     tel = _FakeTelemetry()
-    out = cex_service.sync_fills(client_factory=lambda k, s: _FakeKraken(k, s), telemetry=tel)
+    out = cex_service.sync_fills(client_factory=_FakeKraken, telemetry=tel)
     assert out == {"emitted": 1, "trade_ids": ["kraken:T1"]}
     assert tel.sent[0].venue == "kraken"
     assert tel.sent[0].tx_hash is None      # CEX spot — no chain hash
@@ -95,4 +95,4 @@ def test_sync_fills_emits_to_telemetry(tmp_env):
 
 def test_operations_without_creds_raise(tmp_env):
     with pytest.raises(RuntimeError):
-        cex_service.get_balances(client_factory=lambda k, s: _FakeKraken(k, s))
+        cex_service.get_balances(client_factory=_FakeKraken)

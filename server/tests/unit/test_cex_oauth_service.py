@@ -7,6 +7,7 @@ errors. No Kraken credential is ever involved.
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
@@ -39,7 +40,10 @@ def test_connect_start_uses_bearer_and_forwards_mode(monkeypatch):
     assert seen["auth"] == "Bearer mgv_test_key"  # Mangrove key, NOT a Kraken key
     assert seen["url"].endswith("/api/v1/exchanges/kraken/connect")
     assert seen["body"]["mode"] == "execute"
-    assert out["authorize_url"].startswith("https://id.kraken.com")
+    # Compare the parsed host exactly, not a URL prefix (prefix checks are the
+    # "incomplete URL substring sanitization" anti-pattern CodeQL flags).
+    parsed = urlparse(out["authorize_url"])
+    assert (parsed.scheme, parsed.netloc) == ("https", "id.kraken.com")
 
 
 def test_place_order_forwards_fields(monkeypatch):
