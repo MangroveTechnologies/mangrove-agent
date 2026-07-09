@@ -49,7 +49,9 @@ mangroveai>=1.7.2,<2.0.0
 # server-side to local. Pinning to >=1.0.2 guarantees the leak-surface
 # fix is in place. See post-mortem: docs/incidents/2026-04-24-eip7702-drain.md
 # Same dist-name-vs-import-name story as mangroveai above.
-mangrovemarkets>=1.0.2,<2.0.0
+# >=1.1.0 carries KrakenClient (BYOK) + TradeRecord + broker attribution
+# (SDK PR #50), which the CEX BYOK + OAuth paths depend on.
+mangrovemarkets>=1.1.0,<2.0.0
 apscheduler[sqlalchemy]>=3.10
 cryptography>=42
 keyring>=24
