@@ -18,8 +18,6 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from mangrove_markets import KrakenClient
-
 from src.config import app_config
 from src.services import cex_credentials
 from src.services.secret_vault import vault
@@ -44,6 +42,13 @@ def _client(client_factory: ClientFactory | None = None) -> Any:
     api_key, api_secret = creds
     if client_factory is not None:
         return client_factory(api_key, api_secret)
+    # Imported lazily: KrakenClient ships in the mangrovemarkets SDK release that
+    # carries the BYOK client. Keeping the import here (not module-level) means
+    # importing this module — and app boot, and test collection — never depends
+    # on that release; only an actual BYOK call without the SDK raises, and with
+    # a clear message. Tests inject client_factory and never reach this line.
+    from mangrove_markets import KrakenClient
+
     return KrakenClient(api_key, api_secret, base_url=_kraken_base())
 
 
