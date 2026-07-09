@@ -62,24 +62,43 @@ class Evaluation(BaseModel):
 
 
 class Trade(BaseModel):
-    """A single order execution — live or paper."""
+    """A single order execution — live, paper, or validate (dry-run).
+
+    Venue-agnostic. A DEX swap uses ``input_token``/``output_token``; a CEX
+    fill (e.g. Kraken) uses ``base``/``quote``/``side``/``qty``. The venue +
+    identity fields are all optional, so one record represents a DEX swap, a
+    CEX fill, or a paper sim. ``strategy_id``/``order_intent`` are null for
+    venue-direct trades (e.g. CEX BYOK) that aren't driven by a strategy.
+    """
 
     id: str
-    strategy_id: str
+    strategy_id: str | None = None
     evaluation_id: str | None = None  # null for user-initiated swaps
-    order_intent: OrderIntent
-    mode: Literal["live", "paper"]
-    tx_hash: str | None = None  # null for paper
-    input_token: str
-    input_amount: float
-    output_token: str
-    output_amount: float
+    order_intent: OrderIntent | None = None  # null for venue-direct (CEX) trades
+    mode: Literal["live", "paper", "validate"]
+    tx_hash: str | None = None  # on-chain (DEX) only; null for CEX spot / paper
+    # DEX token in/out (optional aliases); CEX fills use base/quote/side/qty below.
+    input_token: str | None = None
+    input_amount: float | None = None
+    output_token: str | None = None
+    output_amount: float | None = None
     fill_price: float
     fees: dict = Field(default_factory=dict)  # gas, protocol, slippage
     status: Literal["pending", "confirmed", "failed", "simulated"]
     executed_at: datetime
     confirmed_at: datetime | None = None
     p_and_l: float | None = None  # filled when the position closes
+
+    # -- venue + identity (CEX / telemetry; null for legacy DEX strategy trades) --
+    venue: str | None = None            # kraken | 1inch | xpmarket | jupiter
+    user_id: str | None = None          # server-stamped on ingestion; never client-set
+    venue_order_ref: str | None = None  # e.g. Kraken ordertxid
+    venue_trade_ref: str | None = None  # e.g. Kraken trade_id
+    # CEX amount shape (DEX uses input/output_token above)
+    base: str | None = None
+    quote: str | None = None
+    side: Literal["buy", "sell"] | None = None
+    qty: float | None = None
 
 
 class Position(BaseModel):
