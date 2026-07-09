@@ -14,8 +14,6 @@ import os
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
-import pytest  # noqa: E402
-
 from src.config import app_config  # noqa: E402
 from src.services import notification_service as ns  # noqa: E402
 
