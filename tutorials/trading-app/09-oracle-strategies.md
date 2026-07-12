@@ -149,9 +149,9 @@ the model is overconfident. Always backtest before promoting to paper.
   `oracle_backtest_bulk`) in addition to `client.oracle.*` if you script
   against the SDK directly.
 - The API reference for `client.oracle.*` lives in the
-  [mangrove-ai SDK docs](https://docs.mangrovedeveloper.ai/sdks/mangroveai),
+  [mangrove-ai SDK docs](https://mangrove.io/docs/sdks/mangroveai),
   and the worked SDK walkthroughs are the KB guides
-  [SIEVE end-to-end](https://docs.mangrovedeveloper.ai/guides/sieve-end-to-end-workflow)
-  and [Experiments](https://docs.mangrovedeveloper.ai/api-reference/experiments).
+  [SIEVE end-to-end](https://mangrove.io/docs/guides/sieve-end-to-end-workflow)
+  and [Experiments](https://mangrove.io/docs/api-reference/experiments).
 - The full corpus schema (98 fields on the `results` table) is
   documented at `MangroveOracle/infra/terraform/schemas/results.json`.

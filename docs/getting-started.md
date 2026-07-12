@@ -113,9 +113,9 @@ you ask. They're listed so you know what's happening under the hood.
 ## Go deeper
 
 - **SIEVE, in depth** — tutorial [chapter 09](../tutorials/trading-app/09-oracle-strategies.md),
-  and the KB guides [Filtering with SIEVE](https://docs.mangrovedeveloper.ai/guides/using-sieve-prefilter)
-  and [SIEVE end-to-end](https://docs.mangrovedeveloper.ai/guides/sieve-end-to-end-workflow).
-- **Sweeps / experiments** — KB [Experiments reference](https://docs.mangrovedeveloper.ai/api-reference/experiments).
+  and the KB guides [Filtering with SIEVE](https://mangrove.io/docs/guides/using-sieve-prefilter)
+  and [SIEVE end-to-end](https://mangrove.io/docs/guides/sieve-end-to-end-workflow).
+- **Sweeps / experiments** — KB [Experiments reference](https://mangrove.io/docs/api-reference/experiments).
 - **The full trading workflow** the bot follows — [`trading-bot-workflow.md`](../.claude/rules/trading-bot-workflow.md).
 - **The SDK** behind it all (if you want to script directly) — the
   `mangroveai` Python package, `client.oracle.*`.

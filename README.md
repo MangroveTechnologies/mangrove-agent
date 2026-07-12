@@ -175,7 +175,7 @@ Every tool has a mirrored REST endpoint at `/api/v1/agent/*`. Both call the same
 | **SIEVE** (`sieve_score`) | Scores up to 99 strategy ideas in milliseconds and tells you which are worth testing. | You have *many* ideas and want to skip the duds. |
 | **Sweep** (`oracle_*_experiment`) | Runs many backtests in one managed experiment (`create → validate → launch → results`) and ranks them. | You want the *best* config out of many. |
 
-Example asks: *"Score these 40 variations and tell me which are worth testing"* (`/sieve`), *"Sweep the RSI window from 7 to 21 on BTC 1h and rank them"* (`/sweep`). Full walkthrough: [`docs/getting-started.md`](docs/getting-started.md); deeper dives in the KB [SIEVE guide](https://docs.mangrovedeveloper.ai/guides/using-sieve-prefilter) and [Experiments reference](https://docs.mangrovedeveloper.ai/api-reference/experiments).
+Example asks: *"Score these 40 variations and tell me which are worth testing"* (`/sieve`), *"Sweep the RSI window from 7 to 21 on BTC 1h and rank them"* (`/sweep`). Full walkthrough: [`docs/getting-started.md`](docs/getting-started.md); deeper dives in the KB [SIEVE guide](https://mangrove.io/docs/guides/using-sieve-prefilter) and [Experiments reference](https://mangrove.io/docs/api-reference/experiments).
 
 ---
 
