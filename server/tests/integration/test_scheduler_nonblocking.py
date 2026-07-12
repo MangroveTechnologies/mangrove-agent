@@ -97,10 +97,20 @@ def test_in_flight_tick_does_not_block_requests(tmp_db):
         window_s = time.monotonic() - start_window
         assert window_s < 1.0, f"10 /health calls took {window_s:.2f}s — something is blocking"
 
-        # Each individual call should be fast. 100ms is the plan's bar;
-        # we allow a touch more to cover test-harness overhead on CI.
-        for ms in latencies_ms:
-            assert ms < 200, f"request took {ms:.1f}ms — cron tick is blocking the request path"
+        # A BLOCKED request would take ~3s (the tick's sleep), so the
+        # discriminating signal is orders of magnitude, not milliseconds.
+        # Assert on the median (typical latency stays snappy) and a loose
+        # per-call ceiling — a single 200-300ms hiccup from a loaded CI
+        # runner must not fail the suite (it did: 218ms on 2026-07-12),
+        # but anything approaching the tick duration still fails hard.
+        latencies_ms.sort()
+        median_ms = latencies_ms[len(latencies_ms) // 2]
+        assert median_ms < 200, (
+            f"median request took {median_ms:.1f}ms — cron tick is blocking the request path"
+        )
+        assert latencies_ms[-1] < 1000, (
+            f"slowest request took {latencies_ms[-1]:.1f}ms — cron tick is blocking the request path"
+        )
 
         # Now wait for the tick to finish.
         assert _SLOW_TICK_DONE.wait(timeout=6.0), "slow tick never completed"
