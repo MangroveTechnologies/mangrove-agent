@@ -372,8 +372,10 @@ def _stateless_strategy_dict(row: Any) -> dict[str, Any]:
     execution_state = None
     try:
         execution_state = json.loads(row["execution_state_json"] or "null")
-    except (KeyError, IndexError):
-        pass
+    except (KeyError, IndexError) as exc:
+        # Missing execution_state_json in row shape (e.g., older/mismatched row);
+        # keep execution_state=None so fresh defaults are used below.
+        _log.debug("execution_state_json missing from strategy row; using fresh execution state defaults", exc_info=exc)
     return {
         "name": row["name"],
         "asset": row["asset"],
