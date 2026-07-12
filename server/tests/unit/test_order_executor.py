@@ -156,6 +156,64 @@ def test_paper_simulates_at_mark_price(temp_db, mock_mangroveai, mock_markets):
     assert fetched[0].mode == "paper"
 
 
+def test_position_lifecycle_paper_enter_exit(temp_db, mock_mangroveai, mock_markets):
+    """#151: entry fills open a LOCAL position row keyed to the engine's
+    position id; exit fills close it and stamp p_and_l on the exit trade."""
+    from src.models.domain import OrderIntent
+    from src.services.order_executor import execute_one
+    from src.services.trade_log import get_position, list_trades
+
+    enter = OrderIntent(action="enter", side="buy", symbol="ETH", amount=0.1,
+                        ref_price=2500.0, engine_position_id="engine-pos-1",
+                        stop_loss=2400.0, take_profit=2700.0, reason="t")
+    execute_one(enter, mode="paper", strategy_id="s1")
+
+    pos = get_position("engine-pos-1")
+    assert pos is not None and pos.status == "open"
+    assert pos.asset == "ETH"
+    assert pos.entry_amount == pytest.approx(0.1)
+    assert pos.entry_price == pytest.approx(2500.0)
+    assert pos.stop_loss == pytest.approx(2400.0)
+
+    # Exit at a higher mark: 0.1 ETH sold at 3000 vs entered at 2500 -> +50.
+    mock_mangroveai.crypto_assets.get_market_data.return_value.data = {"current_price": 3000.0}
+    exit_i = OrderIntent(action="exit", side="sell", symbol="ETH", amount=0.1,
+                         engine_position_id="engine-pos-1", reason="tp")
+    exit_trade = execute_one(exit_i, mode="paper", strategy_id="s1")
+
+    pos = get_position("engine-pos-1")
+    assert pos.status == "closed"
+    assert pos.exit_trade_id == exit_trade.id
+    assert pos.exit_price == pytest.approx(3000.0)
+    stored = [t for t in list_trades("s1") if t.id == exit_trade.id][0]
+    assert stored.p_and_l == pytest.approx(50.0)
+
+
+def test_position_exit_fifo_fallback_without_engine_id(temp_db, mock_mangroveai, mock_markets):
+    """Exits with no engine_position_id close the OLDEST open (strategy, asset) position."""
+    from src.models.domain import OrderIntent
+    from src.services.order_executor import execute_one
+    from src.services.trade_log import list_positions
+
+    for _ in range(2):
+        execute_one(OrderIntent(action="enter", side="buy", symbol="ETH",
+                                amount=0.1, reason="t"), mode="paper", strategy_id="s1")
+    execute_one(OrderIntent(action="exit", side="sell", symbol="ETH",
+                            amount=0.1, reason="t"), mode="paper", strategy_id="s1")
+
+    open_rows = list_positions("s1", status="open")
+    closed_rows = list_positions("s1", status="closed")
+    assert len(open_rows) == 1 and len(closed_rows) == 1
+
+
+def test_user_initiated_swaps_do_not_create_positions(temp_db, mock_mangroveai, mock_markets):
+    from src.services.order_executor import execute_one
+    from src.services.trade_log import list_positions
+
+    execute_one(_intent("buy"), mode="paper", strategy_id="user-initiated")
+    assert list_positions("user-initiated") == []
+
+
 def test_paper_sell_swaps_tokens(temp_db, mock_mangroveai, mock_markets):
     from src.services.order_executor import execute_one
 

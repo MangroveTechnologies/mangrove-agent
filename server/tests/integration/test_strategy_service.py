@@ -366,7 +366,10 @@ def test_tick_maps_engine_shaped_orders(temp_db, mock_ai_sdk, monkeypatch):
     }]
     eval_resp.order_intents = None
     eval_resp.orders = None
-    eval_resp.model_dump.return_value = {}
+    eval_resp.model_dump.return_value = {
+        "execution_state": {"cash_balance": 9900.0, "account_value": 10000.0,
+                            "total_trades": 1, "num_open_positions": 1},
+    }
     mock_ai_sdk.execution.evaluate.return_value = eval_resp
 
     md = MagicMock()
@@ -396,6 +399,22 @@ def test_tick_maps_engine_shaped_orders(temp_db, mock_ai_sdk, monkeypatch):
     assert t.order_intent.action == "enter"
     assert t.order_intent.side == "buy"
     assert t.order_intent.ref_price == pytest.approx(2500.0)
+
+    # #151: the engine's position id keys the LOCAL position row...
+    from src.services.trade_log import get_position
+    pos = get_position("p-7")
+    assert pos is not None and pos.status == "open"
+    assert pos.entry_amount == pytest.approx(0.04)
+
+    # ...and the engine's execution_state persists first-class (migration 005).
+    import json as _json
+    from src.shared.db.sqlite import get_connection
+    row = get_connection().execute(
+        "SELECT execution_state_json FROM strategies WHERE id = ?", (s.id,)
+    ).fetchone()
+    state = _json.loads(row["execution_state_json"])
+    assert state["cash_balance"] == 9900.0
+    assert state["num_open_positions"] == 1
 
 
 def test_tick_skips_resting_bracket_orders(temp_db, mock_ai_sdk, monkeypatch):

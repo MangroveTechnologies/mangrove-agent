@@ -42,6 +42,11 @@ class OrderIntent(BaseModel):
     # Engine's evaluation-time market price. Lets the live executor convert
     # asset units -> input-token (USDC) spend without a second price fetch.
     ref_price: float | None = None
+    # The engine's position UUID for this order. Lets the executor key the
+    # LOCAL positions table to the engine's position exactly: the entry
+    # creates the local row under this id, the bracket/signal exit closes
+    # the same row (#151 — the agent persists its own positions).
+    engine_position_id: str | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
     # Explicit chain-level addresses for live execution. Both or neither.

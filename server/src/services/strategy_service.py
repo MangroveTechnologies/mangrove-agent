@@ -171,6 +171,7 @@ def _map_engine_order(o: dict) -> dict | None:
         "amount": float(o["position_size"]),
         "reason": f"engine {o.get('order_type', 'market')} order {o.get('order_id', '')}".strip(),
         "ref_price": o.get("price"),
+        "engine_position_id": o.get("position_id"),
         "stop_loss": o.get("stop_loss_price"),
         "take_profit": o.get("take_profit_price"),
     }
@@ -670,6 +671,24 @@ def tick(strategy_id: str) -> None:
             duration_ms=duration_ms,
             status="ok",
         ))
+
+        # Persist the engine's execution_state first-class (#151) — the
+        # agent's own record of account/risk state per strategy, and the
+        # exact value the stateless evaluation lane (MangroveAI#840) will
+        # round-trip. Never fail the tick over bookkeeping.
+        exec_state = sdk_dump.get("execution_state")
+        if isinstance(exec_state, dict) and exec_state:
+            try:
+                conn = get_connection()
+                conn.execute(
+                    "UPDATE strategies SET execution_state_json = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(exec_state, default=str),
+                     trade_log.now_utc().isoformat(), strategy_id),
+                )
+                conn.commit()
+            except Exception as e:  # noqa: BLE001
+                _log.error("strategy.execution_state.persist_failed",
+                           strategy_id=strategy_id, exception=str(e))
 
         if order_intents:
             order_executor.execute_many(
