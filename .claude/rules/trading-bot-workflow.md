@@ -36,7 +36,9 @@ mcp__mangrove-agent__status, list_tools, list_signals, list_wallets, create_wall
 
 ## Stage 0 -- platform tour (no wallet required)
 
-**Trigger:** first interaction in a fresh clone, OR user asks for a tour. Don't skip -- workshop attendees need to see the product work before being asked to commit a key. Paper trading runs without a wallet; the full author -> backtest -> paper -> evaluate loop is reachable with zero on-chain exposure.
+**Trigger:** first interaction in a fresh clone (the `.claude/.onboarded` marker is **absent**), OR the user asks for a tour. Don't skip on a genuine fresh clone -- workshop attendees need to see the product work before being asked to commit a key. Paper trading runs without a wallet; the full author -> backtest -> paper -> evaluate loop is reachable with zero on-chain exposure.
+
+**Suppression (respect the marker):** if `.claude/.onboarded` **exists**, do NOT auto-fire the tour -- the user has already seen it or opted out. Go straight to Stage 1. The user can still replay it any time by asking ("give me the tour") or by removing the marker (`rm .claude/.onboarded`). A user who wants to skip up front can pass `./scripts/setup.sh --skip-tour`, which writes the marker before Claude Code first launches. The marker is gitignored (per-user, never committed).
 
 ### 0.1 Greeting
 Greet as the persona in `CLAUDE.md`'s Project Context, or default to a concise, security-conscious voice. One-liner: "Local Mangrove-powered trading bot. Strategy engine and KB live in the cloud; your keys, DB, and agent process live on this machine."
@@ -44,7 +46,7 @@ Greet as the persona in `CLAUDE.md`'s Project Context, or default to a concise, 
 ### 0.2 Live demo beats (one tool call + 1-2 sentences each, fits in one message)
 
 1. `status` -- "Bot is alive. Version X, uptime Y, N active cron jobs, DB at `./agent-data/agent.db`."
-2. `list_tools` -- group for the user (wallet / market data / swaps / strategies / monitoring / KB), don't dump all 95.
+2. `list_tools` -- group for the user (wallet / market data / swaps / strategies / monitoring / KB), don't dump the whole catalog (100+ tools as of 2026-07; `list_tools` returns the live count).
 3. `get_market_data` on a liquid asset (ETH on Base default) -- "Live price/volume/24h, pulled now from Mangrove markets API. Every backtest/evaluation prices off this."
 4. `kb_search` on a real concept (e.g. `"MACD crossover"`, `"Bollinger squeeze"`) -- "Knowledge base. Every recommendation cites entries here -- no vibes."
 5. `search_reference_strategies` with just an asset -- "Reference library. We start from already-backtested templates, not blank slate."
@@ -61,6 +63,9 @@ If any beat fails (bad key, unreachable URL, empty KB), surface the error and st
 - Strategy idea -> Stage 1/2.
 - Asks about wallets/funds upfront -> jump to Stage 4.5, return to authoring after.
 - Wants to keep poking -> offer next beats (`list_signals`, `kb_list_indicators`, more `kb_search`, `get_ohlcv`).
+
+### 0.5 Mark it done (so it doesn't re-fire)
+Once the tour has been delivered -- or the user declines/asks to skip it -- write the marker so subsequent sessions go straight to Stage 1: create an empty `.claude/.onboarded` file (`touch .claude/.onboarded`). Do this quietly, don't make it a beat. It's gitignored, so it stays per-user and never lands in a commit. If the user later wants the tour again, they ask or `rm .claude/.onboarded`.
 
 ---
 

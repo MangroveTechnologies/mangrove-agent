@@ -61,11 +61,14 @@ pointing at whatever port `scripts/setup-mcp.sh` configured.)
 
 ### 0.4 — Fresh-clone Stage 0 greeter fires
 
-This checks the session-start hook (`.claude/hooks/check-onboard.sh`).
+This checks the fresh-clone tour gate in `.claude/rules/trading-bot-workflow.md`
+(Stage 0). The tour is model-driven — there is no session-start hook — and it
+respects the `.claude/.onboarded` marker: absent → the tour fires, present →
+it's suppressed.
 
 **Do:** Nothing — on session start with no `.claude/.onboarded` marker,
 the agent should deliver the Stage 0 greeter (security primer + wallet
-question).
+question), then write `.claude/.onboarded` so it doesn't re-fire.
 
 **Expect (if fresh clone):**
 - Brief intro as the mangrove-agent

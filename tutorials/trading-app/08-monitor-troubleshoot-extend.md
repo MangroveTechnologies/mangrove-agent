@@ -232,7 +232,7 @@ response. No business logic.
 ### MCP tools
 
 ```
-server/src/mcp/tools.py   ← one big file, ~1500 lines, 95 tools
+server/src/mcp/tools.py   ← one big file, ~1500 lines, 100+ tools
 ```
 
 Organized by domain with `_register_*` helpers. If you want to add
