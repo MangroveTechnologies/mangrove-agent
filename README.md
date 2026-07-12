@@ -8,11 +8,11 @@
   <p>
     <strong>An AI trading agent built on the Mangrove API.</strong><br>
     FastAPI + MCP. Autonomous strategy generation, cron-driven execution, full audit trail.<br>
-    CEX trade execution on <strong>Kraken</strong> &nbsp;·&nbsp; DEX execution via <strong>1inch</strong> (Base)
+    CEX trade execution on <strong>Kraken</strong> &nbsp;·&nbsp; DEX execution via <strong>1inch</strong> across 10 EVM chains
   </p>
 
   <p>
-    <a href="https://www.kraken.com"><img src="assets/kraken-logo.webp" alt="Kraken" height="28"></a>
+    <a href="https://www.kraken.com"><img src="assets/kraken-logo.png" alt="Kraken" height="28"></a>
     &nbsp;&nbsp;
     <a href="https://1inch.io"><img src="assets/oneinch-logo.png" alt="1inch" height="28"></a>
   </p>
@@ -37,7 +37,7 @@
 A local AI trading agent that:
 - Turns natural-language goals ("momentum on ETH") into backtested, ranked trading strategies via the [MangroveAI API](https://mangrovedeveloper.ai).
 - Runs live strategies on APScheduler cron jobs. Same evaluator path for paper and live.
-- Executes live DEX swaps through [MangroveMarkets](https://github.com/MangroveTechnologies/MangroveMarkets) (1inch routing on Base). Client-side signing; the routing server never touches your keys.
+- Executes live DEX swaps through [MangroveMarkets](https://github.com/MangroveTechnologies/MangroveMarkets) — 1inch routing across 10 EVM chains (Ethereum, Base, Arbitrum, Polygon, Optimism, BNB, Avalanche, zkSync Era, Gnosis, Linea; the agent defaults to Base). Client-side signing; the routing server never touches your keys.
 - Trades on **Kraken** too, with two connection modes: **bring-your-own-key** (`/setup-kraken` — a least-privilege API key that stays on your machine and talks to Kraken directly) or **keyless OAuth** (`/connect-kraken` — consent once in a browser, no key to manage).
 - Logs every evaluation and trade — DEX and CEX — to local SQLite for a full audit trail.
 
