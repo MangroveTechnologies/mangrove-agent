@@ -81,6 +81,13 @@ the first live allocation on a new strategy. If the bot decides to
 scale up, you can raise the allocation later. If the bot does
 something unexpected, you've capped the blast radius.
 
+This matches how professionals ramp a new algorithm: the standard
+guidance is to start live at a fraction (~25%) of your target size
+and only scale toward full size over weeks–months **as live results
+track the backtest** — and to keep per-trade risk in the 1–2% range
+of the account. Scaling up is a reward the strategy earns with live
+evidence, never something a good backtest buys upfront.
+
 ### `slippage_pct` — how much price deviation you'll accept
 
 This is the big one. Slippage is in **decimal form** (0.002 = 0.2%,

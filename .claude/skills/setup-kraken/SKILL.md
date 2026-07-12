@@ -8,9 +8,10 @@ description: >-
   LEAST-PRIVILEGE Kraken API key, store it securely without ever pasting it in
   chat, and explains the local bring-your-own-key (BYOK) model: the client-side
   SDK connects to Kraken DIRECTLY with the user's key — the key stays on the
-  user's machine and never reaches a Mangrove server. The OAuth2 path (Mangrove
-  submitting on the user's behalf, server-side) is a separate, future mode and
-  NOT this skill.
+  user's machine and never reaches a Mangrove server. The keyless OAuth path
+  (Mangrove holds the grant and submits on the user's behalf, server-side) is
+  the sibling `connect-kraken` skill, NOT this one — offer it when the user
+  doesn't want to create or manage an API key.
 ---
 
 # Setup Kraken (local BYOK)

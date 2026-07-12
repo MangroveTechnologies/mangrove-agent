@@ -175,6 +175,12 @@ agent signs locally (inside the uvicorn process) using
 `eth_account`, then hands the signed transaction to
 `mangrovemarkets` for broadcast.
 
+The same SDK also carries the **Kraken (CEX) integration** — this
+tutorial trades on-chain, but once you're comfortable you can connect
+a Kraken account too (`/setup-kraken` for bring-your-own-key, kept on
+your machine; `/connect-kraken` for keyless OAuth). CEX fills land in
+the same local trade log. Chapter 08 points there.
+
 ## What happens on-chain
 
 When (and only when) a live strategy fires or you explicitly call

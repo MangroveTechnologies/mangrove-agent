@@ -309,19 +309,31 @@ If you finished the tutorial and want to keep going:
    allocate carefully (don't over-commit).
 4. **Vary the timeframe.** Same strategy structure on 4h and 1d —
    see how trade frequency and P&L change.
-5. **Explore the KB.** `kb_list_indicators` + `kb_search` for
+5. **Trade on Kraken.** The agent isn't DEX-only: connect a
+   centralized-exchange account with `/setup-kraken` (bring your own
+   least-privilege API key — it stays on your machine and talks to
+   Kraken directly, never a Mangrove server) or `/connect-kraken`
+   (keyless OAuth — consent once in a browser, no key to create or
+   manage). Fills sync back into the same local trade log as your
+   DEX swaps.
+6. **Explore the KB.** `kb_list_indicators` + `kb_search` for
    anything that catches your eye. If you find a signal you want
    to build around, ask the bot: `"Tell me how <signal> works and
    build a strategy around it for ETH."`
-6. **Read the SDK.** `from mangrove_ai import ...` in a Python REPL
+7. **Read the SDK.** `from mangrove_ai import ...` in a Python REPL
    — the SDK is introspectable and well-typed. You'll find
    capabilities you didn't know the bot had.
 
 ## Getting help
 
+- **Mangrove docs & knowledge base** — https://mangrove.io/docs
+  (the same corpus `kb_search` queries)
 - **Mangrove developer portal** — https://mangrovedeveloper.ai
 - **This repo's issues** —
   https://github.com/MangroveTechnologies/mangrove-agent/issues
+- **Further reading** — a cited survey of current trading-bot
+  best practices, security incidents, and how this repo's design
+  compares: [`docs/research/trading-bot-best-practices.md`](../../docs/research/trading-bot-best-practices.md)
 - **In the bot** — `"What tools do you have for X?"` or `"Search the
   KB for Y."` The bot knows its own capabilities.
 

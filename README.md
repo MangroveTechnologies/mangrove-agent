@@ -30,8 +30,11 @@
 A local AI trading agent that:
 - Turns natural-language goals ("momentum on ETH") into backtested, ranked trading strategies via the [MangroveAI API](https://mangrovedeveloper.ai).
 - Runs live strategies on APScheduler cron jobs. Same evaluator path for paper and live.
-- Executes live swaps through [MangroveMarkets](https://github.com/MangroveTechnologies/MangroveMarkets). Client-side signing; SDK never touches your keys.
-- Logs every evaluation and trade to local SQLite for a full audit trail.
+- Executes live DEX swaps through [MangroveMarkets](https://github.com/MangroveTechnologies/MangroveMarkets) (1inch routing on Base). Client-side signing; the routing server never touches your keys.
+- Trades on **Kraken** too, with two connection modes: **bring-your-own-key** (`/setup-kraken` — a least-privilege API key that stays on your machine and talks to Kraken directly) or **keyless OAuth** (`/connect-kraken` — consent once in a browser, no key to manage).
+- Logs every evaluation and trade — DEX and CEX — to local SQLite for a full audit trail.
+
+Full platform documentation and the trading knowledge base live at **https://mangrove.io/docs** (KB: https://mangrove.io/knowledge-base) — the agent's `kb_search` tool queries the same corpus.
 
 **Real mainnet swap from the agent** (verified April 2026): [0x5c126e...c5565](https://basescan.org/tx/0x5c126e6be26fc736bcb3f11a8f4c699aeee754f6c0bf7e5b7aa2df6a859c5565)
 

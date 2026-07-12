@@ -102,6 +102,22 @@ not just "please don't" conventions. You should know what they are
 because the bot's refusals will sometimes feel annoying, and the
 annoyance is the feature.
 
+Why so paranoid? Because "an AI agent that reads untrusted content
+and can move funds" is the exact shape of nearly every agent-wallet
+drain of 2025–2026: the Grok/Bankr drain (May 2026, ~$200K moved by
+instructions hidden in Morse code in a tweet reply), the AiXBT
+exploit (~$100K ETH via crafted social inputs), and the ElizaOS
+memory-injection research that "gaslit" agents into bad trades.
+The industry lesson from all of them is the same: **prompts are not
+a security boundary — policy at the signing layer is.** That's why
+this bot's guardrails live in hooks, validators, and a hard signing
+allowlist (only known 1inch routers and token approvals to them;
+EIP-7702 delegations refused outright), not in the LLM's judgment.
+Security researchers call the dangerous combination the "lethal
+trifecta" — private data + untrusted content + the ability to act
+externally — and this repo's design goal is to never hand all three
+to the model at once.
+
 ### Safety net 1 — the key-paste block
 
 **Problem it prevents:** you accidentally paste your private key or
@@ -180,6 +196,21 @@ The time-saving version of this advice: if a strategy works in paper
 for at least a full cycle of its timeframe (e.g., a few hours for a
 1h strategy, a day or two for a 4h), and the evaluations look
 reasonable, *then* consider live. Not before.
+
+This isn't just our house rule — it's the standard across mature
+open-source trading bots. freqtrade's docs put it flatly: "always
+dry run your strategy after backtesting it to see if backtesting and
+dry run results are sufficiently similar", because live behavior
+reveals latency, partial fills, and rejections that backtests don't.
+The comparison matters as much as the paper run itself: if paper
+results diverge badly from the backtest, that gap is information —
+investigate it before real funds, don't average it away. And set
+expectations like a regulator would: the CFTC's standing advisory on
+AI trading bots is that "AI technology can't predict the future or
+sudden market changes," and a 2026 study of 925K wallets found AI
+trading agents lost their users ~$192M net in aggregate. Backtests
+and paper runs earn a strategy a small live allocation — nothing
+earns it blind trust.
 
 ## The audit trail
 
