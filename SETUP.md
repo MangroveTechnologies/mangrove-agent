@@ -4,7 +4,7 @@ Get from zero to a running trading agent. Every step has Mac and Windows instruc
 
 **What you will end up with:**
 - A local trading agent running at `http://localhost:9080`
-- Claude Code connected to it with 95 trading tools
+- Claude Code connected to it with 100+ trading tools (run `list_tools` for the live catalog)
 - A working paper strategy you can watch evaluate in real time
 
 ---
@@ -427,8 +427,9 @@ When it finishes successfully you will see:
     PID:   12345  (agent-data/bare.pid)
     Logs:  agent-data/bare.log
 
-    Restart Claude Code in this directory to load the 95 mangrove-agent
-    tools. Then try: "Status check. List my wallets and strategies."
+    Restart Claude Code in this directory to load the mangrove-agent
+    tools (run list_tools for the live catalog). Then try: "Status
+    check. List my wallets and strategies."
 ```
 
 ---
@@ -473,7 +474,7 @@ Wait 10–20 seconds. The agent should run a **platform tour automatically** —
 
 ## You are all set
 
-If you made it this far and the tour fired, everything is working — the server is running, Claude Code is connected, and all 95 trading tools are loaded.
+If you made it this far and the tour fired, everything is working — the server is running, Claude Code is connected, and all the trading tools are loaded (run `list_tools` for the live catalog).
 
 Here is what you can do right now:
 

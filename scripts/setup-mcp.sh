@@ -92,7 +92,7 @@ claude mcp add --transport http --scope local "$SERVER_NAME" "$BASE_URL/mcp/" --
 ok "registered"
 
 echo
-printf "${GREEN}Done.${CLR} Restart Claude Code in this directory to load the mangrove-agent tools (95 total).\n\n"
+printf "${GREEN}Done.${CLR} Restart Claude Code in this directory to load the mangrove-agent tools. Run list_tools for the live catalog.\n\n"
 echo "  cd $(pwd)"
 echo "  claude"
 echo

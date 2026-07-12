@@ -21,7 +21,7 @@ Mangrove (behind an API key), and on the public blockchain.
 │                ▼                                                   │
 │  ┌─────────────────────────────────────────────────┐               │
 │  │ mangrove-agent (uvicorn process, port 9080)         │               │
-│  │   • 95 MCP tools + REST API                     │               │
+│  │   • 100+ MCP tools + REST API                   │               │
 │  │   • APScheduler (in-process cron)               │               │
 │  │   • Fernet-encrypted wallet keys                │               │
 │  │   • SQLite DB: strategies, trades, evaluations  │               │
@@ -57,7 +57,8 @@ four things:
    these directly from a terminal if you want. There's also a free
    `/health` endpoint for "is it up?"
 2. **Serves MCP endpoints** under `/mcp/` — this is what Claude Code
-   talks to for the 95 trading tools. Everything the REST API
+   talks to for the trading tools (100+ as of 2026-07; run
+   `list_tools` for the live catalog). Everything the REST API
    exposes, the MCP tools expose too, and vice versa. They share
    the service layer.
 3. **Runs the scheduler** — APScheduler, in-process, using the same

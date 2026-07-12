@@ -50,6 +50,7 @@ DO_MCP="yes"
 DO_VERIFY="yes"
 ASSUME_YES="no"
 FOREGROUND="no"
+SKIP_TOUR="no"
 API_KEY_ARG=""
 MARKETS_URL_DEFAULT="https://mangrovemarkets-pcqgpciucq-uc.a.run.app"
 MARKETS_URL_ARG=""
@@ -87,6 +88,9 @@ Options:
                         Default: background via nohup, logs in $LOG_FILE.
   --no-mcp              Skip Claude Code MCP registration.
   --no-verify           Skip the final verify pass.
+  --skip-tour           Suppress the first-run platform tour by writing the
+                        .claude/.onboarded marker before Claude Code launches.
+                        Replay it later by asking or 'rm .claude/.onboarded'.
   --api-key KEY         Non-interactive: set MANGROVE_API_KEY.
   --markets-url URL     Non-interactive: set MANGROVEMARKETS_BASE_URL.
                         Default: $MARKETS_URL_DEFAULT
@@ -104,6 +108,7 @@ while [ $# -gt 0 ]; do
     --foreground) FOREGROUND="yes"; shift ;;
     --no-mcp) DO_MCP="no"; shift ;;
     --no-verify) DO_VERIFY="no"; shift ;;
+    --skip-tour) SKIP_TOUR="yes"; shift ;;
     --api-key) API_KEY_ARG="$2"; shift 2 ;;
     --markets-url) MARKETS_URL_ARG="$2"; shift 2 ;;
     --yes) ASSUME_YES="yes"; shift ;;
@@ -206,6 +211,14 @@ if [ ! -d agent-data ]; then
   mkdir -p agent-data
   chmod 700 agent-data
   info "created agent-data/ (chmod 700)"
+fi
+
+# --skip-tour: write the (gitignored, per-user) marker the trading-bot-workflow
+# rule gates on, so the first-run platform tour is suppressed. Replay it later
+# by asking the agent or removing the marker.
+if [ "$SKIP_TOUR" = "yes" ] && [ ! -f .claude/.onboarded ]; then
+  touch .claude/.onboarded
+  info "wrote .claude/.onboarded — first-run tour suppressed (rm to replay)"
 fi
 # Bare-metal only: a prior Docker run bind-mounts agent-data/ as root, which a
 # non-root bare-metal run then can't write. (Docker mode legitimately owns it as
@@ -313,9 +326,15 @@ fi
 echo
 printf "${GREEN}Done.${CLR} mangrove-agent is running at $BASE_URL\n\n"
 echo "Next:"
-echo "  - Restart Claude Code in this directory. The agent will greet you"
-echo "    and walk through wallet setup + security. It will refuse to"
-echo "    accept pasted private keys in chat — if you want to import an"
-echo "    existing wallet, the agent will tell you to run"
-echo "    ./scripts/stash-secret.sh first."
+if [ "$SKIP_TOUR" = "yes" ]; then
+  echo "  - Restart Claude Code in this directory. The first-run tour is"
+  echo "    suppressed (.claude/.onboarded present) — ask for it any time"
+  echo "    or 'rm .claude/.onboarded' to replay it."
+else
+  echo "  - Restart Claude Code in this directory. The agent will greet you"
+  echo "    and walk through wallet setup + security. It will refuse to"
+  echo "    accept pasted private keys in chat — if you want to import an"
+  echo "    existing wallet, the agent will tell you to run"
+  echo "    ./scripts/stash-secret.sh first."
+fi
 echo

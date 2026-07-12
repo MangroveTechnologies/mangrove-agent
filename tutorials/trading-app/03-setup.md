@@ -79,8 +79,9 @@ If everything went well, the last thing you see is:
     PID:   12345  (agent-data/bare.pid)
     Logs:  agent-data/bare.log
 
-    Restart Claude Code in this directory to load the 95 mangrove-agent
-    tools. Then try: "Status check. List my wallets and strategies."
+    Restart Claude Code in this directory to load the mangrove-agent
+    tools (run list_tools for the live catalog). Then try: "Status
+    check. List my wallets and strategies."
 ```
 
 ### If something went wrong
@@ -183,7 +184,8 @@ claude
 ```
 
 Claude Code detects the `.mcp.json` and the local registration, loads
-the 95 tools, and runs a **platform tour** automatically. The tour is
+the tools (100+ as of 2026-07 — run `list_tools` for the live
+catalog), and runs a **platform tour** automatically. The tour is
 a sequence of five live tool calls with one-sentence commentary each —
 the bot is showing you the product works before asking you to do
 anything. You'll see roughly:
@@ -242,14 +244,15 @@ Usually one of three things:
    "ToolSearch" call that returns nothing, or a "the mangrove-agent MCP
    server isn't connected" message, go back to step 4 and fix the
    MCP registration.
-2. **You've already onboarded in this session.** If `.claude/.onboarded`
-   exists, the greeter won't fire (it's designed for fresh clones).
+2. **You've already onboarded.** If `.claude/.onboarded` exists, the
+   greeter won't fire (it's designed for fresh clones, and is written
+   once the tour completes or when you pass `setup.sh --skip-tour`).
    `rm .claude/.onboarded` to reset.
 3. **Claude Code was started from the wrong directory.** MCP local
    registrations are keyed to the project directory. Make sure
    you're in `~/Desktop/mangrove-agent` (or wherever you cloned).
 
-### "I see fewer than 95 tools"
+### "I see fewer tools than expected"
 
 You're on an older version of the repo. `git pull` to sync with
 the branch you cloned from, then restart the server:
