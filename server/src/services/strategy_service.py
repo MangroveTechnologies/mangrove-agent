@@ -111,8 +111,21 @@ def _extract_order_intents(
         if isinstance(o, OrderIntent):
             order_intents.append(o)
         elif isinstance(o, dict):
+            mapped = _map_engine_order(o)
+            if mapped is None:
+                # Resting engine order (pending bracket etc.) — normal, not
+                # an error; the engine re-emits it as `filled` when it
+                # actually triggers (#149).
+                _log.info(
+                    "strategy.tick.order_intent.resting",
+                    strategy_id=strategy_id,
+                    tick_id=tick_id,
+                    order_type=o.get("order_type"),
+                    order_status=o.get("status"),
+                )
+                continue
             try:
-                order_intents.append(OrderIntent.model_validate(_map_engine_order(o)))
+                order_intents.append(OrderIntent.model_validate(mapped))
             except Exception as e:  # noqa: BLE001
                 _log.warning(
                     "strategy.tick.order_intent.skipped",
@@ -125,7 +138,7 @@ def _extract_order_intents(
     return order_intents
 
 
-def _map_engine_order(o: dict) -> dict:
+def _map_engine_order(o: dict) -> dict | None:
     """Translate a MangroveAI engine order into OrderIntent field names.
 
     The engine's evaluate() emits `new_orders` as
@@ -136,10 +149,20 @@ def _map_engine_order(o: dict) -> dict:
     every real engine order failed validation and was skipped, so
     cron-driven strategies never traded (#139). Dicts already in
     OrderIntent shape pass through untouched.
+
+    Returns None for RESTING engine orders — anything not `status ==
+    "filled"`. A tick that opens a position emits the entry as `filled`
+    PLUS its bracket exits (stop_loss / take_profit) as `pending`;
+    executing those brackets immediately would exit the position the
+    moment it entered (#149, observed live 2026-07-12). The engine
+    re-emits a bracket as `filled` on the tick where it actually
+    triggers.
     """
     side = o.get("side")
     if side not in ("enter_long", "exit_long") or "position_size" not in o:
         return o
+    if o.get("status") != "filled":
+        return None
     symbol = (o.get("asset") or "").split("-")[0] or (o.get("asset") or "")
     return {
         "action": "enter" if side == "enter_long" else "exit",

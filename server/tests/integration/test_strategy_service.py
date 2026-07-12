@@ -359,7 +359,7 @@ def test_tick_maps_engine_shaped_orders(temp_db, mock_ai_sdk, monkeypatch):
         "asset": "ETH-USD",
         "side": "enter_long",
         "order_type": "market",
-        "status": "pending",
+        "status": "filled",
         "price": 2500.0,
         "position_size": 0.04,
         "position_id": "p-7",
@@ -396,6 +396,59 @@ def test_tick_maps_engine_shaped_orders(temp_db, mock_ai_sdk, monkeypatch):
     assert t.order_intent.action == "enter"
     assert t.order_intent.side == "buy"
     assert t.order_intent.ref_price == pytest.approx(2500.0)
+
+
+def test_tick_skips_resting_bracket_orders(temp_db, mock_ai_sdk, monkeypatch):
+    """#149 regression, mirroring the exact live payload (2026-07-12): a
+    tick that opens a position emits the FILLED entry plus its bracket
+    exits (stop_loss / take_profit) with status=pending. Only the filled
+    entry may execute — running the pending brackets would exit the
+    position the moment it entered."""
+    from src.services.strategy_service import (
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
+    )
+    from src.services.trade_log import list_trades
+
+    eval_resp = MagicMock()
+    eval_resp.new_orders = [
+        {"order_id": "e850f1d1", "asset": "BTC", "side": "enter_long",
+         "order_type": "limit", "status": "filled",
+         "price": 64176.77, "position_size": 0.14023765, "position_id": "p-1"},
+        {"order_id": "7527afcd", "asset": "BTC", "side": "exit_long",
+         "order_type": "stop_loss", "status": "pending",
+         "price": 63855.88615, "position_size": 0.14023765, "position_id": "p-1"},
+        {"order_id": "7d9df96a", "asset": "BTC", "side": "exit_long",
+         "order_type": "take_profit", "status": "pending",
+         "price": 64818.5377, "position_size": 0.14023765, "position_id": "p-1"},
+    ]
+    eval_resp.order_intents = None
+    eval_resp.orders = None
+    eval_resp.model_dump.return_value = {}
+    mock_ai_sdk.execution.evaluate.return_value = eval_resp
+
+    md = MagicMock()
+    md.data = {"current_price": 64084.0}
+    mock_ai_sdk.crypto_assets.get_market_data.return_value = md
+    monkeypatch.setattr("src.services.order_executor.mangrove_ai_client",
+                        lambda: mock_ai_sdk)
+
+    s = create_manual(StrategyManualRequest(
+        name="brackets", asset="BTC", timeframe="1h",
+        entry=[{"name": "rsi_cross_up", "signal_type": "TRIGGER", "timeframe": "1h"}],
+    ))
+    update_status(s.id, StrategyStatusUpdate(status="inactive"))
+    update_status(s.id, StrategyStatusUpdate(status="paper"))
+
+    tick(s.id)
+
+    trades = list_trades(s.id)
+    assert len(trades) == 1, "only the FILLED entry may execute, not resting brackets"
+    assert trades[0].order_intent.action == "enter"
+    assert trades[0].order_intent.side == "buy"
 
 
 def test_tick_catches_sdk_errors(temp_db, mock_ai_sdk):
