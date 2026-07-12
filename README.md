@@ -7,7 +7,14 @@
 
   <p>
     <strong>An AI trading agent built on the Mangrove API.</strong><br>
-    FastAPI + MCP. Autonomous strategy generation, cron-driven execution, full audit trail.
+    FastAPI + MCP. Autonomous strategy generation, cron-driven execution, full audit trail.<br>
+    CEX trade execution on <strong>Kraken</strong> &nbsp;·&nbsp; DEX execution via <strong>1inch</strong> (Base)
+  </p>
+
+  <p>
+    <a href="https://www.kraken.com"><img src="assets/kraken-logo.webp" alt="Kraken" height="28"></a>
+    &nbsp;&nbsp;
+    <a href="https://1inch.io"><img src="assets/oneinch-logo.png" alt="1inch" height="28"></a>
   </p>
 
   <p>
@@ -17,7 +24,7 @@
     <a href="https://github.com/MangroveTechnologies/mangrove-agent/blob/main/LICENSE">
       <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License">
     </a>
-    <a href="https://discord.gg/xUcn4R6zJR">
+    <a href="https://discord.gg/Yycbw6P93B">
       <img src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white" alt="Discord">
     </a>
   </p>
@@ -51,6 +58,19 @@ This repo is **your own trading agent**: you run it on your machine, your keys n
 Chapters 01–05 are **fund-free** — author, backtest, and paper-trade with zero on-chain exposure. Chapters 06–08 are optional and need a small amount of USDC.
 
 Already know your way around? Keep reading — the rest of this README is a reference.
+
+## Connect your Kraken account
+
+The agent trades on Kraken (CEX) as well as on-chain. Two ways in — pick by how you want access held:
+
+| | **Bring your own key** — `/setup-kraken` | **Keyless OAuth** — `/connect-kraken` |
+|---|---|---|
+| How it works | You create a **least-privilege** Kraken API key (trade + query only, **withdrawal disabled**); the SDK talks to `api.kraken.com` directly from your machine | You approve once in a browser (Kraken Connect / OAuth2); no API key to create, copy, or store |
+| Who holds access | **You** — the key never leaves your machine and never touches a Mangrove server | **Mangrove platform** holds the OAuth grant and submits on your behalf |
+| Best for | Self-custody purists; anyone comfortable making an API key | Fastest path; anyone who doesn't want to manage a key |
+| Revoke | Delete the key in Kraken settings | Revoke the app grant in Kraken settings |
+
+Just say **"set up Kraken"** or **"connect Kraken without a key"** in a session and the matching skill walks you through it — including the exact permission set for the BYOK key. Fills sync into the same local SQLite trade log as your DEX swaps (`cex_status`, `cex_balances`, `cex_sync_fills`).
 
 ---
 
