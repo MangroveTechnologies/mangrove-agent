@@ -612,9 +612,17 @@ def tick(strategy_id: str) -> None:
             return
 
         try:
-            persist = mode == "live"
+            # persist=True for BOTH paper and live (#149/#150): the engine
+            # only saves the position (and therefore only re-evaluates its
+            # stop_loss/take_profit/time exits on later ticks) when persist
+            # is set — get_open_positions loads from its DB. With
+            # persist=False, a paper entry was forgotten the moment it was
+            # emitted, so bracket exits NEVER arrived and paper positions
+            # never closed. Paper-vs-live parity requires the same engine
+            # bookkeeping; paper stays simulation-only on OUR side (no
+            # wallet, no broadcast).
             sdk_resp = mangrove_ai_client().execution.evaluate(
-                row["mangrove_id"], persist=persist,
+                row["mangrove_id"], persist=True,
             )
         except Exception as e:  # noqa: BLE001
             duration_ms = int((time.monotonic() - start_ns) * 1000)

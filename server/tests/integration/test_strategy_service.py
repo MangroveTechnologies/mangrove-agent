@@ -450,6 +450,13 @@ def test_tick_skips_resting_bracket_orders(temp_db, mock_ai_sdk, monkeypatch):
     assert trades[0].order_intent.action == "enter"
     assert trades[0].order_intent.side == "buy"
 
+    # Paper ticks MUST persist engine state — with persist=False the engine
+    # forgets the position immediately (get_open_positions loads from its
+    # DB), so the resting brackets we just skipped would NEVER re-emit as
+    # filled and paper positions would never close.
+    _, ev_kwargs = mock_ai_sdk.execution.evaluate.call_args
+    assert ev_kwargs.get("persist") is True
+
 
 def test_tick_catches_sdk_errors(temp_db, mock_ai_sdk):
     """SDK failure during tick logs evaluation with status=error, does NOT raise."""
