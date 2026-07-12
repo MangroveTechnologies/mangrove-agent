@@ -153,15 +153,24 @@ def _validate_slippage(slippage_pct: float | None) -> None:
 
 
 def _resolve_tokens(intent: OrderIntent) -> tuple[str, str, float]:
-    """Determine input/output token addresses and amount from an OrderIntent.
+    """Determine input/output tokens and the INPUT amount from an OrderIntent.
 
-    Prefers explicit token addresses (user-initiated swaps via /dex/swap);
-    falls back to USDC+symbol convention for cron strategy intents.
+    Prefers explicit token addresses (user-initiated swaps via /dex/swap),
+    where `amount` is already the input-token amount and is used verbatim.
+
+    Cron/engine intents carry `amount` in ASSET units (the engine's
+    position_size, #139). The DEX swap API takes the INPUT amount:
+    - buy  (USDC -> asset): input = amount * price, using the engine's
+      evaluation-time `ref_price` (fallback: current mark price). Same
+      convention as _paper_fill, so paper and live take the same economic
+      exposure for the same intent.
+    - sell (asset -> USDC): the input IS the asset qty — pass through.
     """
     if intent.input_token_address and intent.output_token_address:
         return intent.input_token_address, intent.output_token_address, intent.amount
     if intent.side == "buy":
-        return "USDC", intent.symbol, intent.amount
+        price = intent.ref_price or _fetch_mark_price(intent.symbol)
+        return "USDC", intent.symbol, intent.amount * price
     return intent.symbol, "USDC", intent.amount
 
 
@@ -213,6 +222,7 @@ def _live_swap(
     chain_id: int | None = None,
     venue_id: str | None = None,
     slippage_pct: float | None = None,
+    max_input_amount: float | None = None,
 ) -> Trade:
     """Execute the full 6-step live swap flow.
 
@@ -238,6 +248,20 @@ def _live_swap(
 
     client = mangrove_markets_client()
     input_token, output_token, input_amount = _resolve_tokens(intent)
+
+    # Allocation cap: cron intents are sized by the ENGINE off its own
+    # simulated account, not off the user's allocation block. Never spend
+    # more input than the allocation allows (defense for the funds path;
+    # user-initiated /dex/swap passes no cap — the user typed the amount).
+    if max_input_amount is not None and input_amount > max_input_amount:
+        _log.warning(
+            "order.live.amount_capped",
+            strategy_id=strategy_id,
+            symbol=intent.symbol,
+            requested_input=input_amount,
+            allocation_cap=max_input_amount,
+        )
+        input_amount = max_input_amount
 
     # 1. Quote — via dex_service, the single human<->base-units boundary.
     # `input_amount` is HUMAN units (the agent's convention everywhere);
@@ -342,6 +366,7 @@ def execute_one(
     chain_id: int | None = None,
     venue_id: str | None = None,
     slippage_pct: float | None = None,
+    max_input_amount: float | None = None,
 ) -> Trade:
     """Execute a single OrderIntent.
 
@@ -375,6 +400,7 @@ def execute_one(
             chain_id=chain_id,
             venue_id=venue_id,
             slippage_pct=slippage_pct,
+            max_input_amount=max_input_amount,
         )
     raise SigningError(f"Unknown mode: {mode}")
 
@@ -388,6 +414,7 @@ def execute_many(
     chain_id: int | None = None,
     venue_id: str | None = None,
     slippage_pct: float | None = None,
+    max_input_amount: float | None = None,
 ) -> list[Trade]:
     """Execute N intents in order. Failures on one do not abort the batch.
 
@@ -408,6 +435,7 @@ def execute_many(
                 chain_id=chain_id,
                 venue_id=venue_id,
                 slippage_pct=slippage_pct,
+                max_input_amount=max_input_amount,
             )
             results.append(t)
         except Exception as e:  # noqa: BLE001

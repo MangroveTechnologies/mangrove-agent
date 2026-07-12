@@ -88,7 +88,7 @@ def mock_markets(monkeypatch):
     quote.quote_id = "q-123"
     quote.model_dump.return_value = {
         "quote_id": "q-123",
-        "input_amount": 100_000,                  # 0.1 USDC (6 decimals)
+        "input_amount": 100_000_000,              # 100 USDC (6 decimals)
         "output_amount": 40_000_000_000_000_000,  # 0.04 ETH in wei
         "exchange_rate": 2500.0,
         "venue_fee": 1.0,
@@ -217,14 +217,15 @@ def test_live_full_flow_with_approval(temp_db, mock_mangroveai, mock_markets, st
 
 
 def test_live_quotes_in_base_units(temp_db, mock_mangroveai, mock_markets, stub_sign):
-    """#122 regression: the live path must convert the HUMAN intent amount
-    to base units before dex.get_quote (0.1 USDC @ 6 decimals -> 100_000),
-    and record the quote's output_amount converted back to human units
-    (4e16 wei -> 0.04 ETH) — not the raw base-units value."""
+    """#122 + #139 regression: a cron buy intent's amount is ASSET units
+    (engine position_size). Buying 0.04 ETH at the 2500 mark price spends
+    100 USDC, which must reach dex.get_quote in BASE units (100_000_000
+    @ 6 decimals), and the trade must record human amounts + a real
+    fill price — not raw base-units values."""
     from src.services.order_executor import execute_one
 
     trade = execute_one(
-        _intent("buy", "ETH", 0.1),
+        _intent("buy", "ETH", 0.04),
         mode="live",
         strategy_id="s1",
         wallet_address="0xabc",
@@ -232,15 +233,36 @@ def test_live_quotes_in_base_units(temp_db, mock_mangroveai, mock_markets, stub_
         slippage_pct=0.002,
     )
     _, kwargs = mock_markets.dex.get_quote.call_args
-    assert kwargs["amount"] == 100_000
-    assert trade.input_amount == pytest.approx(0.1)
+    assert kwargs["amount"] == 100_000_000
+    assert trade.input_amount == pytest.approx(100.0)
     assert trade.output_amount == pytest.approx(0.04)
-    # fill_price is derived from the HUMAN amounts (0.1 USDC / 0.04 ETH),
-    # NOT the quote's exchange_rate (a base-units ratio, 2500.0 here).
-    assert trade.fill_price == pytest.approx(2.5)
+    # fill_price derived from HUMAN amounts (100 USDC / 0.04 ETH = 2500),
+    # NOT the quote's exchange_rate (a base-units ratio).
+    assert trade.fill_price == pytest.approx(2500.0)
     # prepare_swap must still be driven by the returned quote_id.
     _, prep_kwargs = mock_markets.dex.prepare_swap.call_args
     assert prep_kwargs["quote_id"] == "q-123"
+
+
+def test_live_buy_uses_ref_price_and_allocation_cap(temp_db, mock_mangroveai, mock_markets, stub_sign):
+    """#139: the engine's evaluation-time ref_price converts asset units to
+    USDC spend without a mark-price fetch, and the allocation amount caps
+    the spend (the engine sizes off its own simulated account, not the
+    user's allocation)."""
+    from src.models.domain import OrderIntent
+    from src.services.order_executor import execute_one
+
+    intent = OrderIntent(action="enter", side="buy", symbol="ETH",
+                         amount=0.1, ref_price=2000.0, reason="engine order")
+    execute_one(
+        intent, mode="live", strategy_id="s1", wallet_address="0xabc",
+        chain_id=8453, slippage_pct=0.002,
+        max_input_amount=50.0,  # 0.1 ETH * 2000 = 200 USDC, capped to 50
+    )
+    _, kwargs = mock_markets.dex.get_quote.call_args
+    assert kwargs["amount"] == 50_000_000  # 50 USDC in base units
+    # ref_price supplied -> no mark-price lookup on the live path
+    assert not mock_mangroveai.crypto_assets.get_market_data.called
 
 
 def test_live_sell_quotes_asset_side_in_base_units(temp_db, mock_mangroveai, mock_markets, stub_sign):
@@ -268,7 +290,8 @@ def test_live_rejects_dust_amount(temp_db, mock_mangroveai, mock_markets, stub_s
 
     with pytest.raises(ValidationError, match="too small to quote"):
         execute_one(
-            _intent("buy", "ETH", 0.0000001),  # < 1e-6 USDC -> 0 base units
+            # sell of 1e-19 ETH -> less than 1 wei -> 0 base units
+            _intent("sell", "ETH", 1e-19),
             mode="live",
             strategy_id="s1",
             wallet_address="0xabc",

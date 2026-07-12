@@ -112,7 +112,7 @@ def _extract_order_intents(
             order_intents.append(o)
         elif isinstance(o, dict):
             try:
-                order_intents.append(OrderIntent.model_validate(o))
+                order_intents.append(OrderIntent.model_validate(_map_engine_order(o)))
             except Exception as e:  # noqa: BLE001
                 _log.warning(
                     "strategy.tick.order_intent.skipped",
@@ -125,11 +125,44 @@ def _extract_order_intents(
     return order_intents
 
 
-def _get_live_allocation(strategy_id: str) -> tuple[str | None, int | None, float | None]:
-    """Return (wallet_address, chain_id, slippage_pct) from the active allocation, or Nones."""
+def _map_engine_order(o: dict) -> dict:
+    """Translate a MangroveAI engine order into OrderIntent field names.
+
+    The engine's evaluate() emits `new_orders` as
+    ``{order_id, asset: "ETH-USD", side: "enter_long"|"exit_long",
+    order_type, status, price, position_size, position_id, ...}``
+    (managers OrderResponse; `position_size` is in ASSET units), which
+    shares no required field with OrderIntent — before this mapping,
+    every real engine order failed validation and was skipped, so
+    cron-driven strategies never traded (#139). Dicts already in
+    OrderIntent shape pass through untouched.
+    """
+    side = o.get("side")
+    if side not in ("enter_long", "exit_long") or "position_size" not in o:
+        return o
+    symbol = (o.get("asset") or "").split("-")[0] or (o.get("asset") or "")
+    return {
+        "action": "enter" if side == "enter_long" else "exit",
+        "side": "buy" if side == "enter_long" else "sell",
+        "symbol": symbol,
+        "amount": float(o["position_size"]),
+        "reason": f"engine {o.get('order_type', 'market')} order {o.get('order_id', '')}".strip(),
+        "ref_price": o.get("price"),
+        "stop_loss": o.get("stop_loss_price"),
+        "take_profit": o.get("take_profit_price"),
+    }
+
+
+def _get_live_allocation(
+    strategy_id: str,
+) -> tuple[str | None, int | None, float | None, float | None]:
+    """Return (wallet_address, chain_id, slippage_pct, amount) from the
+    active allocation, or Nones. `amount` caps the input-token spend of any
+    single live swap (#139: engine intents are sized off the engine's own
+    simulated account, not the user's allocation)."""
     active_alloc = allocation_service.get_active_allocation(strategy_id)
     if not active_alloc:
-        return None, None, None
+        return None, None, None, None
     wallet_address = active_alloc.wallet_address
     slippage_pct = active_alloc.slippage_pct
     wrow = get_connection().execute(
@@ -137,7 +170,7 @@ def _get_live_allocation(strategy_id: str) -> tuple[str | None, int | None, floa
         (wallet_address,),
     ).fetchone()
     chain_id = wrow["chain_id"] if wrow else None
-    return wallet_address, chain_id, slippage_pct
+    return wallet_address, chain_id, slippage_pct, active_alloc.amount
 
 
 # -- Pydantic request/response models ---------------------------------------
@@ -585,8 +618,11 @@ def tick(strategy_id: str) -> None:
         wallet_address = None
         chain_id = None
         slippage_pct = None
+        allocation_amount = None
         if mode == "live":
-            wallet_address, chain_id, slippage_pct = _get_live_allocation(strategy_id)
+            wallet_address, chain_id, slippage_pct, allocation_amount = (
+                _get_live_allocation(strategy_id)
+            )
 
         # Log the evaluation FIRST so trades can FK-reference it. The
         # evaluation describes the SDK call outcome, not the downstream
@@ -610,6 +646,7 @@ def tick(strategy_id: str) -> None:
                 evaluation_id=evaluation_id,
                 wallet_address=wallet_address, chain_id=chain_id,
                 slippage_pct=slippage_pct,
+                max_input_amount=allocation_amount,
             )
 
         _log.info("strategy.tick.completed",
