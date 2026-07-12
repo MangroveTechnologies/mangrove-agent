@@ -477,6 +477,123 @@ def test_tick_skips_resting_bracket_orders(temp_db, mock_ai_sdk, monkeypatch):
     assert ev_kwargs.get("persist") is True
 
 
+def test_tick_stateless_lane_round_trips_state(temp_db, mock_ai_sdk, monkeypatch):
+    """#151 Phase 3: a strategy created with evaluation_lane='stateless'
+    ticks via evaluate_by_object (persist=False), sends the locally
+    persisted execution_state + open_positions, and persists what comes
+    back for the next tick. Engine-shaped filled orders execute the same
+    as the server lane."""
+    import json as _json
+
+    from src.services.strategy_service import (
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
+    )
+    from src.services.trade_log import list_trades
+    from src.shared.db.sqlite import get_connection
+
+    returned_positions = [{
+        "id": "pos-e1", "asset": "ETH-USD", "entry_price": 2500.0,
+        "position_size": 0.04, "cost": 100.0, "open": True,
+        "orders": [{"id": "o-tp", "asset": "ETH-USD", "order_type": "take_profit",
+                    "side": "exit_long", "status": "pending", "price": 2700.0,
+                    "position_size": 0.04, "position_id": "pos-e1", "history": {}}],
+    }]
+    eval_resp = MagicMock()
+    eval_resp.new_orders = [{
+        "order_id": "o-41", "asset": "ETH-USD", "side": "enter_long",
+        "order_type": "market", "status": "filled",
+        "price": 2500.0, "position_size": 0.04, "position_id": "pos-e1",
+    }]
+    eval_resp.order_intents = None
+    eval_resp.orders = None
+    eval_resp.model_dump.return_value = {
+        "execution_state": {"cash_balance": 9900.0, "account_value": 10000.0,
+                            "total_trades": 0, "num_open_positions": 1},
+        "open_positions": returned_positions,
+    }
+    mock_ai_sdk.execution.evaluate_by_object.return_value = eval_resp
+
+    md = MagicMock()
+    md.data = {"current_price": 2500.0}
+    mock_ai_sdk.crypto_assets.get_market_data.return_value = md
+    monkeypatch.setattr("src.services.order_executor.mangrove_ai_client",
+                        lambda: mock_ai_sdk)
+
+    s = create_manual(StrategyManualRequest(
+        name="stateless-lane", asset="ETH", timeframe="1h",
+        entry=[{"name": "rsi_oversold", "signal_type": "TRIGGER", "timeframe": "1h"}],
+        evaluation_lane="stateless",
+    ))
+    update_status(s.id, StrategyStatusUpdate(status="inactive"))
+    update_status(s.id, StrategyStatusUpdate(status="paper"))
+
+    tick(s.id)
+
+    # Dispatched to the OBJECT lane with persist=False and a fresh state.
+    assert not mock_ai_sdk.execution.evaluate.called
+    _, kwargs = mock_ai_sdk.execution.evaluate_by_object.call_args
+    assert kwargs["persist"] is False
+    assert kwargs["open_positions"] == []  # never ticked before
+    sent = mock_ai_sdk.execution.evaluate_by_object.call_args.args[0]
+    assert sent["asset"] == "ETH"
+    assert sent["execution_state"]["cash_balance"] == 10000.0
+
+    # Engine-shaped filled order executed as a paper trade.
+    trades = list_trades(s.id)
+    assert len(trades) == 1 and trades[0].mode == "paper"
+
+    # Returned state persisted for the NEXT tick's echo.
+    row = get_connection().execute(
+        "SELECT execution_state_json, open_positions_json FROM strategies WHERE id = ?",
+        (s.id,),
+    ).fetchone()
+    assert _json.loads(row["execution_state_json"])["cash_balance"] == 9900.0
+    assert _json.loads(row["open_positions_json"])[0]["id"] == "pos-e1"
+
+    # Second tick echoes the persisted blob back.
+    tick(s.id)
+    _, kwargs2 = mock_ai_sdk.execution.evaluate_by_object.call_args
+    assert kwargs2["open_positions"] == returned_positions
+    sent2 = mock_ai_sdk.execution.evaluate_by_object.call_args.args[0]
+    assert sent2["execution_state"]["cash_balance"] == 9900.0
+
+
+def test_tick_default_lane_stays_server(temp_db, mock_ai_sdk, monkeypatch):
+    """No evaluation_lane on the strategy and no config default -> the by-id
+    server lane with persist=True, exactly as before Phase 3."""
+    from src.services.strategy_service import (
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
+    )
+
+    eval_resp = MagicMock()
+    eval_resp.new_orders = []
+    eval_resp.order_intents = None
+    eval_resp.orders = None
+    eval_resp.model_dump.return_value = {}
+    mock_ai_sdk.execution.evaluate.return_value = eval_resp
+
+    s = create_manual(StrategyManualRequest(
+        name="server-lane-default", asset="ETH", timeframe="1h",
+        entry=[{"name": "rsi_oversold", "signal_type": "TRIGGER", "timeframe": "1h"}],
+    ))
+    update_status(s.id, StrategyStatusUpdate(status="inactive"))
+    update_status(s.id, StrategyStatusUpdate(status="paper"))
+
+    tick(s.id)
+
+    assert not mock_ai_sdk.execution.evaluate_by_object.called
+    _, kwargs = mock_ai_sdk.execution.evaluate.call_args
+    assert kwargs["persist"] is True
+
+
 def test_tick_catches_sdk_errors(temp_db, mock_ai_sdk):
     """SDK failure during tick logs evaluation with status=error, does NOT raise."""
     from src.services.strategy_service import (
