@@ -39,14 +39,16 @@ def client(tmp_path, monkeypatch):
     pair.model_dump.return_value = {"from_token": "USDC", "to_token": "ETH"}
     sdk.dex.supported_pairs.return_value = [pair]
 
+    # The backend quotes in BASE units (dex_service converts both ways):
+    # 100 USDC in (6 decimals), 0.04 ETH out (18 decimals).
     quote = MagicMock()
     quote.model_dump.return_value = {
-        "quote_id": "q-1", "input_amount": 100.0, "output_amount": 0.04,
+        "quote_id": "q-1",
+        "input_amount": 100_000_000,
+        "output_amount": 40_000_000_000_000_000,
         "exchange_rate": 2500.0,
     }
     quote.quote_id = "q-1"
-    quote.output_amount = 0.04
-    quote.exchange_rate = 2500.0
     quote.venue_fee = 0.0
     quote.mangrove_fee = 0.0
     quote.price_impact_percent = 0.0
@@ -90,6 +92,22 @@ def client(tmp_path, monkeypatch):
         return ti
 
     sdk.dex.token_info.side_effect = _token_info
+
+    # token_search backs dex_service.resolve_decimals for bare SYMBOLS —
+    # the /dex/swap tests pass "USDC"/"ETH" (the cron-intent convention).
+    # Without this stub a raw MagicMock silently yields decimals=1.
+    _SYMBOLS = {"USDC": 6, "ETH": 18, "WETH": 18}
+
+    def _token_search(chain_id, query):
+        dec = _SYMBOLS.get(query.upper())
+        if dec is None:
+            return []
+        m = MagicMock()
+        m.symbol = query.upper()
+        m.decimals = dec
+        return [m]
+
+    sdk.dex.token_search.side_effect = _token_search
 
     spot_price = MagicMock()
     spot_price.model_dump.return_value = {
@@ -293,6 +311,29 @@ def test_swap_happy_path(client):
     assert body["input_token"] == "USDC"
     assert body["output_token"] == "ETH"
     assert "trade_log_id" in body
+    # #122: the backend must receive BASE units (100 USDC @ 6 decimals),
+    # and the recorded amounts must be HUMAN units.
+    _, kwargs = client.app_sdk.dex.get_quote.call_args
+    assert kwargs["amount"] == 100_000_000
+    assert body["input_amount"] == pytest.approx(100.0)
+    assert body["output_amount"] == pytest.approx(0.04)
+
+
+def test_swap_rejects_dust_amount(client):
+    """#122: a live-path amount that rounds to 0 base units is refused
+    before any quote/approval/signing — same guard as /dex/quote."""
+    r = client.post(
+        "/api/v1/agent/dex/swap",
+        headers=_auth(),
+        json={
+            "input_token": "USDC", "output_token": "ETH", "amount": 0.0000001,
+            "chain_id": 84532, "wallet_address": "0xabc",
+            "slippage_pct": 0.002, "confirm": True,
+        },
+    )
+    assert r.status_code == 400
+    assert r.json()["code"] == "VALIDATION_ERROR"
+    assert not client.app_sdk.dex.broadcast.called
 
 
 def test_auth_required_on_dex_endpoints(client):

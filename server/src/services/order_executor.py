@@ -5,7 +5,7 @@ Takes an OrderIntent and executes it:
   build a simulated Trade row with mode=paper, status=simulated,
   tx_hash=None.
 - Live mode: full 6-step DEX swap via mangrovemarkets:
-    1. dex.get_quote
+    1. dex_service.get_quote (human amount -> base units at the boundary)
     2. dex.approve_token (may return None if allowance already set)
     3. If approval returned: wallet_manager.sign → dex.broadcast → poll tx_status
     4. dex.prepare_swap
@@ -30,7 +30,7 @@ from typing import Any, Literal
 
 from src.config import app_config
 from src.models.domain import OrderIntent, Trade
-from src.services import trade_log
+from src.services import dex_service, trade_log
 from src.services.wallet_manager import sign as wallet_sign
 from src.shared.clients.mangrove import mangrove_ai_client, mangrove_markets_client
 from src.shared.errors import SdkError, SigningError
@@ -239,26 +239,27 @@ def _live_swap(
     client = mangrove_markets_client()
     input_token, output_token, input_amount = _resolve_tokens(intent)
 
-    # 1. Quote
-    try:
-        quote = client.dex.get_quote(
-            input_token=input_token,
-            output_token=output_token,
-            amount=input_amount,
-            chain_id=chain_id,
-            venue_id=venue_id,
-        )
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"dex.get_quote failed: {e}") from e
+    # 1. Quote — via dex_service, the single human<->base-units boundary.
+    # `input_amount` is HUMAN units (the agent's convention everywhere);
+    # dex_service resolves the token's decimals, converts to the base
+    # units the backend expects, rejects dust that rounds to 0, and
+    # converts the returned amounts back to human units.
+    quote = dex_service.get_quote(
+        input_token=input_token,
+        output_token=output_token,
+        amount=input_amount,
+        chain_id=chain_id,
+        venue_id=venue_id,
+    )
 
     _log.info("order.executing", trade_symbol=intent.symbol, side=intent.side,
               input_token=input_token, output_token=output_token,
-              input_amount=input_amount, quote_id=getattr(quote, "quote_id", None))
+              input_amount=input_amount, quote_id=quote.get("quote_id"))
 
     fees: dict[str, Any] = {
-        "venue_fee": getattr(quote, "venue_fee", 0.0),
-        "mangrove_fee": getattr(quote, "mangrove_fee", 0.0),
-        "price_impact_percent": getattr(quote, "price_impact_percent", 0.0),
+        "venue_fee": quote.get("venue_fee", 0.0),
+        "mangrove_fee": quote.get("mangrove_fee", 0.0),
+        "price_impact_percent": quote.get("price_impact_percent", 0.0),
     }
 
     # 2-3. Conditional token approval
@@ -273,7 +274,7 @@ def _live_swap(
     sdk_slippage = slippage_pct * 100.0  # type: ignore[operator]
     try:
         swap_tx = client.dex.prepare_swap(
-            quote_id=quote.quote_id,
+            quote_id=quote["quote_id"],
             wallet_address=wallet_address,
             slippage=sdk_slippage,
         )
@@ -298,6 +299,19 @@ def _live_swap(
     _log.info("order.live.confirmed", tx_hash=tx_hash, status=status_str,
               block_number=final.get("block_number"))
 
+    # dex_service already converted output_amount back to human units
+    # (the raw value is quote["output_amount_base_units"]).
+    output_amount = float(quote.get("output_amount", 0.0))
+
+    # Fill price in the paper-mode convention: the price of intent.symbol
+    # in the counter-token (input per output on a buy, output per input on
+    # a sell). The quote's raw exchange_rate is a BASE-UNITS ratio (e.g.
+    # 1.79e-9 for WETH->USDC), not a human price — never store it as one.
+    if intent.side == "buy":
+        fill_price = (input_amount / output_amount) if output_amount else 0.0
+    else:
+        fill_price = (output_amount / input_amount) if input_amount else 0.0
+
     trade = Trade(
         id=str(uuid.uuid4()),
         strategy_id=strategy_id,
@@ -308,8 +322,8 @@ def _live_swap(
         input_token=input_token,
         input_amount=input_amount,
         output_token=output_token,
-        output_amount=float(getattr(quote, "output_amount", 0.0)),
-        fill_price=float(getattr(quote, "exchange_rate", 0.0)),
+        output_amount=output_amount,
+        fill_price=fill_price,
         fees={**fees, "approval_tx_hash": approval_tx_hash},
         status=trade_status,
         executed_at=trade_log.now_utc(),
@@ -331,10 +345,10 @@ def execute_one(
 ) -> Trade:
     """Execute a single OrderIntent.
 
-    `slippage_pct` is a DECIMAL (0.005 = 0.5%). User-initiated swaps
-    require it (enforced at the MCP / REST boundary). Cron callers may
-    pass None — _live_swap falls back to 1% with a log warning until
-    the allocation schema carries slippage_pct (future work).
+    `slippage_pct` is a DECIMAL (0.005 = 0.5%). REQUIRED for live mode —
+    there is no fallback; _validate_slippage raises without it. Direct
+    callers pass it in the request body, cron callers pull it from the
+    active allocation (migration 004).
 
     strategy_id defaults to "user-initiated" for /dex/swap-style callers;
     cron-driven callers pass the real strategy UUID.
