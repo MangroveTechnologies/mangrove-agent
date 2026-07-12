@@ -29,7 +29,7 @@ import uuid
 from typing import Any, Literal
 
 from src.config import app_config
-from src.models.domain import OrderIntent, Trade
+from src.models.domain import OrderIntent, Position, Trade
 from src.services import dex_service, trade_log
 from src.services.wallet_manager import sign as wallet_sign
 from src.shared.clients.mangrove import mangrove_ai_client, mangrove_markets_client
@@ -379,8 +379,8 @@ def execute_one(
     cron-driven callers pass the real strategy UUID.
     """
     if mode == "paper":
-        return _paper_fill(intent, strategy_id=strategy_id, evaluation_id=evaluation_id)
-    if mode == "live":
+        trade = _paper_fill(intent, strategy_id=strategy_id, evaluation_id=evaluation_id)
+    elif mode == "live":
         if not wallet_address:
             raise SigningError(
                 "wallet_address is required for live execution.",
@@ -392,7 +392,7 @@ def execute_one(
         # not move real funds without it. Paper mode is exempt (above).
         from src.services.wallet_manager import require_backup_confirmed
         require_backup_confirmed(wallet_address)
-        return _live_swap(
+        trade = _live_swap(
             intent,
             strategy_id=strategy_id,
             evaluation_id=evaluation_id,
@@ -402,7 +402,87 @@ def execute_one(
             slippage_pct=slippage_pct,
             max_input_amount=max_input_amount,
         )
-    raise SigningError(f"Unknown mode: {mode}")
+    else:
+        raise SigningError(f"Unknown mode: {mode}")
+
+    _maintain_position(trade, strategy_id=strategy_id)
+    return trade
+
+
+def _maintain_position(trade: Trade, strategy_id: str) -> None:
+    """Keep the LOCAL positions table in sync with strategy fills (#151).
+
+    The agent persists its own positions in ALL cases — regardless of
+    which evaluation lane produced the intent or whether the engine also
+    tracks the position server-side. Entry fills open a row (keyed to the
+    engine's position id when the intent carries one), exit fills close
+    the matching row pro-rata and fill the exit trade's p_and_l.
+
+    Bookkeeping must never fail a trade: errors are logged, not raised.
+    User-initiated swaps (no strategy) are not positions — skipped.
+    """
+    intent = trade.order_intent
+    if intent is None or strategy_id == "user-initiated":
+        return
+    if trade.status == "failed":
+        return
+    try:
+        if intent.action == "enter":
+            # Asset quantity acquired: for a buy, the output leg.
+            entry_amount = trade.output_amount if intent.side == "buy" else trade.input_amount
+            trade_log.update_position(Position(
+                id=intent.engine_position_id or str(uuid.uuid4()),
+                strategy_id=strategy_id,
+                asset=intent.symbol,
+                entry_trade_id=trade.id,
+                entry_price=trade.fill_price,
+                entry_amount=float(entry_amount or 0.0),
+                entry_time=trade.executed_at,
+                status="open",
+                stop_loss=intent.stop_loss,
+                take_profit=intent.take_profit,
+            ))
+            return
+
+        # Exit: close the engine-keyed row, else oldest open (FIFO).
+        position = None
+        if intent.engine_position_id:
+            position = trade_log.get_position(intent.engine_position_id)
+        if position is None or position.status != "open":
+            position = trade_log.find_open_position(strategy_id, intent.symbol)
+        if position is None:
+            _log.warning(
+                "position.exit.unmatched",
+                strategy_id=strategy_id,
+                symbol=intent.symbol,
+                engine_position_id=intent.engine_position_id,
+                trade_id=trade.id,
+            )
+            return
+
+        # Asset quantity sold: for a sell, the input leg.
+        exit_amount = float((trade.input_amount if intent.side == "sell" else trade.output_amount) or 0.0)
+        position.exit_trade_id = trade.id
+        position.exit_price = trade.fill_price
+        position.exit_amount = exit_amount
+        position.exit_time = trade.executed_at
+        position.status = "closed"
+        trade_log.update_position(position)
+
+        # P&L on the exit trade, pro-rata for partial exits.
+        closed_fraction = (
+            min(exit_amount / position.entry_amount, 1.0) if position.entry_amount else 1.0
+        )
+        entry_cost = position.entry_price * position.entry_amount * closed_fraction
+        exit_proceeds = trade.fill_price * exit_amount
+        trade_log.set_trade_pnl(trade.id, exit_proceeds - entry_cost)
+    except Exception as e:  # noqa: BLE001
+        _log.error(
+            "position.bookkeeping.errored",
+            strategy_id=strategy_id,
+            trade_id=trade.id,
+            exception=str(e),
+        )
 
 
 def execute_many(

@@ -116,7 +116,68 @@ def update_position(position: Position) -> None:
     conn.commit()
 
 
+def set_trade_pnl(trade_id: str, p_and_l: float) -> None:
+    """Fill a trade's p_and_l after its position closes (exit trades)."""
+    conn = get_connection()
+    conn.execute("UPDATE trades SET p_and_l = ? WHERE id = ?", (p_and_l, trade_id))
+    conn.commit()
+
+
 # -- Query helpers -----------------------------------------------------------
+
+
+def _row_to_position(r) -> Position:
+    return Position(
+        id=r["id"],
+        strategy_id=r["strategy_id"],
+        asset=r["asset"],
+        entry_trade_id=r["entry_trade_id"],
+        exit_trade_id=r["exit_trade_id"],
+        entry_price=r["entry_price"],
+        entry_amount=r["entry_amount"],
+        entry_time=datetime.fromisoformat(r["entry_time"]),
+        exit_price=r["exit_price"],
+        exit_amount=r["exit_amount"],
+        exit_time=datetime.fromisoformat(r["exit_time"]) if r["exit_time"] else None,
+        status=r["status"],
+        stop_loss=r["stop_loss"],
+        take_profit=r["take_profit"],
+    )
+
+
+def get_position(position_id: str) -> Position | None:
+    r = get_connection().execute(
+        "SELECT * FROM positions WHERE id = ?", (position_id,)
+    ).fetchone()
+    return _row_to_position(r) if r else None
+
+
+def find_open_position(strategy_id: str, asset: str) -> Position | None:
+    """Oldest open position for (strategy, asset) — FIFO fallback for exits
+    whose intent carries no engine_position_id."""
+    r = get_connection().execute(
+        """SELECT * FROM positions
+           WHERE strategy_id = ? AND asset = ? AND status = 'open'
+           ORDER BY entry_time ASC LIMIT 1""",
+        (strategy_id, asset),
+    ).fetchone()
+    return _row_to_position(r) if r else None
+
+
+def list_positions(strategy_id: str, status: str | None = None, limit: int = 50) -> list[Position]:
+    if status:
+        rows = get_connection().execute(
+            """SELECT * FROM positions WHERE strategy_id = ? AND status = ?
+               ORDER BY entry_time DESC LIMIT ?""",
+            (strategy_id, status, limit),
+        ).fetchall()
+    else:
+        rows = get_connection().execute(
+            """SELECT * FROM positions WHERE strategy_id = ?
+               ORDER BY entry_time DESC LIMIT ?""",
+            (strategy_id, limit),
+        ).fetchall()
+    return [_row_to_position(r) for r in rows]
 
 
 def _row_to_evaluation(r) -> Evaluation:

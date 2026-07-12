@@ -15,6 +15,8 @@ A local Mangrove-powered trading bot. Author strategies, backtest, paper-trade, 
 
 **Service-layer pattern:** Routes and MCP tools both call shared services in `server/src/services/`. Never duplicate business logic.
 
+**State ownership:** THIS agent owns the tick and the record. APScheduler here fires every strategy evaluation (MangroveAI never schedules for the agent), and the local SQLite (`agent-data/agent.db`) persists every trade, evaluation, position, and per-strategy `execution_state` — unconditionally, regardless of evaluation lane. Evaluation itself (signals, sizing, exits) happens in the MangroveAI engine via `evaluation_lane`: `server` (default — by-id; engine DB is authoritative for engine position state) or `stateless` (object-lane; the agent supplies and receives all state — pending MangroveAI#840). The engine decides *what* to trade; the agent decides *when to ask*, executes, and keeps the books.
+
 ## Conventions
 
 - Routes in `server/src/api/routes/` -- one file per resource

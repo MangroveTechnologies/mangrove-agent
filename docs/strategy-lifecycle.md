@@ -42,6 +42,25 @@ Key properties:
 - **Invariant: as long as uvicorn is running, strategies tick.**
   Close the laptop or kill the process → nothing fires.
 
+### What the agent persists locally, in all cases
+
+Every tick leaves a complete local record in `agent.db`, regardless of
+evaluation lane (#151):
+
+| Table | Written by | What |
+|---|---|---|
+| `evaluations` | `strategy_service.tick` | Verbatim engine response per tick, incl. `execution_state` |
+| `strategies.execution_state_json` | `strategy_service.tick` (migration 005) | Latest engine account/risk state per strategy — the value the stateless lane round-trips |
+| `trades` | `order_executor` | Every fill, paper or live; exit trades carry `p_and_l` |
+| `positions` | `order_executor._maintain_position` | Opened on entry fills (keyed to the engine's position id), closed with P&L on exit fills |
+
+The division of labor: the **engine decides what to trade** (signals,
+sizing, bracket exits — only `status: "filled"` engine orders execute
+here); the **agent decides when to ask** (its scheduler), executes, and
+keeps the books. `evaluation_lane` (`server` default | `stateless` once
+MangroveAI#840 ships) chooses where the engine's position state lives —
+the local record above exists either way.
+
 ## 2. Deploy to paper
 
 ```
