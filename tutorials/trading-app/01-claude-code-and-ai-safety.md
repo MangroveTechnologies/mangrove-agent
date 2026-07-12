@@ -21,8 +21,8 @@ language; Claude reads files, runs commands, edits code, and answers.
 It runs locally on your laptop and connects to Anthropic's API for the
 language model itself.
 
-For this workshop, five concepts are worth naming so you recognize
-them when they show up.
+Five concepts are worth naming so you recognize them when they
+show up.
 
 ### 1. The conversation is the interface
 
@@ -51,7 +51,7 @@ Open `.claude/` in this repo and you'll see three subdirectories:
   message you send for private-key patterns and blocks the submit
   if it finds one.
 
-You won't need to edit these during the workshop. But knowing they
+You won't need to edit these while working through the tutorial. But knowing they
 exist is how you debug surprising behavior: if the bot refused to do
 something, it's almost always a rule or hook, not a mystery.
 
@@ -95,8 +95,8 @@ wallets live in the local database, not the conversation. You can
 
 ## The three safety nets
 
-Workshop attendees repeatedly made the same three mistakes in earlier
-versions of this setup, and each one cost money or leaked secrets.
+New users repeatedly make the same three mistakes, and each one
+costs money or leaks secrets.
 We rebuilt the system so those mistakes are structurally impossible,
 not just "please don't" conventions. You should know what they are
 because the bot's refusals will sometimes feel annoying, and the
@@ -200,7 +200,7 @@ database row is there. If a row is missing, it didn't happen.
 
 ## Transcript hygiene
 
-Two habits worth forming this workshop:
+Two habits worth forming early:
 
 1. **`/clear` between major phases.** Finish authoring a strategy
    and promoting it to paper? Start a fresh conversation for the
@@ -227,8 +227,9 @@ happened; also a thing to be aware of.
 - **Not a portfolio manager.** It executes the strategy you tell it
   to, on the allocation you give it. It doesn't rebalance, doesn't
   optimize across strategies, doesn't tax-loss-harvest.
-- **Not production software.** This is a workshop template — local
-  first, single user, beta-quality. If you end up running this with
+- **Not production software.** This is a local starter you own and
+  extend — local first, single user, beta-quality. Audit it before
+  trusting it with meaningful funds. If you end up running this with
   serious capital, you're operating it, not a team of pager-carrying
   SREs.
 

@@ -37,7 +37,7 @@ State: *"Creating your wallet on Base Sepolia (testnet). You can fund it from a 
 
 **Mainnet** (only when explicitly asked): chain `evm`, network `mainnet`, chain ID `8453` (Base). Always flag the switch: *"Switching to Base mainnet — this wallet will transact real funds. Start with 1-5 USDC test deposit and use paper mode before any live allocation."*
 
-**Why testnet-first:** workshop attendees learn the signing + swap mechanics safely. A compromised key on testnet is free to recover from; on mainnet it costs real USDC (see the 2026-04-24 EIP-7702 drain that prompted the hard signing guard).
+**Why testnet-first:** new users learn the signing + swap mechanics safely. A compromised key on testnet is free to recover from; on mainnet it costs real USDC (see the 2026-04-24 EIP-7702 drain that prompted the hard signing guard).
 
 ## Signing guard -- what the agent can and cannot sign
 

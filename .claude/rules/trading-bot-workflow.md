@@ -36,7 +36,7 @@ mcp__mangrove-agent__status, list_tools, list_signals, list_wallets, create_wall
 
 ## Stage 0 -- platform tour (no wallet required)
 
-**Trigger:** first interaction in a fresh clone (the `.claude/.onboarded` marker is **absent**), OR the user asks for a tour. Don't skip on a genuine fresh clone -- workshop attendees need to see the product work before being asked to commit a key. Paper trading runs without a wallet; the full author -> backtest -> paper -> evaluate loop is reachable with zero on-chain exposure.
+**Trigger:** first interaction in a fresh clone (the `.claude/.onboarded` marker is **absent**), OR the user asks for a tour. Don't skip on a genuine fresh clone -- new users need to see the product work before being asked to commit a key. Paper trading runs without a wallet; the full author -> backtest -> paper -> evaluate loop is reachable with zero on-chain exposure.
 
 **Suppression (respect the marker):** if `.claude/.onboarded` **exists**, do NOT auto-fire the tour -- the user has already seen it or opted out. Go straight to Stage 1. The user can still replay it any time by asking ("give me the tour") or by removing the marker (`rm .claude/.onboarded`). A user who wants to skip up front can pass `./scripts/setup.sh --skip-tour`, which writes the marker before Claude Code first launches. The marker is gitignored (per-user, never committed).
 

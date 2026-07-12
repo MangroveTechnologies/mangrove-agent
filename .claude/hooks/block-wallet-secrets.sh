@@ -10,7 +10,7 @@
 #   A 0x+64-hex or a real BIP39 mnemonic anywhere in the user's message is
 #   blocked. User input doesn't contain tx hashes (those come from tool
 #   output), so a bare pattern match is safe and catches the common case of
-#   an attendee pasting their key.
+#   a user pasting their key.
 #
 # --mode tool:
 #   Tool responses routinely contain tx hashes that match the 0x+64-hex

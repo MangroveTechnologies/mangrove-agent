@@ -35,7 +35,7 @@ class _Config:
         gcp_project_id = os.getenv("GCP_PROJECT_ID")
         # Only warn when Secret Manager will actually be used — i.e. a config
         # value is a `secret:name:property` reference. Local configs use plain
-        # values, so an unconditional warning here just alarms local/workshop
+        # values, so an unconditional warning here just alarms local
         # users for a lookup that never happens.
         uses_secret_refs = any(
             isinstance(v, str) and v.startswith("secret:")

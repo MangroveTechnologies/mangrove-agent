@@ -200,10 +200,10 @@ Live adds three guarantees over paper:
 
 | Alternative | Why not |
 |---|---|
-| Unix `crontab` + `curl` per attendee | Each user has to configure system cron; unusable from a Claude Code workshop flow |
+| Unix `crontab` + `curl` per user | Each user has to configure system cron; unusable from a Claude Code flow |
 | Separate Python daemon + IPC | More moving parts, more things to restart, more failure modes |
 | Cloud Scheduler / EventBridge | Out of scope for local-first v1; requires cloud deployment |
-| Celery / RQ worker | Heavier than needed for 1-10 strategies per attendee |
+| Celery / RQ worker | Heavier than needed for 1-10 strategies per user |
 
 The in-process APScheduler gives:
 - Zero infra — one process

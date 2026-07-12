@@ -37,15 +37,17 @@ A local AI trading agent that:
 
 ---
 
-## Workshop attendee? Start here.
+## Get started
 
-**First time here?** Follow **[`SETUP.md`](SETUP.md)** first — it walks through installing Git, Python, Node.js, and Claude Code in order (Mac and Windows), clones the repo, and gets the agent running. Come back here once setup is done.
+This repo is **your own trading agent**: you run it on your machine, your keys never leave it, and it's the reference consumer of the [Mangrove API](https://mangrovedeveloper.ai) — clone it, make it yours, extend it into your own trading system.
 
-The full guided walkthrough lives in **[`tutorials/trading-app/`](tutorials/trading-app/00-index.md)** — 8 chapters that take you from "I just cloned this" to "I have a paper strategy running" to (optionally) "I made a live swap."
+1. **Get a Mangrove API key** — free at https://mangrovedeveloper.ai.
+2. **Follow [`SETUP.md`](SETUP.md)** — installs Git, Python, Node.js, and Claude Code in order (Mac and Windows), clones the repo, and gets the agent running. The setup script prompts for your API key.
+3. **Take the guided walkthrough** at [`tutorials/trading-app/`](tutorials/trading-app/00-index.md) — 8 self-paced chapters from "I just cloned this" to "I have a paper strategy running" to (optionally) "I made a live swap."
 
-Chapters 01–05 are **fund-free**. Chapters 06–08 are optional and need a small amount of USDC. Budget ~2 hours for the whole path.
+Chapters 01–05 are **fund-free** — author, backtest, and paper-trade with zero on-chain exposure. Chapters 06–08 are optional and need a small amount of USDC.
 
-Not doing the workshop? Keep reading — the rest of this README is a reference.
+Already know your way around? Keep reading — the rest of this README is a reference.
 
 ---
 

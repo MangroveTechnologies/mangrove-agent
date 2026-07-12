@@ -228,13 +228,12 @@ Things this bot can do now:
 
 - EVM chains (Base, Ethereum, Arbitrum, Polygon, Optimism, BNB,
   Avalanche, zkSync, Gnosis, Linea) for wallet management.
-- Base mainnet for live trading (the default throughout the
-  workshop).
+- Base mainnet for live trading (the default throughout this
+  tutorial).
 - Strategies on 5m / 15m / 30m / 1h / 4h / 1d timeframes.
 - DEX swaps via 1inch.
 - Paper and live trading modes.
-- Up to a few strategies running simultaneously (workshop target:
-  one).
+- Up to a few strategies running simultaneously (start with one).
 
 Things this bot **cannot** do in v1:
 

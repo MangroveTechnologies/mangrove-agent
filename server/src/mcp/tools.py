@@ -315,8 +315,7 @@ def _register_wallet(server: FastMCP) -> None:
         """Running P&L across one or more wallets.
 
         Returns realized + unrealized P&L based on the upstream's
-        cost-basis accounting. Workshop-critical answer to "how am
-        I doing?"
+        cost-basis accounting. The answer to "how am I doing?"
         """
         if not _require(api_key):
             return _auth_error()
@@ -688,7 +687,7 @@ def _register_dex(server: FastMCP) -> None:
     ) -> str:
         """Check the status of a broadcast transaction.
 
-        Workshop-critical post-swap verification: execute_swap returns
+        Post-swap verification: execute_swap returns
         a tx_hash before the tx is finalized. Call this tool after to
         confirm the transaction landed (status: confirmed | pending |
         failed). Pass-through to mangrovemarkets.dex.tx_status.
@@ -767,7 +766,7 @@ def _register_dex(server: FastMCP) -> None:
         Symbols are NOT accepted (upstream 1inch backend rejects
         them with 400 Bad Request). Use get_token_info first if
         you only have a symbol — though that tool is currently
-        broken (see its docstring). Workshop path: hardcode known
+        broken (see its docstring). Reliable path: hardcode known
         addresses (USDC on Base = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913,
         WETH on Base = 0x4200000000000000000000000000000000000006).
 
@@ -1044,8 +1043,8 @@ def _register_market(server: FastMCP) -> None:
     ) -> str:
         """List approved-universe crypto assets (with optional min_score filter).
 
-        Defaults to approved_only=True (the safe workshop subset).
-        Workshop attendees use this to see what's tradeable.
+        Defaults to approved_only=True (the safe curated subset).
+        Use this to see what's tradeable.
         """
         if not _require(api_key):
             return _auth_error()
@@ -2446,7 +2445,7 @@ def _register_strategy(server: FastMCP) -> None:
     async def delete_strategy(strategy_id: str, api_key: str = "") -> str:
         """Delete a strategy upstream on MangroveAI.
 
-        Workshop attendees create throwaway strategies and will want
+        New users create throwaway strategies and will want
         to clean up. This hits mangroveai.strategies.delete — the
         upstream strategy row is removed. Our LOCAL SQLite cache of
         the strategy stays; the local row is harmless once the

@@ -71,7 +71,7 @@ Before saying "go live," decide:
 
 ### `amount` — how much of your wallet's USDC the strategy can trade
 
-For a workshop with 1–5 USDC total, **set `amount` to $1**. This
+For a first run with 1–5 USDC total, **set `amount` to $1**. This
 gives the strategy enough to actually trade (most DEXes have
 minimum sizes around $0.50), while keeping your first real trade
 small.
@@ -91,7 +91,7 @@ Guidance:
 
 | Pair | Recommended slippage | Reasoning |
 |---|---|---|
-| USDC ↔ ETH (the workshop pair) | 0.001 (0.1%) | Deepest liquidity on Base. |
+| USDC ↔ ETH (the example pair) | 0.001 (0.1%) | Deepest liquidity on Base. |
 | USDC ↔ WBTC | 0.001–0.002 (0.1–0.2%) | Very liquid. |
 | USDC ↔ cbETH / stETH | 0.002 (0.2%) | Liquid, slightly thinner pools. |
 | USDC ↔ long-tail altcoin | Don't. | If you need > 0.25%, the liquidity isn't there. |
@@ -101,7 +101,7 @@ because higher slippage values on illiquid pairs invite sandwich
 attackers to extract the difference. The cap is protection, not
 paternalism.
 
-For this chapter's workshop trade: `slippage_pct: 0.002` (0.2%) on
+For this chapter's example trade: `slippage_pct: 0.002` (0.2%) on
 USDC↔ETH. Conservative but not too tight.
 
 ## 3. Promote to live

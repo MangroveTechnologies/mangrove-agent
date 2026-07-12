@@ -1,8 +1,8 @@
-# Your First Trading Bot — Workshop Guide
+# Your First Trading Bot
 
-Welcome. This is the attendee-facing walkthrough for the *Bots & Bytes*
-workshop. By the end, you'll have a Mangrove-powered trading bot
-running on your own laptop: authoring strategies, backtesting them,
+Welcome. This is a self-paced tutorial for building your own trading
+agent on the Mangrove API. By the end, you'll have a Mangrove-powered
+trading bot running on your own laptop: authoring strategies, backtesting them,
 paper-trading, and (if you choose) executing real swaps with real funds
 on Base.
 
@@ -43,15 +43,15 @@ strategy logic, and market data.
 | 08 | [Monitor, troubleshoot, extend](08-monitor-troubleshoot-extend.md) | no | 20 min |
 | 09 | [Score strategies with SIEVE before backtesting](09-oracle-strategies.md) | no | 20 min |
 
-**Total if you do everything: ~2 hr 20 min.**
+This is self-paced — take it in whatever chunks work for you.
+Chapters 01–05 fit comfortably in an afternoon.
 
 ## Before you start
 
-See [`docs/workshop-prereqs.md`](../../docs/workshop-prereqs.md) for the
-one-pager: VSCode, Python 3.11, Claude Code CLI, a Mangrove API key,
-and (if you're on Windows) Git Bash. If you're reading this at the
-workshop, everything on that list should already be done — ask your
-facilitator if not.
+See [`SETUP.md`](../../SETUP.md) for the prerequisites: VSCode,
+Python 3.11, Claude Code CLI, a Mangrove API key (free at
+https://mangrovedeveloper.ai), and (if you're on Windows) Git Bash.
+If you set up with SETUP.md, everything on that list is already done.
 
 ## A note on safety
 

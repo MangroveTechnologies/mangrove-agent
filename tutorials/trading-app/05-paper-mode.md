@@ -10,7 +10,7 @@ No wallet, no funds, no on-chain activity.
 
 This is the last fund-free chapter. If you want to stop here, you
 will still have accomplished the full author → backtest → paper →
-evaluate loop. Everything from Chapter 06 onward is for attendees who
+evaluate loop. Everything from Chapter 06 onward is for when you
 want to move real money.
 
 ## Promote to paper
@@ -193,9 +193,10 @@ Depends on your timeframe and risk appetite. Rough heuristic:
 | `1h` | 2–4 days | Want to see at least 10–20 evaluations cross the strategy's trigger region. |
 | `4h` / `1d` | 1–2 weeks | Slow enough that the sample size matters. |
 
-For a workshop, you'll paper for a couple of hours at most — not
-long enough to truly judge the strategy, but long enough to see the
-mechanics work. That's fine as a demo. For real capital, longer.
+Resist the urge to rush this. A couple of hours of paper is enough
+to see the mechanics work, but not enough to judge the strategy —
+paper for at least a day or two (see the table above for your
+timeframe) before considering live. For real capital, longer.
 
 ## What not to do in paper
 

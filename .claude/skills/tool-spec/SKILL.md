@@ -54,7 +54,7 @@ When drafting tools that touch signing, wallets, or execution, state explicitly 
 
 - Signing flows MUST route through `wallet_manager.sign()` — the hard guard there refuses non-1inch payloads (see `.claude/rules/wallet-presentation.md`).
 - New tools that take a wallet address MUST check `backup_confirmed_at` before executing anything that moves real funds.
-- New tools that take a chain_id MUST default to Base Sepolia (84532) for workshop contexts; mainnet (8453) requires an explicit user signal.
+- New tools that take a chain_id MUST default to Base Sepolia (84532); mainnet (8453) requires an explicit user signal.
 
 ## Output
 

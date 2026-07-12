@@ -293,9 +293,9 @@ To change backtest thresholds (e.g., tighten Sharpe to 1.5 from
 1.2), edit `threshold_spec.json`. Applies to all subsequent
 backtests.
 
-## Post-workshop: things to try
+## Where to go next
 
-If you finished the workshop and want to keep going:
+If you finished the tutorial and want to keep going:
 
 1. **Let your strategy run for a week.** Check back with
    `list_trades`, `portfolio_pnl`. See how backtest expectations
@@ -339,10 +339,10 @@ If you finished the workshop and want to keep going:
   to the bot. If something goes sideways, you can always withdraw
   to MetaMask using the private key you saved in Chapter 06.
 
-That's the workshop. You went from zero to a working,
+That's the tutorial. You went from zero to a working,
 Mangrove-powered, self-custody trading bot running on your own
 laptop, with a paper strategy or a live strategy — whichever you
 stopped at. Build things. Trade carefully. Come back when you want
 to level up.
 
-— End of the workshop tutorial.
+— End of the tutorial.

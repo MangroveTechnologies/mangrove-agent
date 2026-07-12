@@ -175,7 +175,7 @@ def _dump(obj: Any) -> Any:
     description=(
         "Pass-through to mangrovemarkets.dex.tx_status. Use after "
         "execute_swap to verify a transaction landed + its final state "
-        "(confirmed | pending | failed). Workshop-critical: lets the "
+        "(confirmed | pending | failed). Lets the "
         "agent/user confirm a swap actually settled before acting on "
         "balance changes."
     ),
