@@ -63,7 +63,7 @@ _ENCRYPTION_METHOD = "fernet-v1"
 
 # Canonical 1inch AggregationRouter deployments. 1inch uses deterministic
 # CREATE2 deploys so the same addresses apply on Base mainnet (chain_id 8453)
-# AND Base Sepolia testnet (chain_id 84532). Workshop flows start on
+# AND Base Sepolia testnet (chain_id 84532). New-user flows start on
 # testnet — the guard must not discriminate by chain. If 1inch ships a V7
 # or a new chain deploys at a different address, add it here.
 _ONEINCH_ROUTERS: set[str] = {

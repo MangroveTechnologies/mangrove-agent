@@ -9,14 +9,15 @@ fire in a fresh Claude Code session.
 ## Before you start
 
 You should already have these installed (see
-[`docs/workshop-prereqs.md`](../../docs/workshop-prereqs.md) if not):
+[`SETUP.md`](../../SETUP.md) if not — if you set up with SETUP.md,
+everything on this list is already done):
 
 - **Python 3.11 or newer** (`python3 --version` to check)
 - **Git** (`git --version`)
 - **Claude Code CLI** (`claude --version`; install via
   `npm install -g @anthropic-ai/claude-code`)
-- **A Mangrove API key** (the workshop facilitator will hand one out,
-  or grab one from https://mangrovedeveloper.ai)
+- **A Mangrove API key** (get your own at https://mangrovedeveloper.ai
+  — it's free)
 - **VSCode** (recommended — the integrated terminal makes things
   smoother)
 - **Git Bash** if you're on Windows (macOS and Linux use their
@@ -60,7 +61,8 @@ First run takes about 60 seconds. It does, in order:
    pre-set via `./scripts/setup.sh --api-key <key>` for non-interactive
    setups.)
 3. Asks for the `MANGROVEMARKETS_BASE_URL`. Accept the default
-   (Mangrove's hosted URL) unless the facilitator told you otherwise.
+   (Mangrove's hosted URL) unless you're pointing at your own
+   deployment.
 4. Creates `agent-data/` (chmod 700) for durable state.
 5. Builds a Python venv at `.venv/` and `pip install`s dependencies.
 6. Starts the uvicorn server in the background on

@@ -10,11 +10,11 @@ promoting to paper.
 
 A "strategy" in this system has five parts:
 
-1. **An asset** — the token you want to trade. Default for the
-   workshop: ETH.
+1. **An asset** — the token you want to trade. This tutorial uses
+   ETH.
 2. **A timeframe** — the cadence at which the bot evaluates the
    strategy. Supported values: `5m`, `15m`, `30m`, `1h`, `4h`, `1d`.
-   Workshop recommendation: `1h` (enough signal, not too much
+   Recommended: `1h` (enough signal, not too much
    noise, and backtests complete quickly).
 3. **Entry signals** — things that have to be true to open a
    position. Examples: RSI crossed up from oversold, SMA fast
@@ -22,8 +22,8 @@ A "strategy" in this system has five parts:
 4. **Exit signals** — things that trigger closing. Examples: RSI
    crossed down from overbought, trailing stop hit, fixed target.
 5. **Risk config** — position size as a fraction of allocation,
-   stop-loss %, take-profit %, time-based exits, etc. The workshop
-   uses sensible defaults; you can override anything.
+   stop-loss %, take-profit %, time-based exits, etc. Sensible
+   defaults ship out of the box; you can override anything.
 
 The bot can author a strategy in three modes. We'll use the one
 that works best for beginners: **reference-first**.
@@ -97,7 +97,7 @@ timeframe but same category, or same timeframe but different style.
 Read the category and timeframe of each candidate before picking;
 don't assume all three are exact matches for what you asked.
 
-**Pick one.** For the workshop, say: `"Let's try ref-001."`
+**Pick one.** Say: `"Let's try ref-001."`
 
 ## 2. Build + backtest
 
@@ -222,7 +222,7 @@ the same way you would with references.
 **Tradeoff:** autonomous candidates sometimes use unusual signal
 combinations that weren't curated, so the resulting strategy is
 less interpretable ("why did it pick pvo_bullish_cross?"). Fine
-for a workshop, but the reference library is the more trustworthy
+for experimenting, but the reference library is the more trustworthy
 starting point.
 
 ## 6. What's in your DB now
@@ -276,7 +276,7 @@ they form). Chapter 05.
 
 ### "Can I edit a strategy after creating it?"
 
-Not in-place. The workshop pattern is: create a new strategy, let
+Not in-place. The pattern is: create a new strategy, let
 the old one age out or archive it. If you want to try "same signals,
 different params," ask the bot to `build_strategy_from_reference`
 again with overrides, or build manually.

@@ -1,10 +1,10 @@
 # Chapter 06 — Wallet setup
 
-*15 minutes. Funds required ($1–5 USDC recommended for the workshop).*
+*15 minutes. Funds required ($1–5 USDC recommended to start).*
 
 This chapter is the security-critical one. Take it slowly. If any
-step feels wrong, stop and ask the facilitator — this is the moment
-where mistakes cost actual money.
+step feels wrong, stop and re-read before proceeding — this is the
+moment where mistakes cost actual money.
 
 Goal: create or import a wallet, save its private key somewhere
 durable, confirm the backup, and fund it with a small amount of USDC.
@@ -17,7 +17,7 @@ backup gate flipped to "live trading unlocked."
   centralized exchange (Coinbase / Binance / Kraken) that can
   withdraw on Base, or any other self-custody wallet that supports
   the chain.
-- Decide: **create a fresh wallet** (recommended for the workshop)
+- Decide: **create a fresh wallet** (recommended)
   or **import an existing wallet** (only if you already have a
   dedicated trading wallet you want to use).
 - Have 5 minutes of uninterrupted time. Don't start this between
@@ -26,7 +26,7 @@ backup gate flipped to "live trading unlocked."
 **Do NOT use your main wallet.** If you're going to use an existing
 wallet, make sure it's one you created specifically for trading,
 with a small amount of funds you're comfortable risking. A bug in
-this workshop's code (or in your own operation of it) should never
+this bot's code (or in your own operation of it) should never
 be able to drain your savings.
 
 ## Path A — create a fresh wallet (recommended)
@@ -253,15 +253,15 @@ different key than you intended — start over.
 
 The story goes like this:
 
-Workshop attendee creates a wallet, sees the secret scrolling by in
+A user creates a wallet, sees the secret scrolling by in
 a long create_wallet response, doesn't save it. Bot says "backup
-confirmed?" attendee says "sure, yes, go ahead." Bot promotes the
-strategy to live. Live strategy fires, swaps USDC for ETH. Attendee
-closes their laptop and flies home.
+confirmed?" the user says "sure, yes, go ahead." Bot promotes the
+strategy to live. Live strategy fires, swaps USDC for ETH. The user
+closes their laptop and moves on with their week.
 
 Laptop drive dies a week later. The Fernet-encrypted secret in
 `agent.db` is useless without the master key (which is... on the
-dead drive). Attendee has no backup. The wallet is unrecoverable.
+dead drive). There is no backup. The wallet is unrecoverable.
 
 The backup gate makes this failure mode structurally impossible. You
 cannot execute a live trade or promote a live strategy until you've
@@ -289,7 +289,7 @@ You now have:
 
 ## Where your master key actually lives
 
-Worth a sentence on this because attendees get confused:
+Worth a sentence on this because new users get confused:
 
 - **On macOS / Linux with keychain reachable:** the Fernet master
   key is stored in your OS keychain (macOS Keychain app / Linux
@@ -334,8 +334,8 @@ a bridge like base.org/bridge to move them to Base.
 
 If you sent something that isn't USDC (e.g., USDT or DAI), same
 story — the funds are there, but the bot only knows about USDC by
-default. You can still trade them via manual swaps, but it's
-out-of-workshop scope.
+default. You can still trade them via manual swaps, but that's
+beyond the scope of this tutorial.
 
 ### "The confirm-backup.sh script says 'unknown address'"
 

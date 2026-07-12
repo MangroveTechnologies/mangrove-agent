@@ -28,7 +28,7 @@ Check each principle if relevant:
 6. Small first allocation
 7. Wallet secrets NEVER in chat
 8. **Signing is 1inch-only** (hard guard at `wallet_manager._validate_sign_target`)
-9. **Testnet-first for workshop / learning** (Base Sepolia 84532 by default)
+9. **Testnet-first for learning** (Base Sepolia 84532 by default)
 
 Plus the stage machine (Stage 0 tour → 1 Orient → 2 Author → 3 Review → 4 Paper → 4.5 Wallet → 5 Live → 6 Monitor). Does the change preserve the stage boundaries?
 

@@ -5,7 +5,7 @@
 #   Claude Code's project-scope .mcp.json approval is unreliable
 #   (upstream issue #9189 — the enable prompt on session start often
 #   doesn't persist, so `cp .mcp.json.example ./.mcp.json` alone
-#   leaves attendees stuck in an approval loop). The documented
+#   leaves users stuck in an approval loop). The documented
 #   workaround is `claude mcp add -s local ...`, which writes
 #   user-scope config keyed to the project directory and is honored
 #   reliably across restarts.

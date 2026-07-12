@@ -3,7 +3,7 @@
 **Generated:** 2026-04-06
 **Status:** Draft
 
-This document consolidates all Mangrove API endpoints available to Hank, organized by **Core** (workshop essentials) and **Extended** (advanced capabilities).
+This document consolidates all Mangrove API endpoints available to Hank, organized by **Core** (the essentials) and **Extended** (advanced capabilities).
 
 ---
 

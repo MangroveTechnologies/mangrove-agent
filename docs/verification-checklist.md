@@ -360,5 +360,5 @@ rm agent-data/agent.db
 - [ ] 4.2 Live promotion with slippage cap validated
 - [ ] 4.3 Live tick broadcasts a real tx; get_tx_status confirms
 
-Everything through 2.x is workshop-critical and fund-free. 3.x–4.x
+Everything through 2.x is core and fund-free. 3.x–4.x
 needs a funded wallet and is the final verification layer.

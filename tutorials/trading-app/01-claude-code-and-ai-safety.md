@@ -21,8 +21,8 @@ language; Claude reads files, runs commands, edits code, and answers.
 It runs locally on your laptop and connects to Anthropic's API for the
 language model itself.
 
-For this workshop, five concepts are worth naming so you recognize
-them when they show up.
+Five concepts are worth naming so you recognize them when they
+show up.
 
 ### 1. The conversation is the interface
 
@@ -51,7 +51,7 @@ Open `.claude/` in this repo and you'll see three subdirectories:
   message you send for private-key patterns and blocks the submit
   if it finds one.
 
-You won't need to edit these during the workshop. But knowing they
+You won't need to edit these while working through the tutorial. But knowing they
 exist is how you debug surprising behavior: if the bot refused to do
 something, it's almost always a rule or hook, not a mystery.
 
@@ -95,12 +95,28 @@ wallets live in the local database, not the conversation. You can
 
 ## The three safety nets
 
-Workshop attendees repeatedly made the same three mistakes in earlier
-versions of this setup, and each one cost money or leaked secrets.
+New users repeatedly make the same three mistakes, and each one
+costs money or leaks secrets.
 We rebuilt the system so those mistakes are structurally impossible,
 not just "please don't" conventions. You should know what they are
 because the bot's refusals will sometimes feel annoying, and the
 annoyance is the feature.
+
+Why so paranoid? Because "an AI agent that reads untrusted content
+and can move funds" is the exact shape of nearly every agent-wallet
+drain of 2025–2026: the Grok/Bankr drain (May 2026, ~$200K moved by
+instructions hidden in Morse code in a tweet reply), the AiXBT
+exploit (~$100K ETH via crafted social inputs), and the ElizaOS
+memory-injection research that "gaslit" agents into bad trades.
+The industry lesson from all of them is the same: **prompts are not
+a security boundary — policy at the signing layer is.** That's why
+this bot's guardrails live in hooks, validators, and a hard signing
+allowlist (only known 1inch routers and token approvals to them;
+EIP-7702 delegations refused outright), not in the LLM's judgment.
+Security researchers call the dangerous combination the "lethal
+trifecta" — private data + untrusted content + the ability to act
+externally — and this repo's design goal is to never hand all three
+to the model at once.
 
 ### Safety net 1 — the key-paste block
 
@@ -181,6 +197,21 @@ for at least a full cycle of its timeframe (e.g., a few hours for a
 1h strategy, a day or two for a 4h), and the evaluations look
 reasonable, *then* consider live. Not before.
 
+This isn't just our house rule — it's the standard across mature
+open-source trading bots. freqtrade's docs put it flatly: "always
+dry run your strategy after backtesting it to see if backtesting and
+dry run results are sufficiently similar", because live behavior
+reveals latency, partial fills, and rejections that backtests don't.
+The comparison matters as much as the paper run itself: if paper
+results diverge badly from the backtest, that gap is information —
+investigate it before real funds, don't average it away. And set
+expectations like a regulator would: the CFTC's standing advisory on
+AI trading bots is that "AI technology can't predict the future or
+sudden market changes," and a 2026 study of 925K wallets found AI
+trading agents lost their users ~$192M net in aggregate. Backtests
+and paper runs earn a strategy a small live allocation — nothing
+earns it blind trust.
+
 ## The audit trail
 
 Everything the bot does is logged to SQLite in `agent-data/agent.db`:
@@ -200,7 +231,7 @@ database row is there. If a row is missing, it didn't happen.
 
 ## Transcript hygiene
 
-Two habits worth forming this workshop:
+Two habits worth forming early:
 
 1. **`/clear` between major phases.** Finish authoring a strategy
    and promoting it to paper? Start a fresh conversation for the
@@ -227,8 +258,9 @@ happened; also a thing to be aware of.
 - **Not a portfolio manager.** It executes the strategy you tell it
   to, on the allocation you give it. It doesn't rebalance, doesn't
   optimize across strategies, doesn't tax-loss-harvest.
-- **Not production software.** This is a workshop template — local
-  first, single user, beta-quality. If you end up running this with
+- **Not production software.** This is a local starter you own and
+  extend — local first, single user, beta-quality. Audit it before
+  trusting it with meaningful funds. If you end up running this with
   serious capital, you're operating it, not a team of pager-carrying
   SREs.
 
