@@ -350,10 +350,13 @@ def _resolve_evaluation_lane(row: Any) -> str:
     'stateless': object lane, this agent owns all state (MangroveAI#840).
     """
     lane = None
-    try:
-        lane = row["evaluation_lane"]
-    except (KeyError, IndexError):
-        pass
+    if hasattr(row, "get"):
+        lane = row.get("evaluation_lane")
+    else:
+        try:
+            lane = row["evaluation_lane"]
+        except (KeyError, IndexError, TypeError):
+            lane = None
     return lane or getattr(app_config, "EVALUATION_LANE", None) or "server"
 
 
