@@ -34,8 +34,14 @@ class OrderIntent(BaseModel):
     action: Literal["enter", "exit"]
     side: Literal["buy", "sell"]
     symbol: str
+    # ASSET units for cron/engine intents (the engine's position_size).
+    # For user-initiated /dex/swap intents (explicit token addresses) this
+    # is the input-token amount, used verbatim.
     amount: float
     reason: str = ""  # which signal fired, or "user-initiated" for /dex/swap
+    # Engine's evaluation-time market price. Lets the live executor convert
+    # asset units -> input-token (USDC) spend without a second price fetch.
+    ref_price: float | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
     # Explicit chain-level addresses for live execution. Both or neither.

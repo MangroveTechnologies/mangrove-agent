@@ -337,6 +337,67 @@ def test_tick_paper_mode_logs_simulated_trade(temp_db, mock_ai_sdk, monkeypatch)
     assert trades[0].status == "simulated"
 
 
+def test_tick_maps_engine_shaped_orders(temp_db, mock_ai_sdk, monkeypatch):
+    """#139 regression: the REAL engine emits new_orders shaped
+    {order_id, asset: 'ETH-USD', side: 'enter_long', position_size, price}
+    — no OrderIntent field among them. Before the mapping, every real
+    engine order failed validation and was silently skipped, so cron
+    strategies never traded. An engine-shaped order must produce a trade
+    sized in ASSET units (position_size)."""
+    from src.services.strategy_service import (
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
+    )
+    from src.services.trade_log import list_trades
+
+    eval_resp = MagicMock()
+    eval_resp.new_orders = [{
+        "order_id": "o-42",
+        "asset": "ETH-USD",
+        "side": "enter_long",
+        "order_type": "market",
+        "status": "pending",
+        "price": 2500.0,
+        "position_size": 0.04,
+        "position_id": "p-7",
+    }]
+    eval_resp.order_intents = None
+    eval_resp.orders = None
+    eval_resp.model_dump.return_value = {}
+    mock_ai_sdk.execution.evaluate.return_value = eval_resp
+
+    md = MagicMock()
+    md.data = {"current_price": 2500.0}
+    mock_ai_sdk.crypto_assets.get_market_data.return_value = md
+    monkeypatch.setattr("src.services.order_executor.mangrove_ai_client",
+                        lambda: mock_ai_sdk)
+
+    s = create_manual(StrategyManualRequest(
+        name="engine-shape", asset="ETH", timeframe="1h",
+        entry=[{"name": "rsi_oversold", "signal_type": "TRIGGER", "timeframe": "1h"}],
+    ))
+    update_status(s.id, StrategyStatusUpdate(status="inactive"))
+    update_status(s.id, StrategyStatusUpdate(status="paper"))
+
+    tick(s.id)
+
+    trades = list_trades(s.id)
+    assert len(trades) == 1, "engine-shaped order must NOT be skipped"
+    t = trades[0]
+    assert t.mode == "paper"
+    # amount is ASSET units: buys 0.04 ETH, spending 0.04 * 2500 = 100 USDC
+    assert t.output_token == "ETH"
+    assert t.output_amount == pytest.approx(0.04)
+    assert t.input_token == "USDC"
+    assert t.input_amount == pytest.approx(100.0)
+    assert t.order_intent.action == "enter"
+    assert t.order_intent.side == "buy"
+    assert t.order_intent.ref_price == pytest.approx(2500.0)
+
+
 def test_tick_catches_sdk_errors(temp_db, mock_ai_sdk):
     """SDK failure during tick logs evaluation with status=error, does NOT raise."""
     from src.services.strategy_service import (
