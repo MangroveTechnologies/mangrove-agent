@@ -68,7 +68,7 @@ jsonalias==0.1.1
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 keyring==25.7.0
-mangroveai==1.10.0
+mangroveai==1.12.0
 mangrovemarkets==1.0.3
 markdown-it-py==4.2.0
 MarkupSafe==3.0.3

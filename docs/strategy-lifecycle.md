@@ -51,6 +51,7 @@ evaluation lane (#151):
 |---|---|---|
 | `evaluations` | `strategy_service.tick` | Verbatim engine response per tick, incl. `execution_state` |
 | `strategies.execution_state_json` | `strategy_service.tick` (migration 005) | Latest engine account/risk state per strategy — the value the stateless lane round-trips |
+| `strategies.open_positions_json` | `strategy_service.tick` (migration 006, stateless lane) | Engine-shaped open-positions blob, persisted from each response and echoed on the next tick |
 | `trades` | `order_executor` | Every fill, paper or live; exit trades carry `p_and_l` |
 | `positions` | `order_executor._maintain_position` | Opened on entry fills (keyed to the engine's position id), closed with P&L on exit fills |
 

@@ -23,6 +23,7 @@ from typing import Any, Literal
 from mangrove_ai.models import CreateStrategyRequest
 from pydantic import BaseModel, Field
 
+from src.config import app_config
 from src.models.domain import Evaluation, OrderIntent
 from src.services import (
     allocation_service,
@@ -219,6 +220,14 @@ class StrategyManualRequest(BaseModel):
     entry: list[dict[str, Any]]
     exit: list[dict[str, Any]] = Field(default_factory=list)
     execution_config: dict[str, Any] | None = None
+    # Which MangroveAI evaluation lane this strategy's ticks use (#151):
+    #   'server'    — by-id evaluation; the engine's DB is authoritative for
+    #                 engine position state (default).
+    #   'stateless' — object lane; THIS agent supplies and receives all
+    #                 state (execution_state + open_positions) from its own
+    #                 SQLite. Requires MangroveAI with #840/#848.
+    # None falls back to the config default (EVALUATION_LANE, 'server').
+    evaluation_lane: Literal["server", "stateless"] | None = None
 
 
 class StrategyAllocationInput(BaseModel):
@@ -287,6 +296,7 @@ def _insert_cache(
     exit_rules: list[dict],
     execution_config: dict[str, Any],
     generation_report: dict[str, Any] | None,
+    evaluation_lane: str | None = None,
 ) -> str:
     """Insert a row into local strategies cache. Returns our local UUID."""
     local_id = str(uuid.uuid4())
@@ -296,8 +306,8 @@ def _insert_cache(
         """INSERT INTO strategies
            (id, mangrove_id, name, asset, timeframe, status,
             entry_json, exit_json, execution_config_json,
-            generation_report_json, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            generation_report_json, evaluation_lane, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             local_id, mangrove_id,
             getattr(mangrove_detail, "name", "unnamed"),
@@ -308,6 +318,7 @@ def _insert_cache(
             json.dumps(exit_rules),
             json.dumps(execution_config or {}),
             json.dumps(generation_report) if generation_report else None,
+            evaluation_lane,
             now, now,
         ),
     )
@@ -319,6 +330,61 @@ def _extract_timeframe(entry: list[dict]) -> str:
     if not entry:
         return "1h"
     return entry[0].get("timeframe") or "1h"
+
+
+# Fresh-strategy engine account defaults for the stateless lane, matching
+# the engine's own sim-account bootstrap (cash 10k; see MangroveAI
+# execution_state contract).
+_FRESH_EXECUTION_STATE = {
+    "cash_balance": 10000.0,
+    "account_value": 10000.0,
+    "total_trades": 0,
+    "num_open_positions": 0,
+}
+
+
+def _resolve_evaluation_lane(row: Any) -> str:
+    """Per-strategy lane, falling back to the config default (#151).
+
+    'server' (default): by-id evaluation, engine DB authoritative.
+    'stateless': object lane, this agent owns all state (MangroveAI#840).
+    """
+    lane = None
+    if hasattr(row, "get"):
+        lane = row.get("evaluation_lane")
+    else:
+        try:
+            lane = row["evaluation_lane"]
+        except (KeyError, IndexError, TypeError):
+            lane = None
+    return lane or getattr(app_config, "EVALUATION_LANE", None) or "server"
+
+
+def _stateless_strategy_dict(row: Any) -> dict[str, Any]:
+    """Build the object-lane strategy payload from the LOCAL row.
+
+    Everything the engine requires lives locally: rules and the full
+    execution_config synced at create time, and the execution_state we
+    persist after every tick (migration 005). A never-ticked strategy
+    starts from the fresh sim-account defaults.
+    """
+    execution_config = json.loads(row["execution_config_json"] or "{}")
+    execution_state = None
+    try:
+        execution_state = json.loads(row["execution_state_json"] or "null")
+    except (KeyError, IndexError) as exc:
+        # Missing execution_state_json in row shape (e.g., older/mismatched row);
+        # keep execution_state=None so fresh defaults are used below.
+        _log.debug("execution_state_json missing from strategy row; using fresh execution state defaults", exc_info=exc)
+    return {
+        "name": row["name"],
+        "asset": row["asset"],
+        "entry": json.loads(row["entry_json"] or "[]"),
+        "exit": json.loads(row["exit_json"] or "[]"),
+        "execution_config": execution_config,
+        "execution_state": execution_state or dict(_FRESH_EXECUTION_STATE),
+        "position_size_calc": execution_config.get("position_size_calc", "v2"),
+    }
 
 
 def _row_to_response(row: Any) -> StrategyDetailResponse:
@@ -482,6 +548,7 @@ def create_manual(req: StrategyManualRequest) -> StrategyDetailResponse:
         exit_rules=req.exit,
         execution_config=req.execution_config or backtest_service.flattened_defaults(),
         generation_report=None,
+        evaluation_lane=req.evaluation_lane,
     )
     row = _get_row(local_id)
     resp = _row_to_response(row)
@@ -612,19 +679,30 @@ def tick(strategy_id: str) -> None:
                       order_count=0, duration_ms=0, reason="not active")
             return
 
+        lane = _resolve_evaluation_lane(row)
         try:
-            # persist=True for BOTH paper and live (#149/#150): the engine
-            # only saves the position (and therefore only re-evaluates its
-            # stop_loss/take_profit/time exits on later ticks) when persist
-            # is set — get_open_positions loads from its DB. With
-            # persist=False, a paper entry was forgotten the moment it was
-            # emitted, so bracket exits NEVER arrived and paper positions
-            # never closed. Paper-vs-live parity requires the same engine
-            # bookkeeping; paper stays simulation-only on OUR side (no
-            # wallet, no broadcast).
-            sdk_resp = mangrove_ai_client().execution.evaluate(
-                row["mangrove_id"], persist=True,
-            )
+            if lane == "stateless":
+                # Object lane (#151/MangroveAI#840): THIS agent supplies and
+                # receives all state. execution_state + open_positions come
+                # from our SQLite (persisted below after every tick) and the
+                # engine writes nothing server-side. Triggered exits arrive
+                # in new_orders as status='filled', same as the by-id lane.
+                sdk_resp = mangrove_ai_client().execution.evaluate_by_object(
+                    _stateless_strategy_dict(row),
+                    persist=False,
+                    open_positions=json.loads(row["open_positions_json"] or "[]"),
+                )
+            else:
+                # Server lane (default). persist=True for BOTH paper and
+                # live (#149/#150): the engine only saves the position (and
+                # therefore only re-evaluates its stop_loss/take_profit/time
+                # exits on later ticks) when persist is set —
+                # get_open_positions loads from its DB. Paper-vs-live parity
+                # requires the same engine bookkeeping; paper stays
+                # simulation-only on OUR side (no wallet, no broadcast).
+                sdk_resp = mangrove_ai_client().execution.evaluate(
+                    row["mangrove_id"], persist=True,
+                )
         except Exception as e:  # noqa: BLE001
             duration_ms = int((time.monotonic() - start_ns) * 1000)
             trade_log.log_evaluation(Evaluation(
@@ -675,16 +753,29 @@ def tick(strategy_id: str) -> None:
         # Persist the engine's execution_state first-class (#151) — the
         # agent's own record of account/risk state per strategy, and the
         # exact value the stateless evaluation lane (MangroveAI#840) will
-        # round-trip. Never fail the tick over bookkeeping.
+        # round-trip. On the stateless lane, also persist the returned
+        # open_positions blob verbatim — it is echoed on the next tick
+        # (positions table stays the human audit trail; this is protocol
+        # state). Never fail the tick over bookkeeping.
         exec_state = sdk_dump.get("execution_state")
+        open_positions_blob = sdk_dump.get("open_positions")
         if isinstance(exec_state, dict) and exec_state:
             try:
                 conn = get_connection()
-                conn.execute(
-                    "UPDATE strategies SET execution_state_json = ?, updated_at = ? WHERE id = ?",
-                    (json.dumps(exec_state, default=str),
-                     trade_log.now_utc().isoformat(), strategy_id),
-                )
+                if open_positions_blob is not None:
+                    conn.execute(
+                        """UPDATE strategies SET execution_state_json = ?,
+                           open_positions_json = ?, updated_at = ? WHERE id = ?""",
+                        (json.dumps(exec_state, default=str),
+                         json.dumps(open_positions_blob, default=str),
+                         trade_log.now_utc().isoformat(), strategy_id),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE strategies SET execution_state_json = ?, updated_at = ? WHERE id = ?",
+                        (json.dumps(exec_state, default=str),
+                         trade_log.now_utc().isoformat(), strategy_id),
+                    )
                 conn.commit()
             except Exception as e:  # noqa: BLE001
                 _log.error("strategy.execution_state.persist_failed",
