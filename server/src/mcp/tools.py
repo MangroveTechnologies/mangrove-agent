@@ -2257,6 +2257,22 @@ def _register_strategy(server: FastMCP) -> None:
     ) -> str:
         """Run a backtest against an existing strategy (mode=quick|full).
 
+        Async-backed (SDK >=1.14): the SDK submits to the async surface and
+        polls status internally, so long windows work -- there is no gateway
+        timeout ceiling. Warm windows return in seconds; a cold long window
+        (first request for that asset/range) can take tens of seconds while
+        historical data is fetched. Pick windows for statistical coverage,
+        not transport limits.
+
+        Mode semantics: `full` runs the real engine -- every position gets a
+        system ATR stop-loss/take-profit bracket plus time-based exits from
+        execution_config, so entry-only strategies (empty exit list) are
+        first-class and close positions normally. `quick` is a
+        signal-frequency screen with NO risk management (no SL/TP/time
+        exits): entry-only strategies there hold one position to
+        end-of-window, so quick metrics are for relative screening only --
+        never quote them as performance.
+
         Window resolution (first non-null wins):
           start_date+end_date > lookback_hours > lookback_days
           > lookback_months > timeframes.recommended_lookback_months
@@ -2287,7 +2303,10 @@ def _register_strategy(server: FastMCP) -> None:
     register_tool(ToolEntry(
         name="backtest_strategy",
         description=(
-            "Backtest a strategy (quick or full). Window precedence: "
+            "Backtest a strategy (quick or full). Async-backed (SDK >=1.14: "
+            "submit + poll under the hood), so long windows work — no "
+            "gateway timeout; cold long windows may take tens of seconds. "
+            "Window precedence: "
             "start+end > hours > days > months > timeframe-aware auto "
             "(5m-1h=3mo, 4h=6mo, 1d=12mo). `config` is a single dict "
             "that merges over trading_defaults.json — use it for "

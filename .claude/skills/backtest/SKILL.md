@@ -70,12 +70,17 @@ timeframe:
 | 4h | 6 | **12–30 months** (default: 18mo) |
 | 1d | 1 | **5–14 years** (default: 5y, capped by provider history) |
 
-> **Upstream timeout ceiling.** A single backtest runs against the cloud
-> engine under `MANGROVE_SDK_TIMEOUT_SECONDS` (default 180s). Very long
-> intraday windows can exceed it and return a `504`/`SDK_ERROR` — e.g. a
-> **12-month 1h** run (~8,760 bars) reliably times out. Staying in the table's
-> ranges (≤~6mo on 1h) keeps you well under it; for longer spans use
-> `oracle_backtest_async` + poll, or walk several shorter windows.
+> **Long windows are fine (SDK ≥1.14).** `backtest_strategy` is async-backed:
+> the SDK submits to the async surface (`POST /api/v2/backtests/`) and polls
+> status internally, so there is **no gateway timeout ceiling** — a 12-month
+> 1h run (~8,760 bars) completes normally (verified: `num_days=370`). Warm
+> windows return in seconds; a *cold* long window (first request for that
+> asset/range) can take tens of seconds while historical data is fetched —
+> that is the SDK polling, not a hang. The SDK gives up after its poll
+> `timeout` (default 600s) with a `TimeoutError`. The old advice to walk
+> shorter windows or drop to `oracle_backtest_async` for long spans is
+> obsolete; pick the window the table recommends for *statistical* reasons,
+> not transport ones.
 
 The table is the default. Override reasons:
 
@@ -99,6 +104,16 @@ Tell the user the resolved window before running: "Backtesting on
 ## Phase C — Run
 
 Call `backtest_strategy(strategy_id, mode="full", start_date=..., end_date=...)`. Mode is always `"full"` for this skill (quick mode is for the bulk-candidate flow in `/create-strategy` Phase B-bulk).
+
+> **Quick-mode caveat.** `mode="quick"` is a signal-frequency screen with **no
+> risk management** — no stop-loss, no take-profit, no time-based exits. An
+> entry-only strategy there holds a single position until end-of-window, so
+> quick-mode metrics are NOT comparable to full-mode metrics and must never be
+> quoted as performance. This is a quick-mode artifact only: in `full` mode,
+> entry-only strategies are first-class — every position carries a system
+> ATR stop-loss/take-profit bracket plus time-based exits from
+> `execution_config`, so exit signals are optional refinement, not a
+> requirement (523/1000 reference strategies are entry-only by design).
 
 Set expectations on latency:
 
