@@ -29,6 +29,7 @@ from src.services import (
     allocation_service,
     backtest_service,
     candidate_generator,
+    notification_service,
     order_executor,
     scheduler_service,
     trade_log,
@@ -716,6 +717,12 @@ def tick(strategy_id: str) -> None:
             _log.error("strategy.tick.errored",
                        strategy_id=strategy_id, tick_id=tick_id,
                        exception=str(e), duration_ms=duration_ms)
+            # Best-effort Slack alert (no-op unless SLACK_WEBHOOK_URL is set;
+            # never raises back into the tick).
+            notification_service.notify_error(
+                strategy_name=row["name"], asset=row["asset"],
+                timeframe=row["timeframe"], mode=mode, error=str(e),
+            )
             return
 
         # Extract OrderIntents from the SDK response (defensive about
@@ -789,6 +796,16 @@ def tick(strategy_id: str) -> None:
                 slippage_pct=slippage_pct,
                 max_input_amount=allocation_amount,
             )
+
+        # Outbound notification for this tick — posts an OPEN/CLOSE block to
+        # Slack when the SDK reported new orders or closed trades. Reads
+        # new_orders/closed_trades/current_price/strategy_summary off the
+        # verbatim SDK response. No-op unless SLACK_WEBHOOK_URL is set; quiet
+        # ticks post nothing (SLACK_QUIET_IF_EMPTY). Never raises into the tick.
+        notification_service.notify_tick(
+            strategy_name=row["name"], asset=row["asset"],
+            timeframe=row["timeframe"], mode=mode, sdk_dump=sdk_dump,
+        )
 
         _log.info("strategy.tick.completed",
                   strategy_id=strategy_id, tick_id=tick_id,
