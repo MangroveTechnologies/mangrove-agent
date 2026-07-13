@@ -105,6 +105,16 @@ Tell the user the resolved window before running: "Backtesting on
 
 Call `backtest_strategy(strategy_id, mode="full", start_date=..., end_date=...)`. Mode is always `"full"` for this skill (quick mode is for the bulk-candidate flow in `/create-strategy` Phase B-bulk).
 
+> **Quick-mode caveat.** `mode="quick"` is a signal-frequency screen with **no
+> risk management** — no stop-loss, no take-profit, no time-based exits. An
+> entry-only strategy there holds a single position until end-of-window, so
+> quick-mode metrics are NOT comparable to full-mode metrics and must never be
+> quoted as performance. This is a quick-mode artifact only: in `full` mode,
+> entry-only strategies are first-class — every position carries a system
+> ATR stop-loss/take-profit bracket plus time-based exits from
+> `execution_config`, so exit signals are optional refinement, not a
+> requirement (523/1000 reference strategies are entry-only by design).
+
 Set expectations on latency:
 
 - 5m × 14d (~4000 bars): a few seconds

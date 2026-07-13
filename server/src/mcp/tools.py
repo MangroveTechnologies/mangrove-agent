@@ -2264,6 +2264,15 @@ def _register_strategy(server: FastMCP) -> None:
         historical data is fetched. Pick windows for statistical coverage,
         not transport limits.
 
+        Mode semantics: `full` runs the real engine -- every position gets a
+        system ATR stop-loss/take-profit bracket plus time-based exits from
+        execution_config, so entry-only strategies (empty exit list) are
+        first-class and close positions normally. `quick` is a
+        signal-frequency screen with NO risk management (no SL/TP/time
+        exits): entry-only strategies there hold one position to
+        end-of-window, so quick metrics are for relative screening only --
+        never quote them as performance.
+
         Window resolution (first non-null wins):
           start_date+end_date > lookback_hours > lookback_days
           > lookback_months > timeframes.recommended_lookback_months
