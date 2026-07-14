@@ -15,6 +15,7 @@ from src.api.routes.logs import router as logs_router
 from src.api.routes.market import router as market_router
 from src.api.routes.on_chain import router as on_chain_router
 from src.api.routes.oracle import router as oracle_router
+from src.api.routes.portfolio import router as portfolio_router
 from src.api.routes.reference_strategies import router as reference_strategies_router
 from src.api.routes.signals import router as signals_router
 from src.api.routes.strategies import router as strategies_router
@@ -33,6 +34,7 @@ agent_router.include_router(market_router)
 agent_router.include_router(on_chain_router)
 agent_router.include_router(signals_router)
 agent_router.include_router(strategies_router)
+agent_router.include_router(portfolio_router)
 agent_router.include_router(oracle_router)
 agent_router.include_router(reference_strategies_router)
 agent_router.include_router(logs_router)

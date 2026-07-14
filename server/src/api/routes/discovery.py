@@ -129,9 +129,19 @@ async def status() -> dict:
             "archived": counts.get("archived", 0),
         },
         "active_cron_jobs": active_job_count(),
+        "portfolio_risk": _portfolio_risk_status(),
         "db_path": str(app_config.DB_PATH),
         "uptime_seconds": int(time.monotonic() - _STARTUP_MONOTONIC),
     }
+
+
+def _portfolio_risk_status() -> dict:
+    """Portfolio kill-switch state for /status (#146). Never fail /status over it."""
+    try:
+        from src.services import portfolio_risk_service
+        return portfolio_risk_service.get_status()
+    except Exception:  # noqa: BLE001
+        return {"tripped": None, "error": "unavailable"}
 
 
 @router.get(
