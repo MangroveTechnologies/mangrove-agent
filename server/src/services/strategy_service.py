@@ -633,6 +633,15 @@ def update_status(strategy_id: str, update: StrategyStatusUpdate) -> StrategyDet
 
     _apply_scheduler_effects(strategy_id, row, target, current)
     _set_status(strategy_id, target)
+
+    # Portfolio kill switch (#146): the live-book composition just changed
+    # (a strategy entered or left 'live'), so committed capital / realized P&L
+    # in the aggregate shifted for a deliberate reason -- re-baseline the
+    # high-water mark so it is not mistaken for drawdown. No-op while latched.
+    if "live" in (target, current):
+        from src.services import portfolio_risk_service
+        portfolio_risk_service.rebaseline(reason=f"status_{current}_to_{target}")
+
     new_row = _get_row(strategy_id)
     _log.info("strategy.status_changed",
               strategy_id=strategy_id, from_status=current, to_status=target,
@@ -780,6 +789,28 @@ def tick(strategy_id: str) -> None:
             except Exception as e:  # noqa: BLE001
                 _log.error("strategy.execution_state.persist_failed",
                            strategy_id=strategy_id, exception=str(e))
+
+        # Portfolio kill switch (#146): on every LIVE tick, update the live-book
+        # high-water mark and trip if aggregate drawdown crosses the limit. A
+        # trip pauses ALL live strategies (latched, human-reset only) -- so if
+        # not allowed we must NOT place new orders this tick. Runs regardless of
+        # whether THIS strategy produced intents, since a trip can be driven by
+        # realized losses on OTHER live strategies.
+        if mode == "live":
+            from src.services import portfolio_risk_service
+            pr = portfolio_risk_service.check_before_live_execution()
+            if not pr["allowed"]:
+                _log.warning("strategy.tick.portfolio_halt",
+                             strategy_id=strategy_id, tick_id=tick_id,
+                             drawdown=pr.get("drawdown"),
+                             book_value=pr.get("book_value"),
+                             high_water_mark=pr.get("high_water_mark"),
+                             reason=pr.get("reason"))
+                _log.info("strategy.tick.completed",
+                          strategy_id=strategy_id, tick_id=tick_id,
+                          order_count=0, duration_ms=duration_ms,
+                          reason="portfolio_halt")
+                return
 
         if order_intents:
             order_executor.execute_many(

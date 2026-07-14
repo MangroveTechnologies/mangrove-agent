@@ -22,5 +22,7 @@
     "X402_CDP_API_KEY_ID",
     "X402_CDP_API_KEY_SECRET"
   ],
-  "full_app_keys": []
+  "full_app_keys": [
+    "PORTFOLIO_MAX_DRAWDOWN_PCT"
+  ]
 }
