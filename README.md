@@ -47,7 +47,27 @@ Full platform documentation and the trading knowledge base live at **https://man
 
 ---
 
-## Get started
+## Install as a Claude Code plugin
+
+The fastest way in. Tell your Claude Code agent *"install this trading bot: https://github.com/MangroveTechnologies/mangrove-agent"*, or run it yourself:
+
+```bash
+claude plugin marketplace add MangroveTechnologies/mangrove-agent
+claude plugin install mangrove-agent@mangrove
+```
+
+Inside a Claude Code session the same thing is `/plugin marketplace add MangroveTechnologies/mangrove-agent`, then `/plugin install mangrove-agent@mangrove`. Claude Code asks for your **MangroveAI API key** (free at https://mangrovedeveloper.ai) and stores it as a sensitive setting. Never paste the key into chat.
+
+Start a new session. On first start the plugin installs its Python dependencies and starts the agent in the background (about 1-3 minutes). Then say *"give me the tour"* or *"build me a momentum strategy for ETH"*.
+
+- **Needs:** Python 3.11+ and a bash shell (macOS, Linux, or WSL / Git Bash on Windows).
+- **Where your data lives:** `~/.mangrove-agent/` holds the config, the SQLite DB (wallets, strategies, trades) and the wallet master key. It survives plugin updates. Back it up once you hold funds, and never delete it while wallets hold funds.
+- **Network:** the agent listens on `127.0.0.1:9080` only. Don't also run a git-clone agent on 9080.
+- **Logs:** `~/.mangrove-agent/agent-data/agent.log` (server) and `bootstrap.log` (install/start).
+
+Want to change the code? Clone the repo instead (below). Both paths run the same agent.
+
+## Get started (git clone)
 
 This repo is **your own trading agent**: you run it on your machine, your keys never leave it, and it's the reference consumer of the [Mangrove API](https://mangrovedeveloper.ai) — clone it, make it yours, extend it into your own trading system.
 

@@ -47,6 +47,7 @@ class _Config:
 
         self._load_required_keys(required_keys, gcp_project_id)
         self._load_full_app_keys(full_app_keys, gcp_project_id)
+        self._anchor_state_paths()
 
         # LOCAL_AGENT_URL — this agent's own local surface. Wallet/secret ops
         # (key generation, the SecretVault, reveal/stash/confirm) live HERE, on
@@ -54,6 +55,24 @@ class _Config:
         # MANGROVEMARKETS_BASE_URL (the remote, keyless DEX-routing server).
         # Defaulted (not required) so existing configs without the key still boot.
         self.LOCAL_AGENT_URL = self._raw_config.get("LOCAL_AGENT_URL") or "http://localhost:9080"
+
+    def _anchor_state_paths(self) -> None:
+        """Resolve relative DB_PATH / MASTER_KEY_PATH against MANGROVE_AGENT_HOME.
+
+        Without this, `./agent-data/agent.db` would follow the process cwd — for
+        a plugin that could be the versioned cache dir, and a plugin update
+        would silently start a fresh, empty wallet DB.
+        """
+        home = self.agent_home()
+        if not home:
+            return
+        for key in ("DB_PATH", "MASTER_KEY_PATH"):
+            value = getattr(self, key, None)
+            if not value or str(value) == ":memory:":
+                continue
+            path = os.path.expanduser(str(value))
+            if not os.path.isabs(path):
+                setattr(self, key, os.path.normpath(os.path.join(home, path)))
 
     def _load_required_keys(self, required_keys: set, gcp_project_id: str) -> None:
         """Validate and set all required config keys. Exits on missing or null values."""
@@ -94,11 +113,26 @@ class _Config:
             print(f"Failed to load configuration-keys.json: {e}")
             sys.exit(1)
 
+    @staticmethod
+    def agent_home() -> str | None:
+        """MANGROVE_AGENT_HOME — where a plugin install keeps config + state.
+
+        Plugin code lives in a versioned cache dir that Claude Code replaces on
+        every update, so config, wallets, the DB and the master key must not.
+        Unset (git clone): config stays in src/config/, state in ./agent-data.
+        """
+        home = os.getenv("MANGROVE_AGENT_HOME")
+        return os.path.abspath(os.path.expanduser(home)) if home else None
+
     def load_config_file(self):
         environment = os.getenv("ENVIRONMENT") or os.getenv("APP_ENV")
         filename = f"{environment}-config.json"
         try:
-            config_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
+            home = self.agent_home()
+            if home:
+                config_dir = os.path.join(home, "config")
+            else:
+                config_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
             file_path = os.path.join(config_dir, filename)
 
             if not os.path.exists(file_path):

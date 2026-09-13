@@ -33,9 +33,11 @@ except Exception:
 print(d.get('tool_name', ''))
 " 2>/dev/null)
 
-if [ "$TOOL" != "mcp__mangrove-agent__execute_swap" ]; then
-    exit 0
-fi
+# Project-scoped MCP (git clone) or the installed plugin's namespaced server.
+case "$TOOL" in
+    mcp__mangrove-agent__execute_swap|mcp__plugin_mangrove-agent_mangrove-agent__execute_swap) ;;
+    *) exit 0 ;;
+esac
 
 # Extract args. If any required field is missing, fall through — execute_swap's
 # own Pydantic validator will surface the right error shape.
@@ -72,10 +74,11 @@ case "$INPUT_TOKEN" in
     *) exit 0 ;;
 esac
 
-# Locate repo root and config.
+# Locate config (git clone or installed plugin — see scripts/_agent_home.sh).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-CONFIG_FILE="$REPO_ROOT/server/src/config/local-config.json"
+# shellcheck source=../../scripts/_agent_home.sh
+source "$REPO_ROOT/scripts/_agent_home.sh" 2>/dev/null || CONFIG_FILE="$REPO_ROOT/server/src/config/local-config.json"
 
 if [ ! -f "$CONFIG_FILE" ]; then
     exit 0  # can't authenticate without config — fall through
@@ -94,7 +97,7 @@ if [ -z "$API_KEY" ]; then
     exit 0
 fi
 
-BASE_URL="${BASE_URL:-http://localhost:9080}"
+BASE_URL="${BASE_URL:-${LOCAL_AGENT_URL:-http://localhost:9080}}"
 
 # Query balances. 3-second timeout keeps the hook fast; server unreachable =
 # fall through so the user sees the real error from execute_swap.

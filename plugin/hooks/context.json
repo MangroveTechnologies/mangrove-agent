@@ -1,6 +1,0 @@
-{
-  "hookSpecificOutput": {
-    "suppressOutput": true,
-    "additionalContext": "Mangrove Agent plugin active. Available commands: /help. MCP server endpoint configured in plugin/.mcp.json. Use /help to see all commands."
-  }
-}
