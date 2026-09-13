@@ -9,8 +9,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# Install from the lockfile (pinned, universal) — not the ranges in
+# requirements.txt, which drift (mcp 2.x broke every range install, #159).
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir -r requirements.lock
 
 COPY src/ src/
 COPY pyproject.toml ./

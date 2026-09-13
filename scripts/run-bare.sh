@@ -108,9 +108,9 @@ ok "venv active: $(which python3)"
 
 # -- 5. pip install ----------------------------------------------------------
 
-step "5. pip install -r server/requirements.txt"
+step "5. pip install -r server/requirements.lock"
 python3 -m pip install --quiet --upgrade pip
-python3 -m pip install --quiet -r server/requirements.txt
+python3 -m pip install --quiet -r server/requirements.lock
 ok "deps installed"
 
 # -- 6. keychain smoke test --------------------------------------------------
