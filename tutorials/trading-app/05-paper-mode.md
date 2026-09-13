@@ -3,7 +3,7 @@
 *15 minutes. No funds required. The first chapter where the bot is
 actually running on a schedule.*
 
-You ended Chapter 04 with a strategy in `draft` status — saved but
+You ended Chapter 04 with a strategy in `inactive` status — saved but
 dormant. In this chapter you promote it to `paper`, which schedules
 it to evaluate on a cron and simulates fills at current market price.
 No wallet, no funds, no on-chain activity.
@@ -33,7 +33,8 @@ Check `list_evaluations` any time to see what the strategy saw.
 Verify the cron registered:
 
 ```bash
-curl -s -H 'X-API-Key: dev-key-1' \
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" \
   http://localhost:9080/api/v1/agent/status | python3 -m json.tool \
   | grep active_cron
 ```
@@ -173,7 +174,8 @@ curl -s http://localhost:9080/health 2>&1 | head -1
 ./scripts/setup.sh --yes --no-mcp --no-verify
 
 # Confirm the cron came back automatically
-curl -s -H 'X-API-Key: dev-key-1' \
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" \
   http://localhost:9080/api/v1/agent/status | python3 -m json.tool \
   | grep active_cron
 # → "active_cron_jobs": 1

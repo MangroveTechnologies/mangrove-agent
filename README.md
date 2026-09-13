@@ -47,7 +47,27 @@ Full platform documentation and the trading knowledge base live at **https://man
 
 ---
 
-## Get started
+## Install as a Claude Code plugin
+
+The fastest way in. Tell your Claude Code agent *"install this trading bot: https://github.com/MangroveTechnologies/mangrove-agent"*, or run it yourself:
+
+```bash
+claude plugin marketplace add MangroveTechnologies/mangrove-agent
+claude plugin install mangrove-agent@mangrove
+```
+
+Inside a Claude Code session the same thing is `/plugin marketplace add MangroveTechnologies/mangrove-agent`, then `/plugin install mangrove-agent@mangrove`. Claude Code asks for your **MangroveAI API key** (free at https://mangrovedeveloper.ai) and stores it as a sensitive setting. Never paste the key into chat.
+
+Start a new session. On first start the plugin installs its Python dependencies and starts the agent in the background (about 1-3 minutes). Then say *"give me the tour"* or *"build me a momentum strategy for ETH"*.
+
+- **Needs:** Python 3.11+ and a bash shell (macOS, Linux, or WSL / Git Bash on Windows).
+- **Where your data lives:** `~/.mangrove-agent/` holds the config, the SQLite DB (wallets, strategies, trades) and the wallet master key. It survives plugin updates. Back it up once you hold funds, and never delete it while wallets hold funds.
+- **Network:** the agent listens on `127.0.0.1:9080` only. Don't also run a git-clone agent on 9080.
+- **Logs:** `~/.mangrove-agent/agent-data/agent.log` (server) and `bootstrap.log` (install/start).
+
+Want to change the code? Clone the repo instead (below). Both paths run the same agent.
+
+## Get started (git clone)
 
 This repo is **your own trading agent**: you run it on your machine, your keys never leave it, and it's the reference consumer of the [Mangrove API](https://mangrovedeveloper.ai) — clone it, make it yours, extend it into your own trading system.
 
@@ -174,24 +194,28 @@ Wallet setup and live trading are in Chapters 06 and 07 of the tutorial. The sum
 
 ## What the agent can do
 
-100+ MCP tools as of 2026-07 (including the `hello_mangrove` x402 demo) — run `list_tools` for the live catalog, which is authoritative. Rough grouping:
+100 MCP tools as of 2026-09 (including the `hello_mangrove` x402 demo). Run `list_tools` for the live catalog, which is authoritative.
 
 | Category | Tools |
 |---|---|
 | Discovery (free) | `status`, `list_tools`, `hello_mangrove` |
-| Wallet | `create_wallet`, `import_wallet`, `list_wallets`, `get_balances`, `portfolio_value`, `portfolio_pnl` |
-| DEX | `list_dex_venues`, `get_swap_quote`, `execute_swap`, `get_tx_status`, `get_token_info`, `get_spot_price`, `get_gas_price`, `get_oneinch_chart` |
-| Market / on-chain | `get_ohlcv`, `get_market_data`, `get_crypto_assets`, `get_trending_coins`, `search_crypto_assets`, `get_smart_money_sentiment` |
-| Signals | `list_signals`, `kb_list_indicators` |
-| Strategy | `create_strategy_autonomous`, `create_strategy_manual`, `list_strategies`, `get_strategy`, `update_strategy_status`, `delete_strategy`, `backtest_strategy`, `evaluate_strategy`, `search_reference_strategies`, `build_strategy_from_reference` |
-| Execution | `list_positions`, `get_position`, `list_trade_history` |
-| Logs | `list_evaluations`, `list_trades`, `list_all_trades` |
-| Knowledge Base | `kb_search`, `list_docs`, `get_doc` |
-| DeFi | `get_protocol_tvl`, `get_chain_tvl`, `get_stablecoin_metrics` |
+| Wallets & portfolio | `create_wallet`, `import_wallet`, `list_wallets`, `get_balances`, `portfolio_value`, `portfolio_pnl`, `portfolio_tokens`, `portfolio_defi`, `portfolio_history` |
+| Kraken (CEX) | `cex_status`, `cex_connect_kraken`, `cex_balances`, `cex_validate_order`, `cex_sync_fills` |
+| DEX (1inch) | `list_dex_venues`, `get_swap_quote`, `execute_swap`, `get_tx_status`, `get_spot_price`, `get_gas_price`, `get_token_search`, `get_allowances`, `get_token_info`¹, `get_dex_chart`¹ |
+| Market data | `get_ohlcv`, `get_market_data`, `get_trending`, `list_approved_assets`, `get_asset`, `get_global_market` |
+| Signals | `list_signals`, `get_signal`, `match_signals`, `search_signals` |
+| On-chain & smart money | `get_whale_activity`, `get_whale_transactions`, `get_smart_money_sentiment`, `screen_smart_money`, `get_token_holders`, `get_exchange_flows`, `get_smart_money_historical_holdings`, `get_smart_money_dex_trades`, `get_smart_money_perp_trades`, `get_token_dex_trades`, `get_token_flows` |
+| DeFi | `get_chain_tvl`, `get_protocol_tvl`, `get_stablecoin_metrics` |
 | DeFi Pro (Pro/Startup/Enterprise) | `get_token_unlocks`, `get_perp_funding`, `get_treasuries`, `get_etf_flows`, `get_lending_borrow_rates` — starter: [docs/defi-pro.md](docs/defi-pro.md) |
-| Oracle research | `sieve_score`, `oracle_create_experiment`, `oracle_validate_experiment`, `oracle_launch_experiment`, `oracle_pause_experiment`, `oracle_get_experiment`, `oracle_list_experiments`, `oracle_data_query`, `oracle_backtest`, `oracle_backtest_async`, `oracle_backtest_poll`, `oracle_backtest_bulk`, `oracle_list_results`, `oracle_list_datasets`, `oracle_list_signals`, `oracle_list_templates` |
+| Social | `get_sentiment`, `get_mentions`, `get_influence_score` |
+| Strategy | `create_strategy_autonomous`, `create_strategy_manual`, `search_reference_strategies`, `build_strategy_from_reference`, `list_strategies`, `get_strategy`, `update_strategy_status`, `delete_strategy`, `backtest_strategy`, `evaluate_strategy` |
+| Execution & logs | `list_account_positions`, `get_account_position`, `list_account_trades`, `list_evaluations`, `list_trades`, `list_all_trades` |
+| Knowledge base & docs | `kb_search`, `kb_glossary_get`, `kb_get_document`, `kb_list_indicators`, `kb_list_tags`, `list_docs`, `get_doc_content` |
+| Oracle research | `sieve_score`, `oracle_data_query`, `oracle_backtest`, `oracle_backtest_async`, `oracle_backtest_poll`, `oracle_backtest_bulk`, `oracle_create_experiment`, `oracle_list_experiments`, `oracle_get_experiment`, `oracle_update_experiment`, `oracle_delete_experiment`, `oracle_validate_experiment`, `oracle_launch_experiment`, `oracle_pause_experiment`, `oracle_list_results`, `oracle_list_datasets`, `oracle_list_signals`, `oracle_list_templates` |
 
-Every tool has a mirrored REST endpoint at `/api/v1/agent/*`. Both call the same service layer — pick whichever fits your caller.
+¹ Currently broken upstream; the tool description says why.
+
+Every tool has a mirrored REST endpoint at `/api/v1/agent/*`. Both call the same service layer — pick whichever fits your caller. Authenticated routes take `X-API-Key` set to the first entry of `API_KEYS` in `server/src/config/local-config.json` (a unique key `setup.sh` generates). That is the agent's own local key, **not** your MangroveAI API key. `/health`, `status` and `list_tools` need no key, so a wrong key looks fine until the first authenticated call returns 401.
 
 **SIEVE + Sweep — screen many ideas, then find the best config.** Two of those Oracle tools are the research workhorses:
 

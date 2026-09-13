@@ -1,0 +1,266 @@
+# Signal -> strategy-archetype map (machine-readable).
+# The classification rule, its sources and the reasoning behind each call are recorded in the
+# signal-archetype-classification research note; this file is the decision, not the argument.
+# Covers every signal the knowledge graph carries -- one row per signal, no row without a
+# signal. A name here that the graph does not have is a rename the map missed, and a signal
+# the graph has and this does not is refused at composition time, so the two are asserted
+# equal by test rather than kept in step by hand.
+#
+# Per-signal fields:
+#   arch : one of [trend_following, momentum, breakout, volatility, mean_reversion, any, none]
+#          `any` belongs to no single archetype and is admissible in every regime that admits
+#          anything; it never decides the strategy's archetype. `none` is a no-trade gate.
+#   type : TRIGGER | FILTER   (from the KB docstring Type:)
+#   role : entry_trigger | context_filter | confirmation | exit | no_trade_gate
+#   cond : (optional) archetype depends on a param; resolve per-strategy from entry_json
+#   flag : (optional) known ambiguity / naming issue -> lower confidence, see the doc
+#
+# NOTE (long-only): overbought oscillators are mean_reversion FAMILY but role=exit (fade the
+# top is not a long entry). bearish/*_down/*_lower TRIGGER variants keep their archetype but
+# are entries only for the SHORT side -> in this long-only book, role=exit for those.
+
+rules:
+  # applied AFTER per-signal lookup, over the strategy's {trigger, filters}
+  primary_is_trigger: true
+  momentum_trigger_plus_trend_context_filter: trend_following   # promote
+  breakout_trigger_plus_compression_filter: breakout            # high-confidence
+  mean_reversion_trigger_plus_strong_trend_filter: INCOHERENT   # flag, do not surface
+  conditional_resolution:
+    rsi_cross_up:   {threshold_le_35: mean_reversion, else: momentum}
+    cmo_cross_up:   {threshold_le_neg20: mean_reversion, else: momentum}
+    cmo_cross_down: {threshold_ge_20: mean_reversion, else: momentum}   # default thr +50 -> exit
+    cci_oversold:   {default: mean_reversion, lambert_breakout_usage: trend_following}
+    cci_overbought: {default: mean_reversion, lambert_breakout_usage: trend_following}
+
+trend:            # 88 signals
+  is_above_sma:            {arch: trend_following, type: FILTER,  role: context_filter}
+  sma_crossover:           {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  sma_cross_up:            {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  sma_cross_down:          {arch: trend_following, type: TRIGGER, role: exit}
+  macd_bullish_cross:      {arch: momentum,        type: TRIGGER, role: entry_trigger}
+  macd_bearish_cross:      {arch: momentum,        type: TRIGGER, role: exit}
+  macd_positive:           {arch: momentum,        type: FILTER,  role: context_filter}
+  ema_cross_up:            {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  ema_cross_down:          {arch: trend_following, type: TRIGGER, role: exit}
+  ema_crossover:           {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  price_above_ema:         {arch: trend_following, type: FILTER,  role: context_filter}
+  adx_strong_trend:        {arch: trend_following, type: FILTER,  role: context_filter}
+  adx_bullish_di:          {arch: trend_following, type: FILTER,  role: context_filter}
+  aroon_up_trend:          {arch: trend_following, type: FILTER,  role: context_filter}
+  aroon_down_trend:        {arch: trend_following, type: FILTER,  role: context_filter}
+  aroon_crossover:         {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  wma_cross_up:            {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  wma_cross_down:          {arch: trend_following, type: TRIGGER, role: exit}
+  trix_bullish:            {arch: momentum,        type: FILTER,  role: context_filter}
+  trix_bearish:            {arch: momentum,        type: FILTER,  role: context_filter}
+  mass_reversal_signal:    {arch: volatility,      type: TRIGGER, role: entry_trigger, flag: direction_agnostic_needs_companion}
+  ichimoku_bullish:        {arch: trend_following, type: FILTER,  role: context_filter}
+  ichimoku_bearish:        {arch: trend_following, type: FILTER,  role: context_filter}
+  ichimoku_tk_cross:       {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  kst_bullish_cross:       {arch: momentum,        type: TRIGGER, role: entry_trigger}
+  kst_bearish_cross:       {arch: momentum,        type: TRIGGER, role: exit}
+  dpo_positive:            {arch: momentum,        type: FILTER,  role: context_filter, flag: cycle_tool}
+  dpo_negative:            {arch: momentum,        type: FILTER,  role: context_filter, flag: cycle_tool}
+  cci_overbought:          {arch: mean_reversion,  type: FILTER,  role: context_filter, cond: true, flag: dual_lambert}
+  cci_oversold:            {arch: mean_reversion,  type: FILTER,  role: context_filter, cond: true, flag: dual_lambert}
+  vortex_bullish:          {arch: trend_following, type: FILTER,  role: context_filter}
+  vortex_bearish:          {arch: trend_following, type: FILTER,  role: context_filter}
+  vortex_crossover:        {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  stc_overbought:          {arch: momentum,        type: FILTER,  role: context_filter, flag: dual_mean_reversion}
+  stc_oversold:            {arch: momentum,        type: FILTER,  role: context_filter, flag: dual_mean_reversion}
+  is_above_dema:           {arch: trend_following, type: FILTER,  role: context_filter}
+  dema_cross_up:           {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  dema_cross_down:         {arch: trend_following, type: TRIGGER, role: exit}
+  is_above_tema:           {arch: trend_following, type: FILTER,  role: context_filter}
+  tema_cross_up:           {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  tema_cross_down:         {arch: trend_following, type: TRIGGER, role: exit}
+  is_above_trima:          {arch: trend_following, type: FILTER,  role: context_filter}
+  trima_cross_up:          {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  trima_cross_down:        {arch: trend_following, type: TRIGGER, role: exit}
+  is_above_smma:           {arch: trend_following, type: FILTER,  role: context_filter}
+  smma_cross_up:           {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  smma_cross_down:         {arch: trend_following, type: TRIGGER, role: exit}
+  is_above_epma:           {arch: trend_following, type: FILTER,  role: context_filter}
+  epma_cross_up:           {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  epma_cross_down:         {arch: trend_following, type: TRIGGER, role: exit}
+  is_above_hma:            {arch: trend_following, type: FILTER,  role: context_filter}
+  hma_cross_up:            {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  hma_cross_down:          {arch: trend_following, type: TRIGGER, role: exit}
+  is_above_alma:           {arch: trend_following, type: FILTER,  role: context_filter}
+  alma_cross_up:           {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  alma_cross_down:         {arch: trend_following, type: TRIGGER, role: exit}
+  is_above_t3:             {arch: trend_following, type: FILTER,  role: context_filter}
+  t3_cross_up:             {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  t3_cross_down:           {arch: trend_following, type: TRIGGER, role: exit}
+  is_above_mama:           {arch: trend_following, type: FILTER,  role: context_filter}
+  mama_cross_up:           {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  mama_cross_down:         {arch: trend_following, type: TRIGGER, role: exit}
+  heikin_ashi_bullish:     {arch: trend_following, type: FILTER,  role: context_filter}
+  heikin_ashi_bearish:     {arch: trend_following, type: FILTER,  role: context_filter}
+  alligator_bullish:       {arch: trend_following, type: FILTER,  role: context_filter}
+  alligator_bearish:       {arch: trend_following, type: FILTER,  role: context_filter}
+  alligator_sleeping:      {arch: none,            type: FILTER,  role: no_trade_gate}
+  ma_ribbon_bullish:       {arch: trend_following, type: FILTER,  role: context_filter}
+  ma_ribbon_bearish:       {arch: trend_following, type: FILTER,  role: context_filter}
+  ma_ribbon_tangled:       {arch: none,            type: FILTER,  role: no_trade_gate}
+  ttm_squeeze_active:      {arch: volatility,      type: FILTER,  role: context_filter}
+  ttm_squeeze_fired_bullish: {arch: breakout,      type: TRIGGER, role: entry_trigger}
+  ttm_squeeze_fired_bearish: {arch: breakout,      type: TRIGGER, role: exit}
+  rsi_bullish_divergence:  {arch: mean_reversion,  type: TRIGGER, role: entry_trigger}
+  rsi_bearish_divergence:  {arch: mean_reversion,  type: TRIGGER, role: exit}
+  rsi_hidden_bullish_divergence:  {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  rsi_hidden_bearish_divergence:  {arch: trend_following, type: TRIGGER, role: exit}
+  multi_tf_trend_bullish:  {arch: trend_following, type: FILTER,  role: context_filter}
+  multi_tf_trend_bearish:  {arch: trend_following, type: FILTER,  role: context_filter}
+
+momentum:         # 42 signals
+  rsi_overbought:          {arch: mean_reversion,  type: FILTER,  role: exit}
+  rsi_oversold:            {arch: mean_reversion,  type: FILTER,  role: entry_trigger}
+  rsi_cross_up:            {arch: momentum,        type: TRIGGER, role: entry_trigger, cond: true}
+  rsi_cross_down:          {arch: momentum,        type: TRIGGER, role: exit}
+  stoch_overbought:        {arch: mean_reversion,  type: FILTER,  role: exit}
+  stoch_oversold:          {arch: mean_reversion,  type: FILTER,  role: entry_trigger}
+  williams_r_overbought:   {arch: mean_reversion,  type: FILTER,  role: exit}
+  williams_r_oversold:     {arch: mean_reversion,  type: FILTER,  role: entry_trigger}
+  tsi_bullish:             {arch: momentum,        type: FILTER,  role: context_filter}
+  tsi_bearish:             {arch: momentum,        type: FILTER,  role: context_filter}
+  uo_overbought:           {arch: mean_reversion,  type: FILTER,  role: exit}
+  uo_oversold:             {arch: mean_reversion,  type: FILTER,  role: entry_trigger}
+  kama_cross_up:           {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  kama_cross_down:         {arch: trend_following, type: TRIGGER, role: exit}
+  roc_positive:            {arch: momentum,        type: FILTER,  role: context_filter}
+  roc_negative:            {arch: momentum,        type: FILTER,  role: context_filter}
+  roc_momentum_shift:      {arch: momentum,        type: TRIGGER, role: entry_trigger}
+  ao_bullish:              {arch: momentum,        type: FILTER,  role: context_filter}
+  ao_bearish:              {arch: momentum,        type: FILTER,  role: context_filter}
+  ao_zero_cross:           {arch: momentum,        type: TRIGGER, role: entry_trigger}
+  stochrsi_overbought:     {arch: mean_reversion,  type: FILTER,  role: exit}
+  stochrsi_oversold:       {arch: mean_reversion,  type: FILTER,  role: entry_trigger}
+  ppo_bullish_cross:       {arch: momentum,        type: TRIGGER, role: entry_trigger}
+  ppo_bearish_cross:       {arch: momentum,        type: TRIGGER, role: exit}
+  pvo_bullish_cross:       {arch: volatility,      type: TRIGGER, role: confirmation, flag: volume_oscillator_low_conf}
+  pvo_bearish_cross:       {arch: volatility,      type: TRIGGER, role: confirmation, flag: volume_oscillator_low_conf}
+  mom_bullish:             {arch: momentum,        type: FILTER,  role: context_filter}
+  mom_bearish:             {arch: momentum,        type: FILTER,  role: context_filter}
+  mom_cross_up:            {arch: momentum,        type: TRIGGER, role: entry_trigger}
+  mom_cross_down:          {arch: momentum,        type: TRIGGER, role: exit}
+  bop_bullish:             {arch: momentum,        type: FILTER,  role: context_filter, flag: single_bar_pressure}
+  bop_bearish:             {arch: momentum,        type: FILTER,  role: context_filter, flag: single_bar_pressure}
+  bop_cross_up:            {arch: momentum,        type: TRIGGER, role: entry_trigger, flag: single_bar_pressure}
+  bop_cross_down:          {arch: momentum,        type: TRIGGER, role: exit}
+  macd_line_positive:      {arch: momentum,        type: FILTER,  role: context_filter}
+  macd_line_negative:      {arch: momentum,        type: FILTER,  role: context_filter}
+  macd_line_cross_up:      {arch: momentum,        type: TRIGGER, role: entry_trigger}
+  macd_line_cross_down:    {arch: momentum,        type: TRIGGER, role: exit}
+  cmo_overbought:          {arch: mean_reversion,  type: FILTER,  role: exit}
+  cmo_oversold:            {arch: mean_reversion,  type: FILTER,  role: entry_trigger}
+  cmo_cross_up:            {arch: mean_reversion,  type: TRIGGER, role: entry_trigger, cond: true}
+  cmo_cross_down:          {arch: mean_reversion,  type: TRIGGER, role: exit, cond: true}
+
+volatility:       # 20 signals
+  bb_upper_breakout:       {arch: breakout,        type: TRIGGER, role: entry_trigger}
+  bb_lower_breakout:       {arch: breakout,        type: TRIGGER, role: exit, flag: long_only_breakdown}
+  bb_squeeze:              {arch: volatility,      type: TRIGGER, role: context_filter, flag: compression_state_not_directional}
+  atr_high_volatility:     {arch: volatility,      type: FILTER,  role: context_filter}
+  kc_upper_breakout:       {arch: breakout,        type: TRIGGER, role: entry_trigger}
+  kc_lower_breakout:       {arch: breakout,        type: TRIGGER, role: exit, flag: long_only_breakdown}
+  dc_upper_breakout:       {arch: breakout,        type: TRIGGER, role: entry_trigger}
+  dc_lower_breakout:       {arch: breakout,        type: TRIGGER, role: exit, flag: long_only_breakdown}
+  ulcer_high_risk:         {arch: volatility,      type: FILTER,  role: context_filter}
+  ulcer_low_risk:          {arch: volatility,      type: FILTER,  role: context_filter}
+  natr_high_volatility:    {arch: volatility,      type: FILTER,  role: context_filter}
+  natr_low_volatility:     {arch: volatility,      type: FILTER,  role: context_filter}
+  bb_above_upper:          {arch: mean_reversion,  type: FILTER,  role: context_filter, flag: long_only_overbought}
+  bb_below_lower:          {arch: mean_reversion,  type: FILTER,  role: context_filter}
+  kc_above_upper:          {arch: mean_reversion,  type: FILTER,  role: context_filter, flag: long_only_overbought}
+  kc_below_lower:          {arch: mean_reversion,  type: FILTER,  role: context_filter}
+  ve_above_upper:          {arch: mean_reversion,  type: FILTER,  role: context_filter, flag: long_only_overbought}
+  ve_below_lower:          {arch: mean_reversion,  type: FILTER,  role: context_filter}
+  cl_above_low_offset:     {arch: trend_following, type: FILTER,  role: context_filter}
+  cl_below_high_offset:    {arch: trend_following, type: FILTER,  role: context_filter}
+  cl_low_offset_break:     {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  cl_high_offset_break:    {arch: trend_following, type: TRIGGER, role: exit}
+  starc_upper_breakout:    {arch: mean_reversion,  type: FILTER,  role: context_filter, flag: name_says_breakout_canon_says_reversion}
+  starc_lower_breakout:    {arch: mean_reversion,  type: FILTER,  role: context_filter, flag: name_says_breakout_canon_says_reversion}
+
+pattern:          # 40 signals -- candlestick and bar geometry
+  # arch: any. A pattern is a statement about the last few bars, not about what kind of
+  # strategy it belongs to: the same engulfing candle confirms a trend-following entry, a
+  # breakout and a mean-reversion bounce. So a pattern is admissible in every regime that
+  # admits anything, and it never decides the strategy's archetype -- whichever OTHER
+  # signal is the trigger does. A pattern as the sole trigger leaves the archetype open.
+  bullish_engulfing_trigger:         {arch: any, type: TRIGGER, role: entry_trigger}
+  bullish_harami_trigger:            {arch: any, type: TRIGGER, role: entry_trigger}
+  bullish_pin_bar_trigger:           {arch: any, type: TRIGGER, role: entry_trigger}
+  dragonfly_doji_trigger:            {arch: any, type: TRIGGER, role: entry_trigger}
+  hammer_trigger:                    {arch: any, type: TRIGGER, role: entry_trigger}
+  inverted_hammer_trigger:           {arch: any, type: TRIGGER, role: entry_trigger}
+  marubozu_bullish_trigger:          {arch: any, type: TRIGGER, role: entry_trigger}
+  morning_star_trigger:              {arch: any, type: TRIGGER, role: entry_trigger}
+  piercing_line_trigger:             {arch: any, type: TRIGGER, role: entry_trigger}
+  three_inside_up_trigger:           {arch: any, type: TRIGGER, role: entry_trigger}
+  three_white_soldiers_trigger:      {arch: any, type: TRIGGER, role: entry_trigger}
+  tweezer_bottoms_trigger:           {arch: any, type: TRIGGER, role: entry_trigger}
+  two_bar_reversal_bullish_trigger:  {arch: any, type: TRIGGER, role: entry_trigger}
+  bearish_engulfing_trigger:         {arch: any, type: TRIGGER, role: exit}
+  bearish_harami_trigger:            {arch: any, type: TRIGGER, role: exit}
+  bearish_pin_bar_trigger:           {arch: any, type: TRIGGER, role: exit}
+  dark_cloud_cover_trigger:          {arch: any, type: TRIGGER, role: exit}
+  evening_star_trigger:              {arch: any, type: TRIGGER, role: exit}
+  gravestone_doji_trigger:           {arch: any, type: TRIGGER, role: exit}
+  hanging_man_trigger:               {arch: any, type: TRIGGER, role: exit}
+  marubozu_bearish_trigger:          {arch: any, type: TRIGGER, role: exit}
+  shooting_star_trigger:             {arch: any, type: TRIGGER, role: exit}
+  three_black_crows_trigger:         {arch: any, type: TRIGGER, role: exit}
+  three_inside_down_trigger:         {arch: any, type: TRIGGER, role: exit}
+  tweezer_tops_trigger:              {arch: any, type: TRIGGER, role: exit}
+  two_bar_reversal_bearish_trigger:  {arch: any, type: TRIGGER, role: exit}
+  doji_trigger:                      {arch: any, type: TRIGGER, role: entry_trigger, flag: direction_agnostic_needs_companion}
+  inside_bar_trigger:                {arch: any, type: TRIGGER, role: entry_trigger, flag: direction_agnostic_needs_companion}
+  long_legged_doji_trigger:          {arch: any, type: TRIGGER, role: entry_trigger, flag: direction_agnostic_needs_companion}
+  nr7_trigger:                       {arch: any, type: TRIGGER, role: entry_trigger, flag: direction_agnostic_needs_companion}
+  outside_bar_trigger:               {arch: any, type: TRIGGER, role: entry_trigger, flag: direction_agnostic_needs_companion}
+  spinning_top_trigger:              {arch: any, type: TRIGGER, role: entry_trigger, flag: direction_agnostic_needs_companion}
+  bearish_pattern_recent:            {arch: any, type: FILTER,  role: context_filter}
+  bullish_pattern_recent:            {arch: any, type: FILTER,  role: context_filter}
+  continuation_pattern_bearish:      {arch: any, type: FILTER,  role: context_filter}
+  continuation_pattern_bullish:      {arch: any, type: FILTER,  role: context_filter}
+  indecision_pattern_recent:         {arch: any, type: FILTER,  role: context_filter}
+  reversal_pattern_bearish:          {arch: any, type: FILTER,  role: context_filter}
+  reversal_pattern_bullish:          {arch: any, type: FILTER,  role: context_filter}
+  strong_body_recent:                {arch: any, type: FILTER,  role: context_filter}
+
+volume:           # 33 signals -- all confirmation except vwma_cross_* (genuine entry)
+  adi_bullish:             {arch: trend_following, type: FILTER,  role: confirmation}
+  adi_bearish:             {arch: trend_following, type: FILTER,  role: confirmation}
+  obv_bullish:             {arch: trend_following, type: FILTER,  role: confirmation}
+  obv_bearish:             {arch: trend_following, type: FILTER,  role: confirmation}
+  cmf_bullish:             {arch: trend_following, type: FILTER,  role: confirmation}
+  cmf_bearish:             {arch: trend_following, type: FILTER,  role: confirmation}
+  force_bullish:           {arch: momentum,        type: FILTER,  role: confirmation}
+  force_bearish:           {arch: momentum,        type: FILTER,  role: confirmation}
+  eom_bullish:             {arch: trend_following, type: FILTER,  role: confirmation}
+  eom_bearish:             {arch: trend_following, type: FILTER,  role: confirmation}
+  vpt_bullish:             {arch: trend_following, type: FILTER,  role: confirmation}
+  vpt_bearish:             {arch: trend_following, type: FILTER,  role: confirmation}
+  nvi_bullish:             {arch: trend_following, type: FILTER,  role: confirmation}
+  nvi_bearish:             {arch: trend_following, type: FILTER,  role: confirmation}
+  mfi_overbought:          {arch: mean_reversion,  type: FILTER,  role: exit}
+  mfi_oversold:            {arch: mean_reversion,  type: FILTER,  role: entry_trigger}
+  vwap_above:              {arch: trend_following, type: FILTER,  role: confirmation}
+  vwap_below:              {arch: trend_following, type: FILTER,  role: confirmation}
+  daily_return_positive:   {arch: momentum,        type: FILTER,  role: confirmation}
+  daily_return_negative:   {arch: momentum,        type: FILTER,  role: confirmation}
+  cumulative_return_positive: {arch: trend_following, type: FILTER, role: confirmation}
+  cumulative_return_target:   {arch: none,         type: FILTER,  role: exit, flag: take_profit_not_entry}
+  is_above_vwma:           {arch: trend_following, type: FILTER,  role: confirmation}
+  vwma_cross_up:           {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  vwma_cross_down:         {arch: trend_following, type: TRIGGER, role: exit}
+  adosc_bullish:           {arch: momentum,        type: FILTER,  role: confirmation}
+  adosc_bearish:           {arch: momentum,        type: FILTER,  role: confirmation}
+  adosc_cross_up:          {arch: momentum,        type: TRIGGER, role: entry_trigger, flag: volume_flow_confirmation_leaning}
+  adosc_cross_down:        {arch: momentum,        type: TRIGGER, role: exit}
+  kvo_bullish_cross:       {arch: momentum,        type: TRIGGER, role: entry_trigger, flag: volume_flow_confirmation_leaning}
+  kvo_bearish_cross:       {arch: momentum,        type: TRIGGER, role: exit}
+  kvo_bullish:             {arch: momentum,        type: FILTER,  role: confirmation}
+  kvo_bearish:             {arch: momentum,        type: FILTER,  role: confirmation}

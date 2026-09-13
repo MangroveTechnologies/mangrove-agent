@@ -25,7 +25,8 @@ cd "$REPO_ROOT"
 
 CONFIG_FILE="server/src/config/local-config.json"
 VENV_DIR=".venv"
-HOST="${BARE_HOST:-0.0.0.0}"
+# Loopback only by default: this process holds wallet secrets.
+HOST="${BARE_HOST:-127.0.0.1}"
 PORT="${BARE_PORT:-9080}"
 
 GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; DIM="\033[2m"; CLR="\033[0m"
@@ -108,9 +109,9 @@ ok "venv active: $(which python3)"
 
 # -- 5. pip install ----------------------------------------------------------
 
-step "5. pip install -r server/requirements.txt"
+step "5. pip install -r server/requirements.lock"
 python3 -m pip install --quiet --upgrade pip
-python3 -m pip install --quiet -r server/requirements.txt
+python3 -m pip install --quiet -r server/requirements.lock
 ok "deps installed"
 
 # -- 6. keychain smoke test --------------------------------------------------

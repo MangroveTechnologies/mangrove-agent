@@ -190,6 +190,23 @@ class TestBuildFromReference:
         assert exec_cfg.get("reward_factor") is not None
         assert exec_cfg.get("atr_period") is not None
 
+    def test_no_reference_builds_superseded_stop_keys(self):
+        """Regression: MangroveAI's strategy write path refuses the superseded
+        stop keys (400 "execution_config names superseded stop parameter(s)").
+        Every Oracle-sweep reference carried them, so all 120 failed
+        create_strategy_manual. No built payload may carry one."""
+        for ref in svc.list_all():
+            exec_cfg = svc.build_from_reference(reference_id=ref.id)["execution_config"]
+            leaked = svc.SUPERSEDED_STOP_KEYS & set(exec_cfg)
+            assert not leaked, f"{ref.id} builds superseded stop keys {sorted(leaked)}"
+
+    def test_seed_data_has_no_superseded_stop_keys(self):
+        """The seed itself stays clean, so search results don't advertise
+        parameters the platform no longer accepts."""
+        for ref in svc.list_all():
+            leaked = svc.SUPERSEDED_STOP_KEYS & set(ref.execution_config)
+            assert not leaked, f"{ref.id} seed carries superseded stop keys {sorted(leaked)}"
+
 
 class TestCategoryDetection:
     @pytest.mark.parametrize(

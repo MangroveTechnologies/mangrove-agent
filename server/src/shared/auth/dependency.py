@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from fastapi import Header
 
-from src.shared.auth.middleware import validate_api_key
+from src.shared.auth.middleware import published_default_keys_configured, validate_api_key
 from src.shared.errors import AuthInvalidApiKey, AuthMissingApiKey
 
 
@@ -34,7 +34,11 @@ def require_api_key(x_api_key: str | None = Header(None, alias="X-API-Key")) -> 
                 "API key required.",
                 suggestion="Pass X-API-Key header with a valid key.",
             ) from e
-        raise AuthInvalidApiKey(
-            "Invalid API key.",
-            suggestion="Check your X-API-Key header against the configured API_KEYS.",
-        ) from e
+        if published_default_keys_configured():
+            suggestion = (
+                "This agent's API_KEYS still holds the key published in the example config, "
+                "which is refused. Re-run ./scripts/setup.sh to generate a unique key."
+            )
+        else:
+            suggestion = "Check your X-API-Key header against the configured API_KEYS."
+        raise AuthInvalidApiKey("Invalid API key.", suggestion=suggestion) from e

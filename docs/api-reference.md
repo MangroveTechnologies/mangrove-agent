@@ -608,7 +608,7 @@ Every strategy carries an `execution_config` with these fields (defaults from `t
 | `max_risk_per_trade` | number | 0.01 | Max risk per trade (1%) |
 | `reward_factor` | number | 2 | Risk/reward ratio target |
 | `atr_period` | int | 14 | ATR lookback period in bars |
-| `atr_volatility_factor` | number | 2.0 | ATR multiplier for stop loss |
+| `volatility_tolerance` | number | 0.5 | Where the stop sits on the ATR width, 0–1 (0 = 0.5× signal-timeframe ATR, 1 = 2× daily ATR). Replaces the superseded `atr_volatility_factor` / `atr_short_weight` / `atr_long_weight` / `atr_cap_multiplier`, which `strategies.create` now rejects |
 | `min_balance_threshold` | number | 0.1 | Minimum account balance |
 | `min_trade_amount` | number | 25 | Minimum trade size ($) |
 | `max_open_positions` | int | 10 | Max concurrent positions |
@@ -617,7 +617,7 @@ Every strategy carries an `execution_config` with these fields (defaults from `t
 | `target_volatility` | number | 0.02 | Target volatility level |
 | `volatility_mode` | string | `"stddev"` | `"stddev"` or `"atr"` |
 | `enable_volatility_adjustment` | bool | false | Volatility-based position sizing |
-| `cooldown_bars` | int | 24 | Bars between trades |
+| `cooldown_config` | object | per-timeframe | Loss-streak cooldowns keyed by timeframe (`short/long_loss_limit`, `short/long_window_bars`, `short/long_cooldown_bars`). Supersedes the deprecated `cooldown_bars` / `daily_momentum_limit` / `weekly_momentum_limit`. |
 | `max_hold_bars` | int | 50 | Max bars to hold a position |
 | `exit_on_loss_after_bars` | int | 50 | Exit losers after N bars |
 | `exit_on_profit_after_bars` | int | 60 | Exit winners after N bars |
@@ -654,9 +654,10 @@ Run a synchronous backtest against historical market data.
 | `target_volatility` | number | Target volatility |
 | `volatility_mode` | string | `"stddev"` or `"atr"` |
 | `enable_volatility_adjustment` | bool | Volatility-based sizing |
-| `cooldown_bars` | int | Bars between trades |
-| `daily_momentum_limit` | number | Daily momentum threshold |
-| `weekly_momentum_limit` | number | Weekly momentum threshold |
+| `cooldown_config` | object | Per-timeframe cooldown config (preferred) |
+| `cooldown_bars` | int | DEPRECATED — use `cooldown_config`; ignored by the engine when `cooldown_config` is set |
+| `daily_momentum_limit` | number | DEPRECATED — use `cooldown_config` |
+| `weekly_momentum_limit` | number | DEPRECATED — use `cooldown_config` |
 
 **Date Range Options (at least one required):**
 
@@ -673,9 +674,9 @@ Run a synchronous backtest against historical market data.
 |-----------|------|-------------|
 | `slippage_pct` | number | Max slippage per leg (default: 0.004 = 0.4%) |
 | `fee_pct` | number | Max fee rate (default: 0.0085 = 0.85%) |
-| `execution_config` | object | ATR params (`atr_period`, `atr_volatility_factor`). Defaults from `trading_defaults.json`. |
+| `execution_config` | object | Stop params (`atr_period`, `volatility_tolerance`). Defaults from `trading_defaults.json`. |
 
-**Important:** `atr_period` and `atr_volatility_factor` belong in `execution_config`, NOT in `strategy_json`.
+**Important:** `atr_period` and `volatility_tolerance` belong in `execution_config`, NOT in `strategy_json`.
 
 **Response:**
 ```json

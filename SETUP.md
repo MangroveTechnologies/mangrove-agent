@@ -573,8 +573,9 @@ The agent's address is registered incorrectly with Claude Code. These commands r
 
 ```bash
 claude mcp remove mangrove-agent
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
 claude mcp add -s local -t http mangrove-agent http://localhost:9080/mcp/ \
-  --header "X-API-Key: dev-key-1"
+  --header "X-API-Key: $KEY"
 ```
 
 Then close and reopen Claude Code.

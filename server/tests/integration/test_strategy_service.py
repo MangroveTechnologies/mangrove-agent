@@ -9,6 +9,7 @@ rather than unit.
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -64,7 +65,7 @@ def mock_ai_sdk(monkeypatch):
     bt_result.success = True
     bt_result.metrics = {
         "irr_annualized": 0.4,
-        "win_rate": 0.6,
+        "win_rate": 60.0,  # SDK scale: 0-100
         "total_trades": 25,
         "sharpe_ratio": 1.5,
         "max_drawdown": 0.1,
@@ -74,6 +75,12 @@ def mock_ai_sdk(monkeypatch):
     bt_result.trade_history = []
     bt_result.error = None
     client.backtesting.run.return_value = bt_result
+    # The winner's full backtest submits + polls (keeps the server-side run id).
+    client.backtesting.submit_async.return_value = SimpleNamespace(backtest_id="bt-auto", status="queued")
+    client.backtesting.poll_status.side_effect = lambda _id: SimpleNamespace(
+        status="completed", metrics=dict(bt_result.metrics), trade_history=[],
+        execution_time_seconds=1.0, error_message=None,
+    )
 
     # strategies.create: return a fresh mock with a unique id per call,
     # so the DB's UNIQUE(mangrove_id) constraint is respected.
@@ -133,7 +140,7 @@ def test_create_autonomous_no_viable_candidates(temp_db, mock_ai_sdk):
     from src.shared.errors import StrategyNoViableCandidates
 
     # Drop win_rate under the threshold.
-    mock_ai_sdk.backtesting.run.return_value.metrics["win_rate"] = 0.3
+    mock_ai_sdk.backtesting.run.return_value.metrics["win_rate"] = 20.0  # < 25% spec floor
 
     with pytest.raises(StrategyNoViableCandidates):
         create_autonomous(StrategyAutonomousRequest(
@@ -153,6 +160,38 @@ def test_create_manual_happy_path(temp_db, mock_ai_sdk):
         exit=[],
     ))
     assert detail.mangrove_id.startswith("mg-new-")
+
+
+def test_create_manual_same_rules_twice_returns_existing_strategy(temp_db, mock_ai_sdk):
+    """Regression: MangroveAI's create returns the EXISTING strategy when the
+    rules already exist for the account. The local UNIQUE(mangrove_id) insert
+    used to 500; now the existing local row comes back."""
+    from src.services.strategy_service import StrategyManualRequest, create_manual
+    from src.shared.db.sqlite import get_connection
+
+    def _same_upstream(_request):
+        m = MagicMock()
+        m.id = "mg-existing"
+        m.name = getattr(_request, "name", "x")
+        m.asset = "ETH"
+        m.status = "inactive"
+        return m
+
+    mock_ai_sdk.strategies.create.side_effect = _same_upstream
+    req = StrategyManualRequest(
+        name="dup", asset="ETH", timeframe="1h",
+        entry=[{"name": "rsi_oversold", "signal_type": "TRIGGER", "timeframe": "1h", "params": {}}],
+        exit=[],
+    )
+    first = create_manual(req)
+    second = create_manual(req)
+
+    assert second.id == first.id
+    assert second.mangrove_id == "mg-existing"
+    rows = get_connection().execute(
+        "SELECT COUNT(*) FROM strategies WHERE mangrove_id = ?", ("mg-existing",),
+    ).fetchone()[0]
+    assert rows == 1
 
 
 def test_create_manual_invalid_composition_raises(temp_db, mock_ai_sdk):
@@ -408,6 +447,7 @@ def test_tick_maps_engine_shaped_orders(temp_db, mock_ai_sdk, monkeypatch):
 
     # ...and the engine's execution_state persists first-class (migration 005).
     import json as _json
+
     from src.shared.db.sqlite import get_connection
     row = get_connection().execute(
         "SELECT execution_state_json FROM strategies WHERE id = ?", (s.id,)
@@ -671,7 +711,11 @@ def test_tick_logs_warning_when_order_intent_fails_validation(temp_db, mock_ai_s
               reason contains the Pydantic error, payload_keys lists fields present in dict
     """
     from src.services.strategy_service import (
-        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
     )
 
     eval_resp = MagicMock()
@@ -700,8 +744,13 @@ def test_tick_warning_log_contains_only_keys_not_values(temp_db, mock_ai_sdk):
     expected: kwargs logged do NOT contain those values — only key names (PII/financial scrubbed)
     """
     import json as _json
+
     from src.services.strategy_service import (
-        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
     )
 
     sensitive_amount = 99999.0
@@ -739,7 +788,11 @@ def test_tick_warning_payload_keys_lists_field_names(temp_db, mock_ai_sdk):
               key names only, zero values
     """
     from src.services.strategy_service import (
-        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
     )
 
     eval_resp = MagicMock()
@@ -764,7 +817,11 @@ def test_tick_mixed_valid_and_invalid_intents_processes_only_valid(temp_db, mock
               evaluation logged as ok
     """
     from src.services.strategy_service import (
-        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
     )
     from src.services.trade_log import list_evaluations, list_trades
 
@@ -800,7 +857,11 @@ def test_tick_all_malformed_intents_still_completes_with_ok_evaluation(temp_db, 
     expected: warning fired twice, zero trades, evaluation status=ok (tick didn't error out)
     """
     from src.services.strategy_service import (
-        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
     )
     from src.services.trade_log import list_evaluations, list_trades
 
@@ -831,7 +892,11 @@ def test_tick_warning_includes_strategy_id_for_correlation(temp_db, mock_ai_sdk)
     expected: strategy_id in warning kwargs matches the strategy — enables log correlation
     """
     from src.services.strategy_service import (
-        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
     )
 
     eval_resp = MagicMock()

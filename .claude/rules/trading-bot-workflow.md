@@ -6,7 +6,7 @@ The agent is a Mangrove-powered trading bot. Product is **strategy-driven automa
 
 1. **Author** a strategy (autonomous goal -> candidates, or manual rules).
 2. **Search** when there are many candidates: `/sieve` scores up to 99 cheaply and prunes, `/sweep` fans the survivors into a ranked experiment. **Backtest** the winner(s) to verdict.
-3. **Promote** winner: `draft -> paper -> live` with allocation block.
+3. **Promote** winner: `inactive -> paper -> live` with allocation block. New strategies are saved as `inactive` (saved, not scheduled) -- not `draft`; see Stage 4.
 4. **Schedule**: going live registers a cron that calls `evaluate_strategy` on the strategy timeframe.
 5. **Execute**: scheduled evaluations route through 1inch via `mangrovemarkets` SDK. Automatic; user does not click "swap."
 6. **Monitor**: trades, evaluations, balances; tweak allocation, pause, archive.
@@ -60,7 +60,7 @@ Greet as the persona in `CLAUDE.md`'s Project Context, or default to a concise, 
 3. `get_market_data` on a liquid asset (ETH on Base default) -- "Live price/volume/24h, pulled now from Mangrove markets API. Every backtest/evaluation prices off this."
 4. `kb_search` on a real concept (e.g. `"MACD crossover"`, `"Bollinger squeeze"`) -- "Knowledge base. Every recommendation cites entries here -- no vibes."
 5. `search_reference_strategies` with just an asset -- "Reference library. We start from already-backtested templates, not blank slate."
-6. `sieve_score` on one sample strategy (e.g. BTC 1h MACD cross + SMA filter) -- "This is **SIEVE**: a model trained on 1.24M historical runs that scores a strategy in milliseconds. 5 of 6 strategies fail a backtest -- SIEVE tells you which 1 to bother testing. Score 99 ideas for the cost of one. Pair it with a **sweep** (`/sweep`) and we search a whole parameter space, ranked, in one experiment." Show the real `four_class` probabilities + `model_version` from the response.
+6. `sieve_score` on one sample strategy (e.g. BTC 1h MACD cross + SMA filter) -- "This is **SIEVE**: a go/no-go gate trained on millions of historical runs that scores a strategy in milliseconds. Many candidates never place a trade -- SIEVE tells you which ones will, so you only pay to backtest those. Score 99 ideas for the cost of one. It doesn't predict performance; the backtest does. Pair it with a **sweep** (`/sweep`) and we search a whole parameter space, ranked by real backtests, in one experiment." Show the real `binary` probabilities (`p_no_trades` / `p_trades`) + `model_version` from the response.
 
 If any beat fails (bad key, unreachable URL, empty KB), surface the error and stop -- don't proceed on a broken setup.
 
@@ -100,7 +100,7 @@ Two invariants:
 
 The cheap-before-expensive loop:
 
-1. **`/sieve`** -- score up to 99 candidates in one millisecond-cheap call. Drop the dead-on-arrival ones (`p_no_trades > 0.5`), rank the rest by `P(winning)`. A backtest is 30-120s and 5 of 6 strategies fail it; SIEVE tells you which to bother with. (Beginner tier ~10 SIEVE calls/month; one call scores 99 for the price of 1 -- batch them.)
+1. **`/sieve`** -- score up to 99 candidates in one millisecond-cheap call. Drop the ones SIEVE expects never to trade (`p_no_trades > 0.5`). SIEVE is a go/no-go gate, not a performance ranking -- never order candidates by predicted winning/losing (that head is retired). A backtest is 30-120s; SIEVE stops you paying for ones that would come back with zero trades. (Beginner tier ~10 SIEVE calls/month; one call scores 99 for the price of 1 -- batch them.)
 2. **`/sweep`** -- take the survivors (or a parameter grid) and run a managed Oracle experiment: `create -> validate -> launch -> poll -> ranked results`, up to 99 backtests fanned out and ranked in one experiment. (Beginner tier ~2 sweep launches/month.)
 3. **Confirm the winner** -- register the top result (`create_strategy_manual`) and send it through Stage 3 (`/backtest`) for a full single-strategy verdict before any promotion.
 
@@ -108,7 +108,7 @@ Both skills cite the same Mangrove intelligence (`oracle_list_signals`, the KB) 
 
 ## Stage 3 -- Review backtest
 
-Use the `/backtest` skill. Window from a bar-count target (~2000-5000 bars), not a fixed month table. Verdict against 6 thresholds in `server/src/services/data/threshold_spec.json` (sortino >= 1.5, sharpe >= 1.2, calmar >= 1.0, irr >= 0.15, max_drawdown <= 0.7, win_rate >= 0.25), plus benchmark-relative line (beat buy-and-hold? beat BTC?). Never invent metrics -- if `total_trades == 0`, report `INSUFFICIENT_TRADES`. Every non-PASS ships failure-mode advice. Ask: "Promote to paper, iterate, or reject?"
+Use the `/backtest` skill. Window from a bar-count target (~2000-5000 bars), not a fixed month table. The verdict is computed server-side and returned as `verdict` by `backtest_strategy(mode="full")` -- present it, don't recompute it. It grades against 6 thresholds in `server/src/services/data/threshold_spec.json` (sortino >= 1.5, sharpe >= 1.2, calmar >= 1.0, irr >= 0.15, max_drawdown <= 0.7, win_rate >= 0.25; percent metrics converted from 0-100): PASS = 6/6, MARGINAL = 4-5/6, FAIL = <=3/6. Add the benchmark-relative line (beat buy-and-hold? beat BTC?). Never invent metrics -- if `total_trades < BACKTEST_MIN_TRADES` (10, includes 0), the verdict is `INSUFFICIENT_TRADES`. Autonomous candidate pruning uses the same `min_win_rate` and trade floor. Every non-PASS ships failure-mode advice. Ask: "Promote to paper, iterate, or reject?"
 
 ## Stage 4 -- Paper
 

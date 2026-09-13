@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -31,12 +33,24 @@ def client(tmp_path, monkeypatch):
 
     bt = MagicMock()
     bt.success = True
-    bt.metrics = {"irr_annualized": 0.4, "win_rate": 0.6, "total_trades": 25,
+    bt.metrics = {"irr_annualized": 0.4, "win_rate": 60.0, "total_trades": 25,
                   "sharpe_ratio": 1.5, "max_drawdown": 0.1, "net_pnl": 2500.0}
     bt.trade_count = 25
     bt.trade_history = [{"entry": "2026-01-01", "pnl": 10}]
     bt.error = None
     sdk.backtesting.run.return_value = bt
+    # Full mode submits + polls so the server-side run id survives.
+    sdk.backtesting.submit_async.return_value = SimpleNamespace(backtest_id="bt-1", status="queued")
+    sdk.backtesting.poll_status.return_value = SimpleNamespace(
+        status="completed", metrics={**bt.metrics, "total_return": 5.0},
+        trade_history=bt.trade_history, execution_time_seconds=1.0, error_message=None,
+    )
+    # Daily closes 100 -> 110 over the last 91 days, for the benchmark.
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    sdk.crypto_assets.get_ohlcv.return_value = {"success": True, "symbol": "ETH", "data": [
+        {"timestamp": (today - timedelta(days=90 - i)).isoformat(), "close": 100 + i * (10 / 90)}
+        for i in range(91)
+    ]}
 
     counter = {"n": 0}
 
@@ -63,6 +77,7 @@ def client(tmp_path, monkeypatch):
         "src.services.candidate_generator.mangrove_ai_client",
         "src.services.backtest_service.mangrove_ai_client",
         "src.services.strategy_service.mangrove_ai_client",
+        "src.services.benchmark_service.mangrove_ai_client",
     ):
         monkeypatch.setattr(path, lambda s=sdk: s)
 
@@ -183,6 +198,31 @@ def test_backtest_full(client):
     assert body["success"] is True
     assert body["metrics"]["irr_annualized"] == 0.4
     assert body["trade_history"] == [{"entry": "2026-01-01", "pnl": 10}]
+    # New top-level keys; the existing response shape is unchanged.
+    assert body["backtest_id"] == "bt-1"
+    assert body["metric_units"]["total_return"] == "percent_0_100"
+    bench = body["benchmark"]
+    assert bench["available"] is True
+    assert bench["asset"] == "ETH"
+    assert bench["buy_and_hold_return_pct"] == 10.0
+    assert bench["strategy_minus_benchmark_pct"] == -5.0
+
+
+def test_backtest_full_can_skip_benchmark(client):
+    created = client.post(
+        "/api/v1/agent/strategies/manual",
+        headers=_auth(),
+        json={"name": "s", "asset": "ETH", "timeframe": "1h",
+              "entry": [{"name": "rsi_oversold", "signal_type": "TRIGGER",
+                         "timeframe": "1h"}]},
+    ).json()
+    r = client.post(
+        f"/api/v1/agent/strategies/{created['id']}/backtest",
+        headers=_auth(),
+        json={"mode": "full", "lookback_months": 3, "include_benchmark": False},
+    )
+    assert r.status_code == 200
+    assert "benchmark" not in r.json()
 
 
 def test_evaluate_manual_tick(client):

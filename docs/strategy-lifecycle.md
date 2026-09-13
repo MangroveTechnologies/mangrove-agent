@@ -68,7 +68,7 @@ the local record above exists either way.
 User                        Tool (MCP)                     What happens
 ────────────────────────────────────────────────────────────────────────
 "Promote to paper"  →   update_strategy_status(            strategy_service.update_status():
-                          strategy_id=...,                  1. Validate transition (draft→paper OK;
+                          strategy_id=...,                  1. Validate transition (inactive→paper OK;
                           status="paper"                       no confirm required, no allocation)
                         )                                   2. mangroveai.strategies.update_status(
                                                                 mangrove_id, "paper")   [upstream sync]
@@ -86,7 +86,7 @@ User                        Tool (MCP)                     What happens
                                                                     replace_existing=True,
                                                                     coalesce=True, max_instances=1,
                                                                   )
-                                                            4. Local status: draft → paper
+                                                            4. Local status: inactive → paper
 ```
 
 ### What runs on each tick (paper)
@@ -206,7 +206,7 @@ Live adds three guarantees over paper:
 |---|---|
 | Create | `create_strategy_autonomous` OR `search_reference_strategies` + `build_strategy_from_reference` + `create_strategy_manual` |
 | Backtest | `backtest_strategy` |
-| Review | agent uses `threshold_spec` values from `server/src/services/data/threshold_spec.json` |
+| Review | `backtest_strategy(mode="full")` returns a server-computed `verdict` (PASS / MARGINAL / FAIL / INSUFFICIENT_TRADES) against `server/src/services/data/threshold_spec.json` — see `server/src/services/backtest_verdict.py` |
 | Promote paper | `update_strategy_status(status="paper")` |
 | Watch paper | `list_evaluations`, `list_trades` |
 | Create wallet | `create_wallet` (secret returned via `vault_token` → `reveal-secret.sh`) |

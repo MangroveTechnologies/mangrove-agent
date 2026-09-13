@@ -19,6 +19,18 @@ ENVIRONMENT=prod   -> src/config/prod-config.json
 cp src/config/local-example-config.json src/config/local-config.json
 ```
 
+### Plugin installs: `MANGROVE_AGENT_HOME`
+
+When the agent runs as the Claude Code plugin, its code lives in a versioned cache directory that Claude Code replaces on every update. Config and state therefore live under `MANGROVE_AGENT_HOME` (default `~/.mangrove-agent`, set by `scripts/plugin-start-agent.sh`):
+
+```
+$MANGROVE_AGENT_HOME/config/local-config.json   # read instead of src/config/<env>-config.json
+$MANGROVE_AGENT_HOME/agent-data/agent.db         # relative DB_PATH resolves here
+$MANGROVE_AGENT_HOME/agent-data/master.key       # relative MASTER_KEY_PATH resolves here
+```
+
+When `MANGROVE_AGENT_HOME` is set, `src/config.py` loads the config from `$MANGROVE_AGENT_HOME/config/` and resolves relative `DB_PATH` / `MASTER_KEY_PATH` against it rather than the process cwd. `configuration-keys.json` always comes from the package. Unset (a git clone), nothing changes. The helper scripts (`reveal-secret.sh`, `stash-secret.sh`, `confirm-backup.sh`, `stash-kraken-secret.sh`) find the right config through `scripts/_agent_home.sh`.
+
 ## Value Resolution
 
 Config values are resolved from the JSON config file. If a value starts with `secret:`, it's resolved from GCP Secret Manager:

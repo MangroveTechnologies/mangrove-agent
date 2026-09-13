@@ -1,0 +1,17 @@
+{
+  "name": "mangrove",
+  "description": "Claude Code plugins from Mangrove Technologies.",
+  "owner": {
+    "name": "Mangrove Technologies",
+    "url": "https://github.com/MangroveTechnologies"
+  },
+  "plugins": [
+    {
+      "name": "mangrove-agent",
+      "source": "./",
+      "description": "Local AI trading agent on the Mangrove API: author strategies, backtest, paper-trade, and go live on DEX (1inch) or Kraken. Keys and wallets stay on your machine.",
+      "category": "finance",
+      "homepage": "https://github.com/MangroveTechnologies/mangrove-agent"
+    }
+  ]
+}

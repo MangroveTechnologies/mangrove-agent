@@ -1,0 +1,50 @@
+{
+  "name": "mangrove-agent",
+  "version": "0.2.0",
+  "description": "Local AI trading agent on the Mangrove API: author strategies, backtest, paper-trade, and go live on DEX (1inch) or Kraken. Keys and wallets stay on your machine.",
+  "author": {
+    "name": "Mangrove Technologies",
+    "url": "https://github.com/MangroveTechnologies"
+  },
+  "homepage": "https://mangrovedeveloper.ai",
+  "repository": "https://github.com/MangroveTechnologies/mangrove-agent",
+  "license": "MIT",
+  "keywords": ["trading", "backtesting", "defi", "kraken", "mcp"],
+  "userConfig": {
+    "mangrove_api_key": {
+      "type": "string",
+      "title": "MangroveAI API key",
+      "description": "Your dev_ or prod_ key from https://mangrovedeveloper.ai. Stored by Claude Code; never paste it into chat.",
+      "required": true,
+      "sensitive": true
+    }
+  },
+  "skills": [
+    "./.claude/skills/trading-bot",
+    "./.claude/skills/michael/knowledge-graph",
+    "./.claude/skills/michael/strategy-composition",
+    "./.claude/skills/michael/strategy-management",
+    "./.claude/skills/michael/backtesting",
+    "./.claude/skills/michael/market-intelligence",
+    "./.claude/skills/michael/portfolio",
+    "./.claude/skills/michael/sweeps",
+    "./.claude/skills/michael/sweep-results",
+    "./.claude/skills/create-strategy",
+    "./.claude/skills/backtest",
+    "./.claude/skills/sieve",
+    "./.claude/skills/sweep",
+    "./.claude/skills/custom-signal",
+    "./.claude/skills/setup-kraken",
+    "./.claude/skills/connect-kraken"
+  ],
+  "hooks": "./.claude-plugin/hooks.json",
+  "mcpServers": {
+    "mangrove-agent": {
+      "type": "http",
+      "url": "http://127.0.0.1:9080/mcp/",
+      "headers": {
+        "X-API-Key": "${user_config.mangrove_api_key}"
+      }
+    }
+  }
+}

@@ -6,9 +6,10 @@ mode on the server. Until that ships, "quick" and "full" here both hit
 run() — the distinction is in how we summarize results (quick = metrics
 only; full = metrics + trade_history).
 
-Filter + rank:
-- Drop candidates with win_rate <= BACKTEST_MIN_WIN_RATE  (default 0.51)
+Filter + rank (same bars as the backtest verdict, backtest_verdict.py):
 - Drop candidates with total_trades < BACKTEST_MIN_TRADES (default 10)
+- Drop candidates with win_rate below threshold_spec.json `min_win_rate`
+  (0.25; the SDK's 0-100 win_rate is converted before comparing)
 - Sort survivors by irr_annualized DESC
 
 Metric key lookup is defensive: the SDK's metrics dict field names may
@@ -17,17 +18,21 @@ vary. We look up several common spellings and return 0.0 if none present.
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from mangrove_ai.exceptions import NotFoundError
 from mangrove_ai.models import BacktestRequest
+from mangrove_ai.models.backtesting import BacktestResult
 from pydantic import BaseModel
 
 from src.config import app_config
+from src.services import backtest_verdict
 from src.services.candidate_generator import StrategyCandidate
 from src.shared import timeframes
 from src.shared.clients.mangrove import mangrove_ai_client
-from src.shared.errors import SdkError
+from src.shared.errors import BacktestNotFound, SdkError
 from src.shared.logging import get_logger
 
 _log = get_logger(__name__)
@@ -68,10 +73,15 @@ _FALLBACK_TRADING_DEFAULTS: dict[str, Any] = {
         # valid so backtests don't 500 when the canon fetch is unavailable.
         "position_size_calc": "v2",
         "atr_period": 14,
-        "atr_volatility_factor": 2.0,
-        "atr_short_weight": 0.95,
-        "atr_long_weight": 0.05,
-        "atr_cap_multiplier": 2.1,
+        # atr_width_dial stop model. The weighted_atr keys this used to carry
+        # (atr_volatility_factor / atr_short_weight / atr_long_weight /
+        # atr_cap_multiplier) are superseded and refused by strategies.create,
+        # so a fallback-using server could not create any strategy.
+        "stop_model": "atr_width_dial",
+        "volatility_tolerance": 0.5,
+        "min_stop_distance_pct": 0.005,
+        "max_drawdown_limit": 0.2,
+        "max_drawdown_halt_limit": 0.2,
     },
     "position_limits": {
         "initial_balance": 10000,
@@ -89,14 +99,26 @@ _FALLBACK_TRADING_DEFAULTS: dict[str, Any] = {
         "enable_volatility_adjustment": False,
     },
     "trading_rules": {
-        "cooldown_bars": 24,
-        "daily_momentum_limit": 3,
-        "weekly_momentum_limit": 3,
+        # cooldown_config only. The legacy scalars (cooldown_bars /
+        # daily_momentum_limit / weekly_momentum_limit / max_hold_time_hours)
+        # are deprecated in mangroveai and ignored by the engine whenever
+        # cooldown_config is present (MangroveAI managers/risk_manager.py).
+        # Every supported timeframe is keyed — the engine raises if the
+        # strategy's primary timeframe is missing (30m/4h used to be).
+        # Values mirror the live canon (2026-09).
         "cooldown_config": {
-            "5m":  {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 180, "long_window_bars": 480},
-            "15m": {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 120, "long_window_bars": 320},
-            "1h":  {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 48,  "long_window_bars": 144},
-            "1d":  {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 20,  "long_window_bars": 60},
+            "5m":  {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 180, "long_window_bars": 480,
+                    "short_cooldown_bars": 180, "long_cooldown_bars": 480},
+            "15m": {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 120, "long_window_bars": 320,
+                    "short_cooldown_bars": 120, "long_cooldown_bars": 320},
+            "30m": {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 80,  "long_window_bars": 220,
+                    "short_cooldown_bars": 80,  "long_cooldown_bars": 220},
+            "1h":  {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 48,  "long_window_bars": 144,
+                    "short_cooldown_bars": 48,  "long_cooldown_bars": 144},
+            "4h":  {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 32,  "long_window_bars": 96,
+                    "short_cooldown_bars": 32,  "long_cooldown_bars": 96},
+            "1d":  {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 20,  "long_window_bars": 60,
+                    "short_cooldown_bars": 20,  "long_cooldown_bars": 60},
         },
     },
     "time_based_exits": {
@@ -182,7 +204,32 @@ def flattened_defaults() -> dict[str, Any]:
     ):
         section_data = canon.get(section) or {}
         out.update(section_data)
-    return out
+    return drop_legacy_cooldown_fields(out)
+
+
+# Top-level cooldown fields superseded by `cooldown_config` (mangroveai
+# DeprecationWarning; MangroveAI's RiskManager reads them ONLY when
+# cooldown_config is None). The live canon still ships them for old clients.
+LEGACY_COOLDOWN_FIELDS: tuple[str, ...] = (
+    "cooldown_bars",
+    "daily_momentum_limit",
+    "weekly_momentum_limit",
+    "max_hold_time_hours",
+)
+
+
+def drop_legacy_cooldown_fields(config: dict[str, Any]) -> dict[str, Any]:
+    """Remove the deprecated cooldown scalars when cooldown_config covers them.
+
+    Behaviour-neutral: with a non-empty cooldown_config the engine ignores
+    the scalars (and strategies.create accepts cooldown_config alone). If
+    cooldown_config is absent the scalars are the only cooldown source, so
+    they are kept. Operates on the canon defaults only — a caller that
+    explicitly passes one of these in a backtest `config` still sends it.
+    """
+    if isinstance(config.get("cooldown_config"), dict) and config["cooldown_config"]:
+        return {k: v for k, v in config.items() if k not in LEGACY_COOLDOWN_FIELDS}
+    return config
 
 
 def backtest_cost_defaults() -> dict[str, Any]:
@@ -259,6 +306,8 @@ class CandidateBacktestResult(BaseModel):
     reject_reason: str | None = None  # filled after filter step
     raw_metrics: dict[str, Any] = {}
     error: str | None = None
+    # Server-side run id (full backtests only) — read it back with get_backtest.
+    backtest_id: str | None = None
 
 
 def _metric(metrics: dict[str, Any] | None, *keys: str, default: float = 0.0) -> float:
@@ -408,9 +457,18 @@ def filter_and_rank(
     min_trades: int | None = None,
 ) -> tuple[list[CandidateBacktestResult], list[CandidateBacktestResult]]:
     """Split results into (survivors, rejected), with rejected carrying a
-    reject_reason. Survivors are sorted by irr_annualized DESC."""
+    reject_reason. Survivors are sorted by irr_annualized DESC.
+
+    The win-rate floor is the SAME bar the backtest verdict uses:
+    `threshold_spec.json` `min_win_rate` (a decimal, 0.25). `min_win_rate`
+    overrides it, also as a decimal. The SDK reports `win_rate` on a 0-100
+    scale, so it is converted before comparing — the old
+    `BACKTEST_MIN_WIN_RATE=0.51` compared 0-100 values against a decimal
+    and therefore rejected nothing. `min_trades` defaults to
+    `BACKTEST_MIN_TRADES`, the same floor behind INSUFFICIENT_TRADES.
+    """
     if min_win_rate is None:
-        min_win_rate = float(app_config.BACKTEST_MIN_WIN_RATE)
+        min_win_rate = float(backtest_verdict.load_thresholds()["min_win_rate"])
     if min_trades is None:
         min_trades = int(app_config.BACKTEST_MIN_TRADES)
 
@@ -426,9 +484,12 @@ def filter_and_rank(
                 "reject_reason": f"total_trades {r.total_trades} < {min_trades}"
             }))
             continue
-        if r.win_rate <= min_win_rate:
+        if not backtest_verdict.passes_win_rate_floor(r.win_rate, min_win_rate):
             rejected.append(r.model_copy(update={
-                "reject_reason": f"win_rate {r.win_rate:.3f} <= {min_win_rate}"
+                "reject_reason": (
+                    f"win_rate {r.win_rate:.1f}% < {min_win_rate * 100:g}% "
+                    "(threshold_spec min_win_rate)"
+                )
             }))
             continue
         survivors.append(r)
@@ -472,7 +533,8 @@ def full_backtest(
 
     client = mangrove_ai_client()
     try:
-        raw = client.backtesting.run(
+        raw, backtest_id = _run_tracked(
+            client,
             _build_request(
                 candidate,
                 lookback_months=resolved_months,
@@ -481,6 +543,8 @@ def full_backtest(
                 config=config,
             ),
         )
+    except SdkError:
+        raise
     except Exception as e:  # noqa: BLE001
         raise SdkError(
             f"Full backtest failed: {e}",
@@ -488,6 +552,7 @@ def full_backtest(
         ) from e
 
     summary = _summarize(candidate, raw)
+    summary.backtest_id = backtest_id
     # Attach trade history (if present) so the /strategies/autonomous response
     # can include it in full_backtest_metrics.
     trade_history = getattr(raw, "trade_history", None)
@@ -514,5 +579,204 @@ def full_backtest(
         resolved_months=resolved_months,
         resolved_start=resolved_start,
         resolved_end=resolved_end,
+        backtest_id=backtest_id,
     )
     return summary
+
+
+# ---------------------------------------------------------------------------
+# Tracked submission — the run's server-side id survives
+# ---------------------------------------------------------------------------
+
+_POLL_INTERVAL_S = 2.0
+_POLL_TIMEOUT_S = 600.0
+
+
+def _run_tracked(client: Any, request: BacktestRequest) -> tuple[BacktestResult, str]:
+    """Submit a backtest and poll it to completion, keeping its backtest_id.
+
+    Same transport as the SDK's ``backtesting.run()`` (async submit to
+    ``/api/v2/backtests/`` + status polling, no gateway ceiling), which
+    discards the id. MangroveAI persists every run under the API key's
+    user, so keeping the id is what lets a result be read back with
+    ``get_backtest`` instead of re-run.
+    """
+    submission = client.backtesting.submit_async(request)
+    backtest_id = str(submission.backtest_id)
+    deadline = time.monotonic() + _POLL_TIMEOUT_S
+    while True:
+        status = client.backtesting.poll_status(backtest_id)
+        if status.status == "completed":
+            trades = status.trade_history
+            return BacktestResult(
+                success=True,
+                metrics=status.metrics,
+                trade_history=trades,
+                execution_time_seconds=status.execution_time_seconds,
+                trade_count=len(trades) if trades else 0,
+            ), backtest_id
+        if status.status == "failed":
+            return BacktestResult(
+                success=False,
+                error=status.error_message,
+                execution_time_seconds=status.execution_time_seconds,
+            ), backtest_id
+        if time.monotonic() > deadline:
+            raise SdkError(
+                f"Backtest {backtest_id} did not finish within {_POLL_TIMEOUT_S:.0f}s.",
+                suggestion=f"It may still complete server-side; read it later with get_backtest('{backtest_id}').",
+            )
+        time.sleep(_POLL_INTERVAL_S)
+
+
+# ---------------------------------------------------------------------------
+# Stored runs — read back instead of re-running
+# ---------------------------------------------------------------------------
+
+#: The unit of each backtest metric. MangroveAI returns percent-typed metrics
+#: on a 0-100 scale (0.52 means 0.52%, not 52%) — see threshold_spec.json's
+#: metrics_mapping — and the scale cannot be recovered from the value itself.
+METRIC_UNITS: dict[str, str] = {
+    "starting_balance": "usd",
+    "ending_balance": "usd",
+    "total_return": "percent_0_100",
+    "win_rate": "percent_0_100",
+    "avg_daily_return": "percent_0_100",
+    "irr_daily": "percent_0_100",
+    "irr_annualized": "percent_0_100",
+    "max_drawdown": "percent_0_100",
+    "sharpe_ratio": "ratio_annualized",
+    "sortino_ratio": "ratio_annualized",
+    "calmar_ratio": "ratio_annualized",
+    "gain_to_pain_ratio": "ratio",
+    "num_days": "days",
+    "max_drawdown_duration": "days",
+    "total_trades": "count",
+    "max_consecutive_wins": "count",
+    "max_consecutive_losses": "count",
+}
+METRIC_UNITS_NOTE = (
+    "Percent-typed metrics are on a 0-100 scale: 0.52 means 0.52%, not 52%. "
+    "Never infer the scale from how big a number looks."
+)
+
+_LIST_FIELDS = (
+    "id", "asset", "status", "result", "start_date", "end_date", "initial_balance",
+    "total_return", "irr_annualized", "sharpe_ratio", "win_rate", "max_drawdown",
+    "total_trades", "execution_time", "created_at", "archived",
+)
+
+_TIMEFRAME_ORDER = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
+
+
+def _finest_timeframe(config: dict[str, Any]) -> str | None:
+    """The candle size a stored run used: the finest timeframe its rules name."""
+    found = {
+        str(rule.get("timeframe"))
+        for rule in (config.get("entry") or []) + (config.get("exit") or [])
+        if isinstance(rule, dict) and rule.get("timeframe")
+    }
+    ranked = [tf for tf in _TIMEFRAME_ORDER if tf in found]
+    return ranked[0] if ranked else (sorted(found)[0] if found else None)
+
+
+def list_backtests(
+    asset: str | None = None,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    include_archived: bool = False,
+) -> dict[str, Any]:
+    """The caller's stored backtest runs, newest first (``users.get_my_backtests``).
+
+    Runs are keyed to the API key's user, not to this agent's local strategy
+    ids — MangroveAI does not record a strategy id for agent-submitted runs —
+    so filter by ``asset`` / dates and read ``get_backtest`` for the rules.
+    """
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
+    try:
+        page = mangrove_ai_client().users.get_my_backtests(
+            status=status,
+            asset=asset.strip().upper() if asset else None,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+            offset=offset,
+            include_archived=include_archived,
+        )
+    except Exception as e:  # noqa: BLE001
+        raise SdkError(f"users.get_my_backtests failed: {e}") from e
+    rows = [{field: getattr(item, field, None) for field in _LIST_FIELDS} for item in page.items]
+    return {
+        "total": page.total,
+        "offset": offset,
+        "limit": limit,
+        "count": len(rows),
+        "backtests": rows,
+        "metric_units": {k: METRIC_UNITS[k] for k in ("total_return", "irr_annualized", "sharpe_ratio", "win_rate", "max_drawdown", "total_trades")},
+        "metric_units_note": METRIC_UNITS_NOTE,
+    }
+
+
+def get_backtest(
+    backtest_id: str, include_trades: bool = False, include_benchmark: bool = True,
+) -> dict[str, Any]:
+    """One stored run in full: status, window, rules, metrics and (optionally) trades.
+
+    Reads ``GET /backtests/{id}`` through the SDK transport directly: in
+    mangroveai <= 1.15 ``backtesting.get()`` types the response as
+    ``BacktestResult`` (which requires ``success``), but the endpoint returns
+    the stored run record, so the typed call raises on every successful 200.
+    """
+    if not backtest_id or not str(backtest_id).strip():
+        raise BacktestNotFound("backtest_id is required.")
+    client = mangrove_ai_client()
+    try:
+        raw = client.backtesting._core.request("GET", f"/backtests/{backtest_id}").json()
+    except NotFoundError as e:
+        raise BacktestNotFound(
+            f"No backtest {backtest_id} is visible to this API key.",
+            suggestion="List stored runs with list_backtests.",
+        ) from e
+    except Exception as e:  # noqa: BLE001
+        raise SdkError(f"GET /backtests/{backtest_id} failed: {e}") from e
+
+    config = raw.get("config") if isinstance(raw.get("config"), dict) else {}
+    trades = raw.get("trade_history") or []
+    out: dict[str, Any] = {
+        "backtest_id": raw.get("id") or str(backtest_id),
+        "status": raw.get("status"),
+        "asset": raw.get("asset"),
+        "strategy_name": config.get("name"),
+        "interval": _finest_timeframe(config),
+        "window": {"start": raw.get("start_date"), "end": raw.get("end_date")},
+        "created_at": raw.get("created_at"),
+        "completed_at": raw.get("completed_at"),
+        "execution_time_seconds": raw.get("execution_time_seconds"),
+        "initial_balance": raw.get("initial_balance"),
+        "metrics": raw.get("metrics"),
+        "metric_units": METRIC_UNITS,
+        "metric_units_note": METRIC_UNITS_NOTE,
+        "trade_count": len(trades),
+        "config": config,
+        "error": raw.get("error_message"),
+    }
+    if include_trades:
+        out["trade_history"] = trades
+    if include_benchmark and raw.get("status") == "completed" and raw.get("asset") \
+            and raw.get("start_date") and raw.get("end_date"):
+        from src.services.benchmark_service import benchmark_for_window
+
+        benchmark = benchmark_for_window(
+            raw["asset"], {"start_date": raw["start_date"], "end_date": raw["end_date"]},
+        )
+        total_return = (raw.get("metrics") or {}).get("total_return")
+        if benchmark.get("available") and isinstance(total_return, (int, float)):
+            benchmark["strategy_minus_benchmark_pct"] = round(
+                float(total_return) - benchmark["buy_and_hold_return_pct"], 4,
+            )
+        out["benchmark"] = benchmark
+    return out

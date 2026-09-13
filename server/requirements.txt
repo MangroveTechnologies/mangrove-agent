@@ -1,6 +1,7 @@
-# Ranges below give development flexibility (esp. for the fast-moving Alpha
-# Mangrove SDKs). For a REPRODUCIBLE install pinned to known-good versions,
-# install from the generated lockfile instead:  pip install -r requirements.lock
+# Source ranges. setup.sh, run-bare.sh, the Dockerfile and CI all install from
+# requirements.lock (pinned, cross-platform) — edit ranges here, then
+# regenerate the lock and commit both:
+#   uv pip compile requirements.txt --universal --python-version 3.11 --no-header -o requirements.lock
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 pydantic>=2.0.0
@@ -44,7 +45,14 @@ PyJWT>=2.9.0
 # bounds matching the server) and adds launch_experiment_and_wait() and the
 # signals category filter. The agent already resolves to 1.7.x at install
 # time, so this only raises the floor to match what it actually runs against.
-mangroveai>=1.12.0,<2.0.0
+# Floor raised to 1.14.0: backtesting.run() is async-backed (submit + poll) from
+# 1.14, and the backtest skill no longer tells the agent to walk shorter windows
+# around the old ~15s gateway ceiling (https://github.com/MangroveTechnologies/mangrove-agent/pull/154).
+mangroveai>=1.14.0,<2.0.0
+# Offline knowledge graph (indicators + signals + KB prose, bundled data) behind
+# the query_knowledge tool. Base package only: the [semantic] extra pulls a
+# sentence-transformer stack; without it `ask` degrades to lexical search.
+mangrove-kb>=3.3.1,<4
 # mangrovemarkets 1.0.0 moved EVM wallet keypair generation client-side.
 # The agent's wallet_manager.create_wallet() is unaffected — the SDK
 # call signature is unchanged, only the implementation shifted from

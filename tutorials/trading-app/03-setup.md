@@ -69,7 +69,7 @@ First run takes about 60 seconds. It does, in order:
    `http://localhost:9080`.
 7. Waits for `/health` to return 200 before moving on.
 8. Registers the MCP server with Claude Code via
-   `claude mcp add -s local -t http mangrove-agent http://localhost:9080/mcp/ --header "X-API-Key: dev-key-1"`.
+   `claude mcp add -s local -t http mangrove-agent http://localhost:9080/mcp/ --header "X-API-Key: $KEY"`.
 9. Runs a quick verify pass — hits a few endpoints to confirm the
    tool catalog loaded.
 
@@ -138,18 +138,21 @@ Expected output:
 With your API key:
 
 ```bash
-curl -s -H 'X-API-Key: dev-key-1' http://localhost:9080/api/v1/agent/status \
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" http://localhost:9080/api/v1/agent/status \
   | python3 -m json.tool
 ```
 
 Expected: JSON with `version`, `wallets_count: 0`, `strategies` block
 with all-zero counts, `active_cron_jobs: 0`, and a `db_path`.
 
-The `dev-key-1` above is the **local** API key the agent uses to
-authenticate your own requests. It's in
-`server/src/config/local-config.json` under `API_KEYS`. This is NOT
-your Mangrove API key — that's a separate thing the agent uses to
-talk to Mangrove's hosted API.
+`$KEY` above is the **local** API key the agent uses to authenticate
+your own requests. `setup.sh` generates a unique one for your install
+and stores it in `server/src/config/local-config.json` under
+`API_KEYS` (the `KEY=...` line reads it from there). Treat it like a
+password: anyone who has it and can reach the agent's port can manage
+your wallets. This is NOT your Mangrove API key — that's a separate
+thing the agent uses to talk to Mangrove's hosted API.
 
 ## 4. Verify the MCP registration
 
@@ -170,8 +173,9 @@ different port. Re-register:
 
 ```bash
 claude mcp remove mangrove-agent
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
 claude mcp add -s local -t http mangrove-agent http://localhost:<PORT>/mcp/ \
-  --header "X-API-Key: dev-key-1"
+  --header "X-API-Key: $KEY"
 ```
 
 (Where `<PORT>` is whatever port your server actually landed on.)

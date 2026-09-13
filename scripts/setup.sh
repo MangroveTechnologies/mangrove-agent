@@ -35,10 +35,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 PORT="${BARE_PORT:-9080}"
+# Loopback only by default: this process holds wallet secrets. Set
+# BARE_HOST=0.0.0.0 only on a network you fully trust.
+HOST="${BARE_HOST:-127.0.0.1}"
 # Exported so the child scripts (setup-mcp.sh, verify_quickstart.sh) target the
 # SAME port. Honors BARE_PORT so a busy 9080 (e.g. squatted by VSCode/Code
 # Helper) can be sidestepped end-to-end with one env var.
-export BASE_URL="${BASE_URL:-http://localhost:$PORT}"
+export BASE_URL="${BASE_URL:-http://127.0.0.1:$PORT}"
 CONFIG_FILE="server/src/config/local-config.json"
 EXAMPLE_CONFIG="server/src/config/local-example-config.json"
 PID_FILE="agent-data/bare.pid"
@@ -177,6 +180,30 @@ PY
   info "MANGROVE_API_KEY written"
 fi
 
+# Local API key (API_KEYS): this agent's own X-API-Key, distinct from
+# MANGROVE_API_KEY. Every install gets a unique one. Older installs kept the key
+# published in the example config, which let anyone who could reach the port
+# call the wallet routes (including secret reveal), so those are rotated too.
+KEY_ROTATED="no"
+if python3 - "$CONFIG_FILE" <<'PY'
+import json, secrets, sys
+path = sys.argv[1]
+cfg = json.load(open(path))
+published = {"dev-key-1", "GENERATED_BY_SETUP"}
+keys = [k.strip() for k in str(cfg.get("API_KEYS", "")).split(",") if k.strip()]
+kept = [k for k in keys if k not in published]
+if keys and kept == keys:
+    sys.exit(1)  # already unique: nothing to do
+cfg["API_KEYS"] = ",".join(kept) if kept else secrets.token_urlsafe(32)
+json.dump(cfg, open(path, "w"), indent=2)
+open(path, "a").write("\n")
+PY
+then
+  KEY_ROTATED="yes"
+  info "generated a unique local API key (API_KEYS); Claude Code's MCP registration is refreshed below"
+fi
+chmod 600 "$CONFIG_FILE"
+
 # Update MANGROVEMARKETS_BASE_URL if still localhost (the example default is
 # localhost, which is wrong for most users who want the hosted server).
 CURRENT_URL="$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('MANGROVEMARKETS_BASE_URL',''))")"
@@ -240,20 +267,29 @@ if [ "$MODE" = "docker" ]; then
 else
   step "3. venv + pip install"
   if [ ! -d .venv ]; then
-    PY="$(pick_python)" || fail "Python >= 3.10 is required (x402 needs it) but none was found. Install it (e.g. 'brew install python@3.12') and re-run."
+    PY="$(pick_python 11)" || fail "Python >= 3.11 is required (requirements.lock is resolved for 3.11+) but none was found. Install it (e.g. 'brew install python@3.12') and re-run."
     "$PY" -m venv .venv
     info "created .venv ($PY -> $("$PY" --version 2>&1))"
   fi
   # shellcheck disable=SC1091
   source .venv/bin/activate
   python3 -m pip install --quiet --upgrade pip
-  python3 -m pip install --quiet -r server/requirements.txt
+  python3 -m pip install --quiet -r server/requirements.lock
   ok "deps installed"
 
   step "4. start uvicorn"
   # Run from repo root so relative config paths (./agent-data/…) resolve
   # the same way Docker resolves them (CWD=/app, agent-data/ alongside src/).
   export PYTHONPATH="$REPO_ROOT/server:${PYTHONPATH:-}"
+  # A running agent loaded the old API_KEYS at startup; restart it so the
+  # rotated key (and the loopback bind) take effect.
+  if [ "$KEY_ROTATED" = "yes" ] && [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null \
+     && ps -p "$(cat "$PID_FILE")" -o command= 2>/dev/null | grep -q 'uvicorn src.app:app'; then
+    info "restarting running agent (pid $(cat "$PID_FILE")) to apply the new key"
+    kill "$(cat "$PID_FILE")" 2>/dev/null || true
+    for _ in $(seq 1 20); do kill -0 "$(cat "$PID_FILE")" 2>/dev/null || break; sleep 0.5; done
+    rm -f "$PID_FILE"
+  fi
   if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
     info "uvicorn already running (pid $(cat "$PID_FILE"))"
   else
@@ -267,10 +303,10 @@ else
     if [ "$FOREGROUND" = "yes" ]; then
       info "running in foreground (Ctrl+C to stop)"
       exec env ENVIRONMENT=local PYTHONPATH="$PYTHONPATH" python3 -m uvicorn src.app:app \
-        --host 0.0.0.0 --port "$PORT" --workers 1 --timeout-keep-alive 120
+        --host "$HOST" --port "$PORT" --workers 1 --timeout-keep-alive 120
     else
       nohup env ENVIRONMENT=local PYTHONPATH="$PYTHONPATH" python3 -m uvicorn src.app:app \
-        --host 0.0.0.0 --port "$PORT" --workers 1 --timeout-keep-alive 120 \
+        --host "$HOST" --port "$PORT" --workers 1 --timeout-keep-alive 120 \
         > "$REPO_ROOT/$LOG_FILE" 2>&1 &
       echo $! > "$REPO_ROOT/$PID_FILE"
       info "uvicorn started in background (pid $(cat "$PID_FILE"))"
@@ -284,8 +320,20 @@ fi
 # -- 4. wait for /health -----------------------------------------------------
 
 step "5. Wait for /health"
+# python3 (already required) rather than curl, which preflight never checked for:
+# a curl-less PATH used to report "/health never responded" for a healthy server.
+health_ok() {
+  python3 - "$BASE_URL/health" <<'PY' 2>/dev/null
+import sys, urllib.request
+try:
+    with urllib.request.urlopen(sys.argv[1], timeout=2) as r:
+        sys.exit(0 if r.status == 200 else 1)
+except Exception:
+    sys.exit(1)
+PY
+}
 for i in $(seq 1 30); do
-  if curl -fsS -m 2 "$BASE_URL/health" >/dev/null 2>&1; then
+  if health_ok; then
     ok "/health 200 after ${i}s"
     break
   fi
@@ -306,7 +354,7 @@ done
 
 if [ "$DO_MCP" = "yes" ]; then
   step "6. Register MCP with Claude Code"
-  "$SCRIPT_DIR/setup-mcp.sh" | tail -10
+  SETUP_PARENT=1 "$SCRIPT_DIR/setup-mcp.sh" | tail -10
   ok "MCP registered"
 else
   info "skipped MCP registration (--no-mcp or claude CLI missing)"
@@ -317,9 +365,9 @@ fi
 if [ "$DO_VERIFY" = "yes" ]; then
   step "7. Verify"
   if [ "$MODE" = "docker" ]; then
-    "$SCRIPT_DIR/verify_quickstart.sh" 2>&1 | tail -12 || info "verify had warnings"
+    SETUP_PARENT=1 "$SCRIPT_DIR/verify_quickstart.sh" 2>&1 | tail -12 || info "verify had warnings"
   else
-    "$SCRIPT_DIR/verify_quickstart.sh" --bare 2>&1 | tail -12 || info "verify had warnings"
+    SETUP_PARENT=1 "$SCRIPT_DIR/verify_quickstart.sh" --bare 2>&1 | tail -12 || info "verify had warnings"
   fi
 fi
 
@@ -331,10 +379,11 @@ if [ "$SKIP_TOUR" = "yes" ]; then
   echo "    suppressed (.claude/.onboarded present) — ask for it any time"
   echo "    or 'rm .claude/.onboarded' to replay it."
 else
-  echo "  - Restart Claude Code in this directory. The agent will greet you"
-  echo "    and walk through wallet setup + security. It will refuse to"
-  echo "    accept pasted private keys in chat — if you want to import an"
-  echo "    existing wallet, the agent will tell you to run"
-  echo "    ./scripts/stash-secret.sh first."
+  echo "  - Restart Claude Code in this directory. The agent runs a short"
+  echo "    platform tour (status, market data, knowledge base, reference"
+  echo "    strategies), then offers to build you a strategy. Backtesting and"
+  echo "    paper trading need no wallet; wallet setup comes right before"
+  echo "    going live. The agent never accepts a pasted private key: to"
+  echo "    import a wallet it will point you to ./scripts/stash-secret.sh."
 fi
 echo

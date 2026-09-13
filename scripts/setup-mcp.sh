@@ -32,7 +32,15 @@ CONFIG_FILE="server/src/config/local-config.json"
 SERVER_NAME="mangrove-agent"
 
 GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; DIM="\033[2m"; CLR="\033[0m"
-step() { printf "${YELLOW}==>${CLR} %s\n" "$1"; }
+# Under setup.sh (SETUP_PARENT set) print sub-steps unnumbered, so they don't
+# collide with setup.sh's own step numbers.
+step() {
+  if [ -n "${SETUP_PARENT:-}" ]; then
+    printf "${DIM}    - %s${CLR}\n" "$(printf '%s' "$1" | sed -E 's/^[0-9]+\. //')"
+  else
+    printf "${YELLOW}==>${CLR} %s\n" "$1"
+  fi
+}
 ok()   { printf "${GREEN}  ✓${CLR} %s\n" "$1"; }
 fail() { printf "${RED}  ✗${CLR} %s\n" "$1" >&2; exit 1; }
 info() { printf "${DIM}    %s${CLR}\n" "$1"; }
@@ -48,7 +56,7 @@ ok "claude found: $(command -v claude)"
 # -- 2. Container reachable -------------------------------------------------
 
 step "2. mangrove-agent container healthy at $BASE_URL"
-if ! curl -fsS -m 5 "$BASE_URL/health" >/dev/null 2>&1; then
+if ! python3 -c 'import sys, urllib.request; sys.exit(0 if urllib.request.urlopen(sys.argv[1], timeout=5).status == 200 else 1)' "$BASE_URL/health" >/dev/null 2>&1; then
   fail "$BASE_URL/health did not respond. Run './scripts/setup.sh --yes' first (bare-metal) or 'docker compose up -d --build' (docker)."
 fi
 ok "/health returned 200"
@@ -96,4 +104,4 @@ printf "${GREEN}Done.${CLR} Restart Claude Code in this directory to load the ma
 echo "  cd $(pwd)"
 echo "  claude"
 echo
-echo 'Then try: "List my tools" or "Create a wallet on Base mainnet".'
+echo 'Then try: "Give me the tour" or "Build me a momentum strategy for ETH on 1h".'

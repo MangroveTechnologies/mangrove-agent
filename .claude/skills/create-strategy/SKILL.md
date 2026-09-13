@@ -99,7 +99,7 @@ Note: the library spans assets and timeframes beyond just the user's target — 
 
 Only when Phase A returned exactly one candidate. Call `build_strategy_from_reference(reference_id, asset=<user's>, timeframe=<user's>, name=<optional>)`.
 
-You get back a `create_strategy_manual`-compatible payload. Pass it directly to `create_strategy_manual(...)` — DO NOT modify `entry`, `exit`, or `execution_config`. The whole point of Mechanism 2 is that these values came from strategies that already backtested well.
+You get back a `create_strategy_manual`-compatible payload with `persisted: false` — **building saves nothing**. There is no strategy_id until you pass the payload to `create_strategy_manual(...)` (REST: `POST /api/v1/agent/strategies/manual`; the `persisted` / `next_step` / `source_reference_id` keys are ignored there). DO NOT modify `entry`, `exit`, or `execution_config`. The whole point of Mechanism 2 is that these values came from strategies that already backtested well.
 
 Only adjustable fields:
 
@@ -231,5 +231,5 @@ User wants a strategy
         (server generates + backtests N candidates, returns winner)
 
 → /backtest skill (window sizing, verdict, iteration)
-→ /promote-strategy skill (draft → paper → live)
+→ /promote-strategy skill (inactive → paper → live; new strategies are saved as inactive)
 ```
