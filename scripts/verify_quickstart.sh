@@ -42,11 +42,35 @@ done
 # -- helpers ----------------------------------------------------------------
 
 GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; DIM="\033[2m"; CLR="\033[0m"
-step() { printf "${YELLOW}==>${CLR} %s\n" "$1"; }
+# Under setup.sh (SETUP_PARENT set) print sub-steps unnumbered, so they don't
+# collide with setup.sh's own step numbers.
+step() {
+    if [ -n "${SETUP_PARENT:-}" ]; then
+        printf "${DIM}    - %s${CLR}\n" "$(printf '%s' "$1" | sed -E 's/^[0-9]+\. //')"
+    else
+        printf "${YELLOW}==>${CLR} %s\n" "$1"
+    fi
+}
 ok()   { printf "${GREEN}  ✓${CLR} %s\n" "$1"; }
 fail() { printf "${RED}  ✗${CLR} %s\n" "$1" >&2; exit 1; }
 info() { printf "${DIM}    %s${CLR}\n" "$1"; }
 elapsed() { echo $(( $(date +%s) - START_TIME )); }
+
+# http_get URL [API_KEY] — print the body on HTTP 200, exit non-zero otherwise.
+# python3 (already required) rather than curl, which nothing checks for.
+http_get() {
+    python3 - "$@" <<'PY'
+import sys, urllib.request
+req = urllib.request.Request(sys.argv[1])
+if len(sys.argv) > 2:
+    req.add_header("X-API-Key", sys.argv[2])
+try:
+    with urllib.request.urlopen(req, timeout=10) as r:
+        sys.stdout.write(r.read().decode())
+except Exception:
+    sys.exit(1)
+PY
+}
 
 # -- 1. Docker available (docker mode only) ---------------------------------
 
@@ -109,7 +133,7 @@ fi
 
 step "4. waiting for /health (up to ${HEALTH_TIMEOUT_S}s)"
 for i in $(seq 1 $HEALTH_TIMEOUT_S); do
-    if curl -fsS "$BASE_URL/health" >/dev/null 2>&1; then
+    if http_get "$BASE_URL/health" >/dev/null 2>&1; then
         ok "/health returned 200 after ${i}s"
         break
     fi
@@ -126,7 +150,7 @@ done
 # -- 5. /status (free) ------------------------------------------------------
 
 step "5. GET /api/v1/agent/status"
-STATUS_JSON="$(curl -fsS "$BASE_URL/api/v1/agent/status")" \
+STATUS_JSON="$(http_get "$BASE_URL/api/v1/agent/status")" \
     || fail "/status request failed"
 VERSION="$(echo "$STATUS_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))')"
 if [ -z "$VERSION" ]; then
@@ -142,7 +166,7 @@ if [ -z "$API_KEY" ]; then
     fail "could not read API_KEYS from $CFG"
 fi
 
-TOOLS_JSON="$(curl -fsS -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/agent/tools")" \
+TOOLS_JSON="$(http_get "$BASE_URL/api/v1/agent/tools" "$API_KEY")" \
     || fail "/tools request failed"
 
 TOOL_COUNT="$(echo "$TOOLS_JSON" | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("tools",[])))')"

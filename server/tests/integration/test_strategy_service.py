@@ -408,6 +408,7 @@ def test_tick_maps_engine_shaped_orders(temp_db, mock_ai_sdk, monkeypatch):
 
     # ...and the engine's execution_state persists first-class (migration 005).
     import json as _json
+
     from src.shared.db.sqlite import get_connection
     row = get_connection().execute(
         "SELECT execution_state_json FROM strategies WHERE id = ?", (s.id,)
@@ -671,7 +672,11 @@ def test_tick_logs_warning_when_order_intent_fails_validation(temp_db, mock_ai_s
               reason contains the Pydantic error, payload_keys lists fields present in dict
     """
     from src.services.strategy_service import (
-        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
     )
 
     eval_resp = MagicMock()
@@ -700,8 +705,13 @@ def test_tick_warning_log_contains_only_keys_not_values(temp_db, mock_ai_sdk):
     expected: kwargs logged do NOT contain those values — only key names (PII/financial scrubbed)
     """
     import json as _json
+
     from src.services.strategy_service import (
-        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
     )
 
     sensitive_amount = 99999.0
@@ -739,7 +749,11 @@ def test_tick_warning_payload_keys_lists_field_names(temp_db, mock_ai_sdk):
               key names only, zero values
     """
     from src.services.strategy_service import (
-        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
     )
 
     eval_resp = MagicMock()
@@ -764,7 +778,11 @@ def test_tick_mixed_valid_and_invalid_intents_processes_only_valid(temp_db, mock
               evaluation logged as ok
     """
     from src.services.strategy_service import (
-        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
     )
     from src.services.trade_log import list_evaluations, list_trades
 
@@ -800,7 +818,11 @@ def test_tick_all_malformed_intents_still_completes_with_ok_evaluation(temp_db, 
     expected: warning fired twice, zero trades, evaluation status=ok (tick didn't error out)
     """
     from src.services.strategy_service import (
-        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
     )
     from src.services.trade_log import list_evaluations, list_trades
 
@@ -831,7 +853,11 @@ def test_tick_warning_includes_strategy_id_for_correlation(temp_db, mock_ai_sdk)
     expected: strategy_id in warning kwargs matches the strategy — enables log correlation
     """
     from src.services.strategy_service import (
-        StrategyManualRequest, StrategyStatusUpdate, create_manual, tick, update_status,
+        StrategyManualRequest,
+        StrategyStatusUpdate,
+        create_manual,
+        tick,
+        update_status,
     )
 
     eval_resp = MagicMock()

@@ -320,8 +320,20 @@ fi
 # -- 4. wait for /health -----------------------------------------------------
 
 step "5. Wait for /health"
+# python3 (already required) rather than curl, which preflight never checked for:
+# a curl-less PATH used to report "/health never responded" for a healthy server.
+health_ok() {
+  python3 - "$BASE_URL/health" <<'PY' 2>/dev/null
+import sys, urllib.request
+try:
+    with urllib.request.urlopen(sys.argv[1], timeout=2) as r:
+        sys.exit(0 if r.status == 200 else 1)
+except Exception:
+    sys.exit(1)
+PY
+}
 for i in $(seq 1 30); do
-  if curl -fsS -m 2 "$BASE_URL/health" >/dev/null 2>&1; then
+  if health_ok; then
     ok "/health 200 after ${i}s"
     break
   fi
@@ -342,7 +354,7 @@ done
 
 if [ "$DO_MCP" = "yes" ]; then
   step "6. Register MCP with Claude Code"
-  "$SCRIPT_DIR/setup-mcp.sh" | tail -10
+  SETUP_PARENT=1 "$SCRIPT_DIR/setup-mcp.sh" | tail -10
   ok "MCP registered"
 else
   info "skipped MCP registration (--no-mcp or claude CLI missing)"
@@ -353,9 +365,9 @@ fi
 if [ "$DO_VERIFY" = "yes" ]; then
   step "7. Verify"
   if [ "$MODE" = "docker" ]; then
-    "$SCRIPT_DIR/verify_quickstart.sh" 2>&1 | tail -12 || info "verify had warnings"
+    SETUP_PARENT=1 "$SCRIPT_DIR/verify_quickstart.sh" 2>&1 | tail -12 || info "verify had warnings"
   else
-    "$SCRIPT_DIR/verify_quickstart.sh" --bare 2>&1 | tail -12 || info "verify had warnings"
+    SETUP_PARENT=1 "$SCRIPT_DIR/verify_quickstart.sh" --bare 2>&1 | tail -12 || info "verify had warnings"
   fi
 fi
 
@@ -367,10 +379,11 @@ if [ "$SKIP_TOUR" = "yes" ]; then
   echo "    suppressed (.claude/.onboarded present) — ask for it any time"
   echo "    or 'rm .claude/.onboarded' to replay it."
 else
-  echo "  - Restart Claude Code in this directory. The agent will greet you"
-  echo "    and walk through wallet setup + security. It will refuse to"
-  echo "    accept pasted private keys in chat — if you want to import an"
-  echo "    existing wallet, the agent will tell you to run"
-  echo "    ./scripts/stash-secret.sh first."
+  echo "  - Restart Claude Code in this directory. The agent runs a short"
+  echo "    platform tour (status, market data, knowledge base, reference"
+  echo "    strategies), then offers to build you a strategy. Backtesting and"
+  echo "    paper trading need no wallet; wallet setup comes right before"
+  echo "    going live. The agent never accepts a pasted private key: to"
+  echo "    import a wallet it will point you to ./scripts/stash-secret.sh."
 fi
 echo
