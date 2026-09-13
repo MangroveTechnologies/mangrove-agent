@@ -6,7 +6,7 @@ The agent is a Mangrove-powered trading bot. Product is **strategy-driven automa
 
 1. **Author** a strategy (autonomous goal -> candidates, or manual rules).
 2. **Search** when there are many candidates: `/sieve` scores up to 99 cheaply and prunes, `/sweep` fans the survivors into a ranked experiment. **Backtest** the winner(s) to verdict.
-3. **Promote** winner: `draft -> paper -> live` with allocation block.
+3. **Promote** winner: `inactive -> paper -> live` with allocation block. New strategies are saved as `inactive` (saved, not scheduled) -- not `draft`; see Stage 4.
 4. **Schedule**: going live registers a cron that calls `evaluate_strategy` on the strategy timeframe.
 5. **Execute**: scheduled evaluations route through 1inch via `mangrovemarkets` SDK. Automatic; user does not click "swap."
 6. **Monitor**: trades, evaluations, balances; tweak allocation, pause, archive.
@@ -108,7 +108,7 @@ Both skills cite the same Mangrove intelligence (`oracle_list_signals`, the KB) 
 
 ## Stage 3 -- Review backtest
 
-Use the `/backtest` skill. Window from a bar-count target (~2000-5000 bars), not a fixed month table. Verdict against 6 thresholds in `server/src/services/data/threshold_spec.json` (sortino >= 1.5, sharpe >= 1.2, calmar >= 1.0, irr >= 0.15, max_drawdown <= 0.7, win_rate >= 0.25), plus benchmark-relative line (beat buy-and-hold? beat BTC?). Never invent metrics -- if `total_trades == 0`, report `INSUFFICIENT_TRADES`. Every non-PASS ships failure-mode advice. Ask: "Promote to paper, iterate, or reject?"
+Use the `/backtest` skill. Window from a bar-count target (~2000-5000 bars), not a fixed month table. The verdict is computed server-side and returned as `verdict` by `backtest_strategy(mode="full")` -- present it, don't recompute it. It grades against 6 thresholds in `server/src/services/data/threshold_spec.json` (sortino >= 1.5, sharpe >= 1.2, calmar >= 1.0, irr >= 0.15, max_drawdown <= 0.7, win_rate >= 0.25; percent metrics converted from 0-100): PASS = 6/6, MARGINAL = 4-5/6, FAIL = <=3/6. Add the benchmark-relative line (beat buy-and-hold? beat BTC?). Never invent metrics -- if `total_trades < BACKTEST_MIN_TRADES` (10, includes 0), the verdict is `INSUFFICIENT_TRADES`. Autonomous candidate pruning uses the same `min_win_rate` and trade floor. Every non-PASS ships failure-mode advice. Ask: "Promote to paper, iterate, or reject?"
 
 ## Stage 4 -- Paper
 

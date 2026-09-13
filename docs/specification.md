@@ -228,6 +228,7 @@ Autonomous strategy creation: skill picks candidates → quick backtest → filt
     "candidates_tried": 7,
     "candidates_passed_filter": 3,
     "winner_rank": 1,
+    "verdict": {"verdict": "PASS", "passed_count": 6, "...": "see backtest_verdict.py"},
     "full_backtest_metrics": {
       "irr_annualized": 0.42,
       "sharpe_ratio": 1.8,
@@ -236,7 +237,7 @@ Autonomous strategy creation: skill picks candidates → quick backtest → filt
       "total_trades": 47
     },
     "rejected_reasons": [
-      {"candidate": "...", "reason": "win_rate 0.48 < 0.51"},
+      {"candidate": "...", "reason": "win_rate 21.0% < 25% (threshold_spec min_win_rate)"},
       ...
     ]
   }
@@ -848,7 +849,6 @@ x402 keys from the template stay required — payment middleware needs them at s
     "KEYRING_SERVICE_NAME",
     "MASTER_KEY_ENV_FALLBACK",
     "BACKTEST_CANDIDATE_COUNT",
-    "BACKTEST_MIN_WIN_RATE",
     "BACKTEST_MIN_TRADES",
     "BACKTEST_DEFAULT_LOOKBACK_MONTHS",
     "LOG_RETENTION_DAYS",
@@ -876,7 +876,6 @@ x402 keys from the template stay required — payment middleware needs them at s
   "KEYRING_SERVICE_NAME": "mangrove-agent",
   "MASTER_KEY_ENV_FALLBACK": "",
   "BACKTEST_CANDIDATE_COUNT": 7,
-  "BACKTEST_MIN_WIN_RATE": 0.51,
   "BACKTEST_MIN_TRADES": 10,
   "BACKTEST_DEFAULT_LOOKBACK_MONTHS": 3,
   "LOG_RETENTION_DAYS": 90,

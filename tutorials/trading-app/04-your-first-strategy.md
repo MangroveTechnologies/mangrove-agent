@@ -234,7 +234,7 @@ Verify the strategy landed:
 ```
 
 The bot calls `list_strategies()` and you should see one row with
-`status: "draft"`. Draft = saved but not running on a cron yet.
+`status: "inactive"`. Inactive = saved but not running on a cron yet.
 We'll change that in Chapter 05.
 
 You can also curl it directly if you're curious:
@@ -290,7 +290,7 @@ again with overrides, or build manually.
   "this doesn't work on today's regime."
 - `INSUFFICIENT_TRADES` is not a failure, it's a "try again with
   more data."
-- A strategy in `draft` state is saved but doing nothing. Promotion
+- A strategy in `inactive` state is saved but doing nothing. Promotion
   to paper schedules it.
 
 You now have a strategy and a verdict. Next, we make it tick.

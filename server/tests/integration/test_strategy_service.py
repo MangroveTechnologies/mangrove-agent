@@ -64,7 +64,7 @@ def mock_ai_sdk(monkeypatch):
     bt_result.success = True
     bt_result.metrics = {
         "irr_annualized": 0.4,
-        "win_rate": 0.6,
+        "win_rate": 60.0,  # SDK scale: 0-100
         "total_trades": 25,
         "sharpe_ratio": 1.5,
         "max_drawdown": 0.1,
@@ -133,7 +133,7 @@ def test_create_autonomous_no_viable_candidates(temp_db, mock_ai_sdk):
     from src.shared.errors import StrategyNoViableCandidates
 
     # Drop win_rate under the threshold.
-    mock_ai_sdk.backtesting.run.return_value.metrics["win_rate"] = 0.3
+    mock_ai_sdk.backtesting.run.return_value.metrics["win_rate"] = 20.0  # < 25% spec floor
 
     with pytest.raises(StrategyNoViableCandidates):
         create_autonomous(StrategyAutonomousRequest(
@@ -153,6 +153,38 @@ def test_create_manual_happy_path(temp_db, mock_ai_sdk):
         exit=[],
     ))
     assert detail.mangrove_id.startswith("mg-new-")
+
+
+def test_create_manual_same_rules_twice_returns_existing_strategy(temp_db, mock_ai_sdk):
+    """Regression: MangroveAI's create returns the EXISTING strategy when the
+    rules already exist for the account. The local UNIQUE(mangrove_id) insert
+    used to 500; now the existing local row comes back."""
+    from src.services.strategy_service import StrategyManualRequest, create_manual
+    from src.shared.db.sqlite import get_connection
+
+    def _same_upstream(_request):
+        m = MagicMock()
+        m.id = "mg-existing"
+        m.name = getattr(_request, "name", "x")
+        m.asset = "ETH"
+        m.status = "inactive"
+        return m
+
+    mock_ai_sdk.strategies.create.side_effect = _same_upstream
+    req = StrategyManualRequest(
+        name="dup", asset="ETH", timeframe="1h",
+        entry=[{"name": "rsi_oversold", "signal_type": "TRIGGER", "timeframe": "1h", "params": {}}],
+        exit=[],
+    )
+    first = create_manual(req)
+    second = create_manual(req)
+
+    assert second.id == first.id
+    assert second.mangrove_id == "mg-existing"
+    rows = get_connection().execute(
+        "SELECT COUNT(*) FROM strategies WHERE mangrove_id = ?", ("mg-existing",),
+    ).fetchone()[0]
+    assert rows == 1
 
 
 def test_create_manual_invalid_composition_raises(temp_db, mock_ai_sdk):

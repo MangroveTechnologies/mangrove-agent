@@ -157,14 +157,74 @@ def _pad_results(
     return top[:limit]
 
 
+def _resolve_filters(
+    asset: str,
+    timeframe: str | None,
+    category: str | None,
+    goal_hint: str | None,
+) -> tuple[str, str | None, str | None, str | None]:
+    """Normalize search inputs → (asset_u, timeframe, category, category_source).
+
+    category_source is "explicit" when the caller passed `category`,
+    "goal_hint" when it was auto-detected, None when there is no category.
+    """
+    asset_u = (asset or "").upper().strip()
+    tf = timeframes.canonicalize_timeframe(timeframe) if timeframe else None
+    if category:
+        return asset_u, tf, category.lower(), "explicit"
+    detected = _detect_category(goal_hint or "")
+    return asset_u, tf, detected, ("goal_hint" if detected else None)
+
+
+def match_info(
+    r: ReferenceStrategy,
+    asset_u: str,
+    tf: str | None,
+    cat: str | None,
+) -> dict[str, Any]:
+    """Describe how a reference relates to the requested filters.
+
+    - match="exact":   every requested filter (asset, timeframe, category —
+                       whichever were supplied) matches the reference's
+                       recorded provenance.
+    - match="partial": some but not all requested filters match.
+    - match="none":    no requested filter matches (pure padding).
+
+    `matched_on` / `unmatched` name the filters on each side, so a caller
+    never has to infer from the echoed request whether a result honours it.
+    """
+    requested: dict[str, str | None] = {"asset": asset_u or None, "timeframe": tf, "category": cat}
+    recorded = {
+        "asset": r.asset.upper(),
+        "timeframe": timeframes.canonicalize_timeframe(r.timeframe),
+        "category": r.category.lower(),
+    }
+    matched = [k for k, want in requested.items() if want and recorded[k] == want]
+    unmatched = [k for k, want in requested.items() if want and recorded[k] != want]
+    if not unmatched:
+        level = "exact"
+    elif matched:
+        level = "partial"
+    else:
+        level = "none"
+    return {"match": level, "matched_on": matched, "unmatched": unmatched}
+
+
 def search(
     asset: str,
     timeframe: str | None = None,
     category: str | None = None,
     goal_hint: str | None = None,
     limit: int = 5,
+    strict: bool = False,
 ) -> list[ReferenceStrategy]:
-    """Return up to `limit` reference strategies matching the filter.
+    """Return up to `limit` reference strategies, ranked by match specificity.
+
+    The filters RANK, they do not exclude (unless `strict=True`): reference
+    strategies are portable signal combos, and their asset/timeframe are
+    provenance, not constraints (see trading-bot-workflow.md, Stage 2).
+    Use `match_info` (or `search_response`) to tell exact matches from
+    padding.
 
     Ranking (most → least specific):
       1. exact asset + exact timeframe + exact category match
@@ -173,24 +233,71 @@ def search(
       4. exact category match only (for cross-asset learnings)
       5. everything else, capped at `limit`
 
+    `strict=True` returns ONLY references that match every supplied filter
+    (possibly an empty list).
+
     If `category` is None and `goal_hint` is set, a category is auto-
     detected from the hint via `_detect_category`.
     """
-    asset_u = (asset or "").upper().strip()
-    tf = timeframes.canonicalize_timeframe(timeframe) if timeframe else None
-    cat = (category or _detect_category(goal_hint or "") or None)
-    if cat:
-        cat = cat.lower()
+    asset_u, tf, cat, _ = _resolve_filters(asset, timeframe, category, goal_hint)
 
     all_refs = _load_all()
 
     ranked = sorted(all_refs, key=lambda r: (-_score_reference(r, asset_u, tf, cat), r.id))
+    if strict:
+        return [r for r in ranked if match_info(r, asset_u, tf, cat)["match"] == "exact"][:limit]
     # Drop any with score 0 ONLY if we have better matches; otherwise fall
     # through to show something rather than nothing.
     top = [r for r in ranked if _score_reference(r, asset_u, tf, cat) > 0]
     if len(top) >= limit:
         return top[:limit]
     return _pad_results(ranked, top, limit)
+
+
+def search_response(
+    asset: str,
+    timeframe: str | None = None,
+    category: str | None = None,
+    goal_hint: str | None = None,
+    limit: int = 5,
+    strict: bool = False,
+) -> dict[str, Any]:
+    """Search + annotate — the single response shape for REST and MCP.
+
+    Every strategy carries `match` / `matched_on` / `unmatched`, and the
+    envelope carries `exact_match_count` + `filter_semantics`, so the echoed
+    `timeframe`/`category` can never be mistaken for a filter that was
+    applied to every result.
+    """
+    asset_u, tf, cat, cat_source = _resolve_filters(asset, timeframe, category, goal_hint)
+    items = search(asset=asset, timeframe=timeframe, category=category,
+                   goal_hint=goal_hint, limit=limit, strict=strict)
+    strategies = [{**r.model_dump(), **match_info(r, asset_u, tf, cat)} for r in items]
+    exact = sum(1 for s in strategies if s["match"] == "exact")
+    if strict:
+        semantics = (
+            "strict: only references whose recorded asset, timeframe and category "
+            "(whichever were supplied) all match are returned."
+        )
+    else:
+        semantics = (
+            "ranked, not filtered: references matching every supplied filter come "
+            "first (match='exact'); remaining slots are padded with partial or "
+            "non-matching references (match='partial'/'none', see `unmatched`). "
+            "References are portable — retarget any of them onto your asset/timeframe "
+            "with build_strategy_from_reference. Pass strict=true for exact matches only."
+        )
+    return {
+        "asset": asset_u,
+        "timeframe": tf,
+        "category": cat,
+        "category_source": cat_source,
+        "strict": strict,
+        "count": len(strategies),
+        "exact_match_count": exact,
+        "filter_semantics": semantics,
+        "strategies": strategies,
+    }
 
 
 def get(reference_id: str) -> ReferenceStrategy | None:
@@ -259,4 +366,24 @@ def build_from_reference(
         "exit": exit_rules,
         "execution_config": exec_cfg,
         "source_reference_id": ref.id,
+        # Hints for the caller. This function only MATERIALIZES a payload —
+        # nothing is saved, so there is no strategy_id to backtest/promote
+        # yet. StrategyManualRequest ignores unknown keys, so the whole dict
+        # (hints included) stays directly POST-able to /strategies/manual.
+        **BUILD_NOT_PERSISTED_HINT,
     }
+
+
+BUILD_NOT_PERSISTED_HINT: dict[str, Any] = {
+    "persisted": False,
+    "next_step": {
+        "action": "create the strategy to persist it",
+        "rest": "POST /api/v1/agent/strategies/manual",
+        "mcp_tool": "create_strategy_manual",
+        "note": (
+            "This payload is NOT saved yet — there is no strategy_id. Send it as-is "
+            "(extra keys such as persisted/next_step/source_reference_id are ignored); "
+            "the response carries the strategy_id to backtest and promote."
+        ),
+    },
+}

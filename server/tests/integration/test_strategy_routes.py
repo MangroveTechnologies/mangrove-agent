@@ -31,7 +31,7 @@ def client(tmp_path, monkeypatch):
 
     bt = MagicMock()
     bt.success = True
-    bt.metrics = {"irr_annualized": 0.4, "win_rate": 0.6, "total_trades": 25,
+    bt.metrics = {"irr_annualized": 0.4, "win_rate": 60.0, "total_trades": 25,
                   "sharpe_ratio": 1.5, "max_drawdown": 0.1, "net_pnl": 2500.0}
     bt.trade_count = 25
     bt.trade_history = [{"entry": "2026-01-01", "pnl": 10}]

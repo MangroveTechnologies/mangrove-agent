@@ -70,7 +70,7 @@ def client(tmp_path, monkeypatch):
     bt = MagicMock(
         success=True,
         metrics={
-            "irr_annualized": 0.4, "win_rate": 0.6, "total_trades": 25,
+            "irr_annualized": 0.4, "win_rate": 60.0, "total_trades": 25,  # win_rate on SDK 0-100 scale
             "sharpe_ratio": 1.5, "max_drawdown": 0.1, "net_pnl": 2500.0,
         },
         trade_count=25, trade_history=[], error=None,

@@ -28,6 +28,7 @@ from src.models.domain import Evaluation, OrderIntent
 from src.services import (
     allocation_service,
     backtest_service,
+    backtest_verdict,
     candidate_generator,
     order_executor,
     scheduler_service,
@@ -178,6 +179,27 @@ def _map_engine_order(o: dict) -> dict | None:
     }
 
 
+def _market_snapshot(sdk_dump: dict[str, Any], *, asset: str) -> dict[str, Any]:
+    """The market context an evaluation saw, lifted from the engine response.
+
+    The engine fetches market data itself and reports the price it evaluated
+    at (`current_price`) plus the evaluation `timestamp`. Before this, the
+    evaluations table stored `market_snapshot: {}` even though both were in
+    `sdk_response`. Returns {} when the response carries neither (e.g. a
+    malformed/empty response) — never invents a price.
+    """
+    snapshot: dict[str, Any] = {}
+    price = sdk_dump.get("current_price")
+    if price is not None:
+        snapshot["price"] = price
+    if sdk_dump.get("timestamp"):
+        snapshot["timestamp"] = sdk_dump["timestamp"]
+    if snapshot:
+        snapshot["asset"] = sdk_dump.get("asset") or asset
+        snapshot["source"] = "mangroveai.execution.evaluate"
+    return snapshot
+
+
 def _get_live_allocation(
     strategy_id: str,
 ) -> tuple[str | None, int | None, float | None, float | None]:
@@ -298,10 +320,23 @@ def _insert_cache(
     generation_report: dict[str, Any] | None,
     evaluation_lane: str | None = None,
 ) -> str:
-    """Insert a row into local strategies cache. Returns our local UUID."""
+    """Insert a row into local strategies cache. Returns our local UUID.
+
+    Idempotent on mangrove_id: MangroveAI's strategies.create returns the
+    EXISTING strategy when the account already has one with the same rules,
+    and mangrove_id is UNIQUE locally, so a blind insert 500'd with
+    "UNIQUE constraint failed: strategies.mangrove_id". Return the existing
+    local row instead; its status/allocation stay untouched.
+    """
     local_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     mangrove_id = str(getattr(mangrove_detail, "id", None) or getattr(mangrove_detail, "strategy_id", local_id))
+    existing = get_connection().execute(
+        "SELECT id FROM strategies WHERE mangrove_id = ?", (mangrove_id,),
+    ).fetchone()
+    if existing is not None:
+        _log.info("strategy.create_deduplicated", strategy_id=existing[0], mangrove_id=mangrove_id)
+        return existing[0]
     get_connection().execute(
         """INSERT INTO strategies
            (id, mangrove_id, name, asset, timeframe, status,
@@ -484,6 +519,8 @@ def create_autonomous(req: StrategyAutonomousRequest) -> tuple[StrategyDetailRes
         "candidates_tried": len(candidates),
         "candidates_passed_filter": len(survivors),
         "winner_rank": 1,
+        # Same server-side grading as POST /strategies/{id}/backtest.
+        "verdict": backtest_verdict.compute_verdict(full.raw_metrics),
         "full_backtest_metrics": {
             "irr_annualized": full.irr_annualized,
             "win_rate": full.win_rate,
@@ -530,6 +567,13 @@ def create_manual(req: StrategyManualRequest) -> StrategyDetailResponse:
 
     _validate_composition(req.entry, req.exit)
 
+    # Created as `inactive`, deliberately NOT `draft`. In MangroveAI a draft
+    # is an UNPROVEN strategy: its update_status refuses draft → paper/live,
+    # and the only exit from draft is promote_proven_draft(), fired when a
+    # backtest *by strategy_id* meets the spec. This agent backtests by
+    # strategy_json and issues its own verdict, so a draft would be stranded
+    # upstream and paper promotion would fail. `inactive` = saved, not
+    # scheduled; promote with update_status(paper).
     try:
         detail = mangrove_ai_client().strategies.create(
             CreateStrategyRequest(
@@ -753,6 +797,7 @@ def tick(strategy_id: str) -> None:
             id=evaluation_id,
             strategy_id=strategy_id,
             timestamp=trade_log.now_utc(),
+            market_snapshot=_market_snapshot(sdk_dump, asset=row["asset"]),
             sdk_response=sdk_dump,
             order_intents=order_intents,
             duration_ms=duration_ms,

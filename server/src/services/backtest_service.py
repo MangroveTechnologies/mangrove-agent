@@ -6,9 +6,10 @@ mode on the server. Until that ships, "quick" and "full" here both hit
 run() — the distinction is in how we summarize results (quick = metrics
 only; full = metrics + trade_history).
 
-Filter + rank:
-- Drop candidates with win_rate <= BACKTEST_MIN_WIN_RATE  (default 0.51)
+Filter + rank (same bars as the backtest verdict, backtest_verdict.py):
 - Drop candidates with total_trades < BACKTEST_MIN_TRADES (default 10)
+- Drop candidates with win_rate below threshold_spec.json `min_win_rate`
+  (0.25; the SDK's 0-100 win_rate is converted before comparing)
 - Sort survivors by irr_annualized DESC
 
 Metric key lookup is defensive: the SDK's metrics dict field names may
@@ -24,6 +25,7 @@ from mangrove_ai.models import BacktestRequest
 from pydantic import BaseModel
 
 from src.config import app_config
+from src.services import backtest_verdict
 from src.services.candidate_generator import StrategyCandidate
 from src.shared import timeframes
 from src.shared.clients.mangrove import mangrove_ai_client
@@ -94,14 +96,26 @@ _FALLBACK_TRADING_DEFAULTS: dict[str, Any] = {
         "enable_volatility_adjustment": False,
     },
     "trading_rules": {
-        "cooldown_bars": 24,
-        "daily_momentum_limit": 3,
-        "weekly_momentum_limit": 3,
+        # cooldown_config only. The legacy scalars (cooldown_bars /
+        # daily_momentum_limit / weekly_momentum_limit / max_hold_time_hours)
+        # are deprecated in mangroveai and ignored by the engine whenever
+        # cooldown_config is present (MangroveAI managers/risk_manager.py).
+        # Every supported timeframe is keyed — the engine raises if the
+        # strategy's primary timeframe is missing (30m/4h used to be).
+        # Values mirror the live canon (2026-09).
         "cooldown_config": {
-            "5m":  {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 180, "long_window_bars": 480},
-            "15m": {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 120, "long_window_bars": 320},
-            "1h":  {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 48,  "long_window_bars": 144},
-            "1d":  {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 20,  "long_window_bars": 60},
+            "5m":  {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 180, "long_window_bars": 480,
+                    "short_cooldown_bars": 180, "long_cooldown_bars": 480},
+            "15m": {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 120, "long_window_bars": 320,
+                    "short_cooldown_bars": 120, "long_cooldown_bars": 320},
+            "30m": {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 80,  "long_window_bars": 220,
+                    "short_cooldown_bars": 80,  "long_cooldown_bars": 220},
+            "1h":  {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 48,  "long_window_bars": 144,
+                    "short_cooldown_bars": 48,  "long_cooldown_bars": 144},
+            "4h":  {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 32,  "long_window_bars": 96,
+                    "short_cooldown_bars": 32,  "long_cooldown_bars": 96},
+            "1d":  {"short_loss_limit": 4, "long_loss_limit": 6, "short_window_bars": 20,  "long_window_bars": 60,
+                    "short_cooldown_bars": 20,  "long_cooldown_bars": 60},
         },
     },
     "time_based_exits": {
@@ -187,7 +201,32 @@ def flattened_defaults() -> dict[str, Any]:
     ):
         section_data = canon.get(section) or {}
         out.update(section_data)
-    return out
+    return drop_legacy_cooldown_fields(out)
+
+
+# Top-level cooldown fields superseded by `cooldown_config` (mangroveai
+# DeprecationWarning; MangroveAI's RiskManager reads them ONLY when
+# cooldown_config is None). The live canon still ships them for old clients.
+LEGACY_COOLDOWN_FIELDS: tuple[str, ...] = (
+    "cooldown_bars",
+    "daily_momentum_limit",
+    "weekly_momentum_limit",
+    "max_hold_time_hours",
+)
+
+
+def drop_legacy_cooldown_fields(config: dict[str, Any]) -> dict[str, Any]:
+    """Remove the deprecated cooldown scalars when cooldown_config covers them.
+
+    Behaviour-neutral: with a non-empty cooldown_config the engine ignores
+    the scalars (and strategies.create accepts cooldown_config alone). If
+    cooldown_config is absent the scalars are the only cooldown source, so
+    they are kept. Operates on the canon defaults only — a caller that
+    explicitly passes one of these in a backtest `config` still sends it.
+    """
+    if isinstance(config.get("cooldown_config"), dict) and config["cooldown_config"]:
+        return {k: v for k, v in config.items() if k not in LEGACY_COOLDOWN_FIELDS}
+    return config
 
 
 def backtest_cost_defaults() -> dict[str, Any]:
@@ -413,9 +452,18 @@ def filter_and_rank(
     min_trades: int | None = None,
 ) -> tuple[list[CandidateBacktestResult], list[CandidateBacktestResult]]:
     """Split results into (survivors, rejected), with rejected carrying a
-    reject_reason. Survivors are sorted by irr_annualized DESC."""
+    reject_reason. Survivors are sorted by irr_annualized DESC.
+
+    The win-rate floor is the SAME bar the backtest verdict uses:
+    `threshold_spec.json` `min_win_rate` (a decimal, 0.25). `min_win_rate`
+    overrides it, also as a decimal. The SDK reports `win_rate` on a 0-100
+    scale, so it is converted before comparing — the old
+    `BACKTEST_MIN_WIN_RATE=0.51` compared 0-100 values against a decimal
+    and therefore rejected nothing. `min_trades` defaults to
+    `BACKTEST_MIN_TRADES`, the same floor behind INSUFFICIENT_TRADES.
+    """
     if min_win_rate is None:
-        min_win_rate = float(app_config.BACKTEST_MIN_WIN_RATE)
+        min_win_rate = float(backtest_verdict.load_thresholds()["min_win_rate"])
     if min_trades is None:
         min_trades = int(app_config.BACKTEST_MIN_TRADES)
 
@@ -431,9 +479,12 @@ def filter_and_rank(
                 "reject_reason": f"total_trades {r.total_trades} < {min_trades}"
             }))
             continue
-        if r.win_rate <= min_win_rate:
+        if not backtest_verdict.passes_win_rate_floor(r.win_rate, min_win_rate):
             rejected.append(r.model_copy(update={
-                "reject_reason": f"win_rate {r.win_rate:.3f} <= {min_win_rate}"
+                "reject_reason": (
+                    f"win_rate {r.win_rate:.1f}% < {min_win_rate * 100:g}% "
+                    "(threshold_spec min_win_rate)"
+                )
             }))
             continue
         survivors.append(r)

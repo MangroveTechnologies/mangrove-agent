@@ -2045,7 +2045,13 @@ def _register_strategy(server: FastMCP) -> None:
 
     register_tool(ToolEntry(
         name="create_strategy_manual",
-        description="Create a strategy with explicit entry/exit rules.",
+        description=(
+            "Create (persist) a strategy with explicit entry/exit rules — also the "
+            "step that saves a build_strategy_from_reference payload. Saved with "
+            "status `inactive` (saved, not scheduled; MangroveAI `draft` means "
+            "unproven and cannot be promoted, so it is not used). Next: "
+            "backtest_strategy, then update_strategy_status(status='paper')."
+        ),
         access="auth",
         parameters=[
             ToolParam(name="name", type="string", required=True, description="Strategy name"),
@@ -2065,6 +2071,7 @@ def _register_strategy(server: FastMCP) -> None:
         category: str | None = None,
         goal_hint: str | None = None,
         limit: int = 5,
+        strict: bool = False,
         api_key: str = "",
     ) -> str:
         """Search curated reference strategies — Mechanism 2 of /create-strategy.
@@ -2074,27 +2081,24 @@ def _register_strategy(server: FastMCP) -> None:
         choices. The agent picks one that matches user intent, then calls
         build_strategy_from_reference to materialize it.
 
-        Ranks by specificity: asset+timeframe+category > asset+timeframe
-        > asset > category. Auto-detects category from goal_hint if not
-        supplied.
+        asset/timeframe/category RANK, they do not filter: exact matches
+        come first (asset+timeframe+category > asset+timeframe > asset >
+        category), then the list is padded. Each result carries
+        `match` (exact|partial|none) + `matched_on`/`unmatched`; the
+        envelope carries `exact_match_count`. strict=true returns exact
+        matches only. Auto-detects category from goal_hint if not supplied.
         """
         if not _require(api_key):
             return _auth_error()
         from src.services import reference_strategies_service
-        items = reference_strategies_service.search(
+        return json.dumps(reference_strategies_service.search_response(
             asset=asset,
             timeframe=timeframe,
             category=category,
             goal_hint=goal_hint,
             limit=limit,
-        )
-        return json.dumps({
-            "asset": asset.upper(),
-            "timeframe": timeframe,
-            "category": category,
-            "count": len(items),
-            "strategies": [r.model_dump() for r in items],
-        })
+            strict=strict,
+        ))
 
     register_tool(ToolEntry(
         name="search_reference_strategies",
@@ -2103,15 +2107,20 @@ def _register_strategy(server: FastMCP) -> None:
             "and asset. Returns ranked candidates with signals + parameter "
             "choices that have worked in backtests. ALWAYS call this "
             "before picking signals manually — it's the primary source of "
-            "parameter intuition."
+            "parameter intuition. asset/timeframe/category RANK results, they "
+            "do not filter them: check each result's `match` "
+            "(exact|partial|none) and `unmatched`, or pass strict=true for "
+            "exact matches only. References are portable — a partial match "
+            "can still be retargeted with build_strategy_from_reference."
         ),
         access="auth",
         parameters=[
             ToolParam(name="asset", type="string", required=True, description="Asset symbol (e.g. BTC, ETH)"),
-            ToolParam(name="timeframe", type="string", required=False, description="5m | 15m | 30m | 1h | 4h | 1d"),
+            ToolParam(name="timeframe", type="string", required=False, description="5m | 15m | 30m | 1h | 4h | 1d — ranks exact-timeframe references first; does not exclude others unless strict=true"),
             ToolParam(name="category", type="string", required=False, description="momentum | mean_reversion | trend_following | breakout | volatility"),
             ToolParam(name="goal_hint", type="string", required=False, description="Free text from the user's goal — auto-detects category if category is not supplied"),
             ToolParam(name="limit", type="integer", required=False, description="Max results (default 5)"),
+            ToolParam(name="strict", type="boolean", required=False, description="true = only references matching every supplied filter (may return 0); default false = ranked + padded"),
             _APIKEY,
         ],
     ))
@@ -2125,6 +2134,11 @@ def _register_strategy(server: FastMCP) -> None:
         api_key: str = "",
     ) -> str:
         """Materialize a reference into a create_strategy_manual payload.
+
+        Does NOT save anything: the response has `persisted: false` and a
+        `next_step` pointing at create_strategy_manual (REST: POST
+        /api/v1/agent/strategies/manual). Only that call returns a
+        strategy_id you can backtest or promote.
 
         Copies the reference's signals EXACTLY (names and params untouched).
         `timeframe` and `asset` are free-to-override — reference strategies
@@ -2150,7 +2164,9 @@ def _register_strategy(server: FastMCP) -> None:
         name="build_strategy_from_reference",
         description=(
             "After search_reference_strategies returns candidates, call this "
-            "to produce a create_strategy_manual payload. Signals and params "
+            "to produce a create_strategy_manual payload. It does NOT save "
+            "anything (`persisted: false`): pass the payload to "
+            "create_strategy_manual to get a strategy_id. Signals and params "
             "are copied exactly — the agent must NOT modify them. `timeframe` "
             "and `asset` are free overrides: a reference is a portable combo, "
             "so retarget onto the user's asset/TF and bulk-backtest the top "

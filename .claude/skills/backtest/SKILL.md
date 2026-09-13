@@ -45,7 +45,7 @@ Do NOT activate for:
 
 Required inputs:
 
-1. **strategy_id** — UUID from `list_strategies` or a `create_strategy_manual` response. If the user says "the one I just made" and there's only one draft, infer it. Otherwise call `list_strategies(status="draft")` and present choices.
+1. **strategy_id** — UUID from `list_strategies` or a `create_strategy_manual` response. If the user says "the one I just made" and there's only one unpromoted strategy, infer it. Otherwise call `list_strategies(status="inactive")` and present choices — new strategies are saved as `inactive` (saved, not scheduled), not `draft`.
 
 Optional overrides (skill proposes defaults in Phase B — don't ask the user for these cold):
 
@@ -126,24 +126,41 @@ If the SDK returns an error, surface the exact message. Don't retry silently —
 
 ## Phase D — Verdict
 
-### Threshold gate
+### Threshold gate — use the server verdict, don't recompute
 
-Evaluate against the 6 thresholds in `server/src/services/data/threshold_spec.json`:
+`backtest_strategy(mode="full")` returns a `verdict` block computed
+server-side (`server/src/services/backtest_verdict.py`) against the 6
+thresholds in `server/src/services/data/threshold_spec.json`. **Present it
+as-is.** Do not re-grade the raw metrics yourself — the SDK reports
+`win_rate`, `max_drawdown` and `irr_annualized` on a 0-100 scale while the
+spec is in decimals, and hand-grading is exactly where that goes wrong.
 
-| Metric | Threshold | Direction |
-|---|---|---|
-| `sortino_ratio` | ≥ 1.5 | higher is better |
-| `sharpe_ratio` | ≥ 1.2 | higher is better |
-| `calmar_ratio` | ≥ 1.0 | higher is better |
-| `irr_annualized` | ≥ 0.15 | higher is better |
-| `max_drawdown` | ≤ 0.7 | lower is better |
-| `win_rate` | ≥ 0.25 | higher is better |
+```
+verdict: {
+  verdict: "PASS" | "MARGINAL" | "FAIL" | "INSUFFICIENT_TRADES",
+  passed_count: 0-6, total_checks: 6,
+  total_trades, min_trades,
+  failed: ["sharpe_ratio", ...],
+  checks: [{metric, threshold, comparison, required, actual, raw, unit, passed, missing}, ...]
+}
+```
 
-Decision rule:
+| Metric | Threshold | Direction | Unit handling |
+|---|---|---|---|
+| `sortino_ratio` | ≥ 1.5 | higher is better | ratio |
+| `sharpe_ratio` | ≥ 1.2 | higher is better | ratio |
+| `calmar_ratio` | ≥ 1.0 | higher is better | ratio |
+| `irr_annualized` | ≥ 0.15 | higher is better | raw 0-100 ÷ 100 |
+| `max_drawdown` | ≤ 0.7 | lower is better | raw 0-100 ÷ 100 |
+| `win_rate` | ≥ 0.25 | higher is better | raw 0-100 ÷ 100 |
+
+Decision rule (what the server applies, in order):
+- **INSUFFICIENT_TRADES** — `total_trades` missing or `< BACKTEST_MIN_TRADES` (10), regardless of ratios. Not a PASS, not a FAIL. Ratios with <10 trades are statistical noise.
 - **PASS** — all 6 pass
-- **MARGINAL** — 4–5 of 6 pass
-- **FAIL** — ≤3 of 6 pass
-- **INSUFFICIENT_TRADES** — `total_trades < 10`, regardless of ratios. Not a PASS, not a FAIL. Ratios with <10 trades are statistical noise.
+- **MARGINAL** — 4 or 5 of 6 pass: close enough to iterate on (alt window, walk-forward, one targeted tweak), not good enough to promote without a second look
+- **FAIL** — 3 or fewer of 6 pass
+
+A missing/null metric counts as not passed and shows `actual: null, missing: true`. If `verdict` itself is null, read `verdict_note` (quick mode, or the run failed) and say so — don't grade it by hand.
 
 ### Benchmark-relative line
 
@@ -206,7 +223,7 @@ The user reviews the verdict and picks one of:
   at Phase B-bulk with the shortlist.
 - **Reject** → archive the strategy via
   `update_strategy_status(strategy_id, status="archived")` so it stops
-  showing up in `list_strategies(status="draft")`. Don't delete — the
+  showing up in `list_strategies(status="inactive")`. Don't delete — the
   record is useful for the user to remember what they tried.
 
 ## Prohibited

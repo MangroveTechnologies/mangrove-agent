@@ -28,7 +28,7 @@ def _candidate(name: str = "c1") -> StrategyCandidate:
 def _fake_result(
     success: bool = True,
     irr: float = 0.5,
-    win_rate: float = 0.6,
+    win_rate: float = 60.0,  # SDK scale: 0-100
     total_trades: int = 20,
     sharpe: float = 1.2,
     max_dd: float = 0.1,
@@ -71,7 +71,7 @@ def test_quick_backtest_returns_metrics(mock_sdk):
     for r in results:
         assert r.success is True
         assert r.irr_annualized == 0.5
-        assert r.win_rate == 0.6
+        assert r.win_rate == 60.0
         assert r.total_trades == 20
         assert r.sharpe_ratio == 1.2
 
@@ -93,8 +93,8 @@ def test_quick_backtest_catches_per_candidate_failures(mock_sdk):
 def test_filter_drops_low_win_rate(mock_sdk):
     from src.services.backtest_service import _summarize, filter_and_rank
 
-    r_low = _summarize(_candidate("low"), _fake_result(win_rate=0.40))
-    r_ok = _summarize(_candidate("ok"), _fake_result(win_rate=0.55))
+    r_low = _summarize(_candidate("low"), _fake_result(win_rate=40.0))
+    r_ok = _summarize(_candidate("ok"), _fake_result(win_rate=55.0))
     survivors, rejected = filter_and_rank([r_low, r_ok], min_win_rate=0.51, min_trades=10)
     assert len(survivors) == 1
     assert survivors[0].candidate.name == "ok"
@@ -154,16 +154,87 @@ def test_full_backtest_wraps_sdk_error(mock_sdk):
         full_backtest(_candidate("winner"))
 
 
-def test_irr_ranking_uses_config_defaults_when_thresholds_not_passed(mock_sdk, monkeypatch):
-    """filter_and_rank picks up thresholds from app_config when args omitted."""
+def test_filter_defaults_to_verdict_thresholds(mock_sdk, monkeypatch):
+    """Omitted thresholds = the verdict's own bars: threshold_spec min_win_rate
+    (0.25, compared against the SDK's 0-100 win_rate) + BACKTEST_MIN_TRADES."""
     from src.config import app_config
     from src.services.backtest_service import _summarize, filter_and_rank
 
-    monkeypatch.setattr(app_config, "BACKTEST_MIN_WIN_RATE", 0.60)
     monkeypatch.setattr(app_config, "BACKTEST_MIN_TRADES", 5)
 
-    r_borderline = _summarize(_candidate("borderline"), _fake_result(win_rate=0.55))
-    r_ok = _summarize(_candidate("ok"), _fake_result(win_rate=0.65))
-    survivors, rejected = filter_and_rank([r_borderline, r_ok])
-    assert [s.candidate.name for s in survivors] == ["ok"]
-    assert len(rejected) == 1
+    r_below = _summarize(_candidate("below"), _fake_result(win_rate=24.0))
+    r_at = _summarize(_candidate("at_floor"), _fake_result(win_rate=25.0))
+    # A <50% win rate is normal for trend/momentum — must survive, as the
+    # verdict would PASS it (the old 0.51 bar was meant to prune these).
+    r_trend = _summarize(_candidate("trend"), _fake_result(win_rate=38.0, total_trades=6))
+    r_few = _summarize(_candidate("few"), _fake_result(win_rate=80.0, total_trades=4))
+    survivors, rejected = filter_and_rank([r_below, r_at, r_trend, r_few])
+    assert sorted(s.candidate.name for s in survivors) == ["at_floor", "trend"]
+    reasons = {r.candidate.name: r.reject_reason for r in rejected}
+    assert "win_rate 24.0% < 25%" in reasons["below"]
+    assert "total_trades 4 < 5" in reasons["few"]
+
+
+def test_filter_win_rate_floor_matches_verdict():
+    """Every candidate the filter keeps on win_rate also passes the verdict's win_rate check."""
+    from src.services import backtest_verdict
+    from src.services.backtest_service import _summarize, filter_and_rank
+
+    results = [_summarize(_candidate(f"c{w}"), _fake_result(win_rate=float(w))) for w in range(0, 101, 5)]
+    survivors, _ = filter_and_rank(results, min_trades=0)
+    for s in survivors:
+        check = next(c for c in backtest_verdict.compute_verdict(s.raw_metrics, min_trades=0)["checks"]
+                     if c["metric"] == "win_rate")
+        assert check["passed"], s.candidate.name
+    assert len(survivors) == len([w for w in range(0, 101, 5) if w >= 25])
+
+
+def test_flattened_defaults_drop_legacy_cooldown_fields(monkeypatch):
+    """Live canon still ships cooldown_bars/daily/weekly_momentum_limit; the agent
+    must not send them when cooldown_config covers them."""
+    from src.services import backtest_service as bs
+
+    canon = {
+        "risk_management": {"max_risk_per_trade": 0.01},
+        "position_limits": {"initial_balance": 10000},
+        "trading_rules": {
+            "max_hold_time_hours": None, "cooldown_bars": 24,
+            "daily_momentum_limit": 3, "weekly_momentum_limit": 3,
+            "cooldown_config": {"1h": {"short_loss_limit": 4, "long_loss_limit": 6,
+                                       "short_window_bars": 48, "long_window_bars": 144}},
+        },
+    }
+    monkeypatch.setattr(bs, "_cached_trading_defaults", canon)
+    flat = bs.flattened_defaults()
+    for k in bs.LEGACY_COOLDOWN_FIELDS:
+        assert k not in flat
+    assert flat["cooldown_config"]["1h"]["short_window_bars"] == 48
+    assert flat["initial_balance"] == 10000
+
+
+def test_legacy_cooldown_fields_kept_without_cooldown_config():
+    from src.services import backtest_service as bs
+
+    cfg = {"cooldown_bars": 24, "daily_momentum_limit": 3, "weekly_momentum_limit": 3}
+    assert bs.drop_legacy_cooldown_fields(cfg) == cfg
+
+
+def test_fallback_canon_covers_every_timeframe_without_legacy_fields():
+    from src.services import backtest_service as bs
+    from src.shared import timeframes
+
+    rules = bs._FALLBACK_TRADING_DEFAULTS["trading_rules"]
+    assert not set(bs.LEGACY_COOLDOWN_FIELDS) & set(rules)
+    for tf in ("5m", "15m", "30m", "1h", "4h", "1d"):
+        timeframes.canonicalize_timeframe(tf)
+        assert tf in rules["cooldown_config"], tf
+
+
+def test_build_request_sends_cooldown_config_not_legacy_fields(mock_sdk, monkeypatch):
+    from src.services import backtest_service as bs
+
+    monkeypatch.setattr(bs, "_cached_trading_defaults", bs._FALLBACK_TRADING_DEFAULTS)
+    wire = bs._build_request(_candidate("c"), lookback_months=3).model_dump(exclude_unset=True)
+    assert "cooldown_config" in wire
+    for k in ("cooldown_bars", "daily_momentum_limit", "weekly_momentum_limit"):
+        assert k not in wire, k

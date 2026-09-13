@@ -3,7 +3,7 @@
 *15 minutes. No funds required. The first chapter where the bot is
 actually running on a schedule.*
 
-You ended Chapter 04 with a strategy in `draft` status — saved but
+You ended Chapter 04 with a strategy in `inactive` status — saved but
 dormant. In this chapter you promote it to `paper`, which schedules
 it to evaluate on a cron and simulates fills at current market price.
 No wallet, no funds, no on-chain activity.
