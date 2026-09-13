@@ -320,10 +320,23 @@ def _insert_cache(
     generation_report: dict[str, Any] | None,
     evaluation_lane: str | None = None,
 ) -> str:
-    """Insert a row into local strategies cache. Returns our local UUID."""
+    """Insert a row into local strategies cache. Returns our local UUID.
+
+    Idempotent on mangrove_id: MangroveAI's strategies.create returns the
+    EXISTING strategy when the account already has one with the same rules,
+    and mangrove_id is UNIQUE locally, so a blind insert 500'd with
+    "UNIQUE constraint failed: strategies.mangrove_id". Return the existing
+    local row instead; its status/allocation stay untouched.
+    """
     local_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     mangrove_id = str(getattr(mangrove_detail, "id", None) or getattr(mangrove_detail, "strategy_id", local_id))
+    existing = get_connection().execute(
+        "SELECT id FROM strategies WHERE mangrove_id = ?", (mangrove_id,),
+    ).fetchone()
+    if existing is not None:
+        _log.info("strategy.create_deduplicated", strategy_id=existing[0], mangrove_id=mangrove_id)
+        return existing[0]
     get_connection().execute(
         """INSERT INTO strategies
            (id, mangrove_id, name, asset, timeframe, status,
