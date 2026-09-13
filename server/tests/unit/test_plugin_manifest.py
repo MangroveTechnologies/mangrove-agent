@@ -5,6 +5,7 @@
 skill folder, a non-executable hook script, or a hook matcher on the wrong MCP
 namespace breaks installs silently, so pin them here.
 """
+import hashlib
 import json
 import os
 import re
@@ -89,3 +90,50 @@ def test_preflight_swap_hook_recognizes_the_plugin_tool_name():
 
 def test_session_context_is_shipped():
     assert (PLUGIN_DIR / "session-context.md").is_file()
+
+
+# -- Synced MangroveAI copilot ("Michael") skills ---------------------------
+
+MICHAEL_DIR = ROOT / ".claude" / "skills" / "michael"
+SYNC_MANIFEST = MICHAEL_DIR / "skills-sync-manifest.json"
+
+
+def _michael_skills() -> set[str]:
+    return {Path(rel).parts[0] for rel in json.loads(SYNC_MANIFEST.read_text())["files"]}
+
+
+def test_synced_skills_match_their_manifest():
+    """Same check CI runs: committed copies are exactly what the sync generated."""
+    manifest = json.loads(SYNC_MANIFEST.read_text())
+    on_disk = {str(p.relative_to(MICHAEL_DIR)) for p in MICHAEL_DIR.rglob("*")
+               if p.is_file() and p.name != SYNC_MANIFEST.name}
+    assert on_disk == set(manifest["files"])
+    for rel, digest in manifest["files"].items():
+        assert hashlib.sha256((MICHAEL_DIR / rel).read_bytes()).hexdigest() == digest, (
+            f"{rel} differs from skills-sync-manifest.json; regenerate with scripts/sync-michael-skills.py"
+        )
+
+
+def test_every_synced_skill_is_shipped_and_conversation_memory_is_not():
+    shipped = set(_load("plugin.json")["skills"])
+    skills = _michael_skills()
+    assert "conversation-memory" not in skills
+    for skill in skills:
+        assert f"./.claude/skills/michael/{skill}" in shipped, skill
+
+
+def test_synced_skills_only_declare_tools_the_agent_registers():
+    tools = set(re.findall(r"^\s+async def ([a-z0-9_]+)\(",
+                           (ROOT / "server" / "src" / "mcp" / "tools.py").read_text(), re.M))
+    for skill in _michael_skills():
+        frontmatter = (MICHAEL_DIR / skill / "SKILL.md").read_text().split("---")[1]
+        declared = re.search(r"^uses-tools:\s*\[(.*?)\]\s*$", frontmatter, re.M)
+        assert declared, skill
+        names = {t.strip() for t in declared.group(1).split(",") if t.strip()}
+        assert names <= tools, f"{skill}: {sorted(names - tools)}"
+
+
+def test_session_context_names_every_shipped_skill():
+    text = (PLUGIN_DIR / "session-context.md").read_text()
+    for rel in _load("plugin.json")["skills"]:
+        assert f"`{Path(rel).name}`" in text or Path(rel).name == "trading-bot", rel
