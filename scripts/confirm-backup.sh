@@ -16,8 +16,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-LOCAL_AGENT_URL="${LOCAL_AGENT_URL:-http://localhost:9080}"
-CONFIG_FILE="server/src/config/local-config.json"
+# Sets CONFIG_FILE + LOCAL_AGENT_URL for a git clone or an installed plugin.
+# shellcheck source=_agent_home.sh
+source "$SCRIPT_DIR/_agent_home.sh"
 
 GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; DIM="\033[2m"; CLR="\033[0m"
 fail() { printf "${RED}  ✗${CLR} %s\n" "$1" >&2; exit 1; }
