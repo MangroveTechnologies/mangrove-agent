@@ -29,21 +29,30 @@ class ReferenceSearchResponse(BaseModel):
     asset: str
     timeframe: str | None
     category: str | None
+    category_source: str | None  # "explicit" | "goal_hint" | None
+    strict: bool
     count: int
+    exact_match_count: int
+    filter_semantics: str
+    # Each strategy carries match ("exact"|"partial"|"none"), matched_on, unmatched.
     strategies: list[dict[str, Any]]
 
 
 @router.get(
     "/search",
     response_model=ReferenceSearchResponse,
-    summary="Search curated reference strategies",
+    summary="Search curated reference strategies (ranked; strict=true to filter)",
     description=(
-        "Returns up to `limit` reference strategies matching the filter. "
-        "Ranks by match specificity: asset+timeframe+category > "
-        "asset+timeframe > asset > category. When `category` is omitted "
-        "and `goal_hint` is supplied, a category is auto-detected. "
-        "Mechanism 2 of the /create-strategy skill — the agent picks from "
-        "these instead of library-default parameter guessing."
+        "Returns up to `limit` reference strategies. `asset`, `timeframe` and "
+        "`category` RANK results, they do not exclude them: references matching "
+        "every supplied filter come first, then the list is padded with partial "
+        "matches. Every result carries `match` (exact | partial | none) plus "
+        "`matched_on` / `unmatched`, and the envelope carries `exact_match_count`. "
+        "References are portable signal combos — retarget any of them with "
+        "/build. Pass `strict=true` to get only exact matches (may be empty). "
+        "When `category` is omitted and `goal_hint` is supplied, a category is "
+        "auto-detected (`category_source: goal_hint`). Mechanism 2 of the "
+        "/create-strategy skill."
     ),
 )
 async def search_references(
@@ -52,21 +61,16 @@ async def search_references(
     category: str | None = None,
     goal_hint: str | None = None,
     limit: int = 5,
+    strict: bool = False,
 ) -> ReferenceSearchResponse:
-    results = reference_strategies_service.search(
+    return ReferenceSearchResponse(**reference_strategies_service.search_response(
         asset=asset,
         timeframe=timeframe,
         category=category,
         goal_hint=goal_hint,
         limit=limit,
-    )
-    return ReferenceSearchResponse(
-        asset=asset.upper(),
-        timeframe=timeframe,
-        category=category,
-        count=len(results),
-        strategies=[r.model_dump() for r in results],
-    )
+        strict=strict,
+    ))
 
 
 @router.get(
@@ -88,14 +92,16 @@ class BuildFromReferenceRequest(BaseModel):
 
 @router.post(
     "/{reference_id}/build",
-    summary="Materialize a create-strategy-manual payload from a reference",
+    summary="Materialize a create-strategy-manual payload from a reference (does NOT save it)",
     description=(
         "Copies the reference's signals exactly. `timeframe` and `asset` "
         "are free-to-override — a reference strategy is a portable signal "
-        "combo, not a pin to the source asset/timeframe. Returns a payload "
-        "the caller can POST to /strategies/manual as-is, or bulk-backtest "
-        "by calling build N times across candidate references and routing "
-        "each result through /backtest."
+        "combo, not a pin to the source asset/timeframe. NOTHING IS PERSISTED: "
+        "the response is a payload with `persisted: false` and a `next_step` "
+        "block. POST it as-is to /api/v1/agent/strategies/manual (MCP: "
+        "create_strategy_manual) to save it — extra keys are ignored — and use "
+        "the returned strategy_id for /strategies/{id}/backtest. For bulk "
+        "evaluation, build N references, create each, then backtest each."
     ),
 )
 async def build_from_reference(

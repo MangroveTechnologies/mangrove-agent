@@ -64,7 +64,7 @@ def mock_ai_sdk(monkeypatch):
     bt_result.success = True
     bt_result.metrics = {
         "irr_annualized": 0.4,
-        "win_rate": 0.6,
+        "win_rate": 60.0,  # SDK scale: 0-100
         "total_trades": 25,
         "sharpe_ratio": 1.5,
         "max_drawdown": 0.1,
@@ -133,7 +133,7 @@ def test_create_autonomous_no_viable_candidates(temp_db, mock_ai_sdk):
     from src.shared.errors import StrategyNoViableCandidates
 
     # Drop win_rate under the threshold.
-    mock_ai_sdk.backtesting.run.return_value.metrics["win_rate"] = 0.3
+    mock_ai_sdk.backtesting.run.return_value.metrics["win_rate"] = 20.0  # < 25% spec floor
 
     with pytest.raises(StrategyNoViableCandidates):
         create_autonomous(StrategyAutonomousRequest(

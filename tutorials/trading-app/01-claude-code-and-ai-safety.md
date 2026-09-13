@@ -181,7 +181,7 @@ should reconsider rather than raise the cap.
 
 ## Paper before live, always
 
-Every new strategy starts in `draft` state (unscheduled) or `paper`
+Every new strategy starts in `inactive` state (unscheduled) or `paper`
 state (scheduled, but fills are simulated at current market price —
 no real swap, no real funds). You can watch paper evaluations fire
 on the strategy's cron for as long as you want, see exactly when and

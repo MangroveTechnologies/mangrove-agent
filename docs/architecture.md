@@ -146,7 +146,7 @@ sequenceDiagram
         SDK-->>SS: metrics
     end
 
-    SS->>SS: filter (win_rate>0.51, trades>=10)
+    SS->>SS: filter (win_rate >= threshold_spec min_win_rate, trades >= BACKTEST_MIN_TRADES)
     SS->>SS: rank by IRR
 
     alt no survivors
@@ -457,7 +457,6 @@ Replace the template's `configuration-keys.json` with:
     "KEYRING_SERVICE_NAME",
     "MASTER_KEY_ENV_FALLBACK",
     "BACKTEST_CANDIDATE_COUNT",
-    "BACKTEST_MIN_WIN_RATE",
     "BACKTEST_MIN_TRADES",
     "BACKTEST_DEFAULT_LOOKBACK_MONTHS",
     "LOG_RETENTION_DAYS"
@@ -478,7 +477,6 @@ Replace the template's `configuration-keys.json` with:
   "KEYRING_SERVICE_NAME": "mangrove-agent",
   "MASTER_KEY_ENV_FALLBACK": "",
   "BACKTEST_CANDIDATE_COUNT": 7,
-  "BACKTEST_MIN_WIN_RATE": 0.51,
   "BACKTEST_MIN_TRADES": 10,
   "BACKTEST_DEFAULT_LOOKBACK_MONTHS": 3,
   "LOG_RETENTION_DAYS": 90

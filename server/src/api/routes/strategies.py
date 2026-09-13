@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from src.services import backtest_service, strategy_service
+from src.services import backtest_service, backtest_verdict, strategy_service
 from src.services.strategy_service import (
     StrategyAutonomousRequest,
     StrategyDetailResponse,
@@ -108,8 +108,14 @@ class BacktestInput(BaseModel):
       - max_units_per_trade, max_trade_amount
       - volatility_window, target_volatility, volatility_mode,
         enable_volatility_adjustment
-      - cooldown_bars, daily_momentum_limit, weekly_momentum_limit
+      - cooldown_config (per-timeframe dict; the legacy cooldown_bars /
+        daily_momentum_limit / weekly_momentum_limit are deprecated and
+        ignored by the engine when cooldown_config is present)
       - reward_factor, atr_period, volatility_tolerance, ...
+
+    Response carries `verdict` (mode=full, successful run): PASS / MARGINAL /
+    FAIL / INSUFFICIENT_TRADES against threshold_spec.json, with per-threshold
+    actual vs required — see services/backtest_verdict.py.
     Any key here overrides the corresponding trading_defaults.json entry.
     Unknown keys are forwarded as-is (SDK allows extras).
     """
@@ -182,9 +188,24 @@ async def backtest(strategy_id: str, req: BacktestInput) -> dict:
         "net_pnl": result.net_pnl,
     })
 
+    # Server-side verdict against threshold_spec.json (see
+    # services/backtest_verdict.py for units + PASS/MARGINAL/FAIL rules).
+    # Only for a successful FULL run: quick mode has no risk management
+    # (no SL/TP/time exits), so its metrics are a screen, not performance.
+    verdict: dict | None = None
+    verdict_note: str | None = None
+    if not result.success:
+        verdict_note = "backtest did not succeed; no verdict issued"
+    elif req.mode != "full":
+        verdict_note = "quick mode is a signal-frequency screen without risk management; run mode=full for a verdict"
+    else:
+        verdict = backtest_verdict.compute_verdict(full_metrics)
+
     return {
         "strategy_id": strategy_id,
         "mode": req.mode,
+        "verdict": verdict,
+        "verdict_note": verdict_note,
         "metrics": full_metrics,
         "trade_history": result.raw_metrics.get("trade_history") if req.mode == "full" else None,
         "resolved_window": result.raw_metrics.get("resolved_window"),

@@ -313,11 +313,11 @@
     },
     {
       "id": "ref-009",
-      "label": "ETH mean-reversion tight \u2014 Stoch oversold bounce on 1h",
+      "label": "ETH mean-reversion tight \u2014 RSI cross-up confirmed by Stoch oversold on 1h",
       "asset": "ETH",
       "timeframe": "1h",
       "category": "mean_reversion",
-      "description": "Stochastic(14,3) oversold (< 20) crosses back up = enter. Exits on overbought (> 80). Tighter + faster than RSI mean-reversion.",
+      "description": "Enters when RSI(14) crosses back up through 30 while Stochastic(14,3) is still oversold (< 20) \u2014 both oscillators must agree the dip is stretched. Exits when RSI(14) crosses down through 70. Stricter than plain RSI mean-reversion (ref-003) and on a faster timeframe.",
       "entry_signals": [
         {
           "name": "rsi_cross_up",
