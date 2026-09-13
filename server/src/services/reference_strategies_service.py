@@ -28,6 +28,16 @@ _log = get_logger(__name__)
 
 _DATA_PATH = Path(__file__).parent / "data" / "reference_strategies.json"
 
+# Stop parameters MangroveAI replaced with `volatility_tolerance` (the
+# atr_width_dial stop model). Its strategy write path is a hard cutover:
+# `strategies.create` 400s on any of these ("execution_config names
+# superseded stop parameter(s)"). Mirrors MangroveAI
+# domains/config/services.py::SUPERSEDED_STOP_KEYS. Stripped from every built
+# payload so a stale reference can never make create_strategy_manual fail.
+SUPERSEDED_STOP_KEYS = frozenset({
+    "atr_short_weight", "atr_long_weight", "atr_cap_multiplier", "atr_volatility_factor",
+})
+
 
 class ReferenceSignal(BaseModel):
     name: str
@@ -236,6 +246,10 @@ def build_from_reference(
     # payload the SDK will accept without extra patching by the caller.
     exec_cfg = dict(_load_execution_defaults())
     exec_cfg.update(dict(ref.execution_config))
+    # Superseded stop keys are refused upstream; canon's volatility_tolerance
+    # (from the defaults above) sets the stop instead.
+    for key in SUPERSEDED_STOP_KEYS:
+        exec_cfg.pop(key, None)
 
     return {
         "name": name or f"{ref.label} [from {ref.id}]",

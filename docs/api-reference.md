@@ -608,7 +608,7 @@ Every strategy carries an `execution_config` with these fields (defaults from `t
 | `max_risk_per_trade` | number | 0.01 | Max risk per trade (1%) |
 | `reward_factor` | number | 2 | Risk/reward ratio target |
 | `atr_period` | int | 14 | ATR lookback period in bars |
-| `atr_volatility_factor` | number | 2.0 | ATR multiplier for stop loss |
+| `volatility_tolerance` | number | 0.5 | Where the stop sits on the ATR width, 0–1 (0 = 0.5× signal-timeframe ATR, 1 = 2× daily ATR). Replaces the superseded `atr_volatility_factor` / `atr_short_weight` / `atr_long_weight` / `atr_cap_multiplier`, which `strategies.create` now rejects |
 | `min_balance_threshold` | number | 0.1 | Minimum account balance |
 | `min_trade_amount` | number | 25 | Minimum trade size ($) |
 | `max_open_positions` | int | 10 | Max concurrent positions |
@@ -673,9 +673,9 @@ Run a synchronous backtest against historical market data.
 |-----------|------|-------------|
 | `slippage_pct` | number | Max slippage per leg (default: 0.004 = 0.4%) |
 | `fee_pct` | number | Max fee rate (default: 0.0085 = 0.85%) |
-| `execution_config` | object | ATR params (`atr_period`, `atr_volatility_factor`). Defaults from `trading_defaults.json`. |
+| `execution_config` | object | Stop params (`atr_period`, `volatility_tolerance`). Defaults from `trading_defaults.json`. |
 
-**Important:** `atr_period` and `atr_volatility_factor` belong in `execution_config`, NOT in `strategy_json`.
+**Important:** `atr_period` and `volatility_tolerance` belong in `execution_config`, NOT in `strategy_json`.
 
 **Response:**
 ```json

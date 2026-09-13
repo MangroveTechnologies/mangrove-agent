@@ -68,10 +68,15 @@ _FALLBACK_TRADING_DEFAULTS: dict[str, Any] = {
         # valid so backtests don't 500 when the canon fetch is unavailable.
         "position_size_calc": "v2",
         "atr_period": 14,
-        "atr_volatility_factor": 2.0,
-        "atr_short_weight": 0.95,
-        "atr_long_weight": 0.05,
-        "atr_cap_multiplier": 2.1,
+        # atr_width_dial stop model. The weighted_atr keys this used to carry
+        # (atr_volatility_factor / atr_short_weight / atr_long_weight /
+        # atr_cap_multiplier) are superseded and refused by strategies.create,
+        # so a fallback-using server could not create any strategy.
+        "stop_model": "atr_width_dial",
+        "volatility_tolerance": 0.5,
+        "min_stop_distance_pct": 0.005,
+        "max_drawdown_limit": 0.2,
+        "max_drawdown_halt_limit": 0.2,
     },
     "position_limits": {
         "initial_balance": 10000,

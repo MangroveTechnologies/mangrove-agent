@@ -109,7 +109,7 @@ class BacktestInput(BaseModel):
       - volatility_window, target_volatility, volatility_mode,
         enable_volatility_adjustment
       - cooldown_bars, daily_momentum_limit, weekly_momentum_limit
-      - reward_factor, atr_period, atr_volatility_factor, ...
+      - reward_factor, atr_period, volatility_tolerance, ...
     Any key here overrides the corresponding trading_defaults.json entry.
     Unknown keys are forwarded as-is (SDK allows extras).
     """
