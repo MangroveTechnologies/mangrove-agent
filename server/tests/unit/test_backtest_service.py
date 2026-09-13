@@ -6,6 +6,7 @@ module mocks the SDK so we can test the composition in isolation.
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -50,6 +51,20 @@ def _fake_result(
     r.trade_history = trade_history
     r.error = error
     return r
+
+
+def _fake_status(status: str = "completed", trade_history: list | None = None,
+                 error_message: str | None = None) -> SimpleNamespace:
+    return SimpleNamespace(
+        status=status,
+        metrics=None if status != "completed" else {
+            "irr_annualized": 0.5, "win_rate": 0.6, "total_trades": 20,
+            "sharpe_ratio": 1.2, "max_drawdown": 0.1, "net_pnl": 1500.0,
+        },
+        trade_history=trade_history,
+        execution_time_seconds=1.5,
+        error_message=error_message,
+    )
 
 
 @pytest.fixture
@@ -138,9 +153,12 @@ def test_full_backtest_includes_trade_history(mock_sdk):
     from src.services.backtest_service import full_backtest
 
     trades = [{"entry_time": "2026-01-01", "pnl": 12.3}]
-    mock_sdk.backtesting.run.return_value = _fake_result(trade_history=trades)
+    mock_sdk.backtesting.submit_async.return_value = SimpleNamespace(backtest_id="bt-9", status="queued")
+    mock_sdk.backtesting.poll_status.return_value = _fake_status(trade_history=trades)
     result = full_backtest(_candidate("winner"))
     assert result.success is True
+    assert result.backtest_id == "bt-9"
+    assert result.total_trades == 20
     assert "trade_history" in result.raw_metrics
     assert result.raw_metrics["trade_history"] == trades
 
@@ -149,7 +167,7 @@ def test_full_backtest_wraps_sdk_error(mock_sdk):
     from src.services.backtest_service import full_backtest
     from src.shared.errors import SdkError
 
-    mock_sdk.backtesting.run.side_effect = RuntimeError("upstream 503")
+    mock_sdk.backtesting.submit_async.side_effect = RuntimeError("upstream 503")
     with pytest.raises(SdkError):
         full_backtest(_candidate("winner"))
 
@@ -167,3 +185,100 @@ def test_irr_ranking_uses_config_defaults_when_thresholds_not_passed(mock_sdk, m
     survivors, rejected = filter_and_rank([r_borderline, r_ok])
     assert [s.candidate.name for s in survivors] == ["ok"]
     assert len(rejected) == 1
+
+
+# ---------------------------------------------------------------------------
+# Tracked full backtests — the server-side run id survives
+# ---------------------------------------------------------------------------
+
+
+def test_full_backtest_polls_until_complete(mock_sdk, monkeypatch):
+    from src.services import backtest_service as bs
+
+    monkeypatch.setattr(bs.time, "sleep", lambda *_: None)
+    mock_sdk.backtesting.submit_async.return_value = SimpleNamespace(backtest_id="bt-2", status="queued")
+    mock_sdk.backtesting.poll_status.side_effect = [
+        _fake_status("queued"), _fake_status("running"), _fake_status("completed", trade_history=[]),
+    ]
+    result = bs.full_backtest(_candidate("c"))
+    assert result.success is True and result.backtest_id == "bt-2"
+    assert mock_sdk.backtesting.poll_status.call_count == 3
+    mock_sdk.backtesting.run.assert_not_called()
+
+
+def test_full_backtest_failed_run_keeps_id_and_error(mock_sdk):
+    from src.services.backtest_service import full_backtest
+
+    mock_sdk.backtesting.submit_async.return_value = SimpleNamespace(backtest_id="bt-3", status="queued")
+    mock_sdk.backtesting.poll_status.return_value = _fake_status("failed", error_message="no data")
+    result = full_backtest(_candidate("c"))
+    assert result.success is False
+    assert result.error == "no data"
+    assert result.backtest_id == "bt-3"
+
+
+def test_full_backtest_timeout_names_the_run(mock_sdk, monkeypatch):
+    from src.services import backtest_service as bs
+    from src.shared.errors import SdkError
+
+    monkeypatch.setattr(bs.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(bs, "_POLL_TIMEOUT_S", -1.0)
+    mock_sdk.backtesting.submit_async.return_value = SimpleNamespace(backtest_id="bt-4", status="queued")
+    mock_sdk.backtesting.poll_status.return_value = _fake_status("running")
+    with pytest.raises(SdkError) as exc:
+        bs.full_backtest(_candidate("c"))
+    assert "bt-4" in exc.value.message and "get_backtest" in exc.value.suggestion
+
+
+# ---------------------------------------------------------------------------
+# Stored runs
+# ---------------------------------------------------------------------------
+
+
+def test_list_backtests_clamps_and_maps(mock_sdk):
+    from src.services.backtest_service import list_backtests
+
+    mock_sdk.users.get_my_backtests.return_value = SimpleNamespace(total=7, items=[
+        SimpleNamespace(id="b1", asset="BTC", status="completed", result="PASS", total_return=12.5),
+    ])
+    out = list_backtests(asset=" btc ", limit=1000, offset=-3)
+    kwargs = mock_sdk.users.get_my_backtests.call_args.kwargs
+    assert kwargs["asset"] == "BTC" and kwargs["limit"] == 100 and kwargs["offset"] == 0
+    assert out["total"] == 7 and out["count"] == 1
+    assert out["backtests"][0]["id"] == "b1"
+    assert out["backtests"][0]["win_rate"] is None  # absent fields are null, never invented
+
+
+def test_list_backtests_wraps_sdk_failure(mock_sdk):
+    from src.services.backtest_service import list_backtests
+    from src.shared.errors import SdkError
+
+    mock_sdk.users.get_my_backtests.side_effect = RuntimeError("503")
+    with pytest.raises(SdkError):
+        list_backtests()
+
+
+def test_get_backtest_reads_raw_record(mock_sdk):
+    from src.services.backtest_service import get_backtest
+
+    mock_sdk.backtesting._core.request.return_value.json.return_value = {
+        "id": "b1", "status": "running", "asset": "ETH",
+        "config": {"name": "n", "entry": [{"timeframe": "4h"}, {"timeframe": "1h"}], "exit": []},
+        "metrics": None, "trade_history": None, "start_date": "2026-01-01", "end_date": "2026-02-01",
+    }
+    out = get_backtest("b1", include_trades=True)
+    assert out["status"] == "running"
+    assert out["interval"] == "1h"
+    assert out["trade_count"] == 0 and out["trade_history"] == []
+    assert "benchmark" not in out  # only completed runs are benchmarked
+
+
+def test_get_backtest_not_found(mock_sdk):
+    from mangrove_ai.exceptions import NotFoundError
+
+    from src.services.backtest_service import get_backtest
+    from src.shared.errors import BacktestNotFound
+
+    mock_sdk.backtesting._core.request.side_effect = NotFoundError(404, "Not Found", "Backtest not found", "INVALID_REQUEST")
+    with pytest.raises(BacktestNotFound):
+        get_backtest("nope")

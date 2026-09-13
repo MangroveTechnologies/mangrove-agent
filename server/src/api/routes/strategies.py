@@ -125,6 +125,10 @@ class BacktestInput(BaseModel):
     # Single escape hatch for tuning. Merges over trading_defaults.json.
     config: dict | None = None
 
+    # Attach buy-and-hold over the same window as `benchmark` (one OHLCV call;
+    # a benchmark that cannot be fetched never fails the backtest).
+    include_benchmark: bool = True
+
 
 @router.post(
     "/{strategy_id}/backtest",
@@ -182,15 +186,34 @@ async def backtest(strategy_id: str, req: BacktestInput) -> dict:
         "net_pnl": result.net_pnl,
     })
 
-    return {
+    resolved_window = result.raw_metrics.get("resolved_window")
+    response: dict[str, Any] = {
         "strategy_id": strategy_id,
+        # Server-side run id (full mode) — read it back with get_backtest
+        # instead of paying for the same measurement again.
+        "backtest_id": result.backtest_id,
         "mode": req.mode,
         "metrics": full_metrics,
+        "metric_units": backtest_service.METRIC_UNITS,
+        "metric_units_note": backtest_service.METRIC_UNITS_NOTE,
         "trade_history": result.raw_metrics.get("trade_history") if req.mode == "full" else None,
-        "resolved_window": result.raw_metrics.get("resolved_window"),
+        "resolved_window": resolved_window,
         "success": result.success,
         "error": result.error,
     }
+    if req.include_benchmark and result.success:
+        # A strategy's return always travels with what holding the asset did
+        # over the same window.
+        from src.services.benchmark_service import benchmark_for_window
+
+        benchmark = benchmark_for_window(detail.asset, resolved_window)
+        total_return = full_metrics.get("total_return")
+        if benchmark.get("available") and isinstance(total_return, (int, float)):
+            benchmark["strategy_minus_benchmark_pct"] = round(
+                float(total_return) - benchmark["buy_and_hold_return_pct"], 4,
+            )
+        response["benchmark"] = benchmark
+    return response
 
 
 @router.post(

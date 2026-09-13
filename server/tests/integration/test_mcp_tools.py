@@ -58,6 +58,11 @@ CORE_TOOLS = {
     "create_strategy_autonomous", "create_strategy_manual",
     "list_strategies", "get_strategy",
     "update_strategy_status", "backtest_strategy", "evaluate_strategy",
+    "get_backtest", "list_backtests",
+    # market
+    "get_benchmark",
+    # knowledge graph
+    "query_knowledge",
     # logs
     "list_evaluations", "list_trades", "list_all_trades",
     # kb
@@ -115,3 +120,24 @@ async def test_list_strategies_rejects_bad_key(mcp_server):
     result = await _call(mcp_server, "list_strategies", {"api_key": "wrong-key"})
     assert result["error"] is True
     assert result["code"] == "AUTH_INVALID_API_KEY"
+
+
+@pytest.mark.asyncio
+async def test_query_knowledge_rejects_missing_key(mcp_server):
+    result = await _call(mcp_server, "query_knowledge", {"op": "stats"})
+    assert result["code"] == "AUTH_INVALID_API_KEY"
+
+
+@pytest.mark.asyncio
+async def test_query_knowledge_stats_offline(mcp_server):
+    result = await _call(mcp_server, "query_knowledge", {"op": "stats", "api_key": "test-key-1"})
+    assert result["op"] == "stats"
+    assert result["result"]["nodes"] > 0
+    assert "source" not in result["result"]
+
+
+@pytest.mark.asyncio
+async def test_query_knowledge_invalid_op_is_structured_error(mcp_server):
+    result = await _call(mcp_server, "query_knowledge", {"op": "search", "api_key": "test-key-1"})
+    assert result["error"] is True
+    assert result["code"] == "KNOWLEDGE_QUERY_INVALID"
