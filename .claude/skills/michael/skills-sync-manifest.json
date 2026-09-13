@@ -1,0 +1,34 @@
+{
+  "generator": "scripts/sync-michael-skills.py",
+  "source": {
+    "repo": "MangroveTechnologies/MangroveAI",
+    "path": "src/MangroveAI/domains/agent/michael/skills",
+    "commit": "f0745d48e0e990135f82af5b9c5dcb9d9f1601ba",
+    "ref": "f0745d48e0e990135f82af5b9c5dcb9d9f1601ba"
+  },
+  "dropped_skills": [
+    "conversation-memory"
+  ],
+  "source_files": {
+    "backtesting/SKILL.md": "a8322b3619ea592620916d9321021ab5c4f7419c8d2f1f8979cae543a3f23702",
+    "knowledge-graph/SKILL.md": "e85ef1c76dfe9aec344f0a537fb6c9b84bf38b444a02937efba7c116e92bf89f",
+    "market-intelligence/SKILL.md": "398cc61efcdef33b741bbfd0dc1991dd0183b73cb9377dc89479e30a9378d725",
+    "portfolio/SKILL.md": "68b02b141e0aa98b2efc58081f6b769eee079adb6f6c18af4faee922d8ba062c",
+    "strategy-composition/SKILL.md": "df26aa15c156b34a231158d2474bce6f054475e9022519187ec6868471dda09d",
+    "strategy-composition/signal_archetype_map.yaml": "b609146b56e19f2ddfdebc8da9cb9b5b5b7dcc6ce63a6093efb15d3b2d7d4556",
+    "strategy-management/SKILL.md": "153c55b3ba83e992293db1772210678acadc5b881820689b1264bd6446f26317",
+    "sweep-results/SKILL.md": "9d64b6d8aaf566b3e13cd0c72af715eb1dcee85a624b681f8289ff8b36361f89",
+    "sweeps/SKILL.md": "683d98fbf4f6456624d5de080d176042f572f8457378987d99d7d159dab1ca07"
+  },
+  "files": {
+    "backtesting/SKILL.md": "adf4ae550e5bab057793189d976c8dd389ee30f4ec9fa6ce44a2289177a14294",
+    "knowledge-graph/SKILL.md": "b3acb1799adb655774186bddd33c90b2430042e4cc59958583a16db07941ac1a",
+    "market-intelligence/SKILL.md": "397fc9df9a0036a68447ca8eea3508468b2ee181e0180bce5e22e3942c025daf",
+    "portfolio/SKILL.md": "f96871f22c1aad73c8126556a33d3599e18d485f84a3bdb105df1a28544ed569",
+    "strategy-composition/SKILL.md": "d19b6fb9b906ebd5b0a94d220dda100242722ad38c5e8883e05ae0cb89390111",
+    "strategy-composition/signal_archetype_map.yaml": "b609146b56e19f2ddfdebc8da9cb9b5b5b7dcc6ce63a6093efb15d3b2d7d4556",
+    "strategy-management/SKILL.md": "ae067a2f7f9129ef61f735554353fd96801b7652664718bbb40756cc7d6cd17b",
+    "sweep-results/SKILL.md": "1d26cfb943a5c023587ad2b2650fda90dda1b28cc878ae31945afb3e314b842b",
+    "sweeps/SKILL.md": "aecea797bf1bee5809174a63498ea7875945771933016a498411d83eb8d5d7da"
+  }
+}

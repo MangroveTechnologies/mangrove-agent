@@ -243,6 +243,8 @@ jsonschema-specifications==2025.9.1
     # via jsonschema
 keyring==25.7.0
     # via -r requirements.txt
+mangrove-kb==3.3.1
+    # via -r requirements.txt
 mangroveai==1.15.0
     # via -r requirements.txt
 mangrovemarkets==1.1.0
@@ -265,10 +267,22 @@ multidict==6.8.0
     #   yarl
 nest-asyncio==1.6.0
     # via x402
+numpy==2.4.6 ; python_full_version < '3.12'
+    # via
+    #   mangrove-kb
+    #   pandas
+    #   scipy
+numpy==2.5.3 ; python_full_version >= '3.12'
+    # via
+    #   mangrove-kb
+    #   pandas
+    #   scipy
 opentelemetry-api==1.44.0
     # via google-api-core
 packaging==26.3
     # via pytest
+pandas==3.0.5
+    # via mangrove-kb
 parsimonious==0.10.0
     # via eth-abi
 pluggy==1.6.0
@@ -345,6 +359,7 @@ python-dateutil==2.9.0.post0
     # via
     #   arrow
     #   cdp-sdk
+    #   pandas
 python-dotenv==1.2.3
     # via
     #   mcp
@@ -394,6 +409,10 @@ rpds-py==2026.6.3
     #   referencing
 ruff==0.16.7
     # via -r requirements.txt
+scipy==1.17.1 ; python_full_version < '3.12'
+    # via mangrove-kb
+scipy==1.18.1 ; python_full_version >= '3.12'
+    # via mangrove-kb
 secretstorage==3.5.0 ; sys_platform == 'linux'
     # via keyring
 sentry-sdk==2.69.1
@@ -468,6 +487,7 @@ typing-inspection==0.4.4
 tzdata==2026.4
     # via
     #   arrow
+    #   pandas
     #   tzlocal
 tzlocal==5.4.4
     # via apscheduler

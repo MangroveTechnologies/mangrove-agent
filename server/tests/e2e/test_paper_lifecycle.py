@@ -76,6 +76,12 @@ def client(tmp_path, monkeypatch):
         trade_count=25, trade_history=[], error=None,
     )
     sdk.backtesting.run.return_value = bt
+    # Full backtests submit + poll so the server-side run id survives.
+    sdk.backtesting.submit_async.return_value = MagicMock(backtest_id="bt-e2e", status="queued")
+    sdk.backtesting.poll_status.return_value = MagicMock(
+        status="completed", metrics=bt.metrics, trade_history=[],
+        execution_time_seconds=1.0, error_message=None,
+    )
 
     counter = {"n": 0}
 
@@ -112,6 +118,7 @@ def client(tmp_path, monkeypatch):
         "src.services.candidate_generator.mangrove_ai_client",
         "src.services.backtest_service.mangrove_ai_client",
         "src.services.strategy_service.mangrove_ai_client",
+        "src.services.benchmark_service.mangrove_ai_client",
         "src.services.order_executor.mangrove_ai_client",
     ):
         monkeypatch.setattr(path, lambda s=sdk: s)

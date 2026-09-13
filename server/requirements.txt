@@ -46,6 +46,10 @@ PyJWT>=2.9.0
 # signals category filter. The agent already resolves to 1.7.x at install
 # time, so this only raises the floor to match what it actually runs against.
 mangroveai>=1.12.0,<2.0.0
+# Offline knowledge graph (indicators + signals + KB prose, bundled data) behind
+# the query_knowledge tool. Base package only: the [semantic] extra pulls a
+# sentence-transformer stack; without it `ask` degrades to lexical search.
+mangrove-kb>=3.3.1,<4
 # mangrovemarkets 1.0.0 moved EVM wallet keypair generation client-side.
 # The agent's wallet_manager.create_wallet() is unaffected — the SDK
 # call signature is unchanged, only the implementation shifted from

@@ -40,6 +40,25 @@ Claude Code skills that help while extending the scaffold:
 - **`/audit-security`** — focused security audit covering wallet + signing surfaces, MCP tool layer, REST routes, dependency CVEs, and git-history secret leaks. Read-only, writes a report to `docs/audits/`.
 - **`/custom-signal <rule>`** — composes a custom entry/exit signal stack from atomic signals when a reference-strategy match isn't available.
 
+## Synced MangroveAI copilot skills
+
+The judgement skills under `.claude/skills/michael/` (backtesting, strategy-composition,
+strategy-management, sweeps, sweep-results, market-intelligence, knowledge-graph, portfolio)
+are generated from MangroveAI's copilot, which is their source of truth. Do not edit them
+here — CI (`--verify-manifest`) fails on a hand-edited copy. To pick up upstream changes:
+
+```bash
+python scripts/sync-michael-skills.py --source ~/mangrove-workspace/MangroveAI --ref origin/main
+python scripts/sync-michael-skills.py --source ~/mangrove-workspace/MangroveAI --ref origin/main --check
+```
+
+The script maps Michael's tool names to this agent's MCP tools (`TOOL_MAP`), annotates
+passages that need a tool this agent does not have yet (`UNAVAILABLE`), and rewrites
+Michael-runtime-only passages (`PATCHES`, anchored on upstream wording — a changed anchor
+fails the sync loudly). When a new agent tool fills a gap, move its entry from
+`UNAVAILABLE` to `TOOL_MAP` and re-sync. The script's docstring shows how to sync from a
+`gh api` tarball when there is no local checkout.
+
 ## Git workflow
 
 See `.claude/rules/git-workflow.md`. Feature branch off `main`, one concern per PR, CI must pass.

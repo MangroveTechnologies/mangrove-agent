@@ -1037,6 +1037,49 @@ def _register_market(server: FastMCP) -> None:
     ))
 
     @server.tool()
+    async def get_benchmark(
+        asset: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        lookback_days: int | None = None,
+        api_key: str = "",
+    ) -> str:
+        """Buy-and-hold return for an asset over a window, as a percentage (0-100 scale).
+
+        Pass start_date + end_date (ISO), or lookback_days ending now. The
+        response carries `buy_and_hold_return_pct` plus `covered_window` — the
+        span the bars actually covered, which can be shorter than requested when
+        history is thin (quote that one). `backtest_strategy` already attaches
+        this as `benchmark` for its own window; call this for a different asset
+        or period.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            from src.services.benchmark_service import get_benchmark as svc
+            return json.dumps(svc(
+                asset, start_date=start_date, end_date=end_date, lookback_days=lookback_days,
+            ))
+        except AgentError as e:
+            return _handle_agent_error(e)
+
+    register_tool(ToolEntry(
+        name="get_benchmark",
+        description=(
+            "Buy-and-hold return (percent, 0-100 scale) for an asset over "
+            "start_date+end_date or lookback_days, with the window actually covered."
+        ),
+        access="auth",
+        parameters=[
+            ToolParam(name="asset", type="string", required=True, description="Asset symbol (e.g. BTC, ETH)"),
+            ToolParam(name="start_date", type="string", required=False, description="ISO start (pair with end_date)"),
+            ToolParam(name="end_date", type="string", required=False, description="ISO end (pair with start_date)"),
+            ToolParam(name="lookback_days", type="integer", required=False, description="Trailing window ending now (instead of dates)"),
+            _APIKEY,
+        ],
+    ))
+
+    @server.tool()
     async def list_approved_assets(
         min_score: float | None = None, limit: int = 100,
         api_key: str = "",
@@ -2269,9 +2312,17 @@ def _register_strategy(server: FastMCP) -> None:
         lookback_hours: int | None = None,
         start_date: str | None = None, end_date: str | None = None,
         config: dict | None = None,
+        include_benchmark: bool = True,
         api_key: str = "",
     ) -> str:
         """Run a backtest against an existing strategy (mode=quick|full).
+
+        Full-mode results carry `backtest_id` (the run is stored server-side;
+        read it back later with get_backtest instead of re-running),
+        `metric_units` (percent-typed metrics are 0-100: 0.52 means 0.52%), and
+        `benchmark` — buy-and-hold over the same window, so a strategy's return
+        is never quoted without what holding the asset did. Set
+        include_benchmark=false to skip that one extra OHLCV call.
 
         Async-backed (SDK >=1.14): the SDK submits to the async surface and
         polls status internally, so long windows work -- there is no gateway
@@ -2312,6 +2363,7 @@ def _register_strategy(server: FastMCP) -> None:
                 start_date=start_date,
                 end_date=end_date,
                 config=config,
+                include_benchmark=include_benchmark,
             )))
         except AgentError as e:
             return _handle_agent_error(e)
@@ -2328,8 +2380,10 @@ def _register_strategy(server: FastMCP) -> None:
             "that merges over trading_defaults.json — use it for "
             "slippage_pct, fee_pct, max_hold_time_hours, initial_balance, "
             "max_risk_per_trade, reward_factor, atr_period, or any other "
-            "BacktestRequest field. Returns full SDK metrics, trade "
-            "history, and a resolved_window block for fallback detection."
+            "BacktestRequest field. Returns full SDK metrics (percent-typed "
+            "on a 0-100 scale, see metric_units), trade history, a "
+            "resolved_window block, the stored run's backtest_id, and "
+            "`benchmark` (buy-and-hold over the same window)."
         ),
         access="auth",
         parameters=[
@@ -2341,6 +2395,91 @@ def _register_strategy(server: FastMCP) -> None:
             ToolParam(name="start_date", type="string", required=False, description="ISO 8601 — paired with end_date, overrides all lookback_* fields"),
             ToolParam(name="end_date", type="string", required=False, description="ISO 8601"),
             ToolParam(name="config", type="object", required=False, description="Merges over trading_defaults.json (slippage_pct, max_risk_per_trade, initial_balance, reward_factor, atr_*, etc.)"),
+            ToolParam(name="include_benchmark", type="boolean", required=False, description="Attach buy-and-hold over the same window (default true)"),
+            _APIKEY,
+        ],
+    ))
+
+    @server.tool()
+    async def list_backtests(
+        asset: str | None = None,
+        status: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+        include_archived: bool = False,
+        api_key: str = "",
+    ) -> str:
+        """The caller's stored backtest runs, newest first, with headline metrics.
+
+        Call it whenever the user refers to a result rather than asking for a
+        new one ("how did it do", "compare those two"), then get_backtest for
+        the run you need: a stored run is the record of what happened, and
+        re-running bills a new one. Runs are keyed to the API key's user, not
+        to local strategy ids (MangroveAI records no strategy id for
+        agent-submitted runs) — filter by asset/dates and match on the
+        strategy_name get_backtest returns. Percent metrics are 0-100.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            from src.services.backtest_service import list_backtests as svc
+            return json.dumps(svc(
+                asset=asset, status=status, date_from=date_from, date_to=date_to,
+                limit=limit, offset=offset, include_archived=include_archived,
+            ))
+        except AgentError as e:
+            return _handle_agent_error(e)
+
+    register_tool(ToolEntry(
+        name="list_backtests",
+        description="List stored backtest runs (newest first) with headline metrics; read one with get_backtest.",
+        access="auth",
+        parameters=[
+            ToolParam(name="asset", type="string", required=False, description="Filter by asset symbol"),
+            ToolParam(name="status", type="string", required=False, description="Filter: completed | running | failed"),
+            ToolParam(name="date_from", type="string", required=False, description="ISO lower bound on creation date"),
+            ToolParam(name="date_to", type="string", required=False, description="ISO upper bound on creation date"),
+            ToolParam(name="limit", type="integer", required=False, description="Page size (default 20, max 100)"),
+            ToolParam(name="offset", type="integer", required=False, description="Page offset"),
+            ToolParam(name="include_archived", type="boolean", required=False, description="Include archived runs"),
+            _APIKEY,
+        ],
+    ))
+
+    @server.tool()
+    async def get_backtest(
+        backtest_id: str,
+        include_trades: bool = False,
+        include_benchmark: bool = True,
+        api_key: str = "",
+    ) -> str:
+        """One stored backtest run in full: status, window, the rules and
+        execution config it ran, metrics (percent-typed on a 0-100 scale), trade
+        count, and buy-and-hold over the same window as `benchmark`.
+
+        Use it instead of backtest_strategy whenever the run already exists.
+        Pass include_trades=true for the trade list.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            from src.services.backtest_service import get_backtest as svc
+            return json.dumps(svc(
+                backtest_id, include_trades=include_trades, include_benchmark=include_benchmark,
+            ))
+        except AgentError as e:
+            return _handle_agent_error(e)
+
+    register_tool(ToolEntry(
+        name="get_backtest",
+        description="Get one stored backtest run (rules, window, metrics, benchmark) by backtest_id.",
+        access="auth",
+        parameters=[
+            ToolParam(name="backtest_id", type="string", required=True, description="Run id from backtest_strategy or list_backtests"),
+            ToolParam(name="include_trades", type="boolean", required=False, description="Include trade_history (default false)"),
+            ToolParam(name="include_benchmark", type="boolean", required=False, description="Attach buy-and-hold over the run's window (default true)"),
             _APIKEY,
         ],
     ))
@@ -2700,6 +2839,92 @@ def _register_kb(server: FastMCP) -> None:
         access="auth",
         parameters=[
             ToolParam(name="category", type="string", required=False, description="Filter: momentum | trend | mean_reversion | volatility | volume | pattern"),
+            _APIKEY,
+        ],
+    ))
+
+    @server.tool()
+    async def query_knowledge(
+        op: str,
+        q: str = "",
+        to: str = "",
+        kind: str | None = None,
+        role: str | None = None,
+        status: str | None = None,
+        requires: str | None = None,
+        param: str | None = None,
+        relation: str | None = None,
+        direction: str = "both",
+        units: str | None = None,
+        bounded: bool | None = None,
+        hops: int = 1,
+        limit: int = 25,
+        api_key: str = "",
+    ) -> str:
+        """Query Mangrove's knowledge graph — every indicator and signal in the
+        library (what each computes, consumes and produces, which signals read
+        which output, what part each plays) joined to the trading knowledge
+        base. Offline (bundled with mangrove-kb). Use it before naming a signal
+        or answering a trading question from memory.
+
+        Ops: stats (counts + the complete vocabulary every filter accepts —
+        call first), find (search BY WORDS; filters kind/role/status/requires/
+        param intersect), ask (search BY MEANING for a question in ordinary
+        words; `note` says when the full meaning index is not installed),
+        get (one node: formula, inputs, params, outputs, warmup), neighbors
+        (relation/direction: in = what reads this, out = what this depends on),
+        outputs (search output values: units, bounded, kind), path (q -> to).
+        Class (kind=) is what a computation measures; role= (trigger|filter)
+        is the part it plays. Capped results carry truncated + note — raise
+        limit before concluding "there are only N".
+        """
+        if not _require(api_key):
+            return _auth_error()
+        from pydantic import ValidationError as PydanticValidationError
+
+        from src.services.knowledge_service import KnowledgeQuery
+        from src.services.knowledge_service import query_knowledge as svc
+        try:
+            req = KnowledgeQuery(
+                op=op, q=q, to=to, kind=kind, role=role, status=status,
+                requires=requires, param=param, relation=relation,
+                direction=direction, units=units, bounded=bounded,
+                hops=hops, limit=limit,
+            )
+        except PydanticValidationError as e:
+            return _err(
+                "KNOWLEDGE_QUERY_INVALID",
+                "; ".join(f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in e.errors()),
+                "op is one of stats, find, ask, get, neighbors, outputs, path; "
+                "direction is in|out|both; limit 1-200; hops 0-3.",
+            )
+        try:
+            return json.dumps(svc(req))
+        except AgentError as e:
+            return _handle_agent_error(e)
+
+    register_tool(ToolEntry(
+        name="query_knowledge",
+        description=(
+            "Query the offline Mangrove knowledge graph (indicators, signals, KB): "
+            "op = stats | find | ask | get | neighbors | outputs | path."
+        ),
+        access="auth",
+        parameters=[
+            ToolParam(name="op", type="string", required=True, description="stats | find | ask | get | neighbors | outputs | path"),
+            ToolParam(name="q", type="string", required=False, description="Search text, or node id/name for get/neighbors/path"),
+            ToolParam(name="to", type="string", required=False, description="path: destination node"),
+            ToolParam(name="kind", type="string", required=False, description="Class filter (find/outputs)"),
+            ToolParam(name="role", type="string", required=False, description="trigger | filter (find)"),
+            ToolParam(name="status", type="string", required=False, description="find: status filter"),
+            ToolParam(name="requires", type="string", required=False, description="find: required input column"),
+            ToolParam(name="param", type="string", required=False, description="find: parameter name"),
+            ToolParam(name="relation", type="string", required=False, description="neighbors: relation filter"),
+            ToolParam(name="direction", type="string", required=False, description="neighbors: in | out | both"),
+            ToolParam(name="units", type="string", required=False, description="outputs: unit filter"),
+            ToolParam(name="bounded", type="boolean", required=False, description="outputs: bounded values only"),
+            ToolParam(name="hops", type="integer", required=False, description="ask: hops from each match (0-3)"),
+            ToolParam(name="limit", type="integer", required=False, description="Max results (1-200, default 25)"),
             _APIKEY,
         ],
     ))

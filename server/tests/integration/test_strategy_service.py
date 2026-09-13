@@ -9,6 +9,7 @@ rather than unit.
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -74,6 +75,12 @@ def mock_ai_sdk(monkeypatch):
     bt_result.trade_history = []
     bt_result.error = None
     client.backtesting.run.return_value = bt_result
+    # The winner's full backtest submits + polls (keeps the server-side run id).
+    client.backtesting.submit_async.return_value = SimpleNamespace(backtest_id="bt-auto", status="queued")
+    client.backtesting.poll_status.side_effect = lambda _id: SimpleNamespace(
+        status="completed", metrics=dict(bt_result.metrics), trade_history=[],
+        execution_time_seconds=1.0, error_message=None,
+    )
 
     # strategies.create: return a fresh mock with a unique id per call,
     # so the DB's UNIQUE(mangrove_id) constraint is respected.

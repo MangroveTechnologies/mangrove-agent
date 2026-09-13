@@ -26,6 +26,13 @@ jobs:
       - name: Lint with ruff
         run: ruff check server/src/
 
+      # The synced Michael skills are generated from the private MangroveAI
+      # repo, which CI cannot read. The generator records a sha256 per file in
+      # skills-sync-manifest.json; this fails if a committed copy was
+      # hand-edited or the manifest is stale.
+      - name: Verify synced Michael skills match their manifest
+        run: python scripts/sync-michael-skills.py --verify-manifest
+
       - name: Run tests
         env:
           ENVIRONMENT: test

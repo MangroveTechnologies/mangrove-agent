@@ -11,8 +11,19 @@ and keys run on this machine under `${MANGROVE_AGENT_HOME}`.
   ToolSearch call (query `+mangrove-agent`, max_results 100). Loading only wallet/swap tools makes
   you forget you can author, backtest, sweep and evaluate strategies.
 - Load the `mangrove-agent:trading-bot` skill before any strategy, backtest, wallet or live-trading
-  work. It holds the full operating rules. Task skills (all `mangrove-agent:` prefixed):
-  `create-strategy`, `backtest`, `sieve`, `sweep`, `custom-signal`, `setup-kraken`, `connect-kraken`.
+  work. It holds the full operating rules. All skills below are `mangrove-agent:` prefixed.
+- Judgement skills, synced from MangroveAI's copilot (MangroveAI is their source of truth):
+  `knowledge-graph` (ask the graph with `query_knowledge` before naming a signal or answering a
+  trading question from memory), `strategy-composition`, `strategy-management`, `backtesting`,
+  `market-intelligence`, `portfolio`, `sweeps`, `sweep-results`. Each marks any capability this
+  agent does not have yet and says what to use instead.
+- Procedure skills for this agent's own tools: `create-strategy` (reference strategies, autonomous
+  mode), `backtest` (window sizing + threshold verdict), `sieve`, `sweep` (Oracle experiment config),
+  `custom-signal`, `setup-kraken`, `connect-kraken`. When both kinds apply, load both -- e.g.
+  `backtest` for the window and verdict, `backtesting` for what you may claim about the run.
+- A strategy's return is never quoted alone: `backtest_strategy` attaches `benchmark` (buy-and-hold
+  over the same window); `get_benchmark` covers any other asset or period. Read past runs with
+  `list_backtests` / `get_backtest` instead of re-running them.
 
 ## Non-negotiables
 

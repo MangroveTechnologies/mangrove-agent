@@ -136,6 +136,24 @@ class AllocationInsufficient(AgentError):
     http_status = 400
 
 
+# -- Backtests / knowledge / market data -------------------------------
+
+
+class BacktestNotFound(AgentError):
+    code = "BACKTEST_NOT_FOUND"
+    http_status = 404
+
+
+class KnowledgeQueryInvalid(AgentError):
+    code = "KNOWLEDGE_QUERY_INVALID"
+    http_status = 400
+
+
+class InsufficientData(AgentError):
+    code = "INSUFFICIENT_DATA"
+    http_status = 422
+
+
 # -- External / internal -----------------------------------------------
 
 
