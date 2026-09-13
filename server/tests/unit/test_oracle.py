@@ -61,21 +61,25 @@ def _strategy() -> dict[str, Any]:
     }
 
 
-_SIEVE_RESPONSE_MOCK = MagicMock()
-_SIEVE_RESPONSE_MOCK.count = 1
-_SIEVE_RESPONSE_MOCK.model_version = "mangrove-sieve:0b9a2da0d827"
-_SIEVE_RESPONSE_MOCK.code_version = "oracle:v0.14.2 ai:v3.10.2 kb:1.0.5 roots:v0.3.0"
-_SIEVE_RESPONSE_MOCK.model_dump.return_value = {
+# Current Oracle contract: the 4-class outcome head is retired, so each
+# prediction carries only `binary` (MangroveOracle #422).
+_SIEVE_RAW_RESPONSE = {
     "predictions": [
-        {
-            "binary": {"p_no_trades": 0.0, "p_trades": 0.9999},
-            "four_class": {"losing": 0.24, "no_trades": 0.0, "wash": 0.06, "winning": 0.70},
-        }
+        {"binary": {"p_no_trades": 0.0044, "p_trades": 0.9956}},
     ],
     "count": 1,
-    "model_version": "mangrove-sieve:0b9a2da0d827",
-    "code_version": "oracle:v0.14.2 ai:v3.10.2 kb:1.0.5 roots:v0.3.0",
+    "model_version": "mangrove-sieve:fb26279be5c6",
+    "code_version": "oracle:v2.11.0 ai:v5.4.0 kb:3.3.1 roots:v0.14.0",
 }
+
+
+def _sieve_client(raw: dict[str, Any]) -> MagicMock:
+    """SDK client whose transport returns `raw` for POST /oracle/sieve/score."""
+    client = MagicMock()
+    client.oracle._core.request.return_value.json.return_value = raw
+    # mangroveai <= 1.15 raises on binary-only responses; the service must not use it.
+    client.oracle.sieve_score.side_effect = AssertionError("typed SDK sieve_score must not be called")
+    return client
 
 
 _DATA_QUERY_RESPONSE_MOCK = MagicMock()
@@ -105,29 +109,47 @@ _BACKTEST_RESPONSE_MOCK.model_dump.return_value = {
 # ---------------------------------------------------------------------------
 
 class TestSieveScore:
-    def test_returns_predictions_with_provenance(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        client = MagicMock()
-        client.oracle.sieve_score.return_value = _SIEVE_RESPONSE_MOCK
+    def test_binary_only_response_returns_predictions_with_provenance(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression: the live binary-only response used to 400 through the
+        typed SDK model (four_class required)."""
+        client = _sieve_client(_SIEVE_RAW_RESPONSE)
         monkeypatch.setattr("src.services.oracle.mangrove_ai_client", lambda: client)
 
         result = svc_sieve_score(SieveScoreInput(strategies=[_strategy()]))
 
         assert result["count"] == 1
-        assert result["model_version"] == "mangrove-sieve:0b9a2da0d827"
-        assert "oracle:v0.14.2" in result["code_version"]
+        assert result["model_version"] == "mangrove-sieve:fb26279be5c6"
+        assert "oracle:v2.11.0" in result["code_version"]
+        assert result["predictions"][0]["binary"]["p_trades"] == pytest.approx(0.9956)
+        assert "four_class" not in result["predictions"][0]
+        method, path = client.oracle._core.request.call_args.args
+        assert (method, path) == ("POST", "/oracle/sieve/score")
+        sent = client.oracle._core.request.call_args.kwargs["json"]
+        assert sent["strategies"][0]["asset"] == "AVAX"
+
+    def test_legacy_four_class_passes_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        legacy = json.loads(json.dumps(_SIEVE_RAW_RESPONSE))
+        legacy["predictions"][0]["four_class"] = {"losing": 0.24, "no_trades": 0.0, "wash": 0.06, "winning": 0.70}
+        client = _sieve_client(legacy)
+        monkeypatch.setattr("src.services.oracle.mangrove_ai_client", lambda: client)
+
+        result = svc_sieve_score(SieveScoreInput(strategies=[_strategy()]))
+
         assert result["predictions"][0]["four_class"]["winning"] == pytest.approx(0.70)
 
     def test_empty_strategies_rejected_locally(self) -> None:
         with pytest.raises(SdkError, match="at least one strategy"):
             svc_sieve_score(SieveScoreInput(strategies=[]))
 
-    def test_client_side_99_cap_surfaces_as_sdk_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        client = MagicMock()
-        client.oracle.sieve_score.side_effect = ValueError("Max 99 items per request, got 100")
+    def test_99_cap_enforced_before_any_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _sieve_client(_SIEVE_RAW_RESPONSE)
         monkeypatch.setattr("src.services.oracle.mangrove_ai_client", lambda: client)
 
         with pytest.raises(SdkError, match="validation failed"):
             svc_sieve_score(SieveScoreInput(strategies=[_strategy()] * 100))
+        client.oracle._core.request.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
