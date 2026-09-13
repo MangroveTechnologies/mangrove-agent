@@ -54,6 +54,25 @@ def _matches_any(api_key: str, valid_keys: set[str]) -> bool:
     return matched
 
 
+# Keys this repo has published (example config, tutorials). A config still
+# carrying one is usable by anyone who has read the repo and can reach the
+# port, and the wallet routes (incl. secret reveal) sit behind this check, so
+# these never authenticate. setup.sh replaces them with a generated key.
+PUBLISHED_DEFAULT_KEYS = frozenset({"dev-key-1", "GENERATED_BY_SETUP"})
+
+
+def _configured_keys(config) -> set[str]:
+    keys = {k.strip() for k in str(config.API_KEYS).split(",") if k.strip()}
+    return keys - PUBLISHED_DEFAULT_KEYS
+
+
+def published_default_keys_configured(config=None) -> bool:
+    """True when API_KEYS still contains a key published in this repo."""
+    config = config or _get_config()
+    keys = {k.strip() for k in str(config.API_KEYS).split(",") if k.strip()}
+    return bool(keys & PUBLISHED_DEFAULT_KEYS)
+
+
 def validate_api_key(api_key: Optional[str]) -> Optional[str]:
     """Validate an API key against configured keys.
 
@@ -68,8 +87,7 @@ def validate_api_key(api_key: Optional[str]) -> Optional[str]:
     if not api_key:
         raise ValueError("Missing API key")
 
-    valid_keys = {k.strip() for k in str(config.API_KEYS).split(",")}
-    if not _matches_any(api_key, valid_keys):
+    if not _matches_any(api_key, _configured_keys(config)):
         raise ValueError("Invalid API key")
 
     return api_key
@@ -86,7 +104,6 @@ def has_valid_api_key(api_key: Optional[str]) -> bool:
             return True
         if not api_key:
             return False
-        valid_keys = {k.strip() for k in str(config.API_KEYS).split(",")}
-        return _matches_any(api_key, valid_keys)
+        return _matches_any(api_key, _configured_keys(config))
     except Exception:
         return False

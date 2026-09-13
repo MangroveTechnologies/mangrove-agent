@@ -109,7 +109,8 @@ Paper mode doesn't require a funded wallet — start here.
 
 **Verify:** In another terminal:
 ```bash
-curl -s -H 'X-API-Key: dev-key-1' 'http://127.0.0.1:9080/api/v1/agent/reference-strategies/search?asset=ETH&timeframe=1h&goal_hint=momentum&limit=5' | python3 -m json.tool | head -20
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" 'http://127.0.0.1:9080/api/v1/agent/reference-strategies/search?asset=ETH&timeframe=1h&goal_hint=momentum&limit=5' | python3 -m json.tool | head -20
 ```
 Same candidates should appear.
 
@@ -126,7 +127,8 @@ Same candidates should appear.
 
 **Verify:**
 ```bash
-curl -s -H 'X-API-Key: dev-key-1' 'http://127.0.0.1:9080/api/v1/agent/strategies' | python3 -m json.tool | head -25
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" 'http://127.0.0.1:9080/api/v1/agent/strategies' | python3 -m json.tool | head -25
 ```
 The new strategy should be there with `status: "draft"`.
 
@@ -166,7 +168,8 @@ breakdown against `threshold_spec.json` values.
 
 **Verify:**
 ```bash
-curl -s -H 'X-API-Key: dev-key-1' 'http://127.0.0.1:9080/api/v1/agent/status' | python3 -m json.tool | grep -A 1 active_cron
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" 'http://127.0.0.1:9080/api/v1/agent/status' | python3 -m json.tool | grep -A 1 active_cron
 ```
 `active_cron_jobs: 1` (assuming no prior strategies).
 
@@ -182,7 +185,8 @@ curl -s -H 'X-API-Key: dev-key-1' 'http://127.0.0.1:9080/api/v1/agent/status' | 
 
 **Verify:**
 ```bash
-curl -s -H 'X-API-Key: dev-key-1' "http://127.0.0.1:9080/api/v1/agent/logs/evaluations?strategy_id=<the id>" | python3 -m json.tool | head -30
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" "http://127.0.0.1:9080/api/v1/agent/logs/evaluations?strategy_id=<the id>" | python3 -m json.tool | head -30
 ```
 At least one evaluation row with `status="ok"`, non-zero `duration_ms`.
 
@@ -195,7 +199,8 @@ sleep 2
 ./scripts/setup.sh --yes --no-mcp --no-verify
 sleep 3
 curl -s http://127.0.0.1:9080/health
-curl -s -H 'X-API-Key: dev-key-1' 'http://127.0.0.1:9080/api/v1/agent/status' | python3 -m json.tool | grep active_cron
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" 'http://127.0.0.1:9080/api/v1/agent/status' | python3 -m json.tool | grep active_cron
 ```
 
 **Expect:** `active_cron_jobs: 1` after restart — the SQLAlchemyJobStore
@@ -237,7 +242,8 @@ you want (password manager, paper).
 
 **Verify:**
 ```bash
-curl -s -H 'X-API-Key: dev-key-1' 'http://127.0.0.1:9080/api/v1/agent/wallet/list' | python3 -m json.tool
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" 'http://127.0.0.1:9080/api/v1/agent/wallet/list' | python3 -m json.tool
 ```
 Your wallet row has a non-null `backup_confirmed_at`.
 
@@ -312,13 +318,16 @@ the strategy decides to act, a real swap happens — watch for:
 
 ```bash
 # Strategies
-curl -s -H 'X-API-Key: dev-key-1' 'http://127.0.0.1:9080/api/v1/agent/strategies' | python3 -m json.tool
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" 'http://127.0.0.1:9080/api/v1/agent/strategies' | python3 -m json.tool
 
 # All trades (local)
-curl -s -H 'X-API-Key: dev-key-1' 'http://127.0.0.1:9080/api/v1/agent/logs/all-trades?limit=10' | python3 -m json.tool
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" 'http://127.0.0.1:9080/api/v1/agent/logs/all-trades?limit=10' | python3 -m json.tool
 
 # Portfolio
-curl -s -H 'X-API-Key: dev-key-1' "http://127.0.0.1:9080/api/v1/agent/wallet/<address>/portfolio" | python3 -m json.tool
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" "http://127.0.0.1:9080/api/v1/agent/wallet/<address>/portfolio" | python3 -m json.tool
 ```
 
 ### 5.2 — Clean up (OPTIONAL)

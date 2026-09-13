@@ -25,7 +25,8 @@ cd "$REPO_ROOT"
 
 CONFIG_FILE="server/src/config/local-config.json"
 VENV_DIR=".venv"
-HOST="${BARE_HOST:-0.0.0.0}"
+# Loopback only by default: this process holds wallet secrets.
+HOST="${BARE_HOST:-127.0.0.1}"
 PORT="${BARE_PORT:-9080}"
 
 GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; DIM="\033[2m"; CLR="\033[0m"

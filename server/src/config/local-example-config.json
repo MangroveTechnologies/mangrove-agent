@@ -1,6 +1,6 @@
 {
   "AUTH_ENABLED": true,
-  "API_KEYS": "dev-key-1",
+  "API_KEYS": "GENERATED_BY_SETUP",
   "MANGROVE_API_KEY": "REPLACE_WITH_YOUR_DEV_OR_PROD_KEY",
   "MANGROVEMARKETS_BASE_URL": "http://localhost:9081",
   "LOCAL_AGENT_URL": "http://localhost:9080",

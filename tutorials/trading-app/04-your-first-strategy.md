@@ -240,7 +240,8 @@ We'll change that in Chapter 05.
 You can also curl it directly if you're curious:
 
 ```bash
-curl -s -H 'X-API-Key: dev-key-1' \
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" \
   http://localhost:9080/api/v1/agent/strategies | python3 -m json.tool
 ```
 

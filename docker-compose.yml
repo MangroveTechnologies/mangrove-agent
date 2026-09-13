@@ -8,8 +8,9 @@ services:
       # Host 9080 -> container 8080. Some host environments (VSCode's
       # helper, other dev tools) grab :8080 — binding 9080 externally
       # sidesteps that while keeping the container's internal port
-      # standard.
-      - "9080:8080"
+      # standard. Published on loopback only: the agent holds wallet
+      # secrets and must not be reachable from the network.
+      - "127.0.0.1:9080:8080"
     environment:
       - ENVIRONMENT=local
     volumes:
