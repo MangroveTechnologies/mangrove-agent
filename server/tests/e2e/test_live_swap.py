@@ -24,9 +24,11 @@ the agent's full stack completes a real on-chain swap.
 """
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 os.environ.setdefault("ENVIRONMENT", "local")
 
@@ -34,7 +36,18 @@ import pytest  # noqa: E402
 from eth_account import Account  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-_API_KEY = "dev-key-1"  # matches local-config.json API_KEYS
+
+def _local_api_key() -> str:
+    """First API_KEYS entry from local-config.json (unique per install, set by setup.sh)."""
+    cfg = Path(__file__).resolve().parents[2] / "src" / "config" / "local-config.json"
+    try:
+        raw = json.loads(cfg.read_text()).get("API_KEYS", "")
+    except FileNotFoundError:
+        return ""
+    return next((k.strip() for k in raw.split(",") if k.strip()), "")
+
+
+_API_KEY = _local_api_key()
 
 # Base Sepolia tokens
 _SEPOLIA_CHAIN_ID = 84532

@@ -233,7 +233,8 @@ After a successful live trade, verify independently:
 
 ```bash
 # From a terminal, use the tx_hash the bot reported
-curl -s -H 'X-API-Key: dev-key-1' \
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" \
   "http://localhost:9080/api/v1/agent/dex/tx-status?tx_hash=0x7d5a...d4e2&chain_id=8453" \
   | python3 -m json.tool
 ```

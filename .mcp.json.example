@@ -1,10 +1,10 @@
 {
   "mcpServers": {
     "mangrove-agent": {
-      "transport": "http",
-      "url": "http://localhost:9080/mcp/",
+      "type": "http",
+      "url": "http://127.0.0.1:9080/mcp/",
       "headers": {
-        "X-API-Key": "dev-key-1"
+        "X-API-Key": "REPLACE_WITH_API_KEYS_FROM_server/src/config/local-config.json"
       }
     }
   }

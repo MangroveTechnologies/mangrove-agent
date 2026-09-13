@@ -33,7 +33,8 @@ Check `list_evaluations` any time to see what the strategy saw.
 Verify the cron registered:
 
 ```bash
-curl -s -H 'X-API-Key: dev-key-1' \
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" \
   http://localhost:9080/api/v1/agent/status | python3 -m json.tool \
   | grep active_cron
 ```
@@ -173,7 +174,8 @@ curl -s http://localhost:9080/health 2>&1 | head -1
 ./scripts/setup.sh --yes --no-mcp --no-verify
 
 # Confirm the cron came back automatically
-curl -s -H 'X-API-Key: dev-key-1' \
+KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
+curl -s -H "X-API-Key: $KEY" \
   http://localhost:9080/api/v1/agent/status | python3 -m json.tool \
   | grep active_cron
 # → "active_cron_jobs": 1
