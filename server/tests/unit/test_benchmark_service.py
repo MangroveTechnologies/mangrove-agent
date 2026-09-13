@@ -104,14 +104,30 @@ def test_provider_failure_is_sdk_error(sdk):
         get_benchmark("ETH", lookback_days=30)
 
 
-def test_benchmark_for_window_never_raises(sdk):
+def test_benchmark_for_window_never_raises_or_leaks_exception_text(sdk):
+    """The reason is returned to API callers (backtest + get_backtest routes), so an
+    upstream exception's text must not reach it (CodeQL py/stack-trace-exposure)."""
     from src.services.benchmark_service import benchmark_for_window
 
-    sdk.crypto_assets.get_ohlcv.side_effect = RuntimeError("provider down")
+    sdk.crypto_assets.get_ohlcv.side_effect = RuntimeError(
+        "provider down: GET https://internal-host/ohlcv?token=secret-abc"
+    )
     out = benchmark_for_window("ETH", {"lookback_months": 3})
     assert out["available"] is False
-    assert "provider down" in out["reason"]
+    assert "secret-abc" not in out["reason"]
+    assert "internal-host" not in out["reason"]
+    assert "provider down" not in out["reason"]
+    assert "data provider error" in out["reason"]
     assert benchmark_for_window("ETH", None)["available"] is False
+
+
+def test_benchmark_for_window_keeps_its_own_insufficient_data_message(sdk):
+    from src.services.benchmark_service import benchmark_for_window
+
+    sdk.crypto_assets.get_ohlcv.return_value = {"success": True, "data": []}
+    out = benchmark_for_window("ETH", {"lookback_months": 1})
+    assert out["available"] is False
+    assert "a buy-and-hold return needs at least two" in out["reason"]
 
 
 def test_benchmark_for_window_uses_months_when_no_dates(sdk):

@@ -166,6 +166,10 @@ def benchmark_for_window(asset: str, resolved_window: dict[str, Any] | None) -> 
 
     Never raises: a benchmark that cannot be fetched must not fail a backtest
     that already ran. Returns ``{"available": False, "reason": ...}`` instead.
+
+    The reason is safe to return to API callers: it carries only messages this
+    module writes itself (bad window, too few closes). Upstream and unexpected
+    exceptions become a generic reason; their detail goes to the server log only.
     """
     window = resolved_window or {}
     try:
@@ -175,7 +179,13 @@ def benchmark_for_window(asset: str, resolved_window: dict[str, Any] | None) -> 
             result = get_benchmark(asset, lookback_days=int(window["lookback_months"]) * 30)
         else:
             return {"available": False, "reason": "the backtest reported no window to benchmark against"}
+    except (ValidationError, InsufficientData) as exc:
+        _log.info("benchmark.unavailable", asset=asset, error=exc.message)
+        return {"available": False, "reason": exc.message}
     except Exception as exc:  # noqa: BLE001 — deliberately swallowed, reported as unavailable
         _log.warning("benchmark.unavailable", asset=asset, error=f"{type(exc).__name__}: {exc}")
-        return {"available": False, "reason": getattr(exc, "message", None) or str(exc)}
+        return {
+            "available": False,
+            "reason": "price history for the benchmark could not be fetched (data provider error)",
+        }
     return {"available": True, **result}
