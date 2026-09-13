@@ -2726,13 +2726,14 @@ def _register_oracle(server: FastMCP) -> None:
         api_key: str = "",
     ) -> str:
         """Score up to 99 candidate strategies through the Mangrove SIEVE
-        classifier. Returns binary go/no-go and 4-class outcome
-        probabilities per strategy, with `model_version` + `code_version`
-        for provenance.
+        go/no-go gate. Returns binary probabilities per strategy
+        (`p_no_trades`, `p_trades`: will it place trades), with
+        `model_version` + `code_version` for provenance.
 
         Use BEFORE paying for backtests: SIEVE cheaply rules out
-        strategies the model predicts will produce no trades, win nothing,
-        or lose. Then backtest only the survivors.
+        strategies the model predicts will never trade. It does NOT predict
+        performance (the old 4-class winning/losing head is retired), so
+        backtest the survivors to find out which are any good.
         """
         if not _require(api_key):
             return _auth_error()
@@ -2747,9 +2748,9 @@ def _register_oracle(server: FastMCP) -> None:
     register_tool(ToolEntry(
         name="sieve_score",
         description=(
-            "Score 1-99 strategies through Mangrove SIEVE before paying for "
-            "backtests. Returns binary + 4-class probabilities per item, "
-            "with model + code provenance."
+            "Score 1-99 strategies through the Mangrove SIEVE go/no-go gate "
+            "before paying for backtests. Returns p_no_trades / p_trades per "
+            "item (will it trade, not how well), with model + code provenance."
         ),
         access="auth",
         parameters=[

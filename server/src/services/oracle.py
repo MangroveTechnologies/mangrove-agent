@@ -80,34 +80,52 @@ class OracleBacktestInput(BaseModel):
 # Service functions
 # ---------------------------------------------------------------------------
 
+SIEVE_MAX_ITEMS = 99
+
+
 def sieve_score(payload: SieveScoreInput) -> dict[str, Any]:
     """Score 1-99 strategies through SIEVE; return predictions + provenance.
 
-    Returns the SDK response as a plain dict so the route layer can shape
-    it for downstream consumers. The SDK already enforces the 99-item
-    cap client-side and raises ValueError before sending.
+    SIEVE is a go/no-go gate: each prediction carries ``binary``
+    (``p_no_trades`` / ``p_trades``) -- will this strategy place trades, i.e.
+    is it worth a backtest. It does not predict performance.
+
+    NOTE -- SDK contract bug (mangroveai <= 1.15.0): Oracle retired the 4-class
+    outcome head (MangroveOracle #422) and no longer returns ``four_class``,
+    but the SDK still types it as required, so ``client.oracle.sieve_score``
+    raises a pydantic ValidationError on every live response. We still build
+    the SDK request model (client-side validation), then call the transport
+    directly -- the same workaround as ``validate_experiment`` -- and return
+    the server's JSON, until an SDK release makes ``four_class`` optional.
     """
     if not payload.strategies:
         raise SdkError("sieve_score requires at least one strategy")
+    if len(payload.strategies) > SIEVE_MAX_ITEMS:
+        raise SdkError(
+            f"sieve_score validation failed: Max {SIEVE_MAX_ITEMS} items per request, "
+            f"got {len(payload.strategies)}"
+        )
+
+    try:
+        body = SieveScoreRequest(strategies=payload.strategies).model_dump(exclude_none=True)
+    except ValueError as exc:
+        raise SdkError(f"sieve_score validation failed: {exc}") from exc
 
     client = mangrove_ai_client()
     try:
-        result = client.oracle.sieve_score(
-            SieveScoreRequest(strategies=payload.strategies)
-        )
-    except ValueError as exc:
-        # Client-side rejection (e.g. >99 items, both/neither input set).
-        raise SdkError(f"sieve_score validation failed: {exc}") from exc
+        raw = client.oracle._core.request("POST", "/oracle/sieve/score", json=body).json()
+    except APIError as exc:
+        raise SdkError(f"sieve_score failed: {exc}") from exc
 
     _log.info(
         "sieve_score",
         extra={
-            "count": result.count,
-            "model_version": result.model_version,
-            "code_version": result.code_version,
+            "count": raw.get("count"),
+            "model_version": raw.get("model_version"),
+            "code_version": raw.get("code_version"),
         },
     )
-    return result.model_dump()
+    return raw
 
 
 def data_query(payload: DataQueryInput) -> dict[str, Any]:
