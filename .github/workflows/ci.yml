@@ -19,8 +19,9 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r server/requirements.txt
-          pip install pytest pytest-asyncio ruff
+          # Lockfile pins pytest/pytest-asyncio/ruff too — CI tests exactly
+          # what setup.sh and Docker install.
+          pip install -r server/requirements.lock
 
       - name: Lint with ruff
         run: ruff check server/src/

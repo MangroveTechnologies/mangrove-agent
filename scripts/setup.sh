@@ -240,14 +240,14 @@ if [ "$MODE" = "docker" ]; then
 else
   step "3. venv + pip install"
   if [ ! -d .venv ]; then
-    PY="$(pick_python)" || fail "Python >= 3.10 is required (x402 needs it) but none was found. Install it (e.g. 'brew install python@3.12') and re-run."
+    PY="$(pick_python 11)" || fail "Python >= 3.11 is required (requirements.lock is resolved for 3.11+) but none was found. Install it (e.g. 'brew install python@3.12') and re-run."
     "$PY" -m venv .venv
     info "created .venv ($PY -> $("$PY" --version 2>&1))"
   fi
   # shellcheck disable=SC1091
   source .venv/bin/activate
   python3 -m pip install --quiet --upgrade pip
-  python3 -m pip install --quiet -r server/requirements.txt
+  python3 -m pip install --quiet -r server/requirements.lock
   ok "deps installed"
 
   step "4. start uvicorn"
