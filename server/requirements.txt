@@ -45,7 +45,10 @@ PyJWT>=2.9.0
 # bounds matching the server) and adds launch_experiment_and_wait() and the
 # signals category filter. The agent already resolves to 1.7.x at install
 # time, so this only raises the floor to match what it actually runs against.
-mangroveai>=1.12.0,<2.0.0
+# Floor raised to 1.14.0: backtesting.run() is async-backed (submit + poll) from
+# 1.14, and the backtest skill no longer tells the agent to walk shorter windows
+# around the old ~15s gateway ceiling (https://github.com/MangroveTechnologies/mangrove-agent/pull/154).
+mangroveai>=1.14.0,<2.0.0
 # Offline knowledge graph (indicators + signals + KB prose, bundled data) behind
 # the query_knowledge tool. Base package only: the [semantic] extra pulls a
 # sentence-transformer stack; without it `ask` degrades to lexical search.

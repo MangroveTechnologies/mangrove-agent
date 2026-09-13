@@ -14,7 +14,6 @@ from google.api_core import exceptions as google_exceptions
 
 from src.shared.gcp_secret_utils import SecretResolutionError, SecretUtils
 
-
 # ---------------------------------------------------------------------------
 # Input validation — checked before any GCP call is made
 # ---------------------------------------------------------------------------
