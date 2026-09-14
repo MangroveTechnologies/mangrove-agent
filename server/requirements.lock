@@ -245,7 +245,7 @@ keyring==25.7.0
     # via -r requirements.txt
 mangrove-kb==3.3.1
     # via -r requirements.txt
-mangroveai==1.15.0
+mangroveai==1.16.0
     # via -r requirements.txt
 mangrovemarkets==1.1.0
     # via -r requirements.txt
