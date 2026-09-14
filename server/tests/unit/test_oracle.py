@@ -74,11 +74,15 @@ _SIEVE_RAW_RESPONSE = {
 
 
 def _sieve_client(raw: dict[str, Any]) -> MagicMock:
-    """SDK client whose transport returns `raw` for POST /oracle/sieve/score."""
+    """SDK client whose typed sieve_score returns `raw` parsed by the real SDK model.
+
+    Parsing through SieveScoreResponse keeps the test honest about the installed
+    SDK: mangroveai <= 1.15 raises on a binary-only response here.
+    """
+    from mangrove_ai.models.oracle import SieveScoreResponse
+
     client = MagicMock()
-    client.oracle._core.request.return_value.json.return_value = raw
-    # mangroveai <= 1.15 raises on binary-only responses; the service must not use it.
-    client.oracle.sieve_score.side_effect = AssertionError("typed SDK sieve_score must not be called")
+    client.oracle.sieve_score.return_value = SieveScoreResponse.model_validate(raw)
     return client
 
 
@@ -124,10 +128,9 @@ class TestSieveScore:
         assert "oracle:v2.11.0" in result["code_version"]
         assert result["predictions"][0]["binary"]["p_trades"] == pytest.approx(0.9956)
         assert "four_class" not in result["predictions"][0]
-        method, path = client.oracle._core.request.call_args.args
-        assert (method, path) == ("POST", "/oracle/sieve/score")
-        sent = client.oracle._core.request.call_args.kwargs["json"]
-        assert sent["strategies"][0]["asset"] == "AVAX"
+        sent = client.oracle.sieve_score.call_args.args[0]
+        assert sent.strategies[0].asset == "AVAX"
+        client.oracle._core.request.assert_not_called()
 
     def test_legacy_four_class_passes_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
         legacy = json.loads(json.dumps(_SIEVE_RAW_RESPONSE))
@@ -149,7 +152,7 @@ class TestSieveScore:
 
         with pytest.raises(SdkError, match="validation failed"):
             svc_sieve_score(SieveScoreInput(strategies=[_strategy()] * 100))
-        client.oracle._core.request.assert_not_called()
+        client.oracle.sieve_score.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

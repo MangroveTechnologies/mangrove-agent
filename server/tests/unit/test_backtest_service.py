@@ -329,17 +329,25 @@ def test_list_backtests_wraps_sdk_failure(mock_sdk):
         list_backtests()
 
 
-def test_get_backtest_reads_raw_record(mock_sdk):
+def test_get_backtest_reads_stored_record_through_typed_sdk(mock_sdk):
+    """backtesting.get() returns the stored run record; parsing it with the real
+    SDK model requires mangroveai >= 1.16 (success is optional, derived from status)."""
+    from mangrove_ai.models.backtesting import BacktestResult
+
     from src.services.backtest_service import get_backtest
 
-    mock_sdk.backtesting._core.request.return_value.json.return_value = {
+    mock_sdk.backtesting.get.return_value = BacktestResult.model_validate({
         "id": "b1", "status": "running", "asset": "ETH",
         "config": {"name": "n", "entry": [{"timeframe": "4h"}, {"timeframe": "1h"}], "exit": []},
         "metrics": None, "trade_history": None, "start_date": "2026-01-01", "end_date": "2026-02-01",
-    }
+        "created_at": "2026-01-01T00:00:00+00:00",
+    })
     out = get_backtest("b1", include_trades=True)
+    mock_sdk.backtesting.get.assert_called_once_with("b1")
+    mock_sdk.backtesting._core.request.assert_not_called()
     assert out["status"] == "running"
     assert out["interval"] == "1h"
+    assert out["created_at"] == "2026-01-01T00:00:00+00:00"
     assert out["trade_count"] == 0 and out["trade_history"] == []
     assert "benchmark" not in out  # only completed runs are benchmarked
 
@@ -350,6 +358,6 @@ def test_get_backtest_not_found(mock_sdk):
     from src.services.backtest_service import get_backtest
     from src.shared.errors import BacktestNotFound
 
-    mock_sdk.backtesting._core.request.side_effect = NotFoundError(404, "Not Found", "Backtest not found", "INVALID_REQUEST")
+    mock_sdk.backtesting.get.side_effect = NotFoundError(404, "Not Found", "Backtest not found", "INVALID_REQUEST")
     with pytest.raises(BacktestNotFound):
         get_backtest("nope")

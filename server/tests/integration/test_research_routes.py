@@ -36,7 +36,9 @@ def sdk():
     )])
     start = (TODAY - timedelta(days=100)).isoformat()
     end = (TODAY - timedelta(days=10)).isoformat()
-    client.backtesting._core.request.return_value.json.return_value = {
+    from mangrove_ai.models.backtesting import BacktestResult
+
+    client.backtesting.get.return_value = BacktestResult.model_validate({
         "id": "b1", "asset": "ETH", "status": "completed", "strategy_id": None,
         "config": {"name": "eth momentum", "asset": "ETH",
                    "entry": [{"name": "rsi_cross_up", "timeframe": "1h"}],
@@ -47,7 +49,7 @@ def sdk():
         "error_message": None, "start_date": start, "end_date": end,
         "initial_balance": 10000.0, "execution_time_seconds": 9.5,
         "created_at": end, "completed_at": end,
-    }
+    })
     return client
 
 
@@ -161,7 +163,7 @@ def test_get_backtest_with_benchmark(client, sdk):
     assert "trade_history" not in body
     assert body["benchmark"]["available"] is True
     assert "strategy_minus_benchmark_pct" in body["benchmark"]
-    sdk.backtesting._core.request.assert_called_with("GET", "/backtests/b1")
+    sdk.backtesting.get.assert_called_with("b1")
 
     r = client.get("/api/v1/agent/backtests/b1", headers=_auth(),
                    params={"include_trades": True, "include_benchmark": False})

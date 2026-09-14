@@ -88,15 +88,9 @@ def sieve_score(payload: SieveScoreInput) -> dict[str, Any]:
 
     SIEVE is a go/no-go gate: each prediction carries ``binary``
     (``p_no_trades`` / ``p_trades``) -- will this strategy place trades, i.e.
-    is it worth a backtest. It does not predict performance.
-
-    NOTE -- SDK contract bug (mangroveai <= 1.15.0): Oracle retired the 4-class
-    outcome head (MangroveOracle #422) and no longer returns ``four_class``,
-    but the SDK still types it as required, so ``client.oracle.sieve_score``
-    raises a pydantic ValidationError on every live response. We still build
-    the SDK request model (client-side validation), then call the transport
-    directly -- the same workaround as ``validate_experiment`` -- and return
-    the server's JSON, until an SDK release makes ``four_class`` optional.
+    is it worth a backtest. It does not predict performance. The retired
+    4-class head (``four_class``) is absent from current responses; mangroveai
+    >= 1.16 types it as optional, and ``exclude_none`` keeps it out of the dict.
     """
     if not payload.strategies:
         raise SdkError("sieve_score requires at least one strategy")
@@ -106,26 +100,24 @@ def sieve_score(payload: SieveScoreInput) -> dict[str, Any]:
             f"got {len(payload.strategies)}"
         )
 
-    try:
-        body = SieveScoreRequest(strategies=payload.strategies).model_dump(exclude_none=True)
-    except ValueError as exc:
-        raise SdkError(f"sieve_score validation failed: {exc}") from exc
-
     client = mangrove_ai_client()
     try:
-        raw = client.oracle._core.request("POST", "/oracle/sieve/score", json=body).json()
+        result = client.oracle.sieve_score(SieveScoreRequest(strategies=payload.strategies))
+    except ValueError as exc:
+        # Client-side rejection (malformed strategy, both/neither input set).
+        raise SdkError(f"sieve_score validation failed: {exc}") from exc
     except APIError as exc:
         raise SdkError(f"sieve_score failed: {exc}") from exc
 
     _log.info(
         "sieve_score",
         extra={
-            "count": raw.get("count"),
-            "model_version": raw.get("model_version"),
-            "code_version": raw.get("code_version"),
+            "count": result.count,
+            "model_version": result.model_version,
+            "code_version": result.code_version,
         },
     )
-    return raw
+    return result.model_dump(exclude_none=True)
 
 
 def data_query(payload: DataQueryInput) -> dict[str, Any]:

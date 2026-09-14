@@ -726,16 +726,15 @@ def get_backtest(
 ) -> dict[str, Any]:
     """One stored run in full: status, window, rules, metrics and (optionally) trades.
 
-    Reads ``GET /backtests/{id}`` through the SDK transport directly: in
-    mangroveai <= 1.15 ``backtesting.get()`` types the response as
-    ``BacktestResult`` (which requires ``success``), but the endpoint returns
-    the stored run record, so the typed call raises on every successful 200.
+    ``backtesting.get()`` returns the stored run record (mangroveai >= 1.16 parses
+    it: ``success`` is derived from ``status``); unknown keys such as
+    ``created_at`` / ``completed_at`` are kept by the SDK model and read below.
     """
     if not backtest_id or not str(backtest_id).strip():
         raise BacktestNotFound("backtest_id is required.")
     client = mangrove_ai_client()
     try:
-        raw = client.backtesting._core.request("GET", f"/backtests/{backtest_id}").json()
+        raw = client.backtesting.get(backtest_id).model_dump()
     except NotFoundError as e:
         raise BacktestNotFound(
             f"No backtest {backtest_id} is visible to this API key.",
