@@ -633,3 +633,388 @@ class TestSignGuard:
         payload["data"] = "0x095ea7b3"  # selector only, no args
         with pytest.raises(SigningError, match="1inch|approve|guard|refuse"):
             sign(payload, _TEST_ADDRESS)
+
+
+# -- x402 payment signing guard ----------------------------------------------
+
+_USDC_BASE_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+
+_AUTHORIZATION_TYPES = {
+    "TransferWithAuthorization": [
+        {"name": "from", "type": "address"},
+        {"name": "to", "type": "address"},
+        {"name": "value", "type": "uint256"},
+        {"name": "validAfter", "type": "uint256"},
+        {"name": "validBefore", "type": "uint256"},
+        {"name": "nonce", "type": "bytes32"},
+    ]
+}
+
+# A plausible facilitator payee. Deliberately arbitrary: the guard does not
+# constrain the payee, and these tests assert that it still signs for one it
+# has never seen.
+_PAYEE = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"
+
+
+class TestX402SignGuard:
+    """Second signing door: EIP-3009 USDC payment authorizations only.
+
+    An x402 payment is EIP-712 typed data, not a transaction, so it never
+    reaches TestSignGuard's checks above. And it is not inert — the signature
+    IS the payment instrument, so every check must run before the key is
+    decrypted. These tests pin that ordering and the narrowness of the
+    allowlist.
+    """
+
+    def _make_wallet(self):
+        from src.services.wallet_manager import create_wallet
+        create_wallet(chain="evm", network="testnet", chain_id=84532)
+
+    def _payload(self, **overrides) -> dict:
+        """A valid Base Sepolia USDC authorization for $0.001 (1000 units)."""
+        payload = {
+            "domain": {
+                "name": "USDC",
+                "version": "2",
+                "chainId": 84532,
+                "verifyingContract": _USDC_BASE_SEPOLIA,
+            },
+            "types": {k: [dict(f) for f in v] for k, v in _AUTHORIZATION_TYPES.items()},
+            "primary_type": "TransferWithAuthorization",
+            "message": {
+                "from": _TEST_ADDRESS,
+                "to": _PAYEE,
+                "value": 1000,
+                "validAfter": 0,
+                "validBefore": 1_900_000_000,
+                "nonce": b"\x11" * 32,
+            },
+            "wallet_address": _TEST_ADDRESS,
+        }
+        payload.update(overrides)
+        return payload
+
+    # -- happy path ----------------------------------------------------------
+
+    def test_signs_valid_testnet_authorization(self, temp_db, stub_keyring, mock_sdk_create):
+        from src.services.wallet_manager import sign_x402_authorization
+        self._make_wallet()
+        sig = sign_x402_authorization(**self._payload())
+        assert isinstance(sig, bytes)
+        assert len(sig) == 65  # r, s, v
+
+    def test_signs_valid_mainnet_authorization(self, temp_db, stub_keyring, mock_sdk_create):
+        """Mainnet USDC on chain 8453 — the real-money path."""
+        from src.services.wallet_manager import sign_x402_authorization
+        self._make_wallet()
+        payload = self._payload()
+        payload["domain"] = {**payload["domain"], "chainId": 8453, "verifyingContract": _USDC_BASE}
+        sig = sign_x402_authorization(**payload)
+        assert len(sig) == 65
+
+    def test_signature_recovers_to_the_paying_wallet(self, temp_db, stub_keyring, mock_sdk_create):
+        """The produced signature must actually be valid EIP-712 over this
+        payload — USDC recovers the signer on-chain and requires it to equal
+        `from`, so a signature that recovers to anything else is worthless."""
+        from eth_account.messages import encode_typed_data
+
+        from src.services.wallet_manager import sign_x402_authorization
+        self._make_wallet()
+        payload = self._payload()
+        sig = sign_x402_authorization(**payload)
+
+        signable = encode_typed_data(
+            domain_data=payload["domain"],
+            message_types=payload["types"],
+            message_data=payload["message"],
+        )
+        assert Account.recover_message(signable, signature=sig) == _TEST_ADDRESS
+
+    def test_payee_is_deliberately_unconstrained(self, temp_db, stub_keyring, mock_sdk_create):
+        """An unknown counterparty is inherent to x402 — the receiving address
+        comes from the server's 402 envelope and may rotate. The guard makes it
+        auditable, not allowlisted."""
+        from src.services.wallet_manager import sign_x402_authorization
+        self._make_wallet()
+        payload = self._payload()
+        payload["message"] = {**payload["message"], "to": "0x" + "ab" * 20}
+        assert len(sign_x402_authorization(**payload)) == 65
+
+    # -- the key must not be touched until the payload is approved -----------
+
+    def test_rejects_before_decrypting_the_key(self, temp_db, stub_keyring, mock_sdk_create, monkeypatch):
+        """The whole point of the guard: a bad payload is refused BEFORE the
+        Fernet decrypt, so rejected payloads never touch plaintext."""
+        from src.services import wallet_manager
+        from src.shared.errors import SigningError
+        self._make_wallet()
+
+        def _explode(*_a, **_k):
+            raise AssertionError("_load_secret called before the guard approved the payload")
+
+        monkeypatch.setattr(wallet_manager, "_load_secret", _explode)
+
+        payload = self._payload(primary_type="Permit")
+        with pytest.raises(SigningError, match="primaryType"):
+            wallet_manager.sign_x402_authorization(**payload)
+
+    @pytest.mark.parametrize("part", ["domain", "types", "message"])
+    def test_rejects_non_mapping_parts(self, temp_db, stub_keyring, mock_sdk_create, part):
+        """These are parsed from a remote server's 402 envelope, so a malformed
+        one must refuse cleanly rather than raise AttributeError."""
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        with pytest.raises(SigningError, match="must be a mapping"):
+            sign_x402_authorization(**self._payload(**{part: "not-a-dict"}))
+
+    # -- struct identity -----------------------------------------------------
+
+    def test_rejects_non_transfer_primary_type(self, temp_db, stub_keyring, mock_sdk_create):
+        """EIP-2612 Permit is a perfectly normal thing to be asked to sign, and
+        the agent still refuses — one struct, nothing else."""
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        with pytest.raises(SigningError, match="primaryType"):
+            sign_x402_authorization(**self._payload(primary_type="Permit"))
+
+    def test_rejects_undeclared_primary_type(self, temp_db, stub_keyring, mock_sdk_create):
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        with pytest.raises(SigningError, match="no 'TransferWithAuthorization' struct"):
+            sign_x402_authorization(**self._payload(types={}))
+
+    def test_rejects_tampered_struct_definition(self, temp_db, stub_keyring, mock_sdk_create):
+        """Right name, wrong definition. EIP-712 hashes the type definition, so
+        this would sign a different struct than the guard believes it approved."""
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["types"]["TransferWithAuthorization"][2] = {"name": "value", "type": "uint128"}
+        with pytest.raises(SigningError, match="canonical EIP-3009"):
+            sign_x402_authorization(**payload)
+
+    def test_rejects_reordered_struct_fields(self, temp_db, stub_keyring, mock_sdk_create):
+        """Field order is part of the EIP-712 typehash."""
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        fields = payload["types"]["TransferWithAuthorization"]
+        fields[0], fields[1] = fields[1], fields[0]
+        with pytest.raises(SigningError, match="canonical EIP-3009"):
+            sign_x402_authorization(**payload)
+
+    def test_rejects_extra_nested_type(self, temp_db, stub_keyring, mock_sdk_create):
+        """Extra struct definitions can smuggle nested data into the hash."""
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["types"]["Delegation"] = [{"name": "delegate", "type": "address"}]
+        with pytest.raises(SigningError, match="unexpected type definitions"):
+            sign_x402_authorization(**payload)
+
+    def test_rejects_junk_entry_appended_to_field_list(self, temp_db, stub_keyring, mock_sdk_create):
+        """The six canonical fields PLUS a non-mapping entry. Filtering
+        non-mappings out instead of refusing would normalize this back to
+        exactly the canonical tuple — validating a struct that is not the one
+        handed to the signer."""
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["types"]["TransferWithAuthorization"].append("junk")
+        with pytest.raises(SigningError, match="not a list of field mappings"):
+            sign_x402_authorization(**payload)
+
+    def test_rejects_non_list_type_definition(self, temp_db, stub_keyring, mock_sdk_create):
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["types"]["TransferWithAuthorization"] = {"from": "address"}
+        with pytest.raises(SigningError, match="not a list of field mappings"):
+            sign_x402_authorization(**payload)
+
+    # -- token / chain binding -----------------------------------------------
+
+    def test_rejects_mainnet_usdc_in_a_testnet_payload(self, temp_db, stub_keyring, mock_sdk_create):
+        """The contract is bound TO the chain. Each half is valid alone; the
+        pairing is the check — this is the mismatch that would let a mainnet
+        signature be produced from a testnet-looking envelope."""
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["domain"] = {**payload["domain"], "verifyingContract": _USDC_BASE}
+        with pytest.raises(SigningError, match="not USDC on chain 84532"):
+            sign_x402_authorization(**payload)
+
+    def test_rejects_unknown_token_contract(self, temp_db, stub_keyring, mock_sdk_create):
+        """A forged envelope pointing at an attacker's token contract."""
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["domain"] = {**payload["domain"], "verifyingContract": "0x" + "ee" * 20}
+        with pytest.raises(SigningError, match="not USDC"):
+            sign_x402_authorization(**payload)
+
+    def test_rejects_unsupported_chain(self, temp_db, stub_keyring, mock_sdk_create):
+        """Ethereum mainnet is not a payment chain for this agent."""
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["domain"] = {**payload["domain"], "chainId": 1}
+        with pytest.raises(SigningError, match="not a supported payment chain"):
+            sign_x402_authorization(**payload)
+
+    def test_rejects_missing_chain_id(self, temp_db, stub_keyring, mock_sdk_create):
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["domain"] = {k: v for k, v in payload["domain"].items() if k != "chainId"}
+        with pytest.raises(SigningError, match="chainId"):
+            sign_x402_authorization(**payload)
+
+    def test_rejects_extra_domain_field(self, temp_db, stub_keyring, mock_sdk_create):
+        """eth_account builds the EIP712Domain type from whichever keys the
+        domain carries, so a stray `salt` changes the domain separator — the
+        signature would cover a different structure than the guard checked."""
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["domain"] = {**payload["domain"], "salt": "0x" + "00" * 32}
+        with pytest.raises(SigningError, match="unexpected domain fields"):
+            sign_x402_authorization(**payload)
+
+    def test_rejects_missing_verifying_contract(self, temp_db, stub_keyring, mock_sdk_create):
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["domain"] = {k: v for k, v in payload["domain"].items() if k != "verifyingContract"}
+        with pytest.raises(SigningError, match="verifyingContract"):
+            sign_x402_authorization(**payload)
+
+    # -- message well-formedness ---------------------------------------------
+
+    def test_rejects_missing_message_field(self, temp_db, stub_keyring, mock_sdk_create):
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        del payload["message"]["validBefore"]
+        with pytest.raises(SigningError, match="Missing"):
+            sign_x402_authorization(**payload)
+
+    def test_rejects_extra_message_field(self, temp_db, stub_keyring, mock_sdk_create):
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["message"]["extra"] = 1
+        with pytest.raises(SigningError, match="unexpected"):
+            sign_x402_authorization(**payload)
+
+    def test_rejects_payer_that_is_not_the_signing_wallet(self, temp_db, stub_keyring, mock_sdk_create):
+        """Under EIP-3009 the payer and the signer are the same account —
+        one wallet's key must never author another wallet's debit."""
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["message"] = {**payload["message"], "from": "0x" + "cd" * 20}
+        with pytest.raises(SigningError, match="not the signing wallet"):
+            sign_x402_authorization(**payload)
+
+    def test_accepts_payer_in_any_case(self, temp_db, stub_keyring, mock_sdk_create):
+        """Checksummed vs lowercase is not a mismatch."""
+        from src.services.wallet_manager import sign_x402_authorization
+        self._make_wallet()
+        payload = self._payload()
+        payload["message"] = {**payload["message"], "from": _TEST_ADDRESS.lower()}
+        assert len(sign_x402_authorization(**payload)) == 65
+
+    def test_rejects_malformed_payee(self, temp_db, stub_keyring, mock_sdk_create):
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["message"] = {**payload["message"], "to": "not-an-address"}
+        with pytest.raises(SigningError, match="message.to is not an"):
+            sign_x402_authorization(**payload)
+
+    @pytest.mark.parametrize("bad_value", ["1000", 10.5, None, True])
+    def test_rejects_non_integer_value(self, temp_db, stub_keyring, mock_sdk_create, bad_value):
+        """A stringified or floating amount is a malformed envelope, not
+        something to coerce. `True` is included because bool is an int
+        subclass in Python and would otherwise sign as 1."""
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["message"] = {**payload["message"], "value": bad_value}
+        with pytest.raises(SigningError, match="`value` must be an integer"):
+            sign_x402_authorization(**payload)
+
+    def test_rejects_value_above_uint256(self, temp_db, stub_keyring, mock_sdk_create):
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["message"] = {**payload["message"], "value": 2**256}
+        with pytest.raises(SigningError, match="out of uint256 range"):
+            sign_x402_authorization(**payload)
+
+    @pytest.mark.parametrize("bad_nonce", [b"\x11" * 31, "0x11", "not-hex", 12345, None])
+    def test_rejects_malformed_nonce(self, temp_db, stub_keyring, mock_sdk_create, bad_nonce):
+        """The nonce is what makes an authorization single-use."""
+        from src.services.wallet_manager import sign_x402_authorization
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        payload = self._payload()
+        payload["message"] = {**payload["message"], "nonce": bad_nonce}
+        with pytest.raises(SigningError, match="nonce is not 32 bytes"):
+            sign_x402_authorization(**payload)
+
+    def test_accepts_hex_string_nonce(self, temp_db, stub_keyring, mock_sdk_create):
+        """x402 hands bytes, but a 0x-prefixed 32-byte hex string is the same
+        nonce and must not be rejected on representation alone."""
+        from src.services.wallet_manager import sign_x402_authorization
+        self._make_wallet()
+        payload = self._payload()
+        payload["message"] = {**payload["message"], "nonce": "0x" + "11" * 32}
+        assert len(sign_x402_authorization(**payload)) == 65
+
+    # -- the two doors stay separate -----------------------------------------
+
+    def test_does_not_widen_the_1inch_allowlist(self, temp_db, stub_keyring, mock_sdk_create):
+        """Regression: adding the payment door must not loosen the swap door.
+        A USDC transfer tx is still refused by sign(), even though USDC is now
+        a known contract to the x402 guard."""
+        from src.services.wallet_manager import sign
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        tx = {
+            "nonce": 0, "gas": 21000,
+            "maxFeePerGas": 2_000_000_000, "maxPriorityFeePerGas": 1_000_000_000,
+            "to": _USDC_BASE, "value": 0, "data": "0x", "chainId": 8453,
+        }
+        with pytest.raises(SigningError, match="1inch|guard|refuse"):
+            sign(tx, _TEST_ADDRESS)
+
+    def test_sign_message_remains_disabled(self, temp_db, stub_keyring, mock_sdk_create):
+        """The narrow typed helper is not a reopening of personal_sign."""
+        from src.services.wallet_manager import sign_message
+        from src.shared.errors import SigningError
+        self._make_wallet()
+        with pytest.raises(SigningError, match="disabled"):
+            sign_message("gm", _TEST_ADDRESS)

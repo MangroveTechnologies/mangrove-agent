@@ -11,6 +11,8 @@ Responsibilities:
   and gets back a vault_token, then calls import_wallet with that id.
 - List stored wallets (addresses + metadata only; never returns secrets).
 - Sign arbitrary EVM transactions locally. The SDK never sees the key.
+- Sign x402 payment authorizations (EIP-3009 TransferWithAuthorization) locally,
+  behind their own narrow guard. Separate door from sign(); see below.
 - Gate live trading on explicit user backup confirmation (backup_confirmed_at).
   Paper mode is unaffected.
 
@@ -148,6 +150,288 @@ def _validate_sign_target(normalized_tx: dict) -> None:
         "no arbitrary transfers, no non-1inch DEX routing, no EIP-7702 delegation.",
         suggestion=f"Known 1inch routers: {sorted(_ONEINCH_ROUTERS)}. If the SDK legitimately routes through a different aggregator, the guard's allowlist must be explicitly expanded with review.",
     )
+
+
+# ---------------------------------------------------------------------------
+# x402 payment signing guard — a SECOND narrow door, NOT a widening of the one
+# above.
+#
+# An x402 payment is EIP-712 typed data (EIP-3009 TransferWithAuthorization),
+# not a transaction dict. It has no top-level `to`, no tx `type` and no
+# authorizationList, so _validate_sign_target can neither inspect it nor
+# meaningfully refuse it — it is a different shape entirely.
+#
+# It is also NOT inert. The signature IS the payment instrument: whoever holds
+# a signed authorization can submit it on-chain and pull `value` USDC from
+# `from`, until validBefore expires or the nonce is spent. There is no second
+# confirmation step where the user can change their mind. Signing here IS
+# spending, so every check below runs BEFORE the key is decrypted, exactly as
+# in sign().
+#
+# What this guard deliberately does NOT constrain: the payee. Paying an
+# arbitrary counterparty is inherent to x402 — the receiving address is chosen
+# by the server in its 402 envelope and may rotate — so there is no allowlist
+# to check it against. It is made auditable instead: payee and value are
+# logged before the key is touched. Aggregate spend limits are a separate
+# concern and do not belong in a signing guard.
+# ---------------------------------------------------------------------------
+
+_X402_PRIMARY_TYPE = "TransferWithAuthorization"
+
+# Canonical USDC deployments, keyed by chain id. Unlike the 1inch routers
+# (one address across chains via deterministic deploy), USDC is deployed
+# per chain, so this guard binds contract TO chain: a Base-mainnet USDC
+# address inside a Base-Sepolia payload is refused, and vice versa. That
+# pairing is the check — neither half means anything alone.
+#
+# Hardcoded on purpose, matching _ONEINCH_ROUTERS. X402_USDC_CONTRACT exists
+# in config and is deliberately NOT read here: a guard whose allowlist comes
+# from config can be widened by editing config, which defeats the point of
+# having a guard. Adding a chain is a reviewed source change.
+_X402_USDC_BY_CHAIN_ID: dict[int, str] = {
+    8453: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",   # Base mainnet
+    84532: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",  # Base Sepolia
+}
+
+# The canonical EIP-3009 struct, pinned field-for-field and in order.
+#
+# Checking primaryType alone is not enough: EIP-712 derives its typehash from
+# the type DEFINITION, so a payload naming "TransferWithAuthorization" while
+# defining different fields signs a different struct than the one we think we
+# are approving. Pinning the definition means the bytes we sign are the bytes
+# we validated.
+_X402_AUTHORIZATION_FIELDS: tuple[tuple[str, str], ...] = (
+    ("from", "address"),
+    ("to", "address"),
+    ("value", "uint256"),
+    ("validAfter", "uint256"),
+    ("validBefore", "uint256"),
+    ("nonce", "bytes32"),
+)
+
+# The EIP712Domain fields a USDC payment carries. eth_account builds the
+# domain separator from whatever keys `domain` holds, so anything outside this
+# set changes the signed hash.
+_X402_DOMAIN_KEYS = frozenset({"name", "version", "chainId", "verifyingContract"})
+
+# USDC is 6-decimal on every chain in _X402_USDC_BY_CHAIN_ID. Only used to put
+# a human-readable amount in the audit log, and only safe to apply because the
+# guard has already pinned the token contract by then.
+_USDC_DECIMALS = 6
+
+_UINT256_MAX = 2**256 - 1
+
+
+def _is_hex_address(value: object) -> bool:
+    if not isinstance(value, str) or not value.startswith("0x") or len(value) != 42:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _as_uint256(value: object, field: str) -> int:
+    """Coerce an EIP-712 uint256 field, refusing anything out of range.
+
+    bool is excluded explicitly — it is an int subclass in Python, and a
+    stray True would otherwise sign as 1.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SigningError(
+            f"Refused to sign x402 authorization: `{field}` must be an integer, "
+            f"got {type(value).__name__}.",
+            suggestion="The payment envelope is malformed. Treat a non-integer amount or timestamp as a bug or a tampered 402 response — do not coerce it.",
+        )
+    if not 0 <= value <= _UINT256_MAX:
+        raise SigningError(
+            f"Refused to sign x402 authorization: `{field}` is out of uint256 range.",
+            suggestion="The payment envelope is malformed. Do not sign a payload whose amount or timestamps cannot be represented on-chain.",
+        )
+    return value
+
+
+def _validate_x402_authorization(
+    domain: dict,
+    types: dict,
+    primary_type: str,
+    message: dict,
+    wallet_address: str,
+) -> tuple[str, int, int]:
+    """Refuse to sign anything that is not a USDC TransferWithAuthorization.
+
+    Raises SigningError on any mismatch. Must run BEFORE the private key is
+    decrypted so rejected payloads never touch plaintext.
+
+    Returns (payee, value, chain_id) for the audit log — read only after the
+    payload has been fully validated, so nothing unvalidated is ever logged
+    as though it were approved.
+    """
+    # -- 0. Shape. These three come from parsing a remote server's 402
+    # envelope, so they are attacker-influenced input: a non-mapping must
+    # produce a clean refusal, not an AttributeError from the checks below.
+    for label, part in (("domain", domain), ("types", types), ("message", message)):
+        if not isinstance(part, dict):
+            raise SigningError(
+                f"Refused to sign x402 authorization: `{label}` must be a mapping, "
+                f"got {type(part).__name__}.",
+                suggestion="The payment envelope is malformed — it did not decode to EIP-712 typed data. Treat as a tampered or non-x402 402 response.",
+            )
+
+    # -- 1. The struct must be the one we mean, by name AND by definition.
+    if primary_type != _X402_PRIMARY_TYPE:
+        raise SigningError(
+            f"Refused to sign x402 authorization: primaryType is {primary_type!r}, "
+            f"and the guard permits only {_X402_PRIMARY_TYPE!r}. The agent signs "
+            "USDC payment authorizations and nothing else — no permits, no "
+            "delegations, no arbitrary typed data.",
+            suggestion="If a future x402 scheme legitimately needs a different struct, add a separate guarded entry point for it — do not widen this one.",
+        )
+
+    declared = types.get(primary_type)
+    if declared is None:
+        raise SigningError(
+            f"Refused to sign x402 authorization: types define no {primary_type!r} struct.",
+            suggestion="The payment envelope is malformed — the primary type must be defined in `types`.",
+        )
+    # Every entry must be a field mapping. Skipping non-mappings instead would
+    # let six canonical fields plus one junk entry normalize to exactly the
+    # canonical tuple — validating a struct that is not the one handed to the
+    # signer.
+    if not isinstance(declared, list) or not all(isinstance(f, dict) for f in declared):
+        raise SigningError(
+            f"Refused to sign x402 authorization: the {primary_type!r} type "
+            "definition is not a list of field mappings.",
+            suggestion="The payment envelope is malformed — EIP-712 type definitions are lists of {name, type} mappings.",
+        )
+    normalized_fields = tuple((f.get("name"), f.get("type")) for f in declared)
+    if normalized_fields != _X402_AUTHORIZATION_FIELDS:
+        raise SigningError(
+            "Refused to sign x402 authorization: the TransferWithAuthorization "
+            "struct does not match the canonical EIP-3009 definition. EIP-712 "
+            "hashes the type definition, so a mismatched definition signs a "
+            "different struct than the one the guard approved.",
+            suggestion=f"Expected fields, in order: {list(_X402_AUTHORIZATION_FIELDS)}. A mismatch means a tampered envelope or an SDK bug — investigate, do not bypass.",
+        )
+    extra_types = set(types) - {primary_type, "EIP712Domain"}
+    if extra_types:
+        raise SigningError(
+            f"Refused to sign x402 authorization: unexpected type definitions "
+            f"{sorted(extra_types)}. A flat EIP-3009 authorization declares no "
+            "nested structs.",
+            suggestion="Extra type definitions can smuggle nested data into the signed hash. Treat this as a tampered envelope.",
+        )
+
+    # -- 2. The token must be real USDC, on the chain the payload claims.
+    # eth_account derives the EIP712Domain type from whichever keys `domain`
+    # actually carries, so an unexpected key (a `salt`, say) silently changes
+    # the domain separator — signing a different structure than the one
+    # checked below. Absent keys are not rejected: a deployment that omits
+    # `version` yields a signature USDC will not accept, which is a wasted
+    # signature rather than a loss, and hard-requiring them risks refusing a
+    # legitimate envelope on a quirk.
+    unexpected_domain_keys = set(domain) - _X402_DOMAIN_KEYS
+    if unexpected_domain_keys:
+        raise SigningError(
+            f"Refused to sign x402 authorization: unexpected domain fields "
+            f"{sorted(unexpected_domain_keys)}. The EIP-712 domain separator is "
+            "built from these keys, so an unexpected one changes what is signed.",
+            suggestion=f"A USDC payment domain carries only {sorted(_X402_DOMAIN_KEYS)}. Treat extra fields as a tampered envelope.",
+        )
+
+    # Int only, deliberately: a stringified chainId would be validated here and
+    # then handed to eth_account verbatim, so what we checked and what we sign
+    # could diverge. That divergence is the exact failure class this guard
+    # exists to prevent, and no caller needs the leniency.
+    chain_id = domain.get("chainId")
+    if not isinstance(chain_id, int) or isinstance(chain_id, bool):
+        raise SigningError(
+            f"Refused to sign x402 authorization: domain.chainId is missing or "
+            f"not an integer (got {chain_id!r}).",
+            suggestion="The payment envelope is malformed. Never sign a payload that does not name the chain it applies to.",
+        )
+
+    expected_usdc = _X402_USDC_BY_CHAIN_ID.get(chain_id)
+    if expected_usdc is None:
+        raise SigningError(
+            f"Refused to sign x402 authorization: chainId {chain_id} is not a "
+            "supported payment chain.",
+            suggestion=f"Supported chains: {sorted(_X402_USDC_BY_CHAIN_ID)} (Base mainnet, Base Sepolia). Adding one is a reviewed source change to _X402_USDC_BY_CHAIN_ID.",
+        )
+
+    verifying_contract = domain.get("verifyingContract")
+    if not _is_hex_address(verifying_contract):
+        raise SigningError(
+            "Refused to sign x402 authorization: domain.verifyingContract is "
+            f"missing or not an address (got {verifying_contract!r}).",
+            suggestion="The payment envelope is malformed — the verifying contract is what binds the signature to a specific token.",
+        )
+    if verifying_contract.lower() != expected_usdc:
+        raise SigningError(
+            f"Refused to sign x402 authorization: verifyingContract "
+            f"{verifying_contract} is not USDC on chain {chain_id}. The agent "
+            "pays in USDC only — signing against an unknown token contract is "
+            "how a forged envelope drains an arbitrary balance.",
+            suggestion=f"Expected {expected_usdc} for chain {chain_id}. If the payment is genuinely denominated in another asset, that is a reviewed change, not a bypass.",
+        )
+
+    # -- 3. The message must be exactly the canonical fields, well-formed.
+    expected_keys = {name for name, _ in _X402_AUTHORIZATION_FIELDS}
+    actual_keys = set(message)
+    if actual_keys != expected_keys:
+        raise SigningError(
+            "Refused to sign x402 authorization: message fields do not match the "
+            f"EIP-3009 authorization. Missing: {sorted(expected_keys - actual_keys)}; "
+            f"unexpected: {sorted(actual_keys - expected_keys)}.",
+            suggestion="The payment envelope is malformed. Do not sign a partially-populated or padded authorization.",
+        )
+
+    payer = message["from"]
+    payee = message["to"]
+    for label, addr in (("from", payer), ("to", payee)):
+        if not _is_hex_address(addr):
+            raise SigningError(
+                f"Refused to sign x402 authorization: message.{label} is not an "
+                f"address (got {addr!r}).",
+                suggestion="The payment envelope is malformed. Both the payer and the payee must be well-formed addresses before anything is signed.",
+            )
+
+    # The signer IS the payer under EIP-3009 — USDC recovers the signature and
+    # requires it to match `from`. A mismatch is never a working payment, so
+    # refusing it here turns a silent on-chain rejection into a clear local
+    # error, and stops one wallet's key being used to author another's debit.
+    if payer.lower() != wallet_address.lower():
+        raise SigningError(
+            f"Refused to sign x402 authorization: message.from ({payer}) is not "
+            f"the signing wallet ({wallet_address}). Under EIP-3009 the payer "
+            "and the signer must be the same account.",
+            suggestion="Check the code path that built this payload — the payer address must come from the same wallet whose key is being asked to sign.",
+        )
+
+    value = _as_uint256(message["value"], "value")
+    _as_uint256(message["validAfter"], "validAfter")
+    _as_uint256(message["validBefore"], "validBefore")
+
+    nonce = message["nonce"]
+    if isinstance(nonce, str):
+        stripped = nonce[2:] if nonce.startswith("0x") else nonce
+        try:
+            nonce_bytes = bytes.fromhex(stripped)
+        except ValueError:
+            nonce_bytes = b""
+    elif isinstance(nonce, (bytes, bytearray)):
+        nonce_bytes = bytes(nonce)
+    else:
+        nonce_bytes = b""
+    if len(nonce_bytes) != 32:
+        raise SigningError(
+            "Refused to sign x402 authorization: message.nonce is not 32 bytes. "
+            "The nonce is what makes an authorization single-use.",
+            suggestion="Each payment attempt must carry a fresh 32-byte nonce — a reused or malformed nonce is burned server-side and the retry will fail.",
+        )
+
+    return payee, value, chain_id
 
 
 # ---------------------------------------------------------------------------
@@ -705,6 +989,19 @@ def _normalize_payload(payload: dict, chain_id: int | None = None) -> dict:
     return out
 
 
+def _account_from_secret(secret: str):
+    """Derive the signing account from a decrypted secret (key or mnemonic).
+
+    Callers own the plaintext's lifetime: decrypt into a local, call this,
+    discard. Shared by sign() and sign_x402_authorization() so the
+    key-vs-mnemonic branch exists once.
+    """
+    if secret.startswith("0x") or len(secret) == 64:
+        return Account.from_key(secret)
+    Account.enable_unaudited_hdwallet_features()
+    return Account.from_mnemonic(secret)
+
+
 def sign(unsigned_tx: dict, wallet_address: str, chain_id: int | None = None) -> str:
     """Sign an EVM transaction with the wallet's key.
 
@@ -723,12 +1020,7 @@ def sign(unsigned_tx: dict, wallet_address: str, chain_id: int | None = None) ->
 
     secret = _load_secret(wallet_address)
     try:
-        if secret.startswith("0x") or len(secret) == 64:
-            account = Account.from_key(secret)
-        else:
-            Account.enable_unaudited_hdwallet_features()
-            account = Account.from_mnemonic(secret)
-
+        account = _account_from_secret(secret)
         signed: SignedTransaction = account.sign_transaction(normalized)
     except Exception as e:  # noqa: BLE001
         raise SigningError(
@@ -748,6 +1040,86 @@ def sign(unsigned_tx: dict, wallet_address: str, chain_id: int | None = None) ->
     raw = signed.rawTransaction if hasattr(signed, "rawTransaction") else signed.raw_transaction
     raw_hex = raw.hex()
     return raw_hex if raw_hex.startswith("0x") else "0x" + raw_hex
+
+
+def sign_x402_authorization(
+    *,
+    domain: dict,
+    types: dict[str, list[dict[str, str]]],
+    primary_type: str,
+    message: dict,
+    wallet_address: str,
+) -> bytes:
+    """Sign an EIP-3009 TransferWithAuthorization for an x402 payment.
+
+    This is the narrow typed helper that sign_message's docstring calls for:
+    a specific payload shape with its own guard, NOT a reopening of general
+    message signing. Anything that is not a USDC TransferWithAuthorization on
+    a known chain is refused by _validate_x402_authorization before the key is
+    decrypted.
+
+    Arguments mirror the x402 ClientEvmSigner.sign_typed_data protocol
+    (domain / types / primary_type / message) so the payer service can adapt
+    this to the SDK without repacking, and returns the 65-byte ECDSA
+    signature that protocol expects.
+
+    NOTE: like sign(), this does NOT gate on backup confirmation — the gate
+    lives one layer up. An x402 payment moves real funds, so the caller MUST
+    call require_backup_confirmed(wallet_address) first, on the same rule as
+    execute_swap and live strategy evaluation. Nor does it enforce any spend
+    limit: a signing guard validates one payload's shape and cannot see an
+    aggregate. Per-payment authorization and portfolio-wide spend control are
+    separate concerns, deliberately kept in separate layers.
+    """
+    payee, value, chain_id = _validate_x402_authorization(
+        domain, types, primary_type, message, wallet_address
+    )
+
+    # Log the approved destination and amount BEFORE the key is decrypted, so
+    # the audit trail records what the guard accepted even if signing then
+    # fails. The payee is uncapped by design, so it must at minimum always be
+    # visible. Both the raw units and the USD amount are recorded: `value` is
+    # what is actually signed, `value_usd` is what a human reads during an
+    # incident without having to remember USDC's decimals.
+    _log.info(
+        "wallet.x402_authorization_approved",
+        wallet_address=wallet_address,
+        chain_id=chain_id,
+        verifying_contract=domain.get("verifyingContract"),
+        payee=payee,
+        value=value,
+        value_usd=value / 10**_USDC_DECIMALS,
+    )
+
+    # eth_account derives EIP712Domain from domain_data and rejects it being
+    # declared in message_types, so drop it if the caller included it.
+    signing_types = {k: v for k, v in types.items() if k != "EIP712Domain"}
+
+    secret = _load_secret(wallet_address)
+    try:
+        account = _account_from_secret(secret)
+        signed = account.sign_typed_data(
+            domain_data=domain,
+            message_types=signing_types,
+            message_data=message,
+        )
+    except Exception as e:  # noqa: BLE001
+        raise SigningError(
+            f"Failed to sign x402 authorization for {wallet_address}: {e}",
+            suggestion="The payload passed the guard, so this is a signing-layer failure — check that the wallet's stored secret is intact and that domain/message field types match the EIP-3009 definition.",
+        ) from e
+    finally:
+        del secret
+
+    _log.info(
+        "wallet.signed_x402_authorization",
+        wallet_address=wallet_address,
+        chain_id=chain_id,
+        payee=payee,
+        value=value,
+        value_usd=value / 10**_USDC_DECIMALS,
+    )
+    return bytes(signed.signature)
 
 
 def sign_message(message: str | bytes, wallet_address: str) -> str:
