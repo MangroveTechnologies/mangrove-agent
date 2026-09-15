@@ -167,6 +167,24 @@ class SigningError(AgentError):
     http_status = 500
 
 
+class X402PaymentError(AgentError):
+    """An outbound x402 payment could not be completed.
+
+    Covers the payment protocol itself — no matching requirements, a
+    transport failure, a 402 that never cleared. It deliberately does NOT
+    cover a refused payload: when the wallet signing guard rejects an
+    envelope the original SigningError is re-raised, so an attempted
+    forgery stays legible as SIGNING_ERROR rather than being flattened
+    into a generic payment failure.
+
+    502, not 500: the failure is in the exchange with an upstream resource
+    server, matching SdkError.
+    """
+
+    code = "X402_PAYMENT_ERROR"
+    http_status = 502
+
+
 class EvaluationError(AgentError):
     code = "EVALUATION_ERROR"
     http_status = 500

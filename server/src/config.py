@@ -56,6 +56,13 @@ class _Config:
         # Defaulted (not required) so existing configs without the key still boot.
         self.LOCAL_AGENT_URL = self._raw_config.get("LOCAL_AGENT_URL") or "http://localhost:9080"
 
+        # X402_PAYER_WALLET — the wallet outbound x402 payments are signed
+        # with. Optional and EMPTY by default on purpose: no wallet is chosen
+        # on the user's behalf, so a caller must either pass an address
+        # explicitly or opt in here. Defaulted (not required) so configs
+        # written before this key still boot, same as LOCAL_AGENT_URL above.
+        self.X402_PAYER_WALLET = self._raw_config.get("X402_PAYER_WALLET") or ""
+
     def _anchor_state_paths(self) -> None:
         """Resolve relative DB_PATH / MASTER_KEY_PATH against MANGROVE_AGENT_HOME.
 

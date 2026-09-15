@@ -31,6 +31,11 @@ def get_hello_mangrove_price() -> str:
     return str(_get_config().X402_HELLO_MANGROVE_PRICE)
 
 
+def get_payer_wallet() -> str:
+    """Address outbound payments are signed with. Empty when unset."""
+    return str(_get_config().X402_PAYER_WALLET or "")
+
+
 def get_cdp_api_key_id() -> str:
     return str(_get_config().X402_CDP_API_KEY_ID or "")
 

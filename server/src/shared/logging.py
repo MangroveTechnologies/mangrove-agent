@@ -33,6 +33,11 @@ subagents + log-tailers can grep for them consistently):
     # sdk
     "sdk.call.started", "sdk.call.completed", "sdk.call.errored"
 
+    # x402 payments (outbound — money leaving this agent)
+    "x402.payment.started", "x402.payment.settled", "x402.payment.unsettled",
+    "x402.payment.refused", "x402.payment.errored",
+    "x402.payment.payer_mismatch", "x402.settlement.undecodable"
+
 Pass the event name as the first positional arg to the logger method;
 attach any structured fields as kwargs:
 
