@@ -98,6 +98,7 @@ def register(server: FastMCP):
     _register_logs(server)
     _register_kb(server)
     _register_oracle(server)
+    _register_x402_spend(server)
     _register_hello_mangrove(server)
 
 
@@ -3536,6 +3537,114 @@ def _run_bounded(fn, timeout_s: float) -> Any:
         # Don't wait on the worker — if it's still blocked on the network we
         # must let registration (and the port bind) proceed regardless.
         executor.shutdown(wait=False)
+
+
+# ---------------------------------------------------------------------------
+# x402 spend budget (auth)
+# ---------------------------------------------------------------------------
+
+
+def _register_x402_spend(server: FastMCP) -> None:
+    """The budget the agent pays MangroveAI out of, and the top-up.
+
+    These are MCP tools and not just REST routes for a specific reason. The
+    budget does not refill itself -- a human has to authorize more -- and if
+    the only way to give that consent were a terminal, the control would fire
+    hardest exactly where the risk it guards against does not exist: in a
+    live conversation, with the user right there. A cron tick at 3am still
+    finds nobody to ask and stays stopped, which is the case that matters.
+    """
+
+    @server.tool()
+    async def x402_spend_status(limit: int = 20, api_key: str = "") -> str:
+        """Outbound x402 budget: spent, remaining, and what the money went on.
+
+        Call this when a payment is refused for budget reasons, BEFORE asking
+        the user to authorize more — show them the ledger first so the answer
+        is informed. Also worth a look when the user asks why data calls
+        stopped working, or what the agent has been spending.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            from src.api.routes.x402_spend import (
+                get_spend_status as status_route,
+            )
+            from src.api.routes.x402_spend import (
+                list_spend_payments as payments_route,
+            )
+            status = await status_route()
+            payments = await payments_route(limit=limit, period_id=None)
+            # Nested, not merged. Flattening two independently-evolving
+            # payloads into one namespace works until the day a field name
+            # appears in both, at which point one silently wins and no test
+            # notices.
+            return json.dumps({"budget": status, **payments})
+        except AgentError as e:
+            return _handle_agent_error(e)
+
+    register_tool(ToolEntry(
+        name="x402_spend_status",
+        description=(
+            "Outbound x402 budget (spent / remaining / exhausted) plus the "
+            "recent payment ledger. Read this before asking the user to "
+            "authorize more spending."
+        ),
+        access="auth",
+        parameters=[
+            ToolParam(name="limit", type="integer", required=False,
+                      description="Ledger rows to include, newest first. Default 20."),
+            _APIKEY,
+        ],
+    ))
+
+    @server.tool()
+    async def x402_spend_reset(
+        confirm: bool = False, cap_usd: float | None = None, api_key: str = "",
+    ) -> str:
+        """Authorize a fresh x402 budget after the user has agreed to it.
+
+        THE USER'S CONSENT IS THE CONTROL — this tool records it, it does not
+        substitute for it. Never call it to get past your own refused
+        payment. The sequence is: show them `x402_spend_status`, tell them
+        what is left to do and roughly what it will cost, ask, and call this
+        only once they have said yes.
+
+        `cap_usd` is the budget THEY chose; omit it to start the same size
+        again. Past payments stay on the ledger under their old period.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        if not confirm:
+            return _err(
+                "CONFIRMATION_REQUIRED",
+                "Authorizing more x402 spending needs the user's explicit agreement.",
+                "Show the user x402_spend_status, ask whether to continue and at "
+                "what budget, then call again with confirm=true.",
+            )
+        try:
+            from src.api.routes.x402_spend import SpendResetRequest
+            from src.api.routes.x402_spend import reset_spend_cap as route
+            return json.dumps(await route(SpendResetRequest(cap_usd=cap_usd)))
+        except AgentError as e:
+            return _handle_agent_error(e)
+
+    register_tool(ToolEntry(
+        name="x402_spend_reset",
+        description=(
+            "Start a fresh x402 budget period after the USER has agreed to "
+            "it. Requires confirm=true. Optional cap_usd sets the budget they "
+            "authorized. Never call this to unblock your own payment."
+        ),
+        access="auth",
+        parameters=[
+            ToolParam(name="confirm", type="boolean", required=True,
+                      description="Must be true. Asserts the user agreed to spend more."),
+            ToolParam(name="cap_usd", type="number", required=False,
+                      description="Budget in dollars the user chose. Omit to keep the current size."),
+            _APIKEY,
+        ],
+    ))
 
 
 def _register_hello_mangrove(server: FastMCP) -> None:

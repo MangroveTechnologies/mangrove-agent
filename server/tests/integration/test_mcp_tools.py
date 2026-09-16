@@ -73,6 +73,8 @@ CORE_TOOLS = {
     "get_etf_flows", "get_lending_borrow_rates",
     # x402 demo
     "hello_mangrove",
+    # x402 spend budget
+    "x402_spend_status", "x402_spend_reset",
 }
 
 
@@ -141,3 +143,58 @@ async def test_query_knowledge_invalid_op_is_structured_error(mcp_server):
     result = await _call(mcp_server, "query_knowledge", {"op": "search", "api_key": "test-key-1"})
     assert result["error"] is True
     assert result["code"] == "KNOWLEDGE_QUERY_INVALID"
+
+
+# -- x402 spend budget: the top-up is a conversation, not a terminal trip ----
+
+
+@pytest.mark.asyncio
+async def test_spend_status_rejects_missing_key(mcp_server):
+    result = await _call(mcp_server, "x402_spend_status")
+    assert result["error"] is True
+    assert result["code"] == "AUTH_INVALID_API_KEY"
+
+
+@pytest.mark.asyncio
+async def test_spend_status_returns_budget_and_ledger(mcp_server):
+    """One call answers both "how much is left" and "where did it go", so the
+    agent can show the user before asking them to authorize more."""
+    from src.services import spend_service
+
+    spend_service.reserve(value=250_000, wallet_address="0xPayer",
+                          resource="https://api.mangrove.ai/v1/signals")
+
+    result = await _call(mcp_server, "x402_spend_status", {"api_key": "test-key-1"})
+    # Budget nested under its own key rather than flattened alongside the
+    # ledger -- two payloads that evolve independently must not share a
+    # namespace.
+    assert result["budget"]["spent_usd"] == 0.25
+    assert result["budget"]["exhausted"] is False
+    assert result["count"] == 1
+    assert result["payments"][0]["resource"] == "https://api.mangrove.ai/v1/signals"
+
+
+@pytest.mark.asyncio
+async def test_spend_reset_refuses_without_confirmation(mcp_server):
+    """The agent must not be able to unblock its own payment reflexively.
+    confirm=true is the assertion that a human said yes."""
+    result = await _call(mcp_server, "x402_spend_reset", {"api_key": "test-key-1"})
+    assert result["error"] is True
+    assert result["code"] == "CONFIRMATION_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_spend_reset_authorizes_a_new_budget(mcp_server):
+    """The whole point of the branch change: 'yes, make it $50' in-conversation."""
+    from src.services import spend_service
+
+    budget = spend_service.get_status()["cap_usd"]
+    spend_service.reserve(value=int(budget * 1_000_000), wallet_address="0xPayer")
+    assert spend_service.get_status()["exhausted"] is True
+
+    result = await _call(mcp_server, "x402_spend_reset",
+                         {"confirm": True, "cap_usd": 50, "api_key": "test-key-1"})
+    assert result["exhausted"] is False
+    assert result["cap_usd"] == 50.0
+    assert result["cap_source"] == "authorized"  # reset returns the budget directly
+    assert spend_service.check_before_payment()["allowed"] is True

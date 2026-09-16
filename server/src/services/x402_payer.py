@@ -27,20 +27,17 @@ What this module refuses to do, structurally
 - **Settle.** Settlement is always the receiver's job. The agent settles
   only for money coming *in*, never for money going *out*.
 
-What it does NOT do yet
------------------------
-There is no aggregate spend cap here. A signing guard sees one payload,
-and this service sees one request; neither can see a running total. The
-SDK's per-payment ceiling (`_MAX_AMOUNT_PER_PAYMENT`) is a backstop
-against a single absurd charge, not a budget. Portfolio-wide accounting
-is a separate concern in a separate layer, exactly as the portfolio kill
-switch is separate from the engine's per-strategy risk gates.
+- **Spend past the agent's budget.** Every signature is reserved against
+  `spend_service` first, so the running total is charged before the
+  authorization exists rather than after a receipt comes back. See
+  `CustodialSigner.sign_typed_data`.
 """
 from __future__ import annotations
 
 import base64
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -54,9 +51,10 @@ from x402.mechanisms.evm.types import TypedDataDomain, TypedDataField
 from x402.schemas.errors import NoMatchingRequirementsError
 from x402.schemas.errors import PaymentError as X402ProtocolError
 
-from src.services import wallet_manager
-from src.shared.errors import AgentError, ValidationError, X402PaymentError
+from src.services import spend_service, wallet_manager
+from src.shared.errors import AgentError, ValidationError, X402PaymentError, X402SpendCapExceeded
 from src.shared.logging import get_logger
+from src.shared.urls import strip_query
 from src.shared.x402.config import get_network, get_payer_wallet
 
 _log = get_logger(__name__)
@@ -80,6 +78,12 @@ _UNSET_CONFIG_VALUES = frozenset({"", "none", "null"})
 # on a single charge — priced Mangrove meters run $0.001–$0.05 — and not a
 # budget. Raising it is a reviewed source change.
 _MAX_AMOUNT_PER_PAYMENT = "$1"
+
+# The only EIP-712 struct the wallet guard will sign, and so the only one
+# the spend cap knows how to price. Kept as a local constant rather than
+# imported from wallet_manager: this module states what it can budget, the
+# guard states what it can sign, and a test asserts the two still agree.
+_EIP3009_PRIMARY_TYPE = "TransferWithAuthorization"
 
 # Generous by design. A priced compute call (a backtest) can run 50–80s, and
 # the authorization stays valid for `validBefore` (+300s), so timing out
@@ -118,16 +122,30 @@ class CustodialSigner:
     one guarded call and is never an attribute of this object.
     """
 
-    def __init__(self, wallet_address: str) -> None:
+    def __init__(self, wallet_address: str, *, resource: str | None = None) -> None:
         # Checksummed once, here, so the same canonical form goes into the
         # authorization's `from` field, the guard's payer comparison and the
         # audit log. Deliberately no DB access: constructing a signer is not
         # signing, and the gates belong on the paying path.
         self._address = _checksum(wallet_address)
+        # What is being paid for, recorded on the ledger row purely for
+        # audit. The signer never sees a URL otherwise — the scheme hands it
+        # a struct, not a request.
+        self._resource = resource
+        # Budget reservations this signer has taken out, oldest first. The
+        # caller that drove the request reconciles them once it knows the
+        # outcome; see `pay`. Held here because the signer is the only
+        # object that exists on both sides of the transport's payment loop.
+        self._reservations: list[str] = []
 
     @property
     def address(self) -> str:
         return self._address
+
+    @property
+    def reservations(self) -> tuple[str, ...]:
+        """Budget reservations taken out for this exchange, oldest first."""
+        return tuple(self._reservations)
 
     def sign_typed_data(
         self,
@@ -139,10 +157,18 @@ class CustodialSigner:
         """Sign EIP-712 typed data through the wallet guard.
 
         This is the narrow waist: every payment, from any caller and any
-        transport, passes through here. The backup gate therefore lives
-        here too — `sign_x402_authorization` deliberately does not gate
-        (matching `sign()`), so a caller that bypassed this method would
-        bypass the check.
+        transport, passes through here. Two gates therefore live here
+        rather than in the layer above, because a caller that bypassed
+        this method would bypass them:
+
+        - **Backup confirmation.** `sign_x402_authorization` deliberately
+          does not gate (matching `sign()`).
+        - **The spend cap.** Budget is claimed BEFORE the signature is
+          produced, and claimed against the value in the struct about to
+          be signed — not against a price quoted earlier in the exchange,
+          which is a different number that nobody has checked. A
+          signature that is never taken out of the agent still authorizes
+          a debit, so "signed" is the honest moment to charge a budget.
 
         The x402 scheme hands `TypedDataDomain` / `TypedDataField`
         dataclasses; the guard reads mappings. Converting is the whole of
@@ -150,13 +176,63 @@ class CustodialSigner:
         the struct that was validated is the struct that gets signed.
         """
         wallet_manager.require_backup_confirmed(self._address)
-        return wallet_manager.sign_x402_authorization(
-            domain=_domain_to_dict(domain),
-            types=_types_to_dicts(types),
-            primary_type=primary_type,
-            message=message,
+
+        domain_dict = _domain_to_dict(domain)
+        reservation = self._reserve_budget(primary_type, domain_dict, message)
+
+        try:
+            return wallet_manager.sign_x402_authorization(
+                domain=domain_dict,
+                types=_types_to_dicts(types),
+                primary_type=primary_type,
+                message=message,
+                wallet_address=self._address,
+            )
+        except Exception:
+            # No signature exists, so no debit can ever be presented — the
+            # one case where giving budget back is provably free. Released
+            # here rather than by the caller because a guard refusal
+            # travels up as an exception and may never reach `pay`'s
+            # reconciliation at all.
+            if reservation is not None:
+                spend_service.release(reservation, reason="signature_refused")
+                self._reservations.remove(reservation)
+            raise
+
+    def _reserve_budget(
+        self, primary_type: str, domain: dict, message: dict[str, Any]
+    ) -> str | None:
+        """Claim budget for an EIP-3009 authorization, or decline to price it.
+
+        Only `TransferWithAuthorization` carries a `value` the agent can
+        read as an amount. Anything else is left entirely to the guard,
+        which permits exactly this one struct and refuses the rest — so
+        an unpriceable payload is unsignable a moment later regardless.
+
+        The alternative, refusing here because no amount could be found,
+        would quietly move the decision about WHICH STRUCTS MAY BE SIGNED
+        out of the signing guard and into a budget check. That is the one
+        place in this path where the reasoning has to stay in one piece, so
+        `test_budgeted_struct_matches_what_the_guard_will_sign` fails if the
+        guard is ever widened without revisiting this.
+        """
+        if primary_type != _EIP3009_PRIMARY_TYPE:
+            return None
+        fields = message if isinstance(message, Mapping) else {}
+        reservation = spend_service.reserve(
+            value=fields.get("value"),
             wallet_address=self._address,
+            payee=_str_or_none_value(fields.get("to")),
+            network=_network_from_domain(domain),
+            resource=self._resource,
+            # Audit metadata: the instant after which USDC rejects this
+            # authorization, so a row can later be proven dead rather than
+            # assumed so. See the note in spend_service on why nothing acts
+            # on it yet.
+            valid_before=fields.get("validBefore"),
         )
+        self._reservations.append(reservation)
+        return reservation
 
 
 def resolve_payer_wallet(wallet_address: str | None = None) -> str:
@@ -180,8 +256,18 @@ def resolve_payer_wallet(wallet_address: str | None = None) -> str:
     return _checksum(candidate)
 
 
-def build_payment_client(wallet_address: str) -> x402Client:
+def build_payment_client(
+    wallet_address: str,
+    *,
+    resource: str | None = None,
+    signer: CustodialSigner | None = None,
+) -> x402Client:
     """Build an x402 client pinned to the configured network and wallet.
+
+    Pass `signer` when the caller needs to reconcile the budget
+    reservations afterwards — the signer is where they accumulate, and a
+    client built without one keeps its signer private. `resource` is
+    audit metadata for the ledger and is ignored if `signer` is given.
 
     Registration is deliberately narrow. `register_exact_evm_client()` —
     the helper the SDK documents — registers the V2 scheme under the
@@ -195,7 +281,8 @@ def build_payment_client(wallet_address: str) -> x402Client:
     """
     network = _require_network()
     client = x402Client()
-    client.register(network, ExactEvmClientScheme(CustodialSigner(wallet_address)))
+    signer = signer or CustodialSigner(wallet_address, resource=resource)
+    client.register(network, ExactEvmClientScheme(signer))
     client.set_spend_controls({"max_amount_per_payment": _MAX_AMOUNT_PER_PAYMENT})
     return client
 
@@ -222,18 +309,25 @@ async def pay(
     loading or the agent from starting — the failure mode that made the
     server side degrade gracefully does not exist on the paying side.
     """
+    # Stripped once here so every log line, every error message and the
+    # ledger row all record the same, credential-free form. A URL that is
+    # safe in one of those places and raw in another is not sanitised, it
+    # is inconsistently sanitised.
+    safe_url = _safe_url(url)
     payer = resolve_payer_wallet(wallet_address)
     # Checked eagerly as well as in the signer: an un-backed-up wallet
     # should fail before the request is sent, not after a round trip.
     wallet_manager.require_backup_confirmed(payer)
+    _check_budget(url)
 
     network = _require_network()
-    client = build_payment_client(payer)
+    signer = CustodialSigner(payer, resource=url)
+    client = build_payment_client(payer, signer=signer)
     transport = x402AsyncTransport(client, transport=httpx.AsyncHTTPTransport())
 
     _log.info(
         "x402.payment.started",
-        url=url,
+        url=safe_url,
         method=method,
         wallet_address=payer,
         network=network,
@@ -249,11 +343,16 @@ async def pay(
         # derive from x402.schemas.errors.PaymentError and are only
         # incidentally wrapped. Catching one and not the other would let a
         # protocol failure escape as a bare exception with no error shape.
-        raise _translate_payment_error(e, url=url, payer=payer, network=network) from e
+        raise _translate_payment_error(e, safe_url=safe_url, payer=payer, network=network) from e
     except httpx.HTTPError as e:
-        _log.warning("x402.payment.errored", url=url, wallet_address=payer, error=str(e))
+        # Reservations are deliberately NOT released here. A connection that
+        # dropped after the signed retry went out may still have been
+        # received and settled; only the receiver knows. An unreleased
+        # reservation costs part of a budget, a wrongly released one costs
+        # money that never appears in the total.
+        _log.warning("x402.payment.errored", url=safe_url, wallet_address=payer, error=_safe_error(e, url))
         raise X402PaymentError(
-            f"x402 payment request to {url} failed at the transport layer: {e}",
+            f"x402 payment request to {safe_url} failed at the transport layer: {_safe_error(e, url)}",
             suggestion="The resource server could not be reached. Check the URL and that the server is running; no payment was made.",
         ) from e
 
@@ -267,6 +366,8 @@ async def pay(
         payer=_str_or_none(settlement, "payer"),
     )
 
+    _reconcile_budget(signer, result, settlement=settlement, url=safe_url)
+
     if result.paid:
         # A settlement naming a different payer means the receiver credited
         # someone else's authorization to this request. Loud, but not fatal:
@@ -274,13 +375,13 @@ async def pay(
         if result.payer and result.payer.lower() != payer.lower():
             _log.warning(
                 "x402.payment.payer_mismatch",
-                url=url,
+                url=safe_url,
                 expected=payer,
                 settled_payer=result.payer,
             )
         _log.info(
             "x402.payment.settled",
-            url=url,
+            url=safe_url,
             wallet_address=payer,
             network=result.network,
             transaction=result.transaction,
@@ -295,7 +396,7 @@ async def pay(
         # free resource in a log tail.
         _log.warning(
             "x402.payment.refused",
-            url=url,
+            url=safe_url,
             wallet_address=payer,
             network=network,
         )
@@ -304,7 +405,7 @@ async def pay(
         # skipped settlement. Both are normal; neither is a charge.
         _log.info(
             "x402.payment.unsettled",
-            url=url,
+            url=safe_url,
             wallet_address=payer,
             status_code=response.status_code,
         )
@@ -315,6 +416,101 @@ async def pay(
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+
+
+def _safe_url(url: str) -> str:
+    """A URL fit to log or put in an error message.
+
+    Same rule the ledger applies before persisting a resource. Logs are
+    just as durable as the database and error messages travel further
+    still -- into the conversation transcript -- so the stripping has to
+    happen on every path or it is decoration on one of them.
+    """
+    return strip_query(url) or url
+
+
+def _safe_error(error: Exception, url: str) -> str:
+    """Exception text with the request URL reduced to its safe form.
+
+    httpx and x402 both interpolate the request URL into their messages, so
+    an error string can reintroduce a query string that every other path
+    has just stripped. Substring replacement rather than re-parsing: the
+    library decides how it formats the URL, and the only thing that has to
+    be true is that the raw form does not survive.
+    """
+    text = str(error)
+    safe = _safe_url(url)
+    return text.replace(url, safe) if url != safe else text
+
+
+def _check_budget(url: str) -> None:
+    """Refuse an exhausted budget before a request is ever sent.
+
+    The binding check happens in the signer, which is the only place the
+    amount is known. This one is a courtesy: when the budget is already
+    gone, the answer does not depend on the price, so there is no reason
+    to make a round trip to find it out.
+    """
+    budget = spend_service.check_before_payment()
+    if budget["allowed"]:
+        return
+    _log.warning(
+        "x402.payment.over_budget",
+        url=_safe_url(url),
+        reason=budget.get("reason"),
+        spent_usd=budget.get("spent_usd"),
+        cap_usd=budget.get("cap_usd"),
+    )
+    raise X402SpendCapExceeded(
+        f"Not requesting {_safe_url(url)}: {budget.get('reason')}.",
+        suggestion=spend_service.TOP_UP_SUGGESTION,
+    )
+
+
+def _reconcile_budget(
+    signer: CustodialSigner,
+    result: PaymentResult,
+    *,
+    settlement: dict | None,
+    url: str,
+) -> None:
+    """Hand this exchange's outcome to the ledger.
+
+    Deliberately thin. The outcome-to-state rules live in `spend_service`
+    so that every payment driver -- this one, and any transport that
+    injects payment into an SDK client -- agrees on what a response means
+    and none of them has to re-derive it.
+    """
+    spend_service.reconcile(
+        signer.reservations,
+        status_code=result.status_code,
+        settlement=settlement,
+        resource=url,
+    )
+
+
+def _network_from_domain(domain: dict) -> str | None:
+    """CAIP-2 id of the chain in the payload, for the ledger row.
+
+    Taken from the struct being signed rather than from `X402_NETWORK`, so
+    the ledger records the chain the authorization actually named. The two
+    agree in practice — the client is registered for one network — but an
+    audit trail that copies configuration is not an audit trail.
+
+    Returns None rather than raising on anything unexpected: this runs
+    before the guard, on input shaped by a remote server, and a missing
+    audit field must not pre-empt the guard's own refusal.
+    """
+    if not isinstance(domain, Mapping):
+        return None
+    chain_id = domain.get("chainId")
+    if isinstance(chain_id, bool) or not isinstance(chain_id, int):
+        return None
+    return f"eip155:{chain_id}"
+
+
+def _str_or_none_value(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _require_network() -> str:
@@ -387,11 +583,15 @@ def _types_to_dicts(
 def _translate_payment_error(
     error: Exception,
     *,
-    url: str,
+    safe_url: str,
     payer: str,
     network: str,
 ) -> AgentError:
     """Turn the transport's wrapped failure back into a useful error.
+
+    Takes `safe_url`, never a raw one: everything this builds ends up in a
+    log line or an error message shown to a user, and both are places a
+    query string must not reach.
 
     `x402AsyncTransport` catches everything its payment path raises and
     re-raises it as a bare `PaymentError`, which would flatten a guard
@@ -408,21 +608,22 @@ def _translate_payment_error(
         if isinstance(cause, NoMatchingRequirementsError):
             _log.warning(
                 "x402.payment.errored",
-                url=url,
+                url=safe_url,
                 wallet_address=payer,
                 network=network,
                 error=str(cause),
             )
             return X402PaymentError(
-                f"The resource at {url} offered no payment option this agent can "
+                f"The resource at {safe_url} offered no payment option this agent can "
                 f"satisfy on {network}: {cause}",
                 suggestion=f"The server is asking for a chain or an asset the agent is not configured for. Confirm X402_NETWORK ({network}) matches what the server advertises, and that the price is quoted in USDC.",
             )
         cause = cause.__cause__
 
-    _log.warning("x402.payment.errored", url=url, wallet_address=payer, error=str(error))
+    _log.warning("x402.payment.errored", url=safe_url, wallet_address=payer,
+                 error=_safe_error(error, safe_url))
     return X402PaymentError(
-        f"x402 payment for {url} failed: {error}",
+        f"x402 payment for {safe_url} failed: {error}",
         suggestion="Check that the payer wallet holds enough USDC on the configured network, and that the resource server's 402 envelope is well-formed.",
     )
 

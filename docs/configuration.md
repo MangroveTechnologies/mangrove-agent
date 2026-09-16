@@ -61,6 +61,7 @@ Always validated at startup. The app fails if any are missing from the config fi
 | `X402_HELLO_MANGROVE_PRICE` | hello_mangrove price in USDC base units (6 decimals) |
 | `X402_CDP_API_KEY_ID` | CDP API key ID (empty string if not using CDP) |
 | `X402_CDP_API_KEY_SECRET` | CDP API secret (empty string if not using CDP) |
+| `X402_SPEND_CAP_USD` | Cumulative budget for OUTBOUND x402 payments, in dollars (default `25`). Bounds volume, not price — the per-payment ceiling is separate and pinned in source. Once spent, payments stop until a human authorizes a new budget; raising this key does not refill an already-spent one. |
 
 ### Full App Keys
 
