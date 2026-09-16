@@ -130,6 +130,7 @@ async def status() -> dict:
         },
         "active_cron_jobs": active_job_count(),
         "portfolio_risk": _portfolio_risk_status(),
+        "x402_spend": _x402_spend_status(),
         "db_path": str(app_config.DB_PATH),
         "uptime_seconds": int(time.monotonic() - _STARTUP_MONOTONIC),
     }
@@ -142,6 +143,20 @@ def _portfolio_risk_status() -> dict:
         return portfolio_risk_service.get_status()
     except Exception:  # noqa: BLE001
         return {"tripped": None, "error": "unavailable"}
+
+
+def _x402_spend_status() -> dict:
+    """Outbound x402 budget for /status. Never fail /status over it.
+
+    Sits beside portfolio_risk because they answer the same question from
+    two directions: "why did the agent stop doing things?" One covers
+    trading capital, the other covers what the agent pays for data.
+    """
+    try:
+        from src.services import spend_service
+        return spend_service.get_status()
+    except Exception:  # noqa: BLE001
+        return {"exhausted": None, "error": "unavailable"}
 
 
 @router.get(

@@ -146,7 +146,9 @@ def test_signer_holds_no_secret(wallet):
     from src.services.x402_payer import CustodialSigner
 
     signer = CustodialSigner(wallet)
-    assert list(vars(signer)) == ["_address"]
+    # An address, an audit label, and its budget reservations -- no key
+    # material, and nothing derived from any.
+    assert sorted(vars(signer)) == ["_address", "_reservations", "_resource"]
     assert _TEST_PRIVKEY not in repr(vars(signer))
 
 
@@ -223,7 +225,9 @@ def test_domain_dataclass_is_converted_for_the_guard(wallet, monkeypatch):
         TypedDataDomain(name="USDC", version="2", chain_id=84532, verifying_contract=_SEPOLIA_USDC),
         {"TransferWithAuthorization": [TypedDataField(name="from", type="address")]},
         "TransferWithAuthorization",
-        {"from": _TEST_ADDRESS},
+        # `value` and `to` are read by the spend cap before signing, so even
+        # a cut-down message has to carry them.
+        {"from": _TEST_ADDRESS, "to": _PAYEE, "value": 50000},
     )
 
     assert captured["domain"] == {
@@ -254,7 +258,7 @@ def test_non_field_type_entries_are_passed_through_not_dropped(wallet, monkeypat
         TypedDataDomain(name="USDC", version="2", chain_id=84532, verifying_contract=_SEPOLIA_USDC),
         {"TransferWithAuthorization": ["junk", TypedDataField(name="to", type="address")]},
         "TransferWithAuthorization",
-        {},
+        {"from": _TEST_ADDRESS, "to": _PAYEE, "value": 50000},
     )
 
     assert captured["types"]["TransferWithAuthorization"][0] == "junk"
@@ -551,7 +555,7 @@ def test_guard_refusal_survives_the_transport_wrapper():
     wrapped.__cause__ = refusal
 
     translated = _translate_payment_error(
-        wrapped, url="http://agent.test/x", payer=_TEST_ADDRESS, network=_SEPOLIA
+        wrapped, safe_url="http://agent.test/x", payer=_TEST_ADDRESS, network=_SEPOLIA
     )
 
     assert translated is refusal
@@ -564,7 +568,7 @@ def test_unrecognised_failure_becomes_a_payment_error():
     from src.services.x402_payer import _translate_payment_error
 
     translated = _translate_payment_error(
-        PaymentError("something odd"), url="http://agent.test/x", payer=_TEST_ADDRESS, network=_SEPOLIA
+        PaymentError("something odd"), safe_url="http://agent.test/x", payer=_TEST_ADDRESS, network=_SEPOLIA
     )
 
     assert translated.code == "X402_PAYMENT_ERROR"
@@ -579,7 +583,7 @@ def test_unwrapped_protocol_error_is_still_shaped():
 
     translated = _translate_payment_error(
         NoMatchingRequirementsError("nothing matched"),
-        url="http://agent.test/x",
+        safe_url="http://agent.test/x",
         payer=_TEST_ADDRESS,
         network=_SEPOLIA,
     )
@@ -598,7 +602,7 @@ def test_translation_terminates_on_a_self_referential_cause():
     looped.__cause__ = looped
 
     translated = _translate_payment_error(
-        looped, url="http://agent.test/x", payer=_TEST_ADDRESS, network=_SEPOLIA
+        looped, safe_url="http://agent.test/x", payer=_TEST_ADDRESS, network=_SEPOLIA
     )
 
     assert translated.code == "X402_PAYMENT_ERROR"
@@ -654,3 +658,382 @@ async def test_no_wallet_secret_env_var_is_ever_read(wallet, sepolia_network, mo
 
     assert result.paid is True
     assert "WALLET_SECRET" not in os.environ
+
+
+# -- the spend budget at the signing waist -----------------------------------
+
+
+_EIP3009_FIELDS = [
+    TypedDataField(name="from", type="address"),
+    TypedDataField(name="to", type="address"),
+    TypedDataField(name="value", type="uint256"),
+    TypedDataField(name="validAfter", type="uint256"),
+    TypedDataField(name="validBefore", type="uint256"),
+    TypedDataField(name="nonce", type="bytes32"),
+]
+
+
+def _authorization(value: int = 50000) -> dict:
+    return {
+        "from": _TEST_ADDRESS,
+        "to": _PAYEE,
+        "value": value,
+        "validAfter": 0,
+        "validBefore": 2**32,
+        "nonce": b"\x01" * 32,
+    }
+
+
+def test_budgeted_struct_matches_what_the_guard_will_sign():
+    """A drift guard between two modules that must not disagree.
+
+    The spend cap prices `TransferWithAuthorization` and declines to price
+    anything else, on the reasoning that the guard refuses everything else
+    anyway. If the guard is ever widened to a second struct, that reasoning
+    stops holding and the new struct would be signed with no budget check.
+    This fails first.
+    """
+    from src.services import wallet_manager, x402_payer
+
+    assert x402_payer._EIP3009_PRIMARY_TYPE == wallet_manager._X402_PRIMARY_TYPE
+
+
+def test_signing_writes_a_ledger_row(wallet):
+    """Every signature appears on the ledger, with the chain it named."""
+    from src.services import spend_service
+    from src.services.x402_payer import CustodialSigner
+
+    signer = CustodialSigner(wallet, resource="http://agent.test/api/x402/hello-mangrove?k=v")
+    ExactEvmClientScheme(signer).create_payment_payload(_requirements())
+
+    row = spend_service.list_payments()[0]
+    assert row["state"] == "authorized"
+    assert row["amount_usd"] == 0.05
+    assert row["wallet_address"] == _TEST_ADDRESS
+    assert row["payee"] == _PAYEE
+    # Read off the struct being signed, not copied from X402_NETWORK.
+    assert row["network"] == _SEPOLIA
+    assert row["resource"] == "http://agent.test/api/x402/hello-mangrove"
+    assert signer.reservations == (row["id"],)
+    assert spend_service.get_status()["spent_usd"] == 0.05
+
+
+def test_over_budget_payment_is_never_signed(wallet, monkeypatch):
+    """The gate has to fire BEFORE the key is touched, not after."""
+    from src.config import app_config
+    from src.services import spend_service, x402_payer
+    from src.shared.errors import X402SpendCapExceeded
+
+    monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 0.01, raising=False)
+    calls: list = []
+    monkeypatch.setattr(
+        x402_payer.wallet_manager,
+        "sign_x402_authorization",
+        lambda **kw: calls.append(kw),
+    )
+
+    signer = x402_payer.CustodialSigner(wallet)
+    with pytest.raises(X402SpendCapExceeded, match="past the"):
+        ExactEvmClientScheme(signer).create_payment_payload(_requirements())
+
+    assert calls == []
+    assert signer.reservations == ()
+    assert spend_service.get_status()["spent_usd"] == 0.0
+
+
+def test_guard_refusal_releases_the_reservation(wallet):
+    """A refused envelope must not quietly eat part of the budget.
+
+    No signature exists, so no debit can ever be presented — the one case
+    where handing budget back is provably free.
+    """
+    from src.services import spend_service
+    from src.services.x402_payer import CustodialSigner
+    from src.shared.errors import SigningError
+
+    signer = CustodialSigner(wallet)
+    with pytest.raises(SigningError, match="not USDC"):
+        signer.sign_typed_data(
+            TypedDataDomain(name="USDC", version="2", chain_id=84532, verifying_contract=_NOT_USDC),
+            {"TransferWithAuthorization": _EIP3009_FIELDS},
+            "TransferWithAuthorization",
+            _authorization(),
+        )
+
+    assert signer.reservations == ()
+    assert spend_service.get_status()["spent_usd"] == 0.0
+    assert spend_service.list_payments()[0]["release_reason"] == "signature_refused"
+
+
+def test_unpriceable_struct_is_left_to_the_guard(wallet):
+    """A struct the cap cannot price must still be refused BY THE GUARD.
+
+    Refusing it here on budget grounds would move the decision about which
+    structs may be signed out of the signing guard — the security property
+    that stopped the permit2 flow — and into a budget check.
+    """
+    from src.services import spend_service
+    from src.services.x402_payer import CustodialSigner
+    from src.shared.errors import SigningError
+
+    with pytest.raises(SigningError, match="primaryType"):
+        CustodialSigner(wallet).sign_typed_data(
+            TypedDataDomain(name="USDC", version="2", chain_id=84532, verifying_contract=_SEPOLIA_USDC),
+            {"PermitWitnessTransferFrom": [TypedDataField(name="spender", type="address")]},
+            "PermitWitnessTransferFrom",
+            {"spender": _PAYEE},
+        )
+
+    assert spend_service.list_payments() == []
+
+
+async def test_spent_budget_refuses_before_any_request(wallet, sepolia_network, mock_http):
+    """Verification case 6, end to end: budget spent, no paid call goes out."""
+    from src.config import app_config
+    from src.services import spend_service
+    from src.services.x402_payer import pay
+    from src.shared.errors import X402SpendCapExceeded
+
+    monkeypatch_cap = getattr(app_config, "X402_SPEND_CAP_USD", None)
+    assert monkeypatch_cap is not None
+    spend_service.reserve(value=int(monkeypatch_cap * 1_000_000), wallet_address=wallet)
+    mock_http.install(httpx.Response(200, json={}))
+
+    with pytest.raises(X402SpendCapExceeded, match="needs authorizing again"):
+        await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+
+    assert mock_http.requests == []
+
+    # The user authorizes more; payment resumes.
+    spend_service.reset()
+    result = await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    assert result.status_code == 200
+
+
+async def test_settled_payment_is_recorded_with_its_transaction(
+    wallet, sepolia_network, mock_http
+):
+    from src.services import spend_service
+    from src.services.x402_payer import pay
+
+    mock_http.install(
+        httpx.Response(402, headers={"PAYMENT-REQUIRED": _payment_required_header()}),
+        httpx.Response(200, json={"ok": True},
+                       headers={"x-payment-response": _settlement_header()}),
+    )
+
+    await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+
+    row = spend_service.list_payments()[0]
+    assert row["state"] == "settled"
+    assert row["transaction"] == "0xabc"
+    assert spend_service.get_status()["spent_usd"] == 0.05
+
+
+async def test_errored_resource_gives_the_budget_back(wallet, sepolia_network, mock_http):
+    """REST skips settlement for any status >= 400, and the nonce is burned,
+    so the authorization is dead and the budget is genuinely free again."""
+    from src.services import spend_service
+    from src.services.x402_payer import pay
+
+    mock_http.install(
+        httpx.Response(402, headers={"PAYMENT-REQUIRED": _payment_required_header()}),
+        httpx.Response(500, json={"error": "upstream exploded"}),
+    )
+
+    await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+
+    assert spend_service.get_status()["spent_usd"] == 0.0
+    assert spend_service.list_payments()[0]["release_reason"] == "resource_error_not_settled"
+
+
+async def test_rejected_payment_gives_the_budget_back(wallet, sepolia_network, mock_http):
+    """A 402 that survived the attempt: the receiver burned the nonce, so
+    the signature can never be presented again."""
+    from src.services import spend_service
+    from src.services.x402_payer import pay
+
+    mock_http.install(
+        httpx.Response(402, headers={"PAYMENT-REQUIRED": _payment_required_header()})
+    )
+
+    await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+
+    assert spend_service.get_status()["spent_usd"] == 0.0
+    assert {p["state"] for p in spend_service.list_payments()} == {"released"}
+
+
+async def test_missing_receipt_still_counts_against_the_budget(
+    wallet, sepolia_network, mock_http
+):
+    """The ambiguous case, and the reason the ledger counts authorizations.
+
+    The agent signed and the resource came back; the only thing missing is
+    an optional header the receiver may simply not send. Releasing on that
+    would let a counterparty decide how much of the budget it had used.
+    """
+    from src.services import spend_service
+    from src.services.x402_payer import pay
+
+    mock_http.install(
+        httpx.Response(402, headers={"PAYMENT-REQUIRED": _payment_required_header()}),
+        httpx.Response(200, json={"ok": True}),
+    )
+
+    result = await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+
+    assert result.paid is False
+    assert spend_service.get_status()["spent_usd"] == 0.05
+    assert spend_service.list_payments()[0]["state"] == "authorized"
+
+
+async def test_free_resource_leaves_no_ledger_row(wallet, sepolia_network, mock_http):
+    """Nothing was signed, so there is nothing to account for."""
+    from src.services import spend_service
+    from src.services.x402_payer import pay
+
+    mock_http.install(httpx.Response(200, json={"message": "hello"}))
+
+    await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+
+    assert spend_service.list_payments() == []
+    assert spend_service.get_status()["spent_usd"] == 0.0
+
+
+async def test_cap_refusal_survives_the_transport_wrapper(wallet, sepolia_network, mock_http, monkeypatch):
+    """The refusal happens INSIDE the transport's payment loop, which
+    flattens everything it catches into a bare PaymentError. A budget
+    refusal must reach the caller as X402_SPEND_CAP_EXCEEDED, not as a
+    generic "payment failed" — the same defect class already fixed for the
+    signing guard."""
+    from src.config import app_config
+    from src.services import spend_service
+    from src.services.x402_payer import pay
+    from src.shared.errors import X402SpendCapExceeded
+
+    # Small enough that the $0.05 resource does not fit, but not zero — so
+    # the pre-flight check in pay() passes and the refusal has to come from
+    # the signer, below the transport.
+    monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 0.01, raising=False)
+    mock_http.install(
+        httpx.Response(402, headers={"PAYMENT-REQUIRED": _payment_required_header()})
+    )
+
+    with pytest.raises(X402SpendCapExceeded) as excinfo:
+        await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+
+    assert excinfo.value.code == "X402_SPEND_CAP_EXCEEDED"
+    # The 402 was received; the paid retry never went out.
+    assert len(mock_http.requests) == 1
+    assert spend_service.get_status()["spent_usd"] == 0.0
+
+
+def test_absurd_amounts_are_refused_before_the_ledger(wallet):
+    """uint256 admits numbers SQLite cannot store. They must be refused, not
+    handed to an insert that raises OverflowError."""
+    from src.services import spend_service
+    from src.shared.errors import ValidationError
+
+    with pytest.raises(ValidationError, match="larger than any real USDC amount"):
+        spend_service.reserve(value=2**255, wallet_address=wallet)
+    assert spend_service.list_payments() == []
+
+
+@pytest.mark.parametrize(
+    "responses,expected_state",
+    [
+        pytest.param("settled", "settled", id="settled"),
+        pytest.param("rejected", "released", id="rejected-402"),
+        pytest.param("errored", "released", id="resource-500"),
+    ],
+)
+async def test_pay_always_leaves_the_ledger_in_a_terminal_state(
+    wallet, sepolia_network, mock_http, responses, expected_state
+):
+    """pay() must never walk away from a reservation it opened.
+
+    Reconciliation is the ONLY moment a settlement transaction is written and
+    the only moment a row stops meaning "we tried". A driver that skips it
+    breaks nothing visible -- payments still work, the budget still roughly
+    counts -- while the audit trail quietly stays empty. So the contract is
+    asserted here rather than left to a docstring.
+    """
+    from src.services import spend_service
+    from src.services.x402_payer import pay
+
+    required = httpx.Response(402, headers={"PAYMENT-REQUIRED": _payment_required_header()})
+    second = {
+        "settled": httpx.Response(200, json={"ok": True},
+                                  headers={"x-payment-response": _settlement_header()}),
+        "rejected": required,
+        "errored": httpx.Response(500, json={"error": "boom"}),
+    }[responses]
+    mock_http.install(required, second)
+
+    await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+
+    ledger = spend_service.list_payments()
+    assert [p["state"] for p in ledger] == [expected_state]
+    # And nothing is left dangling for the counter to find later.
+    assert spend_service.get_status()["unreconciled_count"] == 0
+
+
+async def test_a_settled_payment_records_its_transaction(wallet, sepolia_network, mock_http):
+    """The audit trail's whole purpose: tying a ledger row to money on chain."""
+    from src.services import spend_service
+    from src.services.x402_payer import pay
+
+    mock_http.install(
+        httpx.Response(402, headers={"PAYMENT-REQUIRED": _payment_required_header()}),
+        httpx.Response(200, json={"ok": True},
+                       headers={"x-payment-response": _settlement_header(transaction="0xfeed")}),
+    )
+
+    await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+
+    assert spend_service.list_payments()[0]["transaction"] == "0xfeed"
+
+
+async def test_no_path_out_of_pay_leaks_a_query_string(wallet, sepolia_network, monkeypatch, mock_http):
+    """Sanitising some paths and not others is not sanitising.
+
+    A URL reaches the user through at least four exits: the ledger, log
+    lines, the exception message, and third-party error text that
+    interpolates the request URL. This walks the failure exits and asserts
+    the secret survives none of them.
+    """
+    from src.services.x402_payer import pay
+    from src.shared.errors import AgentError
+
+    leaky = "http://agent.test/api/x402/hello-mangrove?api_key=SUPERSECRET"
+
+    # 1. transport failure -- httpx errors embed the request URL
+    def _boom(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(f"failed connecting to {leaky}", request=request)
+
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda *a, **k: httpx.MockTransport(_boom))
+    with pytest.raises(AgentError) as transport_err:
+        await pay(leaky, wallet_address=wallet)
+    assert "SUPERSECRET" not in transport_err.value.message
+    assert "SUPERSECRET" not in str(transport_err.value.suggestion or "")
+
+    # 2. no payment option the agent can satisfy -- message names the resource
+    mock_http.install(
+        httpx.Response(402, headers={"PAYMENT-REQUIRED": _payment_required_header(asset=_NOT_USDC)})
+    )
+    with pytest.raises(AgentError) as protocol_err:
+        await pay(leaky, wallet_address=wallet)
+    assert "SUPERSECRET" not in protocol_err.value.message
+
+
+def test_error_text_from_a_library_is_scrubbed(wallet):
+    """The library decides how it formats the URL; we only require that the
+    raw form does not survive into anything a human reads."""
+    from src.services.x402_payer import _safe_error
+
+    leaky = "https://api.test/v1/x?token=SUPERSECRET"
+    scrubbed = _safe_error(RuntimeError(f"timed out calling {leaky} after 30s"), leaky)
+
+    assert "SUPERSECRET" not in scrubbed
+    assert "https://api.test/v1/x" in scrubbed
+    assert "after 30s" in scrubbed

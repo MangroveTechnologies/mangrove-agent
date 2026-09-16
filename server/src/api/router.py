@@ -22,6 +22,7 @@ from src.api.routes.reference_strategies import router as reference_strategies_r
 from src.api.routes.signals import router as signals_router
 from src.api.routes.strategies import router as strategies_router
 from src.api.routes.wallet import router as wallet_router
+from src.api.routes.x402_spend import router as x402_spend_router
 
 # Free + auth-gated
 api_router = APIRouter(prefix="/api/v1")
@@ -37,6 +38,7 @@ agent_router.include_router(on_chain_router)
 agent_router.include_router(signals_router)
 agent_router.include_router(strategies_router)
 agent_router.include_router(portfolio_router)
+agent_router.include_router(x402_spend_router)
 agent_router.include_router(oracle_router)
 agent_router.include_router(reference_strategies_router)
 agent_router.include_router(logs_router)

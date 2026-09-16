@@ -344,6 +344,42 @@ Glossary term lookup with backlinks.
 
 ---
 
+### x402 Spend Budget (auth)
+
+Governs money going **out** — what the agent pays for priced upstream calls.
+Independent of the portfolio controls, which govern trading capital. Paper
+trading, local tools and anything reached with an API key are unaffected.
+
+#### `GET /api/v1/agent/x402/spend`
+Budget state: `spent_usd`, `remaining_usd`, `cap_usd`, `cap_source`
+(`authorized` | `config` | `default`), `exhausted`, `unreconciled_count`, and
+the current `period_id`.
+
+`unreconciled_count` **should be zero.** Budget is claimed inside the signer,
+so no transport can pay without being charged; closing the reservation needs
+the response, so it must be called explicitly (`spend_service.reconcile`). A
+driver that skips it breaks no payment — it just stops the ledger recording
+whether anything settled. This counter is how that becomes visible. Also surfaced unauthenticated in the `x402_spend` block of
+`GET /api/v1/agent/status`.
+
+#### `GET /api/v1/agent/x402/spend/payments?limit=<int>&period_id=<int>`
+The payment ledger, newest first — one row per authorization, with payee,
+network, resource, settlement transaction and release reason. Omit
+`period_id` for every payment ever authorized.
+
+#### `POST /api/v1/agent/x402/spend/reset`
+Body: `{"cap_usd": <float|null>}`. Starts a fresh budget period, optionally
+with a new size; `cap_usd` is recorded as the amount a human authorized and
+overrides `X402_SPEND_CAP_USD` from then on. Omit it to restart at the
+current size.
+
+**The budget never refills itself.** This is a human decision — the equivalent
+MCP tool (`x402_spend_reset`) refuses without `confirm=true`, so the agent
+cannot clear its own refused payment. An unattended caller (a scheduler tick)
+that exhausts the budget correctly stays stopped until someone is asked.
+
+---
+
 ## MCP Tools
 
 Every REST endpoint has a mirrored MCP tool with identical semantics. Tool names use plain `verb_resource` form (e.g. `create_strategy_autonomous`, `list_trades`, `get_market_data`) — no project prefix; the MCP server namespace is enough.
@@ -669,6 +705,44 @@ CREATE TABLE positions (
 );
 CREATE INDEX idx_positions_strategy_status ON positions(strategy_id, status);
 
+-- Outbound x402 spend budget: one state row + a per-payment ledger.
+-- A per-payment ceiling cannot bound VOLUME (a sweep is ~99 priced calls),
+-- and only the agent can see the aggregate, so the budget lives here.
+CREATE TABLE x402_spend_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),        -- single row
+    period_id INTEGER NOT NULL DEFAULT 1,         -- bumped by a human top-up
+    period_started_at TEXT NOT NULL,
+    period_cap_micro_usd INTEGER,                 -- budget a human authorized; NULL = use config
+    exhausted INTEGER NOT NULL DEFAULT 0,         -- budget spent; never clears itself
+    exhausted_at TEXT,
+    exhausted_reason TEXT,
+    updated_at TEXT NOT NULL
+);
+
+-- One row per payment AUTHORIZATION, not per settlement: the agent controls
+-- what it signs, not what a receiver settles. A row counts against the budget
+-- from the moment it is signed, and is released only on positive evidence the
+-- authorization is dead (guard refused, or the receiver burned the nonce).
+-- Amounts are integer micro-USD -- USDC is 6-decimal, so an EIP-3009 `value`
+-- IS the micro-USD amount, and no float enters the accounting.
+CREATE TABLE x402_payments (
+    id TEXT PRIMARY KEY,
+    period_id INTEGER NOT NULL,
+    state TEXT NOT NULL,                          -- authorized | settled | released
+    amount_micro_usd INTEGER NOT NULL,
+    wallet_address TEXT NOT NULL,                 -- audit only; the budget is agent-wide
+    payee TEXT,
+    network TEXT,
+    resource TEXT,                                -- URL, query string stripped
+    transaction_hash TEXT,
+    valid_before INTEGER,                         -- unix second the authorization dies at
+    release_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_x402_payments_period_state ON x402_payments(period_id, state);
+CREATE INDEX idx_x402_payments_created_at ON x402_payments(created_at DESC);
+
 -- APScheduler job store (built-in table schema, managed by apscheduler[sqlalchemy])
 -- CREATE TABLE apscheduler_jobs ... (managed by the library)
 ```
@@ -708,6 +782,7 @@ Standard error response:
 | `EVALUATION_ERROR` | 500 | Strategy evaluator raised; details logged |
 | `SCHEDULER_ERROR` | 500 | APScheduler job registration/cancellation failed |
 | `CHAIN_NOT_SUPPORTED_IN_V1` | 501 | User requested XRPL/Solana wallet creation or live execution |
+| `X402_SPEND_CAP_EXCEEDED` | 403 | Outbound x402 payment refused on budget grounds — the budget is spent, or this one payment does not fit in what is left. Nothing was signed. |
 | `INTERNAL_ERROR` | 500 | Catch-all; details in server logs |
 
 All errors carry a `correlation_id` for cross-referencing against the agent's logs.
@@ -904,7 +979,7 @@ All routes and MCP tools delegate to these services. Never duplicate business lo
 
 **Service principle:** if a service would just forward arguments to an SDK call and return the result, it doesn't exist. Routes call the SDK clients directly (via `shared/clients/mangrove.py` singletons). Services exist only when they add orchestration the SDK doesn't provide.
 
-The 8 services that stay:
+The 9 services that stay:
 
 | Module | Responsibility |
 |--------|---------------|
@@ -916,6 +991,7 @@ The 8 services that stay:
 | `services/scheduler_service.py` | APScheduler wrapper: register, cancel, list active jobs |
 | `services/trade_log.py` | SQLite writes: evaluations, trades, positions |
 | `services/allocation_service.py` | Local allocation accounting for live strategies |
+| `services/spend_service.py` | The aggregate budget for outbound x402 payments: running total, per-payment ledger, and the human-authorized top-up. Lives here for the same reason the portfolio kill switch does — the signing guard sees one payload and the payer sees one request; only this process holds the total. |
 
 **Routes that call SDKs directly (no service layer):** signal listing, market data (OHLCV, current data, trending, global), on-chain analytics, KB search/glossary, portfolio (value, P&L, tokens, DeFi, history), DEX venue/pair listing, DEX quote. Each route handler imports the appropriate SDK client from `shared/clients/mangrove.py`, calls the method, returns the response. Adding a wrapper service for these would only duplicate the SDK's interface.
 

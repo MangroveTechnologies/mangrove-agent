@@ -79,12 +79,79 @@ positions in SQLite). So the **portfolio kill switch** lives here
   back to live; the high-water mark starts fresh so it will not immediately
   re-trip.
 
+## Layer 3 — Agent-side, the x402 spend budget (this repo — money going *out*)
+
+Layers 1 and 2 protect **trading capital**. This one protects the wallet the
+agent pays *with*. When the agent buys data from MangroveAI over x402
+(signals, backtests, Oracle runs), each call is cents — but volume is the
+risk, not price: an autonomous sweep is 99 backtests ≈ $2, and
+`oracle_backtest_async` + `oracle_backtest_poll` form a poll loop against a
+priced meter, so a 5-second poll on a two-minute backtest is 24 paid calls for
+one result. Every one of those is individually reasonable.
+
+Same argument as the kill switch, one layer over: the receiving server sees
+one payment, the signing guard sees one payload, and only this agent sees the
+running total. So `spend_service` owns it.
+
+**It is a budget, not a circuit breaker, and you must talk about it that way.**
+A breaker fires on an anomaly and demands review. A budget runs out through
+normal use, and the remedy is a top-up. Spending $25 on data is not an
+incident — it is a bill. Never describe it as a breach, a trip, or a halt.
+
+- **What it measures:** every payment the agent has AUTHORIZED this budget
+  period, in exact micro-USD, from a local ledger. Authorizations, not
+  settlements — the agent controls what it signs, not what a receiver settles.
+- **The gate:** budget is claimed inside the signing path, before the
+  signature exists. A payment that does not fit is refused and nothing is
+  signed. **A single over-budget payment does not exhaust the budget** — that
+  amount comes from a remote server's 402 envelope, and treating it as
+  exhaustion would let any server halt the agent's payments with one oversized
+  quote. Read the ledger before assuming the budget is too small; an
+  unexpectedly large quote usually means the resource is priced differently
+  than you thought.
+- **`unreconciled_count` should be zero.** It counts payments whose outcome
+  was never recorded. Non-zero does not mean money was lost — it means the
+  ledger has stopped being a reliable record of what settled, and is worth
+  reporting rather than ignoring.
+- **Default `X402_SPEND_CAP_USD` is $25** — roughly 10 sweeps, or ~25,000
+  $0.001 signal reads.
+
+### When the budget runs out
+
+This is the one thing to get right. **The user's consent is the control; the
+tool only records it.**
+
+1. Call **`x402_spend_status`** and show them where the money went — the
+   total, and what the biggest line items were.
+2. Tell them what is still left to do and roughly what it will cost.
+3. **Ask.** "That is the $25 budget gone, mostly the three sweeps. Want me to
+   authorize $50 and carry on?"
+4. Only after they say yes, call **`x402_spend_reset`** with `confirm=true`
+   and the `cap_usd` *they* chose. It refuses without `confirm`.
+
+Never call `x402_spend_reset` to get past your own refused payment. If there
+is no human in the loop — a scheduler tick, an autonomous run — the correct
+behaviour is to stop and leave it stopped until someone is asked. That is
+precisely the case the budget exists for.
+
+Outside a conversation the same thing is reachable at
+`GET /api/v1/agent/x402/spend[/payments]` and
+`POST /api/v1/agent/x402/spend/reset`, and `/status` carries an `x402_spend`
+block beside `portfolio_risk`. Paper trading, local tools and anything reached
+with an API key are unaffected — the budget only governs outbound x402
+payments.
+
 ## Rules for you
 
 1. A tick with no new orders is often a risk gate firing — check the denial
    reason / `portfolio_risk` before calling anything "broken."
-2. Never build your own stop-loss, drawdown, cooldown, or kill-switch logic. It
-   exists. Cite it, surface it, explain it.
-3. The portfolio kill switch never auto-resumes. Do not "reset and continue" on
-   the user's behalf — resetting is their call, made with the numbers in front
-   of them.
+2. Never build your own stop-loss, drawdown, cooldown, kill-switch, or
+   spend-limit logic. It exists. Cite it, surface it, explain it.
+3. Neither the portfolio kill switch nor the x402 budget refills itself. Do
+   not "reset and continue" on the user's behalf — it is their call, made with
+   the numbers in front of them. The difference is what you are asking for: a
+   tripped kill switch needs their *review*, a spent budget needs their
+   *permission*. One is grave, the other is routine; do not make a top-up
+   sound like an incident.
+4. "The agent stopped doing things" has two answers, and `/status` carries
+   both: `portfolio_risk` for trading, `x402_spend` for paid data.

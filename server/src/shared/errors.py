@@ -185,6 +185,22 @@ class X402PaymentError(AgentError):
     http_status = 502
 
 
+class X402SpendCapExceeded(AgentError):
+    """The agent refused to make an outbound x402 payment on budget grounds.
+
+    Either the aggregate spend cap is latched, or this one payment would
+    take total spending past it. Distinct from X402PaymentError: nothing
+    failed and nothing was signed — the agent declined to spend.
+
+    403, not 402: 402 is what a server sends when IT wants to be paid, and
+    reusing it for the opposite direction would make the agent's own refusal
+    indistinguishable from an upstream price quote in a log or a client.
+    """
+
+    code = "X402_SPEND_CAP_EXCEEDED"
+    http_status = 403
+
+
 class EvaluationError(AgentError):
     code = "EVALUATION_ERROR"
     http_status = 500

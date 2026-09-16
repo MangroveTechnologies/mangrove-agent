@@ -21,5 +21,6 @@
   "X402_CDP_API_KEY_ID": "secret:app-config-prod:cdp_api_key_id",
   "X402_CDP_API_KEY_SECRET": "secret:app-config-prod:cdp_api_key_secret",
   "X402_PAYER_WALLET": "",
+  "X402_SPEND_CAP_USD": 25,
   "PORTFOLIO_MAX_DRAWDOWN_PCT": 0.3
 }
