@@ -1,4 +1,4 @@
--- merge_plan B3 / item 5: the outbound x402 spend budget.
+-- The outbound x402 spend budget.
 --
 -- The agent is the only place an AGGREGATE outbound spend is visible. A
 -- signing guard sees one payload and a payer service sees one request;

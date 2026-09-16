@@ -660,7 +660,7 @@ async def test_no_wallet_secret_env_var_is_ever_read(wallet, sepolia_network, mo
     assert "WALLET_SECRET" not in os.environ
 
 
-# -- the spend cap at the signing waist (merge_plan B3) ----------------------
+# -- the spend budget at the signing waist -----------------------------------
 
 
 _EIP3009_FIELDS = [
@@ -904,7 +904,7 @@ async def test_cap_refusal_survives_the_transport_wrapper(wallet, sepolia_networ
     """The refusal happens INSIDE the transport's payment loop, which
     flattens everything it catches into a bare PaymentError. A budget
     refusal must reach the caller as X402_SPEND_CAP_EXCEEDED, not as a
-    generic "payment failed" — the same defect class B2 fixed for the
+    generic "payment failed" — the same defect class already fixed for the
     signing guard."""
     from src.config import app_config
     from src.services import spend_service

@@ -1,4 +1,4 @@
-"""Unit tests for spend_service — the outbound x402 spend cap (merge_plan B3).
+"""Unit tests for spend_service — the outbound x402 spend budget.
 
 Verification case 6: a breach latches, further paid calls are refused, and a
 human reset works. Everything here is offline — no facilitator, no chain, no
@@ -191,7 +191,7 @@ def test_raising_the_config_cap_does_not_refill_the_budget(temp_db, monkeypatch)
 
 
 def test_ledger_records_the_wallet_but_the_budget_is_agent_wide(temp_db):
-    """§11.2 constraint 1: an explicit payer argument must not sidestep the cap.
+    """An explicit payer argument must not sidestep the budget.
 
     `resolve_payer_wallet` lets a caller name any wallet, so a budget keyed
     to the CONFIGURED wallet would be bypassed by passing a different one.

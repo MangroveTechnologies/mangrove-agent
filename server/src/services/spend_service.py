@@ -91,6 +91,7 @@ over the agent's whole payment path.
 """
 from __future__ import annotations
 
+import math
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -107,8 +108,8 @@ _log = get_logger(__name__)
 # before this key existed.
 #
 # $25 is sized against what the product actually does, not against what a
-# mistake should cost. A sweep is 99 backtests -- about $2 (see merge_plan
-# §8.2) -- so $5 was two and a half sweeps, roughly one afternoon of the
+# mistake should cost. A sweep is 99 backtests -- about $2 -- so $5 was
+# two and a half sweeps, roughly one afternoon of the
 # headline workflow, and a budget a normal user exhausts on day one teaches
 # them to raise it without reading it. $25 is ~10 sweeps or ~25,000 $0.001
 # signal reads: comfortably more than a session, still cheap enough that
@@ -220,9 +221,10 @@ def _to_micro_usd(cap_usd: object, *, source: str) -> int:
             f"{source} is {cap_usd!r}, which is not a number.",
             suggestion=f"Set {source} to a dollar amount, e.g. {_DEFAULT_CAP_USD:g}. The agent will not pay for anything until the budget is readable.",
         ) from e
-    # NaN compares False against everything, so it has to be caught by
-    # identity with itself rather than by a range check.
-    if value != value or value in (float("inf"), float("-inf")):
+    # NaN and infinity both survive float() and neither can bound anything.
+    # `isfinite` says that in one predicate; a range check cannot, because
+    # NaN compares False against every bound you could write.
+    if not math.isfinite(value):
         raise ValidationError(
             f"{source} is {value}, which is not a usable budget.",
             suggestion=f"Set {source} to a finite dollar amount, e.g. {_DEFAULT_CAP_USD:g}.",
