@@ -7,9 +7,11 @@ import json
 import os
 import re
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+import warnings
 from pathlib import Path
 
 
@@ -61,6 +63,25 @@ def stash(url, api_key, secret):
         raise ValueError("Could not stash the secret; check the local agent and authentication.") from None
 
 
+def write_handoff(token, ttl):
+    """Store a short-lived bearer capability outside stdout and the checkout."""
+    if os.name != "posix":
+        raise ValueError("Private handoff files require POSIX permissions.")
+    directory = Path(tempfile.mkdtemp(prefix="mangrove-wallet-import-"))
+    path = directory / "handoff.json"
+    try:
+        # The private directory and exclusive file creation prevent symlink reuse.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as output:
+            json.dump({"vault_token": token, "secret_ttl_seconds": ttl}, output)
+            output.write("\n")
+        return path
+    except BaseException:
+        path.unlink(missing_ok=True)
+        directory.rmdir()
+        raise
+
+
 def main():
     try:
         endpoint = os.environ.get("LOCAL_AGENT_URL", "http://127.0.0.1:9080")
@@ -76,17 +97,26 @@ def main():
         if not sys.stdin.isatty():
             raise ValueError("Run this script in an interactive terminal for hidden secret entry.")
         print("Paste a private key or 12/24-word mnemonic. Input is hidden.")
-        secret = getpass.getpass("secret: ")
+        with warnings.catch_warnings():
+            # Never let getpass fall back to echoed stdin.
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            secret = getpass.getpass("secret: ")
         try:
             if not secret.strip():
                 raise ValueError("Empty secret; nothing was sent.")
             token, ttl = stash(endpoint, key, secret)
         finally:
-            secret = None  # Python strings cannot guarantee physical memory erasure.
-        print(f"✓ stashed\nvault_token: {token}\nexpires in: {ttl}s (single-read)")
-        print(f"\nNext, tell your agent: Import my wallet with vault_token {token}")
+            # Drop this reference; immutable Python strings cannot be securely erased.
+            del secret
+        handoff = write_handoff(token, ttl)
+        print("✓ stashed. A private, single-use import handoff is ready; import promptly.")
+        print(f"Handoff file: {handoff}")
+        print("Next, tell your local agent: Read the handoff JSON at the path above, "
+              "call import_wallet with its vault_token, then delete the file and its "
+              "containing temporary directory. Do not display the token.")
+        print("If you cancel, delete that file and directory. The token expires server-side.")
         return 0
-    except (OSError, KeyError, ValueError):
+    except (OSError, KeyError, ValueError, getpass.GetPassWarning):
         print("Could not stash the secret. Check the local config, loopback URL, API key and agent; run from an interactive terminal.", file=sys.stderr)
         return 1
     except (KeyboardInterrupt, EOFError):

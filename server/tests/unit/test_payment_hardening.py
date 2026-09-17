@@ -414,3 +414,66 @@ def test_unsigned_rollback_concurrent_with_new_period_does_not_unlock_it(databas
                 worker.terminate()
                 worker.join(5)
         result.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX private handoff")
+def test_stash_handoff_is_private_and_not_reused(tmp_path, monkeypatch):
+    module = _script("scripts/stash-secret.py")
+    monkeypatch.setattr(module.tempfile, "tempdir", str(tmp_path))
+    first = module.write_handoff("synthetic-vault-token", 300)
+    second = module.write_handoff("different-vault-token", 300)
+    assert first != second
+    assert first.stat().st_mode & 0o777 == 0o600
+    assert first.parent.stat().st_mode & 0o777 == 0o700
+    assert json.loads(first.read_text()) == {
+        "vault_token": "synthetic-vault-token", "secret_ttl_seconds": 300,
+    }
+
+
+def test_stash_handoff_cleans_up_failed_write(tmp_path, monkeypatch):
+    module = _script("scripts/stash-secret.py")
+    monkeypatch.setattr(module.tempfile, "tempdir", str(tmp_path))
+    def broken_dump(*args):
+        raise OSError("synthetic write failure")
+    monkeypatch.setattr(module.json, "dump", broken_dump)
+    with pytest.raises(OSError):
+        module.write_handoff("synthetic-vault-token", 300)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("failure", [None, "network", "handoff", "echo"])
+def test_stash_cli_never_logs_credentials(tmp_path, monkeypatch, capsys, failure):
+    module = _script("scripts/stash-secret.py")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"API_KEYS": "SYNTHETIC_API_KEY"}))
+    monkeypatch.setenv("CONFIG_FILE", str(config))
+    monkeypatch.setenv("LOCAL_AGENT_URL", "http://127.0.0.1:9082")
+    monkeypatch.setattr(module.sys.stdin, "isatty", lambda: True)
+    def prompt(*args):
+        if failure == "echo":
+            module.warnings.warn("synthetic fallback", module.getpass.GetPassWarning)
+        return "SYNTHETIC_PRIVATE_KEY"
+    monkeypatch.setattr(module.getpass, "getpass", prompt)
+    calls = []
+    def stash(*args):
+        calls.append(args)
+        if failure == "network":
+            raise ValueError("SYNTHETIC_PRIVATE_KEY")
+        return "SYNTHETIC_VAULT_TOKEN", 300
+    monkeypatch.setattr(module, "stash", stash)
+    handoffs = []
+    def handoff(token, ttl):
+        if failure == "handoff":
+            raise OSError("SYNTHETIC_VAULT_TOKEN")
+        handoffs.append((token, ttl))
+        return tmp_path / "handoff.json"
+    monkeypatch.setattr(module, "write_handoff", handoff)
+    assert module.main() == (0 if failure is None else 1)
+    output = capsys.readouterr()
+    for sensitive in ("SYNTHETIC_PRIVATE_KEY", "SYNTHETIC_VAULT_TOKEN", "SYNTHETIC_API_KEY"):
+        assert sensitive not in output.out + output.err
+    if failure == "echo":
+        assert calls == []
+    if failure is None:
+        assert handoffs == [("SYNTHETIC_VAULT_TOKEN", 300)]
+        assert str(tmp_path / "handoff.json") in output.out
