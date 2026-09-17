@@ -33,6 +33,14 @@ jobs:
       - name: Verify synced Michael skills match their manifest
         run: python scripts/sync-michael-skills.py --verify-manifest
 
+      - name: Lint MCP contract checks
+        run: ruff check --config server/pyproject.toml scripts/mcp_contract.py server/tests/unit/test_mcp_contract.py
+
+      # Offline: imports test config in an isolated child with networking,
+      # database connections and writes blocked. No receiver credentials needed.
+      - name: Verify MCP registration, schemas, pricing and adapter contracts
+        run: python -B scripts/mcp_contract.py
+
       - name: Run tests
         env:
           ENVIRONMENT: test

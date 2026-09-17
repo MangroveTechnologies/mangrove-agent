@@ -1,0 +1,278 @@
+{
+  "direct_sdk_adapters": {
+    "delete_strategy": {
+      "reason": "Existing upstream execution/strategy adapter with local ID or filter semantics; preserve during the separate ownership consolidation.",
+      "sha256": "35443aff3fabc90cea816cdeef0bd4c27fdcdfa75b1f1b71065b2f514422cade"
+    },
+    "get_account_position": {
+      "reason": "Existing upstream execution/strategy adapter with local ID or filter semantics; preserve during the separate ownership consolidation.",
+      "sha256": "ac79cae50259a3e517e08e41bbf2f0c08959028c352d231f2b010ea4a1ccf574"
+    },
+    "get_allowances": {
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
+      "sha256": "89a8b5105863ee04e5ee7e3b1e324bb261300848a1924c60475b1dba9a7cb956"
+    },
+    "get_asset": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "a46c9ced40d80329bea19adc390cfe12385b93bb237fd9c0b5275af4f3039498"
+    },
+    "get_balances": {
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
+      "sha256": "e0a1cada5aed6d4b28a45ff84325dc247723743325b111543e551e371137e675"
+    },
+    "get_chain_tvl": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "5921bccdef23972543c0cb3012139afb97deea1e6e42b3a693e19887d1c80b3e"
+    },
+    "get_dex_chart": {
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
+      "sha256": "9dc9c9150d7f606e5f95e9888ce4758c7b2ee1835449941f678d8139be29cbd2"
+    },
+    "get_doc_content": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "56157e0eaeac0d168484e0ae4f2c439b6c4eccc5bb0e359907d17f18d8a193ea"
+    },
+    "get_etf_flows": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "3425f3dba6e6776fcf2f26a33cff416cf215cc54f8e8dbd36e8847bcf6f8bdbb"
+    },
+    "get_exchange_flows": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "74ea7e5fbb48d7f57f62e66b7f6f9ca0cb669adb844a6e300a5374edb6c15c53"
+    },
+    "get_gas_price": {
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
+      "sha256": "b54698e75f5384db3d9d09a19f623ecad9a8404528939fdc1f76524a0a672875"
+    },
+    "get_global_market": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "8bd426915fd5a4fffa8c76f90eda0f63633f9d836a5642cca488270ce5736368"
+    },
+    "get_influence_score": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "7d375f9d07c580237c2a0463b9a096d93aa77ea1695093deee1ca63d16738b8f"
+    },
+    "get_lending_borrow_rates": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "e60c28a00fef8248cf3f43c0d1164e13eeeab7e1606575ef334a5664c092441a"
+    },
+    "get_mentions": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "5303eafe9b829ade0004808322ff03953df69ca7f5211a6a591c9833499c5bf2"
+    },
+    "get_perp_funding": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "80af57203b15147d725fac7c58d1defe671f7343e00eb8b4d9ddccf93c34cc1e"
+    },
+    "get_protocol_tvl": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "f11885bc6fdd3e7f997555b34c24d07ebdeeb903ffab878edd29865eaefb376b"
+    },
+    "get_sentiment": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "e2d7fc526f91ebbd7b81e62549536ef9e42ac4c151106d7f48438ace9932e7d4"
+    },
+    "get_signal": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "2c9ea7bd522233cf60c81293b636de7e7ecbbfc900d89ff62dd227b858e0a547"
+    },
+    "get_smart_money_dex_trades": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "a1222c212eb5b2b4d0a738c03acb9163c4264f4eff96a3ceae5f2c435b30a8db"
+    },
+    "get_smart_money_historical_holdings": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "f53e6f6cb1de55368af616a2724e4c5c514d16c701ba97db1b3279bb10b72c4e"
+    },
+    "get_smart_money_perp_trades": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "617a4d77b2c488d1468f2c03136985c04f9bbfabd5bb6c024fb84ef5985fed4f"
+    },
+    "get_smart_money_sentiment": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "1c782ed14261bab7fd3750efd573e642c25ef82a6fb6e3a8ccdcbe40123bc016"
+    },
+    "get_spot_price": {
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
+      "sha256": "5f83ab8431e8bd2fbd3e04ab8f2c60adad479740195cac94d3ab5b7f4ff947bb"
+    },
+    "get_stablecoin_metrics": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "3155168aee4825c902909545c8155c27ef2d62580f9d867d244a49d01cbd4a19"
+    },
+    "get_token_dex_trades": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "5635af73ef4d94f36f27edeb02bb7115c06df7461a3343bce057035bbfeaf5c9"
+    },
+    "get_token_flows": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "06ec34f1140fa6be777212c97e1da580d09b4ff9d48e4a800800ebace4ca4cfd"
+    },
+    "get_token_holders": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "3cb612296b958027ef6e682be3411ed06ad15cc07a0966ae4393f43225c832fb"
+    },
+    "get_token_info": {
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
+      "sha256": "eb0b1a00c0f67b7872876803a130ee251843a77d5b0cc62ea1f9a30972c78213"
+    },
+    "get_token_search": {
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
+      "sha256": "0ece83d75381240c2b8dca2cf38671bb8a3f9dc372004775881bd6b483078270"
+    },
+    "get_token_unlocks": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "87ac33df5be9bc141d4185299ced3d1febc9630f8d11a25caafe75f48c79d792"
+    },
+    "get_treasuries": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "d94e70cce8699cc9a213d29fe4cc09ea2f7385dfe0947f3d48d87844eddda343"
+    },
+    "get_trending": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "3ba087a2b1e480a8ffe11259817d7a81bd5854dc1277374fd5cdfd36ea01d34e"
+    },
+    "get_tx_status": {
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
+      "sha256": "30f2075d45eccb58e5f9f2c98feae4954ee5fbff5db3d19a25cf456ea09b57bc"
+    },
+    "get_whale_activity": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "e11f63e9707071c704cc23fb36962392bc1fdd31e2b4490345b82904941a9067"
+    },
+    "get_whale_transactions": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "dc2730f102b492dad5efd4c17cd9921a8c5d361c77c26aedc36555ce9a0b6cc0"
+    },
+    "kb_get_document": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "d9f184b6cb2cab05b28d1fee92deb78af3df1c03d1c3989c2da24cc1e942f2d1"
+    },
+    "kb_glossary_get": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "fabb1aa1d8ef7a28df3d66473af13dbe4d2fe55bb208ed9a7a5b401590b9e532"
+    },
+    "kb_list_indicators": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "a44d7c3507c14886d67dbdfdbc8bd40b40cbf89804953077a1f6010959213adb"
+    },
+    "kb_list_tags": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "e178dc7d76a95a1041b61f5a119392dd1cc223a10d14e677671ecda62eecb848"
+    },
+    "kb_search": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "eb4c57b4503d656853e3dfa20bab24025e9ab4b6472631d1f0ba6fdafdf5f8cc"
+    },
+    "list_account_positions": {
+      "reason": "Existing upstream execution/strategy adapter with local ID or filter semantics; preserve during the separate ownership consolidation.",
+      "sha256": "ea8ea490f1737eea55984cd147f8502704c6dede7e23f7c74b529dcc0e88d7d4"
+    },
+    "list_account_trades": {
+      "reason": "Existing upstream execution/strategy adapter with local ID or filter semantics; preserve during the separate ownership consolidation.",
+      "sha256": "40869263d0f5ebf5a71debbd773dae10c748f41963d920216e44aaea5a4bb83a"
+    },
+    "list_approved_assets": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "24474be05f43186be376ccdbd539b8483157933ba900e45bb0e9df2acc5f75d6"
+    },
+    "list_dex_venues": {
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
+      "sha256": "eed531564a48dd91f55608d20c21aec0d2a3a77ce5905a1f71a9a68ec962c4d8"
+    },
+    "list_docs": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "14c7187d1717909abe47c72b187ea3ae4f274be6390e7b8ff84dd683fc406715"
+    },
+    "list_signals": {
+      "reason": "Bounded MCP aggregation up to 1000 differs from single-page REST; preserve pagination/payment limits until shared logic is designed.",
+      "sha256": "fb863fba9e6e3ab3352476ccb60b3eabb4469c7e5a1047555d5c1da38de38e27"
+    },
+    "match_signals": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "a8916051738d74d2fc905f52b6a5f21463db8390ce6d4a085b6c593083ad4530"
+    },
+    "portfolio_defi": {
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
+      "sha256": "a2db1afbd50e4ddaa3165bf7347731b7afffc95cefe80daa666e908d5bd23480"
+    },
+    "portfolio_history": {
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
+      "sha256": "fea8731846f0d03b412231364bdcf89b021301a86b1e02aa4d2d0ddc0522fedc"
+    },
+    "portfolio_pnl": {
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
+      "sha256": "0bf1c014171920961567f5811219c142a77b70cf97448fb4ae887b74de7fdacb"
+    },
+    "portfolio_tokens": {
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
+      "sha256": "2a59546d60c80729753caf40e41750e2f680b5fef47f25910c6e4fa1a541f6f4"
+    },
+    "portfolio_value": {
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
+      "sha256": "7adbb5d7fc10ff170b9b869ca6310e6d3896b1c96d59f0764456c4c8f9959e67"
+    },
+    "screen_smart_money": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "ce512194751fd342546de16a0e691e776c15caf0e95caa0065a6ad3340c4cfa7"
+    },
+    "search_signals": {
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
+      "sha256": "c1b79e7c859d5c2ff455540b8e2375b0e534dc38e0fa0d21da2be94cd778df67"
+    }
+  },
+  "unknown_pricing": {
+    "get_account_position": "No authoritative published billing definition for this request; do not label it free.",
+    "get_doc_content": "Separate KB/doc origin without authoritative published price.",
+    "kb_get_document": "Separate KB/doc origin without authoritative published price.",
+    "kb_glossary_get": "Separate KB/doc origin without authoritative published price.",
+    "kb_list_indicators": "Separate KB/doc origin without authoritative published price.",
+    "kb_list_tags": "Separate KB/doc origin without authoritative published price.",
+    "kb_search": "Separate KB/doc origin without authoritative published price.",
+    "list_backtests": "No authoritative published billing definition for this request; do not label it free.",
+    "list_docs": "Separate KB/doc origin without authoritative published price.",
+    "oracle_list_datasets": "No authoritative published billing definition for this request; do not label it free.",
+    "oracle_list_signals": "No authoritative published billing definition for this request; do not label it free.",
+    "oracle_list_templates": "No authoritative published billing definition for this request; do not label it free."
+  },
+  "version": 1,
+  "without_upstream_pricing": {
+    "build_strategy_from_reference": "Bundled local reference library; building may read public configuration defaults. Business consolidation is deferred separately.",
+    "cex_balances": "Kraken credentials/operations or MangroveMarkets telemetry, outside MangroveAI pricing.",
+    "cex_connect_kraken": "Kraken credentials/operations or MangroveMarkets telemetry, outside MangroveAI pricing.",
+    "cex_status": "Kraken credentials/operations or MangroveMarkets telemetry, outside MangroveAI pricing.",
+    "cex_sync_fills": "Kraken credentials/operations or MangroveMarkets telemetry, outside MangroveAI pricing.",
+    "cex_validate_order": "Kraken credentials/operations or MangroveMarkets telemetry, outside MangroveAI pricing.",
+    "create_wallet": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
+    "execute_swap": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "get_allowances": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "get_balances": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "get_dex_chart": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "get_gas_price": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "get_spot_price": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "get_strategy": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
+    "get_swap_quote": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "get_token_info": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "get_token_search": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "get_tx_status": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "hello_mangrove": "Local x402 receiver demo; local metadata is checked against configured network.",
+    "import_wallet": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
+    "list_all_trades": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
+    "list_dex_venues": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "list_evaluations": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
+    "list_strategies": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
+    "list_tools": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
+    "list_trades": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
+    "list_wallets": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
+    "portfolio_defi": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "portfolio_history": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "portfolio_pnl": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "portfolio_tokens": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "portfolio_value": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "query_knowledge": "Bundled local knowledge graph, not the receiver Michael-private graph.",
+    "search_reference_strategies": "Bundled local reference library; building may read public configuration defaults. Business consolidation is deferred separately.",
+    "status": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
+    "x402_spend_reset": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
+    "x402_spend_status": "Local agent state, custody, discovery or audit operation; no upstream price binding."
+  }
+}
