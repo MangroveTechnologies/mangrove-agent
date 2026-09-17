@@ -1,0 +1,22 @@
+{
+  "default_environment": {
+    "local": "prod",
+    "dev": "dev",
+    "test": "local",
+    "prod": "prod"
+  },
+  "environments": {
+    "local": {
+      "base_url": "http://localhost:5001/api/v1",
+      "kb_base_url": "http://localhost:8080/api"
+    },
+    "dev": {
+      "base_url": "https://devapi.mangrove.trade/api/v1",
+      "kb_base_url": "https://kb.mangrovedeveloper.ai/api"
+    },
+    "prod": {
+      "base_url": "https://api.mangrovedeveloper.ai/api/v1",
+      "kb_base_url": "https://kb.mangrovedeveloper.ai/api"
+    }
+  }
+}

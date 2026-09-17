@@ -80,6 +80,90 @@ Validated only if present in your config file. If a key is present but has an em
 
 ## Environments
 
+### Outbound MangroveAI authentication (B5)
+
+The agent selects upstream authentication once per process:
+
+- A non-empty `MANGROVE_API_KEY` uses the existing SDK API-key path. A rejected
+  key never falls back to spending wallet funds.
+- An omitted, null or blank key selects x402. The literal strings `none` and
+  `null` also mean unset, consistent with configuration normalization.
+- `API_KEYS` and `AUTH_ENABLED` still protect the local agent. Keep local
+  authentication enabled: an upstream wallet payment does not authorize access
+  to local wallets, secrets, trading or tools.
+
+Users do not need to enter service URLs. Reviewed endpoints ship in
+`src/config/mangrove-endpoints.json` and are selected automatically:
+
+| Agent `ENVIRONMENT` | Default upstream services |
+|:--------------------|:--------------------------|
+| `local` | Hosted production API and Knowledge Base (normal desktop/plugin use) |
+| `prod` | Hosted production API and Knowledge Base |
+| `dev` | Hosted development API and shared hosted Knowledge Base |
+| `test` | Local API and Knowledge Base for tests |
+
+The agent running locally does not mean the user runs a local backend. The
+production endpoints are `https://api.mangrovedeveloper.ai/api/v1` and
+`https://kb.mangrovedeveloper.ai/api`. Development uses
+`https://devapi.mangrove.trade/api/v1` with the same hosted KB, matching
+MangroveAI's deployment configuration. Existing installations pick up the bundled
+endpoints without rewriting their configuration files.
+
+Service selection **never changes `X402_NETWORK`, the wallet or the spend cap**.
+In particular, desktop installs retain their Base Sepolia default: contacting a
+hosted service cannot enable mainnet spending. A server quote for another network
+is refused before signing. Testnet payment testing requires a receiver configured
+for testnet; selecting hosted production does not make it a testnet receiver.
+
+The three settings below are advanced developer overrides, genuinely optional.
+Omit them or leave them null/blank to use the bundled defaults. Templates omit
+these settings so ordinary users are not prompted to configure infrastructure.
+
+| Optional override | Effect |
+|:------------------|:-------|
+| `X402_MANGROVE_ENVIRONMENT` | Select a different upstream environment: `local`, `dev` or `prod`; both URLs follow that environment automatically. |
+| `X402_MANGROVE_BASE_URL` | Override only the core REST API URL, including `/api/v1`. |
+| `X402_MANGROVE_KB_BASE_URL` | Override only the Knowledge Base API URL, including its API path. |
+
+For developers running the backend locally, only one override is needed:
+
+```json
+{
+  "X402_MANGROVE_ENVIRONMENT": "local"
+}
+```
+
+That selects `http://localhost:5001/api/v1` and `http://localhost:8080/api`.
+A URL override is needed only for nonstandard ports or custom servers. Remote
+destinations require HTTPS; HTTP is accepted only for loopback. Malformed
+non-empty overrides and unknown environments fail validation instead of silently
+selecting a different destination. Neither SDK environment variables nor `.env`
+files choose the x402 destinations.
+
+`MANGROVE_API_KEY` remains optional and supports Secret Manager references.
+`X402_PAYER_WALLET` still identifies the locally stored, backup-confirmed payment
+wallet: that is an explicit spending choice, not an infrastructure setting the
+agent can infer. No wallet is selected automatically.
+
+Restart the agent after changing configuration. Do not set `MANGROVE_API_KEY` in
+the agent process environment or use a `.env` file for keyless operation. The
+pinned SDK can inherit an environment key even with `api_key=None`; the payment
+transport refuses that request before sending it and returns instructions to
+unset the environment variable. It does not mutate the process environment or
+strip credentials silently. SDK `.env` loading is disabled for both AI modes.
+
+Ordinary MangroveAI tools then use the selected mode automatically. Payments
+retain backup verification, USDC/network restrictions, the cumulative spend cap,
+and at most one signed retry per upstream request. A tool may make multiple
+requests (pagination or polling), each potentially billable. `list_signals` stops
+after the requested count (1-1000), instead of fetching the entire catalog.
+Free responses need no payment; MangroveMarkets and local-only tools do not use
+the x402 transport. Existing signed or uncertain authorizations remain counted
+even when an HTTP call fails; do not reset the budget to hide uncertain outcomes.
+
+This configuration enables B5's runtime path. The plugin installation manifest
+still requires a key; changing the installation flow belongs to B9.
+
 ### Local Development
 
 Copy the example and edit as needed:

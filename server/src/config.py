@@ -5,6 +5,8 @@ Resolves GCP Secret Manager references using secret:name:property syntax.
 
 Key validation:
 - "required" keys: must be present in config file, app fails without them
+- "optional" keys: resolve normally when present, otherwise None; consumers
+  validate them only when the corresponding feature is used
 - "full_app_keys": validated only if present in config file (preflight check
   for full-stack deployments with DB + Redis). If a full_app_key is present
   in the config but has an empty value, startup fails -- this catches
@@ -29,7 +31,7 @@ class _Config:
             sys.exit(1)
         setattr(self, "ENVIRONMENT", environment)
 
-        required_keys, full_app_keys = self.get_configuration_keys()
+        required_keys, full_app_keys, optional_keys = self.get_configuration_keys()
         self.load_config_file()
 
         gcp_project_id = os.getenv("GCP_PROJECT_ID")
@@ -47,6 +49,13 @@ class _Config:
 
         self._load_required_keys(required_keys, gcp_project_id)
         self._load_full_app_keys(full_app_keys, gcp_project_id)
+        for key in optional_keys:
+            setattr(self, key, self.get_key_value(key, gcp_project_id))
+        # Reviewed service destinations ship with the app. They are separate
+        # from user config so old installs need no migration or URL entry.
+        config_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
+        with open(os.path.join(config_dir, "mangrove-endpoints.json")) as f:
+            self.MANGROVE_ENDPOINTS = json.load(f)
         self._anchor_state_paths()
 
         # LOCAL_AGENT_URL — this agent's own local surface. Wallet/secret ops
@@ -106,8 +115,8 @@ class _Config:
                 setattr(self, key, key_value)
 
     @staticmethod
-    def get_configuration_keys() -> tuple[set, set]:
-        """Load required and full_app_keys from configuration-keys.json."""
+    def get_configuration_keys() -> tuple[set, set, set]:
+        """Load required, full-app and optional keys from the config manifest."""
         try:
             config_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
             keys_path = os.path.join(config_dir, "configuration-keys.json")
@@ -115,7 +124,7 @@ class _Config:
                 keys_data = json.load(f)
                 required = set(keys_data.get("required", []))
                 full_app = set(keys_data.get("full_app_keys", []))
-                return required, full_app
+                return required, full_app, set(keys_data.get("optional", []))
         except (FileNotFoundError, json.JSONDecodeError) as e:
             print(f"Failed to load configuration-keys.json: {e}")
             sys.exit(1)

@@ -32,6 +32,27 @@ _PAYEE = "0xde991861bB3e7078015826Fad749de398F6ec1f6"
 _NOT_USDC = "0x1234567890123456789012345678901234567890"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("header", ["Authorization", "authorization", "X-API-Key", "x-api-key", "PAYMENT-SIGNATURE", "X-PAYMENT"])
+async def test_async_payer_rejects_auth_or_replay_before_wallet_access(monkeypatch, header):
+    from src.services import x402_payer
+    from src.shared.errors import ValidationError
+
+    monkeypatch.setattr(x402_payer, "resolve_payer_wallet", lambda *a: pytest.fail("wallet accessed"))
+    with pytest.raises(ValidationError, match="credentials"):
+        await x402_payer.pay("https://payments.test/resource", headers={header: ""})
+
+
+@pytest.mark.asyncio
+async def test_async_payer_rejects_url_credentials_before_wallet_access(monkeypatch):
+    from src.services import x402_payer
+    from src.shared.errors import ValidationError
+
+    monkeypatch.setattr(x402_payer, "resolve_payer_wallet", lambda *a: pytest.fail("wallet accessed"))
+    with pytest.raises(ValidationError, match="credentials"):
+        await x402_payer.pay("https://user:secret@payments.test/resource")
+
+
 # -- fixtures ----------------------------------------------------------------
 
 

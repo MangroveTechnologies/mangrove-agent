@@ -14,6 +14,7 @@ namespace is enough. See docs/specification.md MCP Tools table.
 from __future__ import annotations
 
 import json
+from itertools import islice
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -1173,18 +1174,25 @@ def _register_signals(server: FastMCP) -> None:
         """List available signals (optionally filtered by category or search)."""
         if not _require(api_key):
             return _auth_error()
+        if limit < 1 or limit > 1000:
+            return _err("VALIDATION_ERROR", "Signal limit must be between 1 and 1000.")
         from src.shared.clients.mangrove import mangrove_ai_client
-        client = mangrove_ai_client()
-        if search:
-            from mangrove_ai.models import SearchSignalsRequest
-            page = client.signals.search(SearchSignalsRequest(query=search, limit=limit))
-            items = [_dump(s) for s in getattr(page, "items", [])]
-        else:
-            all_signals = list(client.signals.list_iter(limit_per_page=min(limit, 100)))
-            items = [_dump(s) for s in all_signals[:limit]]
-        if category:
-            items = [s for s in items if (s.get("category") or "").lower() == category.lower()]
-        return json.dumps({"items": items, "total": len(items)})
+        try:
+            client = mangrove_ai_client()
+            if search:
+                from mangrove_ai.models import SearchSignalsRequest
+                page = client.signals.search(SearchSignalsRequest(query=search, limit=limit))
+                items = [_dump(s) for s in getattr(page, "items", [])]
+            else:
+                # Stop before fetching another billable page once the requested
+                # count is met. Do not materialize the entire upstream catalog.
+                signals = client.signals.list_iter(limit_per_page=min(limit, 100))
+                items = [_dump(s) for s in islice(signals, limit)]
+            if category:
+                items = [s for s in items if (s.get("category") or "").lower() == category.lower()]
+            return json.dumps({"items": items, "total": len(items)})
+        except AgentError as e:
+            return _handle_agent_error(e)
 
     register_tool(ToolEntry(
         name="list_signals",

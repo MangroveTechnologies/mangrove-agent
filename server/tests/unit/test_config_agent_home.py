@@ -61,3 +61,34 @@ def test_without_agent_home_the_package_config_is_used(monkeypatch):
     cfg = _Config()
     assert cfg.DB_PATH == expected["DB_PATH"]
     assert cfg.MASTER_KEY_PATH == expected["MASTER_KEY_PATH"]
+
+
+@pytest.mark.parametrize("keep_api_key", [True, False])
+def test_old_config_without_payment_destinations_still_loads(agent_home, keep_api_key):
+    _write_home_config(agent_home)
+    path = agent_home / "config" / "test-config.json"
+    data = json.loads(path.read_text())
+    for name in ("X402_MANGROVE_ENVIRONMENT", "X402_MANGROVE_BASE_URL", "X402_MANGROVE_KB_BASE_URL"):
+        data.pop(name, None)
+    if not keep_api_key:
+        del data["MANGROVE_API_KEY"]
+    path.write_text(json.dumps(data))
+    config = _Config()
+    assert config.MANGROVE_API_KEY == (data["MANGROVE_API_KEY"] if keep_api_key else None)
+    assert config.X402_MANGROVE_BASE_URL is None
+
+
+def test_optional_api_key_still_resolves_secret_reference(agent_home, monkeypatch):
+    _write_home_config(agent_home, MANGROVE_API_KEY="secret:sdk:key")
+    monkeypatch.setattr("src.config.SecretUtils.get_secret", lambda project, secret, prop: "dev_resolved")
+    assert _Config().MANGROVE_API_KEY == "dev_resolved"
+
+
+def test_existing_install_gets_bundled_endpoints_without_config_migration(agent_home):
+    _write_home_config(agent_home)
+    path = agent_home / "config" / "test-config.json"
+    before = path.read_bytes()
+    cfg = _Config()
+    assert cfg.MANGROVE_ENDPOINTS["default_environment"]["local"] == "prod"
+    assert cfg.MANGROVE_ENDPOINTS["environments"]["prod"]["base_url"] == "https://api.mangrovedeveloper.ai/api/v1"
+    assert path.read_bytes() == before

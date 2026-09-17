@@ -77,6 +77,235 @@ def client(handler, wallet=None, **kwargs):
     ), **kwargs)
 
 
+@pytest.fixture
+def automatic_client(monkeypatch):
+    """Keep real factory selection, SDK, transport and ledger; replace only HTTP."""
+    from src.mcp.server import reset_mcp_server
+    from src.shared.clients import mangrove
+
+    mangrove.reset_clients()
+    reset_mcp_server()
+    # The inbound donation demo is unrelated to outbound SDK payments.
+    # Avoid its external facilitator handshake while registering normal tools.
+    def unavailable_demo():
+        raise ConnectionError("offline demo")
+
+    monkeypatch.setattr("src.shared.x402.server._ensure_initialized", unavailable_demo)
+    monkeypatch.setattr(app_config, "MANGROVE_API_KEY", "")
+    monkeypatch.setattr(app_config, "X402_MANGROVE_ENVIRONMENT", "dev")
+    monkeypatch.setattr(app_config, "X402_MANGROVE_BASE_URL", ORIGIN + "/api/v1")
+    monkeypatch.setattr(app_config, "X402_MANGROVE_KB_BASE_URL", ORIGIN + "/kb")
+
+    def install(handler):
+        monkeypatch.setattr(httpx, "HTTPTransport", lambda **kw: httpx.MockTransport(handler))
+        return mangrove.mangrove_ai_client
+
+    yield install
+    mangrove.reset_clients()
+    reset_mcp_server()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit,search,expected_payments", [(1, None, 1), (101, None, 2), (1, "trend", 1)])
+async def test_normal_mcp_tool_automatically_pays_only_needed_pages(
+    wallet, automatic_client, monkeypatch, limit, search, expected_payments,
+):
+    from src.mcp.server import create_mcp_server
+    from src.shared.auth.middleware import reset_request_api_key, set_request_api_key
+
+    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
+    # Config URLs/environment must take precedence over every ambient SDK default.
+    monkeypatch.setenv("MANGROVE_ENVIRONMENT", "prod")
+    monkeypatch.setenv("MANGROVE_BASE_URL", "https://wrong.test/api/v1")
+    monkeypatch.setenv("MANGROVE_KB_BASE_URL", "https://wrong.test/kb")
+    monkeypatch.setattr("mangrove_ai._config._maybe_load_dotenv", lambda: pytest.fail("dotenv loaded"))
+    seen, nonces = [], []
+
+    def handle(request):
+        seen.append(request)
+        assert request.url.host == "payments.test"
+        assert "Authorization" not in request.headers
+        assert "X-API-Key" not in request.headers  # local key must not be forwarded
+        if "PAYMENT-SIGNATURE" not in request.headers:
+            return challenge()
+        signed = payment(request)
+        assert signed["authorization"]["from"] == wallet
+        nonces.append(signed["authorization"]["nonce"])
+        if search:
+            body = json.loads(request.content)
+            assert body["query"] == search
+            size, offset = body["limit"], 0
+        else:
+            size, offset = int(request.url.params["limit"]), int(request.url.params["offset"])
+        return httpx.Response(200, json={
+            "signals": [{"name": f"signal_{i}", "category": "trend"} for i in range(offset, offset + size)],
+            "total": 10000, "limit": size, "offset": offset,
+        }, headers={"payment-response": receipt(wallet)})
+
+    automatic_client(handle)
+    server = create_mcp_server()
+    token = set_request_api_key("test-key-1")
+    try:
+        result = json.loads(await server._tool_manager._tools["list_signals"].run({"limit": limit, "search": search}))
+    finally:
+        reset_request_api_key(token)
+    assert len(result["items"]) == limit
+    assert len(seen) == 2 * expected_payments
+    assert len(set(nonces)) == expected_payments
+    rows = spend_service.list_payments()
+    assert len(rows) == expected_payments
+    assert all(row["state"] == "settled" for row in rows)
+    assert spend_service.check_before_payment()["spent_usd"] == expected_payments * 0.001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure,code", [("missing_wallet", "VALIDATION_ERROR"), ("cap", "X402_SPEND_CAP_EXCEEDED")])
+async def test_normal_tool_payment_failures_are_structured_without_signed_retry(
+    wallet, automatic_client, monkeypatch, failure, code,
+):
+    from src.mcp.server import create_mcp_server
+
+    if failure == "cap":
+        monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
+        monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 0.0001)
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        assert "PAYMENT-SIGNATURE" not in request.headers
+        return challenge()
+
+    automatic_client(handle)
+    tool = create_mcp_server()._tool_manager._tools["list_signals"]
+    result = json.loads(await tool.run({"api_key": "test-key-1", "limit": 1}))
+    assert result["error"] is True
+    assert result["code"] == code
+    assert len(seen) == 1
+    assert spend_service.list_payments() == []
+
+
+@pytest.mark.asyncio
+async def test_normal_tool_still_requires_local_auth(database, automatic_client):
+    from src.mcp.server import create_mcp_server
+
+    automatic_client(lambda request: pytest.fail("unauthorized caller reached upstream"))
+    tool = create_mcp_server()._tool_manager._tools["list_signals"]
+    for key in ("", "wrong-key"):
+        result = json.loads(await tool.run({"api_key": key}))
+        assert result["code"] == "AUTH_INVALID_API_KEY"
+    assert spend_service.list_payments() == []
+
+
+def test_automatic_free_call_needs_no_wallet_or_budget(database, automatic_client):
+    get_client = automatic_client(lambda request: httpx.Response(200, json={"signals": [], "total": 0}))
+    assert get_client().signals.list().total == 0
+    assert spend_service.list_payments() == []
+
+
+@pytest.mark.parametrize("wrong_network", [False, True])
+def test_real_sdk_uses_desktop_defaults_without_changing_payment_network(
+    wallet, automatic_client, monkeypatch, wrong_network,
+):
+    monkeypatch.setattr(app_config, "ENVIRONMENT", "local")
+    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
+    for key in ("X402_MANGROVE_ENVIRONMENT", "X402_MANGROVE_BASE_URL", "X402_MANGROVE_KB_BASE_URL"):
+        monkeypatch.setattr(app_config, key, None)
+    monkeypatch.setenv("MANGROVE_ENVIRONMENT", "dev")
+    monkeypatch.setenv("MANGROVE_BASE_URL", "https://wrong.test/api/v1")
+    monkeypatch.setenv("MANGROVE_KB_BASE_URL", "https://wrong.test/api")
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        assert str(request.url).startswith("https://api.mangrovedeveloper.ai/api/v1/signals/")
+        assert "Authorization" not in request.headers
+        assert "X-API-Key" not in request.headers
+        if wrong_network:
+            assert "PAYMENT-SIGNATURE" not in request.headers
+            return challenge(network="eip155:8453", asset="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                             extra={"name": "USD Coin", "version": "2"})
+        return httpx.Response(200, json={"signals": [], "total": 0})
+
+    get_client = automatic_client(handle)
+    if wrong_network:
+        with pytest.raises(X402PaymentError):
+            get_client().signals.list()
+    else:
+        assert get_client().signals.list().total == 0
+    assert len(seen) == 1
+    assert app_config.X402_NETWORK == "eip155:84532"
+    assert spend_service.list_payments() == []
+
+
+def test_normal_mcp_http_request_pays_with_local_header_auth(wallet, automatic_client, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from src.app import create_app
+
+    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
+    monkeypatch.setattr("src.services.scheduler_service.start", lambda: None)
+    monkeypatch.setattr("src.services.scheduler_service.shutdown", lambda: None)
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        assert "Authorization" not in request.headers
+        assert "X-API-Key" not in request.headers
+        if "PAYMENT-SIGNATURE" not in request.headers:
+            return challenge()
+        return httpx.Response(200, json={"signals": [{"name": "trend", "category": "trend"}], "total": 1},
+                              headers={"payment-response": receipt(wallet)})
+
+    automatic_client(handle)
+    with TestClient(create_app(), base_url="http://localhost:9080") as local:
+        response = local.post("/mcp/", headers={
+            "X-API-Key": "test-key-1", "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": "2025-03-26",
+        }, json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                 "params": {"name": "list_signals", "arguments": {"limit": 1}}})
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert not result.get("isError")
+    content = json.loads(result["content"][0]["text"])
+    assert content["items"][0]["name"] == "trend"
+    assert len(seen) == 2
+    assert spend_service.list_payments()[0]["state"] == "settled"
+
+
+def test_automatic_mode_refuses_ambient_key_without_mutating_environment(database, automatic_client, monkeypatch):
+    import os
+
+    monkeypatch.setenv("MANGROVE_API_KEY", "prod_ambient")
+    get_client = automatic_client(lambda request: pytest.fail("ambient key escaped"))
+    with pytest.raises(ValidationError, match="credentials"):
+        get_client().signals.list()
+    assert os.environ["MANGROVE_API_KEY"] == "prod_ambient"
+    assert spend_service.list_payments() == []
+
+
+@pytest.mark.asyncio
+async def test_normal_rest_route_keeps_payment_error_code(wallet, automatic_client, monkeypatch):
+    from src.api.routes.signals import list_signals
+
+    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
+    monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 0.0001)
+    automatic_client(lambda request: challenge())
+    with pytest.raises(X402SpendCapExceeded):
+        await list_signals(limit=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [0, -1, 1001])
+async def test_invalid_signal_limit_does_not_call_upstream(database, automatic_client, limit):
+    from src.mcp.server import create_mcp_server
+
+    automatic_client(lambda request: pytest.fail("invalid limit reached upstream"))
+    tool = create_mcp_server()._tool_manager._tools["list_signals"]
+    result = json.loads(await tool.run({"api_key": "test-key-1", "limit": limit}))
+    assert result["code"] == "VALIDATION_ERROR"
+    assert spend_service.list_payments() == []
+
+
 @pytest.mark.parametrize("amount", ["1000", "50000"])
 def test_real_signature_roundtrip_and_ledger(wallet, amount):
     seen = []

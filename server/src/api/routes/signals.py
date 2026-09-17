@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends
 
 from src.shared.auth.dependency import require_api_key
 from src.shared.clients.mangrove import mangrove_ai_client
-from src.shared.errors import SdkError
+from src.shared.errors import AgentError, SdkError
 
 router = APIRouter(
     prefix="/signals",
@@ -34,6 +34,8 @@ async def list_signals(
             page = client.signals.search(SearchSignalsRequest(query=search, limit=limit, offset=offset))
         else:
             page = client.signals.list(limit=limit, offset=offset)
+    except AgentError:
+        raise
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"signals list/search failed: {e}") from e
 
@@ -54,5 +56,7 @@ async def list_signals(
 async def get_signal(name: str) -> Any:
     try:
         return _dump(mangrove_ai_client().signals.get(name))
+    except AgentError:
+        raise
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"signals.get failed: {e}") from e
