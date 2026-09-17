@@ -164,6 +164,50 @@ even when an HTTP call fails; do not reset the budget to hide uncertain outcomes
 This configuration enables B5's runtime path. The plugin installation manifest
 still requires a key; changing the installation flow belongs to B9.
 
+### Tool price discovery (B6)
+
+The free `/api/v1/agent/tools` endpoint, the `list_tools` tool and MCP
+`tools/list` display wallet-payment prices fetched from MangroveAI. Prices are
+not duplicated in the agent. Existing local access tiers remain unchanged;
+upstream API-key calls continue to use quota billing.
+
+Discovery uses the same destination as the wallet-payment client, including
+the optional environment/URL overrides above. These are prospective **x402
+prices**, even when an API key is configured. The displayed network comes from
+the receiver; a mismatch with `X402_NETWORK` is flagged, never corrected by
+changing payment configuration.
+
+Prices refresh on the next discovery request after five minutes. Concurrent
+requests share one refresh; other readers receive the previous snapshot or
+`unavailable` on a cold cache. Failed refreshes retry no more than once per
+30 seconds. Last-known prices may be shown as `stale` for up to one hour, with
+their fetch timestamp; after that the price is unavailable. A missing price
+never means free. MCP clients may cache their tool descriptions, so call the
+`list_tools` tool again for the current snapshot.
+
+Prices are **per upstream request**, not guaranteed totals. Pagination,
+backtest polling, optional benchmarks and multi-step workflows can make several
+requests. Their catalog entries mark `variable_total` and expose component
+prices rather than adding them into a misleading total. KB calls target a
+separate service, and some other endpoints lack published billing definitions;
+these explicitly report `unavailable`. Execution still validates the actual
+402 quote against payment rules and the spend cap.
+
+Discovery uses a separate anonymous HTTP client: no API key, wallet lookup,
+signing, payment retry, redirects or ambient proxies. Response size, page count,
+entry count and time are bounded. It does no network work during startup.
+The free status endpoint also skips SDK catalog counts in wallet-payment mode
+so checking status cannot spend money.
+
+**Receiver rollout:** deploy the companion MangroveAI pricing-metadata change
+before expecting prices to appear. The agent requests anonymous `tools/list`
+with `params._meta["mangrove/include_pricing"] = true`, and reads the versioned
+`result._meta["mangrove/pricing"]` extension. Older receivers continue to work;
+the agent reports unavailable prices without disabling tools. The receiver
+reads existing REST, skill and Oracle billing definitions, including prices
+for REST-only endpoints, without exposing additional callable MCP tools.
+The agent's bindings contain billing identifiers only, never dollar amounts.
+
 ### Local Development
 
 Copy the example and edit as needed:
