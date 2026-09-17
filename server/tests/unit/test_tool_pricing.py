@@ -241,7 +241,7 @@ async def test_fetch_does_not_block_event_loop(monkeypatch):
     def fetch(endpoint):
         entered.set()
         assert release.wait(5)
-        return {}, "eip155:84532", True
+        return {"rest:signals_get": "0.001"}, "eip155:84532", True
     monkeypatch.setattr(pricing, "_fetch_prices", fetch)
     task = asyncio.create_task(pricing.enrich_tools([{"name": "get_signal"}]))
     try:
@@ -253,7 +253,12 @@ async def test_fetch_does_not_block_event_loop(monkeypatch):
         assert not task.done()
     finally:
         release.set()
-    await task
+        result = await task
+    assert result[0]["name"] == "get_signal"
+    assert result[0]["pricing"]["status"] == "fresh"
+    assert result[0]["pricing"]["components"] == [
+        {"meter": "rest:signals_get", "price_usd": "0.001"},
+    ]
 
 
 @pytest.mark.parametrize(("base", "expected"), [
