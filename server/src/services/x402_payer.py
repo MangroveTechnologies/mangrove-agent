@@ -334,6 +334,12 @@ async def pay(
     loading or the agent from starting — the failure mode that made the
     server side degrade gracefully does not exist on the paying side.
     """
+    if any(name.lower() in {"authorization", "x-api-key", "payment-signature", "x-payment"}
+           for name in (headers or {})) or httpx.URL(url).userinfo:
+        raise ValidationError(
+            "x402 requests cannot carry credentials or an existing payment signature.",
+            suggestion="Use the API-key client for key auth; payment requests must start unsigned.",
+        )
     # Stripped once here so every log line, every error message and the
     # ledger row all record the same, credential-free form. A URL that is
     # safe in one of those places and raw in another is not sanitised, it

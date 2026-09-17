@@ -74,7 +74,7 @@ class X402SyncTransport(httpx.BaseTransport):
         if any(name in request.headers for name in _FORBIDDEN_HEADERS):
             raise ValidationError(
                 "x402 requests cannot carry API-key credentials or an existing payment signature.",
-                suggestion="Use the API-key client for key auth; payment requests must start unsigned.",
+                suggestion="Use the API-key client for key auth. For wallet payments, unset the process MANGROVE_API_KEY and restart; payment requests must start unsigned.",
             )
 
         # Preserve bytes, query, method and timeout across the paid retry. Never

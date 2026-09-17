@@ -187,3 +187,9 @@ def test_auth_required_on_all_passthrough_routes(client):
     ]
     for ep in endpoints:
         assert client.get(ep).status_code == 401, f"{ep} should require auth"
+
+
+@pytest.mark.parametrize("query", ["limit=0", "limit=101", "offset=-1"])
+def test_signals_invalid_page_never_calls_upstream(client, monkeypatch, query):
+    monkeypatch.setattr("src.api.routes.signals.mangrove_ai_client", lambda: pytest.fail("invalid page reached upstream"))
+    assert client.get(f"/api/v1/agent/signals?{query}", headers=_auth()).status_code == 422

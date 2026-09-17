@@ -2,7 +2,6 @@
   "required": [
     "AUTH_ENABLED",
     "API_KEYS",
-    "MANGROVE_API_KEY",
     "MANGROVEMARKETS_BASE_URL",
     "DB_PATH",
     "MASTER_KEY_PATH",
@@ -20,6 +19,12 @@
     "X402_HELLO_MANGROVE_PRICE",
     "X402_CDP_API_KEY_ID",
     "X402_CDP_API_KEY_SECRET"
+  ],
+  "optional": [
+    "MANGROVE_API_KEY",
+    "X402_MANGROVE_ENVIRONMENT",
+    "X402_MANGROVE_BASE_URL",
+    "X402_MANGROVE_KB_BASE_URL"
   ],
   "full_app_keys": [
     "PORTFOLIO_MAX_DRAWDOWN_PCT",
