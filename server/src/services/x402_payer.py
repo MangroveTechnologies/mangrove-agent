@@ -43,7 +43,7 @@ from typing import Any
 
 import httpx
 from eth_utils import to_checksum_address
-from x402 import x402Client
+from x402 import x402Client, x402ClientSync
 from x402.http.clients.httpx import PaymentError as X402TransportError
 from x402.http.clients.httpx import x402AsyncTransport
 from x402.mechanisms.evm.exact import ExactEvmClientScheme
@@ -56,6 +56,7 @@ from src.shared.errors import AgentError, ValidationError, X402PaymentError, X40
 from src.shared.logging import get_logger
 from src.shared.urls import strip_query
 from src.shared.x402.config import get_network, get_payer_wallet
+from src.shared.x402.receipts import valid_settlement
 
 _log = get_logger(__name__)
 
@@ -101,8 +102,8 @@ class PaymentResult:
 
     `paid` is False for a resource that never asked for payment — a free
     endpoint is a clean no-payment path, not an error. It is also False
-    when the resource errored: on REST the receiver skips settlement for
-    any status >= 400, so a failed tool is not charged.
+    when there is no validated settlement receipt. An HTTP failure may
+    still have settled; paid=False does not prove that no funds moved.
     """
 
     status_code: int
@@ -195,7 +196,7 @@ class CustodialSigner:
             # travels up as an exception and may never reach `pay`'s
             # reconciliation at all.
             if reservation is not None:
-                spend_service.release(reservation, reason="signature_refused")
+                spend_service.release_unsigned(reservation)
                 self._reservations.remove(reservation)
             raise
 
@@ -230,6 +231,9 @@ class CustodialSigner:
             # assumed so. See the note in spend_service on why nothing acts
             # on it yet.
             valid_before=fields.get("validBefore"),
+            valid_after=fields.get("validAfter"),
+            authorization_nonce=fields.get("nonce"),
+            asset=domain.get("verifyingContract"),
         )
         self._reservations.append(reservation)
         return reservation
@@ -279,12 +283,34 @@ def build_payment_client(
     requirement: `find_schemes_by_network` finds nothing and the payment
     is refused before a signature is ever requested.
     """
-    network = _require_network()
     client = x402Client()
+    _configure_payment_client(client, wallet_address, resource=resource, signer=signer)
+    return client
+
+
+def build_sync_payment_client(
+    wallet_address: str,
+    *,
+    resource: str | None = None,
+    signer: CustodialSigner | None = None,
+) -> x402ClientSync:
+    """Sync counterpart with the same network pin, guard and spending controls."""
+    client = x402ClientSync()
+    _configure_payment_client(client, wallet_address, resource=resource, signer=signer)
+    return client
+
+
+def _configure_payment_client(
+    client: x402Client | x402ClientSync,
+    wallet_address: str,
+    *,
+    resource: str | None,
+    signer: CustodialSigner | None,
+) -> None:
+    network = _require_network()
     signer = signer or CustodialSigner(wallet_address, resource=resource)
     client.register(network, ExactEvmClientScheme(signer))
     client.set_spend_controls({"max_amount_per_payment": _MAX_AMOUNT_PER_PAYMENT})
-    return client
 
 
 async def pay(
@@ -299,9 +325,8 @@ async def pay(
     """Request `url`, paying automatically if it answers 402.
 
     The transport handles the round trip: send, and on a 402 decode the
-    envelope, build a payment payload (a fresh nonce every attempt — a
-    nonce is burned by the receiver before verification, so a replayed
-    signature always fails), and retry with the signature attached.
+    envelope, build a fresh payment authorization and retry with its signature.
+    Earlier signatures are never reused or assumed canceled by a server cache.
 
     Nothing here contacts the facilitator. Verification and settlement are
     the receiver's side of the protocol, so an unreachable facilitator can
@@ -318,7 +343,7 @@ async def pay(
     # Checked eagerly as well as in the signer: an un-backed-up wallet
     # should fail before the request is sent, not after a round trip.
     wallet_manager.require_backup_confirmed(payer)
-    _check_budget(url)
+    check_payment_budget(url)
 
     network = _require_network()
     signer = CustodialSigner(payer, resource=url)
@@ -343,20 +368,20 @@ async def pay(
         # derive from x402.schemas.errors.PaymentError and are only
         # incidentally wrapped. Catching one and not the other would let a
         # protocol failure escape as a bare exception with no error shape.
-        raise _translate_payment_error(e, safe_url=safe_url, payer=payer, network=network) from e
+        raise _translate_payment_error(e, safe_url=safe_url, payer=payer, network=network) from None
     except httpx.HTTPError as e:
         # Reservations are deliberately NOT released here. A connection that
         # dropped after the signed retry went out may still have been
         # received and settled; only the receiver knows. An unreleased
         # reservation costs part of a budget, a wrongly released one costs
         # money that never appears in the total.
-        _log.warning("x402.payment.errored", url=safe_url, wallet_address=payer, error=_safe_error(e, url))
+        _log.warning("x402.payment.errored", url=safe_url, wallet_address=payer, error_type=type(e).__name__)
         raise X402PaymentError(
-            f"x402 payment request to {safe_url} failed at the transport layer: {_safe_error(e, url)}",
-            suggestion="The resource server could not be reached. Check the URL and that the server is running; no payment was made.",
-        ) from e
+            f"x402 payment request to {safe_url} was interrupted.",
+            suggestion="Check connectivity and the payment ledger before retrying; an existing authorization may have settled and remains counted.",
+        ) from None
 
-    settlement = _decode_settlement(response)
+    settlement = decode_settlement(response, payer=payer, network=network) if signer.reservations else None
     result = PaymentResult(
         status_code=response.status_code,
         body=_decode_body(response),
@@ -388,12 +413,7 @@ async def pay(
             status_code=result.status_code,
         )
     elif response.status_code == 402:
-        # A 402 that SURVIVED the payment attempt: the receiver looked at
-        # the signature and rejected it — a burned nonce, an expired
-        # validBefore, an insufficient balance. Nothing was charged, but
-        # nothing was delivered either, and unlike the cases below this is
-        # not routine. Logged separately so it cannot be mistaken for a
-        # free resource in a log tail.
+        # Rejection is an HTTP outcome, not proof of on-chain cancellation.
         _log.warning(
             "x402.payment.refused",
             url=safe_url,
@@ -401,8 +421,7 @@ async def pay(
             network=network,
         )
     else:
-        # Either the resource was free, or it errored and the receiver
-        # skipped settlement. Both are normal; neither is a charge.
+        # No validated receipt: free or uncertain. Retain any authorization.
         _log.info(
             "x402.payment.unsettled",
             url=safe_url,
@@ -426,7 +445,7 @@ def _safe_url(url: str) -> str:
     still -- into the conversation transcript -- so the stripping has to
     happen on every path or it is decoration on one of them.
     """
-    return strip_query(url) or url
+    return strip_query(url) or "[invalid URL]"
 
 
 def _safe_error(error: Exception, url: str) -> str:
@@ -443,7 +462,7 @@ def _safe_error(error: Exception, url: str) -> str:
     return text.replace(url, safe) if url != safe else text
 
 
-def _check_budget(url: str) -> None:
+def check_payment_budget(url: str) -> None:
     """Refuse an exhausted budget before a request is ever sent.
 
     The binding check happens in the signer, which is the only place the
@@ -611,45 +630,39 @@ def _translate_payment_error(
                 url=safe_url,
                 wallet_address=payer,
                 network=network,
-                error=str(cause),
+                error_type=type(cause).__name__,
             )
             return X402PaymentError(
                 f"The resource at {safe_url} offered no payment option this agent can "
-                f"satisfy on {network}: {cause}",
+                f"satisfy on {network}.",
                 suggestion=f"The server is asking for a chain or an asset the agent is not configured for. Confirm X402_NETWORK ({network}) matches what the server advertises, and that the price is quoted in USDC.",
             )
         cause = cause.__cause__
 
     _log.warning("x402.payment.errored", url=safe_url, wallet_address=payer,
-                 error=_safe_error(error, safe_url))
+                 error_type=type(error).__name__)
     return X402PaymentError(
-        f"x402 payment for {safe_url} failed: {error}",
+        f"x402 payment for {safe_url} could not be authorized.",
         suggestion="Check that the payer wallet holds enough USDC on the configured network, and that the resource server's 402 envelope is well-formed.",
     )
 
 
-def _decode_settlement(response: httpx.Response) -> dict | None:
-    """Decode the base64 settlement receipt, or None if there isn't one.
-
-    Never raises. By the time this runs the resource has been delivered
-    and the money has moved; an unreadable receipt costs an audit field,
-    not a payment, and must not be reported as a failed call.
-    """
-    raw = next(
-        (response.headers.get(name) for name in _SETTLEMENT_HEADERS if response.headers.get(name)),
-        None,
-    )
-    if not raw:
+def decode_settlement(response: httpx.Response, *, payer: str | None = None,
+                      network: str | None = None) -> dict | None:
+    """Return a validated server receipt, or None for an uncertain outcome."""
+    raw = next((response.headers.get(name) for name in _SETTLEMENT_HEADERS
+                if response.headers.get(name)), None)
+    if not raw or len(raw) > 16384:
         return None
     try:
-        padded = raw + "=" * (-len(raw) % 4)
-        decoded = json.loads(base64.b64decode(padded))
-    except ValueError as e:
-        # Covers both halves: b64decode raises binascii.Error and
-        # json.loads raises JSONDecodeError, and both subclass ValueError.
-        _log.warning("x402.settlement.undecodable", error=str(e))
+        decoded = json.loads(base64.b64decode(raw + "=" * (-len(raw) % 4), validate=True))
+    except (ValueError, RecursionError):
+        _log.warning("x402.settlement.undecodable")
         return None
-    return decoded if isinstance(decoded, dict) else None
+    if not valid_settlement(decoded, payer=payer, network=network):
+        _log.warning("x402.settlement.invalid")
+        return None
+    return {key: decoded[key] for key in ("success", "transaction", "payer", "network")}
 
 
 def _decode_body(response: httpx.Response) -> Any:

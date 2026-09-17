@@ -694,6 +694,29 @@ class TestX402SignGuard:
         payload.update(overrides)
         return payload
 
+    @pytest.mark.parametrize("field,value", [("name", None), ("name", "USD Coin"), ("version", None), ("version", "1")])
+    def test_domain_pin_refuses_before_decryption(self, monkeypatch, field, value):
+        from src.services import wallet_manager
+        from src.shared.errors import SigningError
+        monkeypatch.setattr(wallet_manager, "_load_secret", lambda *a: pytest.fail("secret loaded"))
+        payload = self._payload()
+        if value is None:
+            payload["domain"].pop(field)
+        else:
+            payload["domain"][field] = value
+        with pytest.raises(SigningError, match="domain name or version"):
+            wallet_manager.sign_x402_authorization(**payload)
+
+    def test_signing_exception_hides_secret(self, monkeypatch):
+        import traceback
+
+        from src.services import wallet_manager
+        from src.shared.errors import SigningError
+        monkeypatch.setattr(wallet_manager, "_load_secret", lambda *a: "syntheticauditword" + " abandon" * 11)
+        with pytest.raises(SigningError) as caught:
+            wallet_manager.sign_x402_authorization(**self._payload())
+        assert "syntheticauditword" not in "".join(traceback.format_exception(caught.value))
+
     # -- happy path ----------------------------------------------------------
 
     def test_signs_valid_testnet_authorization(self, temp_db, stub_keyring, mock_sdk_create):
@@ -708,7 +731,7 @@ class TestX402SignGuard:
         from src.services.wallet_manager import sign_x402_authorization
         self._make_wallet()
         payload = self._payload()
-        payload["domain"] = {**payload["domain"], "chainId": 8453, "verifyingContract": _USDC_BASE}
+        payload["domain"] = {**payload["domain"], "chainId": 8453, "name": "USD Coin", "verifyingContract": _USDC_BASE}
         sig = sign_x402_authorization(**payload)
         assert len(sig) == 65
 

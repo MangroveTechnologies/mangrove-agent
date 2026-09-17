@@ -134,7 +134,7 @@ async def wallet_import(req: WalletImportRequest) -> WalletImportResponse:
     summary="Stash a plaintext secret in the in-process vault",
     description=(
         "Called ONLY by the localhost CLI (scripts/stash-secret.sh). The "
-        "CLI reads the secret via `read -s` so it doesn't echo to the "
+        "CLI reads the secret via a hidden terminal prompt so it doesn't echo to the "
         "terminal, POSTs here, and prints the returned id. The agent can "
         "then consume the id via /wallet/import — the plaintext never "
         "enters Claude Code's transcript or context."

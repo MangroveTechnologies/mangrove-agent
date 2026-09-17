@@ -239,6 +239,7 @@ if [ ! -d agent-data ]; then
   chmod 700 agent-data
   info "created agent-data/ (chmod 700)"
 fi
+chmod 700 agent-data
 
 # --skip-tour: write the (gitignored, per-user) marker the trading-bot-workflow
 # rule gates on, so the first-run platform tour is suppressed. Replay it later

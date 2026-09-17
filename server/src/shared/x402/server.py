@@ -13,6 +13,7 @@ from x402.mechanisms.evm.exact import register_exact_evm_server
 from x402.mechanisms.evm.exact.server import ExactEvmScheme
 from x402.schemas import ResourceInfo
 
+from src.shared.logging import get_logger
 from src.shared.x402.config import (
     get_cdp_api_key_id,
     get_cdp_api_key_secret,
@@ -20,6 +21,28 @@ from src.shared.x402.config import (
     get_network,
     get_pay_to,
 )
+from src.shared.x402.diagnostics import safe_error_code
+
+_log = get_logger(__name__)
+
+
+async def _log_verify_failure(context):
+    error = context.error
+    reason = getattr(error, "invalid_reason", None)
+    if reason is None and error.args:
+        reason = error.args[0]
+    _log.warning("x402.receiver.verify_failed", error_type=type(error).__name__,
+                 error_code=safe_error_code(reason))
+
+
+async def _log_settle_failure(context):
+    error = context.error
+    reason = getattr(error, "error_reason", None)
+    if reason is None and error.args:
+        reason = error.args[0]
+    _log.warning("x402.receiver.settle_failed", error_type=type(error).__name__,
+                 error_code=safe_error_code(reason))
+
 
 _server: x402ResourceServer | None = None
 _initialized: bool = False
@@ -71,6 +94,8 @@ def get_x402_server() -> x402ResourceServer:
 
     facilitator = HTTPFacilitatorClient(config=fc_config)
     _server = x402ResourceServer(facilitator)
+    _server.on_verify_failure(_log_verify_failure)
+    _server.on_settle_failure(_log_settle_failure)
     register_exact_evm_server(_server)
     v1_scheme = ExactEvmScheme()
     _server.register("base", v1_scheme)

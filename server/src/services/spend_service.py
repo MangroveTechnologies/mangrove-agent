@@ -1,99 +1,27 @@
-"""spend_service — the agent-side cap on OUTBOUND x402 spending.
+"""Agent-wide outbound x402 budget, counted before signatures are disclosed.
 
-Why this lives here, and only here
-----------------------------------
-Nothing else can see the total. The wallet signing guard
-(`wallet_manager.sign_x402_authorization`) validates one payload's shape and
-says so in its own docstring: "a signing guard validates one payload's shape
-and cannot see an aggregate." The payer (`x402_payer`) sees one request. The
-receiving server sees one payment, from one caller, once. Only this process
-holds every outbound payment it has ever made, so the aggregate control has
-to be here — the identical argument that puts the portfolio kill switch in
-`portfolio_risk_service` rather than in the MangroveAI engine.
+Reserve uses an IMMEDIATE SQLite transaction on a dedicated connection: the
+cap check, ledger insertion and exhaustion latch are atomic across threads and
+processes. A confirmed user top-up starts a new period under the same lock.
 
-The risk it exists to bound is not one absurd charge; the SDK's per-payment
-ceiling (`x402_payer._MAX_AMOUNT_PER_PAYMENT`, $1) already covers that. It is
-volume. An autonomous sweep is 99 backtests at $0.02 — $2 for one experiment.
-Worse, `oracle_backtest_async` + `oracle_backtest_poll` form a poll loop
-against a priced meter: a 5-second poll on a two-minute backtest is 24 paid
-calls for a single result. Each one is individually reasonable and passes
-every per-payment check there is.
+Signed authorizations remain counted until settlement is recorded. HTTP errors,
+server nonce caches and later successful attempts cannot prove an earlier
+signature unusable. Only a failure before signature disclosure releases budget.
+Even expiry alone cannot prove that a signature was never settled; there is no
+automatic refund or retry. Old uncertain rows require review against chain data.
 
-The model: one budget, many wallets
------------------------------------
-The cap is AGENT-WIDE, not per wallet. `x402_payer.resolve_payer_wallet`
-lets an explicit argument override `X402_PAYER_WALLET`, so a budget keyed to
-the configured wallet would be sidestepped by any caller that names a
-different address. The ledger still records which wallet paid — that is audit
-data, not the budget key.
-
-Authorizations, not settlements
--------------------------------
-Spending is counted from the moment a payment is AUTHORIZED, because that is
-the last moment the agent is in control. After a signature exists, whether
-money moves is the receiver's decision, reported through an optional header
-that servers disagree about the name of. A budget that only counted confirmed
-settlements would let the counterparty choose how much of the budget it had
-used. So:
-
-- `reserve()` writes an `authorized` row and it counts immediately.
-- `settle()` attaches the settlement transaction — evidence, not accounting.
-- `release()` removes a row from the count, and ONLY on positive evidence the
-  authorization is dead: the guard refused to sign it, or the receiver
-  rejected it (which burns the nonce, so it can never be settled later).
-
-Anything ambiguous stays counted.
-
-Why expired authorizations are NOT reclaimed automatically
-----------------------------------------------------------
-An authorization dies at `validBefore` (+300s): past that instant USDC will
-reject it, so nobody can ever settle it. That makes an `authorized` row older
-than its own expiry provably dead money, and handing its budget back looks
-like an obvious win. `valid_before` is recorded on every row precisely so it
-can be — but nothing does it yet, deliberately.
-
-The reason is that "still `authorized` after expiry" does not yet mean "never
-settled". `reconcile()` has to be CALLED — it needs the response, which the
-signer never sees — so a payment driver that skips it leaves every row
-`authorized` whatever the outcome. Under that regime an expiry sweep would
-release successful payments too, and the running total would count nothing at
-all. A budget that silently stops counting is far worse than one that counts
-slightly high.
-
-So the order matters: prove reconciliation is actually happening, then turn on
-the sweep. `unreconciled_count()` is the proof — when it stays at zero, every
-`authorized` row really is in flight and expiry really does mean unsettled.
-Reclaiming before then would convert a conservative over-count into an
-unbounded under-count, the one direction a spend control must never fail.
-
-A budget, not a circuit breaker
-------------------------------
-The two look alike and are not. A breaker fires on an ANOMALY, latches, and
-demands review — a 30% book drawdown means something went wrong, which is
-why `portfolio_risk_service` is shaped the way it is. A budget runs out
-through entirely NORMAL use. Nothing went wrong; the remedy is a top-up, not
-an investigation.
-
-So spending here is `exhausted`, never `tripped`, and it does not clear
-itself — but authorizing more is one sentence through the `x402_spend_reset`
-MCP tool, not a trip to a terminal. That matters because the risk this
-bounds is unattended spend: a cron tick at 3am that exhausts the budget
-finds no human to ask and stays stopped, which is correct, while a user
-who is right there answers "yes, make it $50" and carries on. The strictness
-scales with the absence of a human, and the code can actually see that
-difference — a tool call has one, a scheduler tick does not.
-
-One thing that is NOT a top-up prompt: a single payment larger than the
-remaining budget. That is refused outright and the budget is left alone,
-because the amount comes out of a remote server's 402 envelope — treating it
-as exhaustion would hand any resource server a one-request denial of service
-over the agent's whole payment path.
+The cap is agent-wide rather than per-wallet. Integer micro-USDC units avoid
+rounding when summing payments. An oversized quote is refused without latching;
+a budget that is actually consumed stays exhausted until a user approves a reset.
 """
 from __future__ import annotations
 
 import math
+import re
+import sqlite3
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from src.config import app_config
@@ -101,6 +29,7 @@ from src.shared.db.sqlite import get_connection
 from src.shared.errors import ValidationError, X402SpendCapExceeded
 from src.shared.logging import get_logger
 from src.shared.urls import strip_query
+from src.shared.x402.receipts import valid_settlement
 
 _log = get_logger(__name__)
 
@@ -137,14 +66,28 @@ _AUTHORIZATION_GRACE_S = 300
 # States that consume budget. `released` is the only one that does not.
 _COUNTING_STATES = ("authorized", "settled")
 
-# Reserving is read-then-write: the running total is summed, a decision is
-# made, and a row is inserted. The agent is a single process, but the HTTP
-# server and the APScheduler tick run on different threads against one shared
-# SQLite connection, so two concurrent payments could each read a total that
-# does not include the other. This lock makes the sequence atomic. It is NOT
-# a substitute for a database constraint across processes — the agent is
-# single-process by construction (one SQLite file, one scheduler).
+# Serialize threads and use a dedicated SQLite write transaction for processes.
+# The application and manual payment tools may share the same database file.
 _reserve_lock = threading.Lock()
+
+
+@contextmanager
+def _budget_transaction():
+    with _reserve_lock:
+        shared = str(app_config.DB_PATH) == ":memory:"
+        conn = get_connection() if shared else sqlite3.connect(str(app_config.DB_PATH), timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            yield conn
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        finally:
+            if not shared:
+                conn.close()
+
 
 # Said the same way everywhere a payment is refused for want of budget.
 # Names the MCP tools rather than the REST routes on purpose: the whole
@@ -248,8 +191,8 @@ def _to_usd(micro_usd: int) -> float:
     return round(micro_usd / _MICRO_USD_PER_USD, 6)
 
 
-def _get_state() -> dict:
-    row = get_connection().execute(
+def _get_state(conn=None) -> dict:
+    row = (conn if conn is not None else get_connection()).execute(
         "SELECT period_id, period_started_at, period_cap_micro_usd, exhausted, "
         "exhausted_at, exhausted_reason, updated_at FROM x402_spend_state WHERE id = 1"
     ).fetchone()
@@ -269,18 +212,20 @@ def _get_state() -> dict:
     }
 
 
-def _update_state(**fields) -> None:
+def _update_state(conn=None, **fields) -> None:
     fields["updated_at"] = _now()
     cols = ", ".join(f"{k} = ?" for k in fields)
-    conn = get_connection()
+    owned = conn is None
+    conn = conn if conn is not None else get_connection()
     conn.execute(f"UPDATE x402_spend_state SET {cols} WHERE id = 1", tuple(fields.values()))
-    conn.commit()
+    if owned:
+        conn.commit()
 
 
-def _spent_micro_usd(period_id: int) -> int:
+def _spent_micro_usd(period_id: int, conn=None) -> int:
     """Committed spend for a period: every row that is not released."""
     placeholders = ", ".join("?" for _ in _COUNTING_STATES)
-    row = get_connection().execute(
+    row = (conn if conn is not None else get_connection()).execute(
         f"SELECT COALESCE(SUM(amount_micro_usd), 0) AS v FROM x402_payments "
         f"WHERE period_id = ? AND state IN ({placeholders})",
         (period_id, *_COUNTING_STATES),
@@ -288,7 +233,7 @@ def _spent_micro_usd(period_id: int) -> int:
     return int(row["v"])
 
 
-def _coerce_unix_seconds(value: object) -> int | None:
+def _coerce_unix_seconds(value: object, *, allow_zero: bool = False) -> int | None:
     """Read an EIP-3009 `validBefore` as a unix second, or None.
 
     Unlike the amount, an unreadable value here is NOT fatal: this field is
@@ -302,7 +247,7 @@ def _coerce_unix_seconds(value: object) -> int | None:
         seconds = int(value)
     except (TypeError, ValueError):
         return None
-    return seconds if 0 < seconds <= _MAX_STORABLE_MICRO_USD else None
+    return seconds if (0 if allow_zero else 1) <= seconds <= _MAX_STORABLE_MICRO_USD else None
 
 
 def _coerce_micro_usd(value: object) -> int:
@@ -375,8 +320,8 @@ def get_status() -> dict:
         # next call", and a negative remainder is not a more useful no.
         "remaining_usd": _to_usd(max(cap - spent, 0)),
         "payment_count": _payment_count(state["period_id"]),
-        # Should be zero. Non-zero means some payment driver is not calling
-        # reconcile(), so those rows will never record whether they settled.
+        # Expired authorizations with uncertain outcomes require investigation.
+        # Reconciliation cannot infer non-settlement from an HTTP error.
         "unreconciled_count": unreconciled_count(state["period_id"]),
         "period_id": state["period_id"],
         "period_started_at": state["period_started_at"],
@@ -384,19 +329,11 @@ def get_status() -> dict:
 
 
 def unreconciled_count(period_id: int | None = None) -> int:
-    """Authorizations that should have been closed out by now and were not.
+    """Count old authorizations whose settlement is still uncertain.
 
-    The number that makes a forgotten `reconcile()` visible. A row is counted
-    once its authorization can no longer be settled by anybody — past
-    `valid_before`, or, for a row written without one, `_AUTHORIZATION_GRACE_S`
-    after it was created. At that point "still `authorized`" cannot mean "in
-    flight"; it means nobody ever recorded what happened.
-
-    **It should be zero.** A non-zero value does not mean money was lost — it
-    means the ledger is no longer an audit trail, because those rows will
-    never carry a settlement transaction or a terminal state. That is the
-    failure mode this counter exists to stop being silent, since skipping
-    reconciliation raises nothing and breaks no payment.
+    A nonzero count calls for review; a missing receipt or HTTP error can leave
+    legitimate ambiguity even when the transport correctly called reconcile().
+    Nothing is automatically released, including after authorization expiry.
     """
     state_period = period_id if period_id is not None else _get_state()["period_id"]
     now = datetime.now(timezone.utc)
@@ -427,6 +364,7 @@ def list_payments(*, limit: int = 50, period_id: int | None = None) -> list[dict
     sql = (
         "SELECT id, period_id, state, amount_micro_usd, wallet_address, payee, "
         "network, resource, transaction_hash, valid_before, release_reason, "
+        "authorization_nonce, asset, valid_after, "
         "created_at, updated_at "
         "FROM x402_payments"
     )
@@ -448,6 +386,9 @@ def list_payments(*, limit: int = 50, period_id: int | None = None) -> list[dict
             "resource": r["resource"],
             "transaction": r["transaction_hash"],
             "valid_before": r["valid_before"],
+            "authorization_nonce": r["authorization_nonce"],
+            "asset": r["asset"],
+            "valid_after": r["valid_after"],
             "release_reason": r["release_reason"],
             "created_at": r["created_at"],
             "updated_at": r["updated_at"],
@@ -510,6 +451,9 @@ def reserve(
     network: str | None = None,
     resource: str | None = None,
     valid_before: object = None,
+    authorization_nonce: object = None,
+    asset: object = None,
+    valid_after: object = None,
 ) -> str:
     """Claim budget for one payment. Raises rather than overspending.
 
@@ -527,11 +471,21 @@ def reserve(
     amount = _coerce_micro_usd(value)
     resource = strip_query(resource)
     valid_before = _coerce_unix_seconds(valid_before)
+    valid_after = _coerce_unix_seconds(valid_after, allow_zero=True)
+    # Malformed inputs will be refused by the signing guard. Do not persist
+    # arbitrary remote strings while reserving before that guard runs.
+    if isinstance(authorization_nonce, (bytes, bytearray)):
+        authorization_nonce = "0x" + bytes(authorization_nonce).hex()
+    if isinstance(authorization_nonce, str) and re.fullmatch(r"(?:0x)?[0-9a-fA-F]{64}", authorization_nonce):
+        authorization_nonce = "0x" + authorization_nonce.removeprefix("0x").lower()
+    else:
+        authorization_nonce = None
+    asset = asset.lower() if isinstance(asset, str) and re.fullmatch(r"0x[0-9a-fA-F]{40}", asset) else None
 
-    with _reserve_lock:
-        state = _get_state()
+    with _budget_transaction() as conn:
+        state = _get_state(conn)
         cap = _cap_micro_usd(state)
-        spent = _spent_micro_usd(state["period_id"])
+        spent = _spent_micro_usd(state["period_id"], conn)
 
         if state["exhausted"]:
             _log.warning("x402.spend.refused", reason="budget_spent", amount_usd=_to_usd(amount),
@@ -558,19 +512,18 @@ def reserve(
 
         reservation_id = str(uuid.uuid4())
         now = _now()
-        conn = get_connection()
         conn.execute(
             """INSERT INTO x402_payments (id, period_id, state, amount_micro_usd,
                  wallet_address, payee, network, resource, transaction_hash,
-                 valid_before, release_reason, created_at, updated_at)
-               VALUES (?, ?, 'authorized', ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?)""",
+                 valid_before, release_reason, created_at, updated_at,
+                 authorization_nonce, asset, valid_after)
+               VALUES (?, ?, 'authorized', ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?)""",
             (reservation_id, state["period_id"], amount, wallet_address, payee,
-             network, resource, valid_before, now, now),
+             network, resource, valid_before, now, now, authorization_nonce, asset, valid_after),
         )
-        conn.commit()
 
         spent_after = spent + amount
-        count = _payment_count(state["period_id"])
+        count = conn.execute("SELECT COUNT(*) FROM x402_payments WHERE period_id = ? AND state != 'released'", (state["period_id"],)).fetchone()[0]
         _log.info("x402.spend.reserved", reservation_id=reservation_id,
                   amount_usd=_to_usd(amount), spent_usd=_to_usd(spent_after),
                   cap_usd=_to_usd(cap), wallet_address=wallet_address,
@@ -587,122 +540,96 @@ def reserve(
             _mark_exhausted(
                 f"${_to_usd(spent_after)} of the ${_to_usd(cap)} budget used "
                 f"across {count} payments",
-                spent=spent_after, cap=cap,
+                spent=spent_after, cap=cap, conn=conn,
             )
 
     return reservation_id
 
 
-def _mark_exhausted(reason: str, *, spent: int, cap: int) -> None:
+def _mark_exhausted(reason: str, *, spent: int, cap: int, conn=None) -> None:
     """Record that the budget is spent. Never clears itself.
 
     WARNING, not ERROR: a spent budget is the expected end of normal use,
     not a fault. Logging it at error level would put a routine top-up
     prompt in the same bucket as the portfolio kill switch.
     """
-    _update_state(exhausted=1, exhausted_at=_now(), exhausted_reason=reason)
+    _update_state(conn=conn, exhausted=1, exhausted_at=_now(), exhausted_reason=reason)
     _log.warning("x402.spend.exhausted", reason=reason,
                  spent_usd=_to_usd(spent), cap_usd=_to_usd(cap))
 
 
 def reconcile(
     reservation_ids: list[str] | tuple[str, ...] | str | None,
-    *,
-    status_code: int,
-    settlement: dict | None = None,
-    resource: str | None = None,
+    *, status_code: int, settlement: dict | None = None, resource: str | None = None,
 ) -> None:
-    """Close out an exchange's reservations. **Every payment driver must call this.**
+    """Record a validated server receipt; all uncertain authorizations stay counted.
 
-    `reserve()` is unavoidable — it runs inside the signer, so no transport
-    can pay without being charged. This is the other half, and it is NOT
-    structural, because closing a reservation needs the OUTCOME and the
-    signer never sees a response. It therefore has to be called explicitly
-    by whatever drove the request: `x402_payer.pay` today, and any transport
-    that injects payment into an SDK client tomorrow.
-
-    Skipping it does not raise and does not break a payment. What it does is
-    quieter and worse: every row stays `authorized` forever, so the ledger
-    records only that the agent *tried* to pay. No settlement transaction is
-    written, success and failure become indistinguishable on disk, and the
-    audit trail this table exists to provide is empty while still looking
-    like a ledger. `get_status()["unreconciled_count"]` is how that shows up
-    if it ever happens — it should be zero.
-
-    The outcome-to-state mapping lives here rather than in the caller so
-    every driver agrees on what a given response means:
-
-    - **A settlement receipt** — settled, transaction recorded. The total
-      does not change; it was charged when the authorization was signed.
-    - **402** — the receiver rejected the signature and burned the nonce, so
-      the authorization can never be presented again. Released.
-    - **>= 400** — on REST the receiver skips settlement for an errored
-      resource, so nothing was charged. Released.
-    - **Anything else** — a success with no readable receipt. Ambiguous, and
-      deliberately left counted: releasing on a missing optional header
-      would let the counterparty decide how much budget it had used.
+    HTTP errors and a server nonce cache cannot cancel an on-chain authorization.
+    A receipt is server-reported evidence, not independent chain confirmation.
     """
     ids = _as_id_list(reservation_ids)
     if not ids:
         return
-
-    transaction = settlement.get("transaction") if isinstance(settlement, dict) else None
-    if settlement is not None:
-        settle(ids, transaction=transaction if isinstance(transaction, str) else None,
-               resource=resource)
-    elif status_code == 402:
-        release(ids, reason="rejected_by_receiver")
-    elif status_code >= 400:
-        release(ids, reason="resource_error_not_settled")
+    row = get_connection().execute(
+        "SELECT wallet_address, network FROM x402_payments WHERE id = ?", (ids[-1],)
+    ).fetchone()
+    if row and valid_settlement(settlement, payer=row["wallet_address"], network=row["network"]):
+        settle(ids, transaction=settlement["transaction"], resource=resource)
     else:
-        _log.warning(
-            "x402.spend.settlement_unconfirmed",
-            reservation_ids=list(ids),
-            status_code=status_code,
-            resource=strip_query(resource),
-        )
+        _log.warning("x402.spend.settlement_unconfirmed", reservation_ids=ids,
+                     status_code=status_code, resource=strip_query(resource))
 
 
 def settle(reservation_ids: list[str] | tuple[str, ...] | str | None, *,
            transaction: str | None = None, resource: str | None = None) -> None:
-    """Attach settlement evidence to a reservation. Does not change the total.
-
-    Only the LAST reservation can have settled: the receiver burns a nonce
-    before verifying it, so every earlier attempt in the same exchange is
-    dead by the time a later one succeeds. Those earlier rows are released
-    here rather than left counting.
-    """
+    """Record evidence for the final attempt. Earlier signatures remain counted."""
     ids = _as_id_list(reservation_ids)
     if not ids:
         return
-    settled_id, superseded = ids[-1], ids[:-1]
-    if superseded:
-        release(superseded, reason="superseded_by_later_attempt")
+    if not isinstance(transaction, str) or not re.fullmatch(r"0x[0-9a-fA-F]{64}", transaction):
+        return
+    with _budget_transaction() as conn:
+        cursor = conn.execute(
+            "UPDATE x402_payments SET state = 'settled', transaction_hash = ?, "
+            "resource = COALESCE(?, resource), updated_at = ? "
+            "WHERE id = ? AND state = 'authorized'",
+            (transaction, strip_query(resource), _now(), ids[-1]),
+        )
+    _log.info("x402.spend.settled" if cursor.rowcount else "x402.spend.settle_noop",
+              reservation_id=ids[-1], transaction=transaction)
 
-    now = _now()
-    conn = get_connection()
-    cursor = conn.execute(
-        "UPDATE x402_payments SET state = 'settled', transaction_hash = ?, "
-        "resource = COALESCE(?, resource), updated_at = ? "
-        "WHERE id = ? AND state = 'authorized'",
-        (transaction, strip_query(resource), now, settled_id),
-    )
-    conn.commit()
-    if cursor.rowcount:
-        _log.info("x402.spend.settled", reservation_id=settled_id, transaction=transaction)
-    else:
-        # Already settled or already released. Worth a line rather than a
-        # silent no-op: on a ledger, "nothing changed" is itself the finding.
-        _log.warning("x402.spend.settle_noop", reservation_id=settled_id,
-                     transaction=transaction)
+
+def release_unsigned(reservation_id: str) -> None:
+    """Undo only a proven pre-disclosure signing failure, under the budget lock.
+
+    Never use for a transmitted signature, timeout, HTTP error or chain expiry.
+    Older periods and already released/settled rows cannot unlock this period.
+    """
+    with _budget_transaction() as conn:
+        row = conn.execute("SELECT state, period_id, amount_micro_usd FROM x402_payments WHERE id = ?",
+                           (reservation_id,)).fetchone()
+        if row is None or row["state"] != "authorized":
+            return
+        state = _get_state(conn)
+        current = row["period_id"] == state["period_id"]
+        cap = _cap_micro_usd(state)
+        before = _spent_micro_usd(state["period_id"], conn)
+        conn.execute("UPDATE x402_payments SET state = 'released', release_reason = 'signature_refused', "
+                     "updated_at = ? WHERE id = ? AND state = 'authorized'", (_now(), reservation_id))
+        # An unsigned positive reservation caused this period to appear full.
+        # Recompute under the same lock; concurrent resets/reservations cannot
+        # get their exhaustion state cleared by an old or repeated release.
+        if (current and state["exhausted"] and row["amount_micro_usd"] > 0
+                and before >= cap and _spent_micro_usd(state["period_id"], conn) < cap):
+            _update_state(conn=conn, exhausted=0, exhausted_at=None, exhausted_reason=None)
+    _log.info("x402.spend.unsigned_released", reservation_id=reservation_id)
 
 
 def release(reservation_ids: list[str] | tuple[str, ...] | str | None, *, reason: str) -> None:
     """Give budget back, for authorizations that provably cannot be settled.
 
     Call this ONLY with positive evidence the authorization is dead — the
-    guard refused to sign, or the receiver rejected the payment and burned
-    the nonce. An unknown outcome is not evidence: leaving a row counted
+    guard refused to sign before any signature was disclosed. An unknown outcome is not evidence: leaving a row counted
     costs part of a budget, releasing one that later settles costs money.
 
     Releases only `authorized` rows, so re-running it cannot resurrect
@@ -712,14 +639,13 @@ def release(reservation_ids: list[str] | tuple[str, ...] | str | None, *, reason
     if not ids:
         return
     now = _now()
-    conn = get_connection()
-    placeholders = ", ".join("?" for _ in ids)
-    cursor = conn.execute(
-        f"UPDATE x402_payments SET state = 'released', release_reason = ?, updated_at = ? "
-        f"WHERE id IN ({placeholders}) AND state = 'authorized'",
-        (reason, now, *ids),
-    )
-    conn.commit()
+    with _budget_transaction() as conn:
+        placeholders = ", ".join("?" for _ in ids)
+        cursor = conn.execute(
+            f"UPDATE x402_payments SET state = 'released', release_reason = ?, updated_at = ? "
+            f"WHERE id IN ({placeholders}) AND state = 'authorized'",
+            (reason, now, *ids),
+        )
     if cursor.rowcount:
         _log.info("x402.spend.released", reservation_ids=list(ids),
                   released=cursor.rowcount, reason=reason)
@@ -754,19 +680,20 @@ def reset(cap_usd: float | None = None) -> dict:
     one, so `list_payments()` still shows every payment the agent has ever
     authorized while the total starts fresh.
     """
-    state = _get_state()
-    previous_spent = _spent_micro_usd(state["period_id"])
-    new_period = state["period_id"] + 1
-    fields: dict = {
-        "period_id": new_period,
-        "period_started_at": _now(),
-        "exhausted": 0,
-        "exhausted_at": None,
-        "exhausted_reason": None,
-    }
-    if cap_usd is not None:
-        fields["period_cap_micro_usd"] = _authorized_cap_micro_usd(cap_usd)
-    _update_state(**fields)
+    with _budget_transaction() as conn:
+        state = _get_state(conn)
+        previous_spent = _spent_micro_usd(state["period_id"], conn)
+        new_period = state["period_id"] + 1
+        fields: dict = {
+            "period_id": new_period,
+            "period_started_at": _now(),
+            "exhausted": 0,
+            "exhausted_at": None,
+            "exhausted_reason": None,
+        }
+        if cap_usd is not None:
+            fields["period_cap_micro_usd"] = _authorized_cap_micro_usd(cap_usd)
+        _update_state(conn=conn, **fields)
 
     _log.warning("x402.spend.topped_up", previous_period=state["period_id"],
                  previous_spent_usd=_to_usd(previous_spent), new_period=new_period,

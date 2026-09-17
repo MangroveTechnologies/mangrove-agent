@@ -392,9 +392,9 @@ def test_no_wallet_anywhere_refuses_rather_than_guessing(monkeypatch):
 # -- pay() round trips -------------------------------------------------------
 
 
-def _settlement_header(transaction: str = "0xabc", payer: str = _TEST_ADDRESS) -> str:
+def _settlement_header(transaction: str = "0x" + "ab" * 32, payer: str = _TEST_ADDRESS) -> str:
     return base64.b64encode(
-        json.dumps({"transaction": transaction, "network": _SEPOLIA, "payer": payer}).encode()
+        json.dumps({"success": True, "transaction": transaction, "network": _SEPOLIA, "payer": payer}).encode()
     ).decode()
 
 
@@ -455,7 +455,7 @@ async def test_402_is_paid_and_settlement_is_reported(wallet, sepolia_network, m
 
     assert result.status_code == 200
     assert result.paid is True
-    assert result.transaction == "0xabc"
+    assert result.transaction == "0x" + "ab" * 32
     assert result.network == _SEPOLIA
     assert result.payer == _TEST_ADDRESS
 
@@ -639,7 +639,7 @@ async def test_unreachable_server_reports_a_payment_error(wallet, sepolia_networ
 
     monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda *a, **k: httpx.MockTransport(_boom))
 
-    with pytest.raises(X402PaymentError, match="transport layer"):
+    with pytest.raises(X402PaymentError, match="interrupted"):
         await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
 
@@ -826,13 +826,12 @@ async def test_settled_payment_is_recorded_with_its_transaction(
 
     row = spend_service.list_payments()[0]
     assert row["state"] == "settled"
-    assert row["transaction"] == "0xabc"
+    assert row["transaction"] == "0x" + "ab" * 32
     assert spend_service.get_status()["spent_usd"] == 0.05
 
 
-async def test_errored_resource_gives_the_budget_back(wallet, sepolia_network, mock_http):
-    """REST skips settlement for any status >= 400, and the nonce is burned,
-    so the authorization is dead and the budget is genuinely free again."""
+async def test_errored_resource_retains_the_budget(wallet, sepolia_network, mock_http):
+    """An HTTP error cannot cancel a disclosed authorization."""
     from src.services import spend_service
     from src.services.x402_payer import pay
 
@@ -843,13 +842,12 @@ async def test_errored_resource_gives_the_budget_back(wallet, sepolia_network, m
 
     await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
-    assert spend_service.get_status()["spent_usd"] == 0.0
-    assert spend_service.list_payments()[0]["release_reason"] == "resource_error_not_settled"
+    assert spend_service.get_status()["spent_usd"] == 0.05
+    assert spend_service.list_payments()[0]["release_reason"] is None
 
 
-async def test_rejected_payment_gives_the_budget_back(wallet, sepolia_network, mock_http):
-    """A 402 that survived the attempt: the receiver burned the nonce, so
-    the signature can never be presented again."""
+async def test_rejected_payment_retains_the_budget(wallet, sepolia_network, mock_http):
+    """An HTTP error cannot cancel a disclosed authorization."""
     from src.services import spend_service
     from src.services.x402_payer import pay
 
@@ -859,8 +857,8 @@ async def test_rejected_payment_gives_the_budget_back(wallet, sepolia_network, m
 
     await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
-    assert spend_service.get_status()["spent_usd"] == 0.0
-    assert {p["state"] for p in spend_service.list_payments()} == {"released"}
+    assert spend_service.get_status()["spent_usd"] == 0.05
+    assert {p["state"] for p in spend_service.list_payments()} == {"authorized"}
 
 
 async def test_missing_receipt_still_counts_against_the_budget(
@@ -943,21 +941,14 @@ def test_absurd_amounts_are_refused_before_the_ledger(wallet):
     "responses,expected_state",
     [
         pytest.param("settled", "settled", id="settled"),
-        pytest.param("rejected", "released", id="rejected-402"),
-        pytest.param("errored", "released", id="resource-500"),
+        pytest.param("rejected", "authorized", id="rejected-402"),
+        pytest.param("errored", "authorized", id="resource-500"),
     ],
 )
-async def test_pay_always_leaves_the_ledger_in_a_terminal_state(
+async def test_pay_reconciles_without_releasing_uncertain_payments(
     wallet, sepolia_network, mock_http, responses, expected_state
 ):
-    """pay() must never walk away from a reservation it opened.
-
-    Reconciliation is the ONLY moment a settlement transaction is written and
-    the only moment a row stops meaning "we tried". A driver that skips it
-    breaks nothing visible -- payments still work, the budget still roughly
-    counts -- while the audit trail quietly stays empty. So the contract is
-    asserted here rather than left to a docstring.
-    """
+    """Settlement is recorded; uncertain signatures remain authorized."""
     from src.services import spend_service
     from src.services.x402_payer import pay
 
@@ -974,7 +965,7 @@ async def test_pay_always_leaves_the_ledger_in_a_terminal_state(
 
     ledger = spend_service.list_payments()
     assert [p["state"] for p in ledger] == [expected_state]
-    # And nothing is left dangling for the counter to find later.
+    # Fresh uncertain authorizations have not yet expired.
     assert spend_service.get_status()["unreconciled_count"] == 0
 
 
@@ -986,12 +977,12 @@ async def test_a_settled_payment_records_its_transaction(wallet, sepolia_network
     mock_http.install(
         httpx.Response(402, headers={"PAYMENT-REQUIRED": _payment_required_header()}),
         httpx.Response(200, json={"ok": True},
-                       headers={"x-payment-response": _settlement_header(transaction="0xfeed")}),
+                       headers={"x-payment-response": _settlement_header(transaction="0x" + "fe" * 32)}),
     )
 
     await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
-    assert spend_service.list_payments()[0]["transaction"] == "0xfeed"
+    assert spend_service.list_payments()[0]["transaction"] == "0x" + "fe" * 32
 
 
 async def test_no_path_out_of_pay_leaks_a_query_string(wallet, sepolia_network, monkeypatch, mock_http):

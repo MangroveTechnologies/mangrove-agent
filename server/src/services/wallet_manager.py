@@ -323,14 +323,7 @@ def _validate_x402_authorization(
             suggestion="Extra type definitions can smuggle nested data into the signed hash. Treat this as a tampered envelope.",
         )
 
-    # -- 2. The token must be real USDC, on the chain the payload claims.
-    # eth_account derives the EIP712Domain type from whichever keys `domain`
-    # actually carries, so an unexpected key (a `salt`, say) silently changes
-    # the domain separator — signing a different structure than the one
-    # checked below. Absent keys are not rejected: a deployment that omits
-    # `version` yields a signature USDC will not accept, which is a wasted
-    # signature rather than a loss, and hard-requiring them risks refusing a
-    # legitimate envelope on a quirk.
+    # Pin both the EIP-712 structure and the deployed token's domain.
     unexpected_domain_keys = set(domain) - _X402_DOMAIN_KEYS
     if unexpected_domain_keys:
         raise SigningError(
@@ -374,6 +367,13 @@ def _validate_x402_authorization(
             "pays in USDC only — signing against an unknown token contract is "
             "how a forged envelope drains an arbitrary balance.",
             suggestion=f"Expected {expected_usdc} for chain {chain_id}. If the payment is genuinely denominated in another asset, that is a reviewed change, not a bypass.",
+        )
+
+    expected_name = {8453: "USD Coin", 84532: "USDC"}[chain_id]
+    if domain.get("name") != expected_name or domain.get("version") != "2":
+        raise SigningError(
+            "Refused to sign x402 authorization: unexpected USDC domain name or version.",
+            suggestion="Use the supported token domain for the configured chain; missing or altered domains are refused.",
         )
 
     # -- 3. The message must be exactly the canonical fields, well-formed.
@@ -721,11 +721,11 @@ def import_wallet(
 
     try:
         address = _derive_address(secret)
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         raise SigningError(
-            f"Could not derive EVM address from the provided secret: {e}",
+            "Could not derive an EVM address from the provided secret.",
             suggestion="Verify the secret is a valid 0x-prefixed private key or BIP39 mnemonic.",
-        ) from e
+        ) from None
 
     conn = get_connection()
     existing = conn.execute(
@@ -1022,11 +1022,11 @@ def sign(unsigned_tx: dict, wallet_address: str, chain_id: int | None = None) ->
     try:
         account = _account_from_secret(secret)
         signed: SignedTransaction = account.sign_transaction(normalized)
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         raise SigningError(
-            f"Failed to sign transaction for {wallet_address}: {e}",
+            "Failed to sign transaction with the stored wallet.",
             suggestion="Verify the tx dict has all EVM required fields. Pass chain_id explicitly if the SDK payload omits it.",
-        ) from e
+        ) from None
     finally:
         del secret
 
@@ -1103,11 +1103,11 @@ def sign_x402_authorization(
             message_types=signing_types,
             message_data=message,
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         raise SigningError(
-            f"Failed to sign x402 authorization for {wallet_address}: {e}",
+            "Failed to sign x402 authorization with the stored wallet.",
             suggestion="The payload passed the guard, so this is a signing-layer failure — check that the wallet's stored secret is intact and that domain/message field types match the EIP-3009 definition.",
-        ) from e
+        ) from None
     finally:
         del secret
 

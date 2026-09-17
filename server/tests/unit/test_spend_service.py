@@ -40,7 +40,7 @@ def _reserve(amount_micro_usd, **kw):
 
     return spend_service.reserve(
         value=amount_micro_usd,
-        wallet_address=kw.pop("wallet_address", "0xPayer"),
+        wallet_address=kw.pop("wallet_address", "0x" + "11" * 20),
         **kw,
     )
 
@@ -244,12 +244,12 @@ def test_settle_records_evidence_without_changing_the_total(temp_db):
     from src.services import spend_service
 
     rid = _reserve(5 * _CENT)
-    spend_service.settle(rid, transaction="0xdeadbeef", resource="https://x.test/a?key=secret")
+    spend_service.settle(rid, transaction="0x" + "de" * 32, resource="https://x.test/a?key=secret")
 
     assert spend_service.get_status()["spent_usd"] == 0.05
     row = spend_service.list_payments()[0]
     assert row["state"] == "settled"
-    assert row["transaction"] == "0xdeadbeef"
+    assert row["transaction"] == "0x" + "de" * 32
     # Query strings are stripped: a durable ledger is no place for a
     # credential that leaked into a URL.
     assert row["resource"] == "https://x.test/a"
@@ -273,31 +273,26 @@ def test_release_cannot_resurrect_budget_from_a_settled_payment(temp_db):
     from src.services import spend_service
 
     rid = _reserve(5 * _CENT)
-    spend_service.settle(rid, transaction="0xabc")
+    spend_service.settle(rid, transaction="0x" + "ab" * 32)
     spend_service.release(rid, reason="oops")
 
     assert spend_service.get_status()["spent_usd"] == 0.05
     assert spend_service.list_payments()[0]["state"] == "settled"
 
 
-def test_settling_a_retry_releases_the_superseded_attempt(temp_db):
-    """Only one authorization per exchange can settle.
-
-    The receiver burns a nonce BEFORE it verifies, so an earlier attempt is
-    already dead by the time a later one succeeds. Leaving it counted would
-    charge the budget twice for one payment.
-    """
+def test_settling_a_retry_retains_the_earlier_authorization(temp_db):
+    """A later settlement does not cancel an earlier signature."""
     from src.services import spend_service
 
     first = _reserve(5 * _CENT)
     second = _reserve(5 * _CENT)
     assert spend_service.get_status()["spent_usd"] == 0.10
 
-    spend_service.settle([first, second], transaction="0xfeed")
+    spend_service.settle([first, second], transaction="0x" + "fe" * 32)
 
-    assert spend_service.get_status()["spent_usd"] == 0.05
+    assert spend_service.get_status()["spent_usd"] == 0.10
     by_id = {p["id"]: p for p in spend_service.list_payments()}
-    assert by_id[first]["state"] == "released"
+    assert by_id[first]["state"] == "authorized"
     assert by_id[second]["state"] == "settled"
 
 
@@ -536,12 +531,12 @@ def test_query_strings_never_reach_the_ledger_or_an_error_message(temp_db, monke
 
     leaky = "https://api.test/v1/signals?api_key=SUPERSECRET&x=1"
 
-    spend_service.reserve(value=10, wallet_address="0xPayer", resource=leaky)
+    spend_service.reserve(value=10, wallet_address="0x" + "11" * 20, resource=leaky)
     assert spend_service.list_payments()[0]["resource"] == "https://api.test/v1/signals"
 
     monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 0, raising=False)
     with pytest.raises(X402SpendCapExceeded) as excinfo:
-        x402_payer._check_budget(leaky)
+        x402_payer.check_payment_budget(leaky)
     assert "SUPERSECRET" not in excinfo.value.message
     assert "https://api.test/v1/signals" in excinfo.value.message
 
@@ -627,34 +622,34 @@ def test_reconcile_settles_when_a_receipt_came_back(temp_db):
     from src.services import spend_service
 
     rid = _reserve(5 * _CENT)
-    _reconcile(rid, settlement={"transaction": "0xabc", "network": "eip155:84532"},
+    _reconcile(rid, settlement={"success": True, "transaction": "0x" + "ab" * 32, "network": "eip155:84532", "payer": "0x" + "11" * 20},
                resource="https://api.test/v1/x?token=LEAK")
 
     row = spend_service.list_payments()[0]
     assert row["state"] == "settled"
-    assert row["transaction"] == "0xabc"
+    assert row["transaction"] == "0x" + "ab" * 32
     assert row["resource"] == "https://api.test/v1/x"      # query still stripped
     assert spend_service.get_status()["spent_usd"] == 0.05  # settling is not a charge
 
 
-def test_reconcile_releases_a_rejected_payment(temp_db):
+def test_reconcile_retains_a_rejected_payment(temp_db):
     from src.services import spend_service
 
     rid = _reserve(5 * _CENT)
     _reconcile(rid, status_code=402)
 
-    assert spend_service.get_status()["spent_usd"] == 0.0
-    assert spend_service.list_payments()[0]["release_reason"] == "rejected_by_receiver"
+    assert spend_service.get_status()["spent_usd"] == 0.05
+    assert spend_service.list_payments()[0]["state"] == "authorized"
 
 
-def test_reconcile_releases_when_the_resource_errored(temp_db):
+def test_reconcile_retains_when_the_resource_errored(temp_db):
     from src.services import spend_service
 
     rid = _reserve(5 * _CENT)
     _reconcile(rid, status_code=500)
 
-    assert spend_service.get_status()["spent_usd"] == 0.0
-    assert spend_service.list_payments()[0]["release_reason"] == "resource_error_not_settled"
+    assert spend_service.get_status()["spent_usd"] == 0.05
+    assert spend_service.list_payments()[0]["state"] == "authorized"
 
 
 def test_reconcile_keeps_an_unconfirmed_success_counted(temp_db):
@@ -670,15 +665,14 @@ def test_reconcile_keeps_an_unconfirmed_success_counted(temp_db):
 
 
 def test_reconcile_survives_a_receipt_with_no_transaction_field(temp_db):
-    """A receipt that decodes but names no transaction still means settled --
-    the money moved, the evidence is just thinner."""
+    """Missing settlement evidence remains uncertain and counted."""
     from src.services import spend_service
 
     rid = _reserve(5 * _CENT)
     _reconcile(rid, settlement={"network": "eip155:84532"})
 
     row = spend_service.list_payments()[0]
-    assert row["state"] == "settled" and row["transaction"] is None
+    assert row["state"] == "authorized" and row["transaction"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -690,7 +684,7 @@ def test_a_reconciled_ledger_reports_nothing_unreconciled(temp_db):
     from src.services import spend_service
 
     rid = _reserve(_CENT, valid_before=1)          # long expired
-    _reconcile(rid, settlement={"transaction": "0xabc"})
+    _reconcile(rid, settlement={"success": True, "transaction": "0x" + "ab" * 32, "network": "eip155:84532", "payer": "0x" + "11" * 20})
     assert spend_service.get_status()["unreconciled_count"] == 0
 
 
