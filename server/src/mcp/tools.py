@@ -1176,6 +1176,7 @@ def _register_signals(server: FastMCP) -> None:
             return _auth_error()
         if limit < 1 or limit > 1000:
             return _err("VALIDATION_ERROR", "Signal limit must be between 1 and 1000.")
+        category = (category.strip().lower() or None) if category else None
         from src.shared.clients.mangrove import mangrove_ai_client
         try:
             client = mangrove_ai_client()
@@ -1186,13 +1187,16 @@ def _register_signals(server: FastMCP) -> None:
             else:
                 # Stop before fetching another billable page once the requested
                 # count is met. Do not materialize the entire upstream catalog.
-                signals = client.signals.list_iter(limit_per_page=min(limit, 100))
+                kwargs = {"category": category} if category else {}
+                signals = client.signals.list_iter(limit_per_page=min(limit, 100), **kwargs)
                 items = [_dump(s) for s in islice(signals, limit)]
             if category:
                 items = [s for s in items if (s.get("category") or "").lower() == category.lower()]
             return json.dumps({"items": items, "total": len(items)})
         except AgentError as e:
             return _handle_agent_error(e)
+        except Exception:  # Upstream errors can contain echoed credentials or user input.
+            return _err("SIGNAL_LIST_FAILED", "Could not list signals from the upstream service.")
 
     register_tool(ToolEntry(
         name="list_signals",
@@ -1219,8 +1223,10 @@ def _register_signals(server: FastMCP) -> None:
         try:
             from src.shared.clients.mangrove import mangrove_ai_client
             return json.dumps(_dump(mangrove_ai_client().signals.get(signal_name)))
-        except Exception as e:  # noqa: BLE001
-            return _err("SIGNAL_GET_FAILED", str(e))
+        except AgentError as e:
+            return _handle_agent_error(e)
+        except Exception:  # Never expose raw upstream errors to the conversation.
+            return _err("SIGNAL_GET_FAILED", "Could not fetch signal details from the upstream service.")
 
     register_tool(ToolEntry(
         name="get_signal",
@@ -1255,8 +1261,10 @@ def _register_signals(server: FastMCP) -> None:
                 similarity_threshold=similarity_threshold,
             )
             return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _err("SIGNAL_MATCH_FAILED", str(e))
+        except AgentError as e:
+            return _handle_agent_error(e)
+        except Exception:  # Never expose raw upstream errors to the conversation.
+            return _err("SIGNAL_MATCH_FAILED", "Could not match signals from the upstream service.")
 
     register_tool(ToolEntry(
         name="match_signals",
@@ -1293,8 +1301,10 @@ def _register_signals(server: FastMCP) -> None:
                 "total": getattr(page, "total", len(items)),
                 "limit": limit, "offset": offset,
             })
-        except Exception as e:  # noqa: BLE001
-            return _err("SIGNAL_SEARCH_FAILED", str(e))
+        except AgentError as e:
+            return _handle_agent_error(e)
+        except Exception:  # Never expose raw upstream errors to the conversation.
+            return _err("SIGNAL_SEARCH_FAILED", "Could not search signals from the upstream service.")
 
     register_tool(ToolEntry(
         name="search_signals",

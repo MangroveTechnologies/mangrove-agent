@@ -680,3 +680,86 @@ def test_signer_persists_public_authorization_identity(wallet):
     assert row["asset"] == USDC.lower()
     assert row["state"] == "authorized"
     assert "signature" not in row
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,args", [
+    ("list_signals", {"limit": 1}),
+    ("get_signal", {"signal_name": "trend"}),
+    ("search_signals", {"query": "trend"}),
+    ("match_signals", {"description": "trend"}),
+])
+async def test_signal_tools_never_echo_remote_error_bodies(database, automatic_client, name, args):
+    from src.mcp.server import create_mcp_server
+
+    sentinel = "synthetic-private-token user@example.test"
+    automatic_client(lambda request: httpx.Response(403, json={"message": sentinel, "error": sentinel}))
+    tool = create_mcp_server()._tool_manager._tools[name]
+    result = await tool.run({"api_key": "test-key-1", **args})
+    assert sentinel not in result
+    assert json.loads(result)["error"] is True
+    assert spend_service.list_payments() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,args", [
+    ("get_signal", {"signal_name": "trend"}),
+    ("search_signals", {"query": "trend"}),
+    ("match_signals", {"description": "trend"}),
+])
+async def test_signal_tools_preserve_cap_error(wallet, automatic_client, monkeypatch, name, args):
+    from src.mcp.server import create_mcp_server
+
+    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
+    monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 0.0001)
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        assert "payment-signature" not in request.headers
+        return challenge()
+
+    automatic_client(handle)
+    tool = create_mcp_server()._tool_manager._tools[name]
+    result = json.loads(await tool.run({"api_key": "test-key-1", **args}))
+    assert result["code"] == "X402_SPEND_CAP_EXCEEDED"
+    assert len(seen) == 1
+    assert spend_service.list_payments() == []
+
+
+@pytest.mark.asyncio
+async def test_category_is_filtered_upstream_before_paid_limit(wallet, automatic_client, monkeypatch):
+    from src.mcp.server import create_mcp_server
+
+    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        assert request.url.params["category"] == "trend"
+        assert request.url.params["limit"] == "1"
+        if "payment-signature" not in request.headers:
+            return challenge()
+        return httpx.Response(200, json={"signals": [{"name": "trend", "category": "trend"}], "total": 100},
+                              headers={"payment-response": receipt(wallet)})
+
+    automatic_client(handle)
+    tool = create_mcp_server()._tool_manager._tools["list_signals"]
+    result = json.loads(await tool.run({"api_key": "test-key-1", "limit": 1, "category": "trend"}))
+    assert result["items"][0]["name"] == "trend"
+    assert len(seen) == 2
+    assert len(spend_service.list_payments()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("detail", [False, True])
+async def test_signal_rest_errors_do_not_echo_remote_data(database, automatic_client, detail):
+    from src.api.routes.signals import get_signal, list_signals
+    from src.shared.errors import SdkError
+
+    sentinel = "synthetic-private-token user@example.test"
+    automatic_client(lambda request: httpx.Response(403, json={"message": sentinel, "error": sentinel}))
+    with pytest.raises(SdkError) as error:
+        await (get_signal("trend") if detail else list_signals(limit=1))
+    assert sentinel not in json.dumps(error.value.to_dict())
+    assert error.value.__suppress_context__
