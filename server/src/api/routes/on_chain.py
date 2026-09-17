@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from src.shared.auth.dependency import require_api_key
 from src.shared.clients.mangrove import mangrove_ai_client
-from src.shared.errors import SdkError
+from src.shared.errors import AgentError, SdkError
 
 router = APIRouter(
     prefix="/on-chain",
@@ -30,24 +30,30 @@ def _dump(obj: Any) -> Any:
 async def smart_money(symbol: str, chain: str | None = None) -> Any:
     try:
         return _dump(mangrove_ai_client().on_chain.get_smart_money_sentiment(symbol, chain=chain))
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"on_chain.get_smart_money_sentiment failed: {e}") from e
+    except AgentError:
+        raise
+    except Exception:
+        raise SdkError("on_chain.get_smart_money_sentiment failed at the upstream service.") from None
 
 
 @router.get("/whale-activity", summary="Whale activity summary for a token")
 async def whale_activity(symbol: str, hours_back: int = 24) -> Any:
     try:
         return _dump(mangrove_ai_client().on_chain.get_whale_activity(symbol, hours_back=hours_back))
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"on_chain.get_whale_activity failed: {e}") from e
+    except AgentError:
+        raise
+    except Exception:
+        raise SdkError("on_chain.get_whale_activity failed at the upstream service.") from None
 
 
 @router.get("/token-holders/{symbol}", summary="Holder distribution + concentration")
 async def token_holders(symbol: str) -> Any:
     try:
         return _dump(mangrove_ai_client().on_chain.get_token_holders(symbol))
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"on_chain.get_token_holders failed: {e}") from e
+    except AgentError:
+        raise
+    except Exception:
+        raise SdkError("on_chain.get_token_holders failed at the upstream service.") from None
 
 
 # ---------------------------------------------------------------------------
@@ -75,8 +81,10 @@ async def smart_money_historical_holdings(body: _SmartMoneyHistoricalHoldingsBod
         return _dump(mangrove_ai_client().on_chain.get_smart_money_historical_holdings(
             **body.model_dump(exclude_none=True),
         ))
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"on_chain.get_smart_money_historical_holdings failed: {e}") from e
+    except AgentError:
+        raise
+    except Exception:
+        raise SdkError("on_chain.get_smart_money_historical_holdings failed at the upstream service.") from None
 
 
 class _SmartMoneyDexTradesBody(BaseModel):
@@ -93,8 +101,10 @@ async def smart_money_dex_trades(body: _SmartMoneyDexTradesBody) -> Any:
         return _dump(mangrove_ai_client().on_chain.get_smart_money_dex_trades(
             **body.model_dump(exclude_none=True),
         ))
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"on_chain.get_smart_money_dex_trades failed: {e}") from e
+    except AgentError:
+        raise
+    except Exception:
+        raise SdkError("on_chain.get_smart_money_dex_trades failed at the upstream service.") from None
 
 
 class _SmartMoneyPerpTradesBody(BaseModel):
@@ -111,8 +121,10 @@ async def smart_money_perp_trades(body: _SmartMoneyPerpTradesBody) -> Any:
         return _dump(mangrove_ai_client().on_chain.get_smart_money_perp_trades(
             **body.model_dump(exclude_none=True),
         ))
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"on_chain.get_smart_money_perp_trades failed: {e}") from e
+    except AgentError:
+        raise
+    except Exception:
+        raise SdkError("on_chain.get_smart_money_perp_trades failed at the upstream service.") from None
 
 
 class _TokenDexTradesBody(BaseModel):
@@ -131,8 +143,10 @@ async def token_dex_trades(symbol: str, body: _TokenDexTradesBody) -> Any:
         return _dump(mangrove_ai_client().on_chain.get_token_dex_trades(
             symbol, **body.model_dump(exclude_none=True),
         ))
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"on_chain.get_token_dex_trades failed: {e}") from e
+    except AgentError:
+        raise
+    except Exception:
+        raise SdkError("on_chain.get_token_dex_trades failed at the upstream service.") from None
 
 
 class _TokenFlowsBody(BaseModel):
@@ -152,5 +166,7 @@ async def token_flows(symbol: str, body: _TokenFlowsBody) -> Any:
         return _dump(mangrove_ai_client().on_chain.get_token_flows(
             symbol, **body.model_dump(exclude_none=True),
         ))
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"on_chain.get_token_flows failed: {e}") from e
+    except AgentError:
+        raise
+    except Exception:
+        raise SdkError("on_chain.get_token_flows failed at the upstream service.") from None

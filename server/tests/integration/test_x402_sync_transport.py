@@ -763,3 +763,56 @@ async def test_signal_rest_errors_do_not_echo_remote_data(database, automatic_cl
         await (get_signal("trend") if detail else list_signals(limit=1))
     assert sentinel not in json.dumps(error.value.to_dict())
     assert error.value.__suppress_context__
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,args", [
+    ("get_trending", {}), ("list_docs", {}),
+    ("kb_list_tags", {}), ("get_whale_activity", {"symbol": "ETH"}),
+])
+@pytest.mark.parametrize("refused_payment", [False, True])
+async def test_other_upstream_tools_sanitize_errors_and_preserve_cap(
+    wallet, automatic_client, monkeypatch, name, args, refused_payment,
+):
+    from src.mcp.server import create_mcp_server
+
+    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
+    monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 0.0001)
+    seen = []
+    sentinel = "synthetic-private-token user@example.test"
+
+    def handle(request):
+        seen.append(request)
+        assert "payment-signature" not in request.headers
+        return challenge() if refused_payment else httpx.Response(403, json={"message": sentinel})
+
+    automatic_client(handle)
+    tool = create_mcp_server()._tool_manager._tools[name]
+    result = await tool.run({"api_key": "test-key-1", **args})
+    assert sentinel not in result
+    assert json.loads(result)["error"] is True
+    if refused_payment:
+        assert json.loads(result)["code"] == "X402_SPEND_CAP_EXCEEDED"
+    assert len(seen) == 1
+    assert spend_service.list_payments() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["market", "on_chain", "kb"])
+@pytest.mark.parametrize("refused_payment", [False, True])
+async def test_other_rest_routes_sanitize_errors_and_preserve_cap(
+    wallet, automatic_client, monkeypatch, route, refused_payment,
+):
+    from src.api.routes import kb, market, on_chain
+    from src.shared.errors import SdkError
+
+    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
+    monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 0.0001)
+    sentinel = "synthetic-private-token user@example.test"
+    automatic_client(lambda request: challenge() if refused_payment else httpx.Response(403, json={"message": sentinel}))
+    calls = {"market": lambda: market.trending(), "on_chain": lambda: on_chain.whale_activity("ETH"),
+             "kb": lambda: kb.search("trend")}
+    with pytest.raises(X402SpendCapExceeded if refused_payment else SdkError) as error:
+        await calls[route]()
+    assert sentinel not in json.dumps(error.value.to_dict())
+    assert spend_service.list_payments() == []

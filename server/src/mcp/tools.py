@@ -54,6 +54,13 @@ def _handle_agent_error(e: AgentError) -> str:
     return json.dumps(e.to_dict())
 
 
+def _handle_upstream_error(code: str, error: Exception) -> str:
+    """Preserve agent errors while withholding untrusted SDK error text."""
+    if isinstance(error, AgentError):
+        return _handle_agent_error(error)
+    return _err(code, "The upstream service request failed.")
+
+
 def _dump(obj: Any) -> Any:
     if hasattr(obj, "model_dump"):
         return obj.model_dump()
@@ -1029,7 +1036,7 @@ def _register_market(server: FastMCP) -> None:
             from src.shared.clients.mangrove import mangrove_ai_client
             return json.dumps(_dump(mangrove_ai_client().crypto_assets.get_trending()))
         except Exception as e:  # noqa: BLE001
-            return _err("CRYPTO_TRENDING_FAILED", str(e))
+            return _handle_upstream_error("CRYPTO_TRENDING_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_trending",
@@ -1101,7 +1108,7 @@ def _register_market(server: FastMCP) -> None:
             items = mangrove_ai_client().crypto_assets.list(**kwargs)
             return json.dumps([_dump(i) for i in items])
         except Exception as e:  # noqa: BLE001
-            return _err("CRYPTO_LIST_FAILED", str(e))
+            return _handle_upstream_error("CRYPTO_LIST_FAILED", e)
 
     register_tool(ToolEntry(
         name="list_approved_assets",
@@ -1127,7 +1134,7 @@ def _register_market(server: FastMCP) -> None:
             from src.shared.clients.mangrove import mangrove_ai_client
             return json.dumps(_dump(mangrove_ai_client().crypto_assets.get(symbol)))
         except Exception as e:  # noqa: BLE001
-            return _err("CRYPTO_GET_FAILED", str(e))
+            return _handle_upstream_error("CRYPTO_GET_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_asset",
@@ -1152,7 +1159,7 @@ def _register_market(server: FastMCP) -> None:
             from src.shared.clients.mangrove import mangrove_ai_client
             return json.dumps(_dump(mangrove_ai_client().crypto_assets.get_global_market()))
         except Exception as e:  # noqa: BLE001
-            return _err("CRYPTO_GLOBAL_FAILED", str(e))
+            return _handle_upstream_error("CRYPTO_GLOBAL_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_global_market",
@@ -1346,7 +1353,7 @@ def _register_on_chain(server: FastMCP) -> None:
             )
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
-            return _err("ONCHAIN_WHALE_ACTIVITY_FAILED", str(e))
+            return _handle_upstream_error("ONCHAIN_WHALE_ACTIVITY_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_whale_activity",
@@ -1376,7 +1383,7 @@ def _register_on_chain(server: FastMCP) -> None:
             r = mangrove_ai_client().on_chain.get_whale_transactions(**kwargs)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
-            return _err("ONCHAIN_WHALE_TXS_FAILED", str(e))
+            return _handle_upstream_error("ONCHAIN_WHALE_TXS_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_whale_transactions",
@@ -1412,7 +1419,7 @@ def _register_on_chain(server: FastMCP) -> None:
             r = mangrove_ai_client().on_chain.get_smart_money_sentiment(**kwargs)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
-            return _err("ONCHAIN_SMART_MONEY_FAILED", str(e))
+            return _handle_upstream_error("ONCHAIN_SMART_MONEY_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_smart_money_sentiment",
@@ -1440,7 +1447,7 @@ def _register_on_chain(server: FastMCP) -> None:
             r = mangrove_ai_client().on_chain.screen_smart_money(**kwargs)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
-            return _err("ONCHAIN_SMART_MONEY_SCREEN_FAILED", str(e))
+            return _handle_upstream_error("ONCHAIN_SMART_MONEY_SCREEN_FAILED", e)
 
     register_tool(ToolEntry(
         name="screen_smart_money",
@@ -1463,7 +1470,7 @@ def _register_on_chain(server: FastMCP) -> None:
             r = mangrove_ai_client().on_chain.get_token_holders(symbol=symbol)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
-            return _err("ONCHAIN_HOLDERS_FAILED", str(e))
+            return _handle_upstream_error("ONCHAIN_HOLDERS_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_token_holders",
@@ -1492,7 +1499,7 @@ def _register_on_chain(server: FastMCP) -> None:
             r = mangrove_ai_client().on_chain.get_exchange_flows(**kwargs)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
-            return _err("ONCHAIN_EXCHANGE_FLOWS_FAILED", str(e))
+            return _handle_upstream_error("ONCHAIN_EXCHANGE_FLOWS_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_exchange_flows",
@@ -1540,7 +1547,7 @@ def _register_on_chain(server: FastMCP) -> None:
             r = mangrove_ai_client().on_chain.get_smart_money_historical_holdings(**kwargs)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
-            return _err("ONCHAIN_SM_HISTORICAL_HOLDINGS_FAILED", str(e))
+            return _handle_upstream_error("ONCHAIN_SM_HISTORICAL_HOLDINGS_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_smart_money_historical_holdings",
@@ -1582,7 +1589,7 @@ def _register_on_chain(server: FastMCP) -> None:
             r = mangrove_ai_client().on_chain.get_smart_money_dex_trades(**kwargs)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
-            return _err("ONCHAIN_SM_DEX_TRADES_FAILED", str(e))
+            return _handle_upstream_error("ONCHAIN_SM_DEX_TRADES_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_smart_money_dex_trades",
@@ -1624,7 +1631,7 @@ def _register_on_chain(server: FastMCP) -> None:
             r = mangrove_ai_client().on_chain.get_smart_money_perp_trades(**kwargs)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
-            return _err("ONCHAIN_SM_PERP_TRADES_FAILED", str(e))
+            return _handle_upstream_error("ONCHAIN_SM_PERP_TRADES_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_smart_money_perp_trades",
@@ -1667,7 +1674,7 @@ def _register_on_chain(server: FastMCP) -> None:
             r = mangrove_ai_client().on_chain.get_token_dex_trades(symbol, **kwargs)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
-            return _err("ONCHAIN_TOKEN_DEX_TRADES_FAILED", str(e))
+            return _handle_upstream_error("ONCHAIN_TOKEN_DEX_TRADES_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_token_dex_trades",
@@ -1715,7 +1722,7 @@ def _register_on_chain(server: FastMCP) -> None:
             r = mangrove_ai_client().on_chain.get_token_flows(symbol, **kwargs)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
-            return _err("ONCHAIN_TOKEN_FLOWS_FAILED", str(e))
+            return _handle_upstream_error("ONCHAIN_TOKEN_FLOWS_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_token_flows",
@@ -1758,7 +1765,7 @@ def _register_defi(server: FastMCP) -> None:
         try:
             return json.dumps(_dump(mangrove_ai_client().defi.get_chain_tvl(chain=chain)))
         except Exception as e:  # noqa: BLE001
-            return _err("DEFI_CHAIN_TVL_FAILED", str(e))
+            return _handle_upstream_error("DEFI_CHAIN_TVL_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_chain_tvl",
@@ -1778,7 +1785,7 @@ def _register_defi(server: FastMCP) -> None:
         try:
             return json.dumps(_dump(mangrove_ai_client().defi.get_protocol_tvl(protocol=protocol)))
         except Exception as e:  # noqa: BLE001
-            return _err("DEFI_PROTOCOL_TVL_FAILED", str(e))
+            return _handle_upstream_error("DEFI_PROTOCOL_TVL_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_protocol_tvl",
@@ -1798,7 +1805,7 @@ def _register_defi(server: FastMCP) -> None:
         try:
             return json.dumps(_dump(mangrove_ai_client().defi.get_stablecoin_metrics()))
         except Exception as e:  # noqa: BLE001
-            return _err("DEFI_STABLECOIN_FAILED", str(e))
+            return _handle_upstream_error("DEFI_STABLECOIN_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_stablecoin_metrics",
@@ -1817,7 +1824,7 @@ def _register_defi(server: FastMCP) -> None:
         try:
             return json.dumps(_dump(mangrove_ai_client().defi.get_token_unlocks()))
         except Exception as e:  # noqa: BLE001
-            return _err("DEFI_TOKEN_UNLOCKS_FAILED", str(e))
+            return _handle_upstream_error("DEFI_TOKEN_UNLOCKS_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_token_unlocks",
@@ -1834,7 +1841,7 @@ def _register_defi(server: FastMCP) -> None:
         try:
             return json.dumps(_dump(mangrove_ai_client().defi.get_perp_funding()))
         except Exception as e:  # noqa: BLE001
-            return _err("DEFI_PERP_FUNDING_FAILED", str(e))
+            return _handle_upstream_error("DEFI_PERP_FUNDING_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_perp_funding",
@@ -1851,7 +1858,7 @@ def _register_defi(server: FastMCP) -> None:
         try:
             return json.dumps(_dump(mangrove_ai_client().defi.get_treasuries()))
         except Exception as e:  # noqa: BLE001
-            return _err("DEFI_TREASURIES_FAILED", str(e))
+            return _handle_upstream_error("DEFI_TREASURIES_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_treasuries",
@@ -1868,7 +1875,7 @@ def _register_defi(server: FastMCP) -> None:
         try:
             return json.dumps(_dump(mangrove_ai_client().defi.get_etf_flows()))
         except Exception as e:  # noqa: BLE001
-            return _err("DEFI_ETF_FLOWS_FAILED", str(e))
+            return _handle_upstream_error("DEFI_ETF_FLOWS_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_etf_flows",
@@ -1885,7 +1892,7 @@ def _register_defi(server: FastMCP) -> None:
         try:
             return json.dumps(_dump(mangrove_ai_client().defi.get_lending_borrow_rates()))
         except Exception as e:  # noqa: BLE001
-            return _err("DEFI_LENDING_RATES_FAILED", str(e))
+            return _handle_upstream_error("DEFI_LENDING_RATES_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_lending_borrow_rates",
@@ -1915,7 +1922,7 @@ def _register_social(server: FastMCP) -> None:
             r = mangrove_ai_client().social.get_sentiment(topic=topic, hours_back=hours_back)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
-            return _err("SOCIAL_SENTIMENT_FAILED", str(e))
+            return _handle_upstream_error("SOCIAL_SENTIMENT_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_sentiment",
@@ -1941,7 +1948,7 @@ def _register_social(server: FastMCP) -> None:
             )
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
-            return _err("SOCIAL_MENTIONS_FAILED", str(e))
+            return _handle_upstream_error("SOCIAL_MENTIONS_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_mentions",
@@ -1964,7 +1971,7 @@ def _register_social(server: FastMCP) -> None:
             r = mangrove_ai_client().social.get_influence_score(username=username)
             return json.dumps(_dump(r))
         except Exception as e:  # noqa: BLE001
-            return _err("SOCIAL_INFLUENCE_FAILED", str(e))
+            return _handle_upstream_error("SOCIAL_INFLUENCE_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_influence_score",
@@ -2001,7 +2008,7 @@ def _register_docs(server: FastMCP) -> None:
             items = mangrove_ai_client().docs.list()
             return json.dumps([_dump(i) for i in items])
         except Exception as e:  # noqa: BLE001
-            return _err("DOCS_LIST_FAILED", str(e))
+            return _handle_upstream_error("DOCS_LIST_FAILED", e)
 
     register_tool(ToolEntry(
         name="list_docs",
@@ -2023,7 +2030,7 @@ def _register_docs(server: FastMCP) -> None:
         try:
             return json.dumps(_dump(mangrove_ai_client().docs.get_content(path=path)))
         except Exception as e:  # noqa: BLE001
-            return _err("DOCS_GET_FAILED", str(e))
+            return _handle_upstream_error("DOCS_GET_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_doc_content",
@@ -2553,7 +2560,7 @@ def _register_strategy(server: FastMCP) -> None:
             items = mangrove_ai_client().execution.list_positions(**kwargs)
             return json.dumps([_dump(i) for i in items])
         except Exception as e:  # noqa: BLE001
-            return _err("EXECUTION_POSITIONS_FAILED", str(e))
+            return _handle_upstream_error("EXECUTION_POSITIONS_FAILED", e)
 
     register_tool(ToolEntry(
         name="list_account_positions",
@@ -2577,7 +2584,7 @@ def _register_strategy(server: FastMCP) -> None:
             from src.shared.clients.mangrove import mangrove_ai_client
             return json.dumps(_dump(mangrove_ai_client().execution.get_position(position_id)))
         except Exception as e:  # noqa: BLE001
-            return _err("EXECUTION_POSITION_GET_FAILED", str(e))
+            return _handle_upstream_error("EXECUTION_POSITION_GET_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_account_position",
@@ -2618,7 +2625,7 @@ def _register_strategy(server: FastMCP) -> None:
             items = mangrove_ai_client().execution.list_trades(**kwargs)
             return json.dumps([_dump(i) for i in items])
         except Exception as e:  # noqa: BLE001
-            return _err("EXECUTION_TRADES_FAILED", str(e))
+            return _handle_upstream_error("EXECUTION_TRADES_FAILED", e)
 
     register_tool(ToolEntry(
         name="list_account_trades",
@@ -2657,7 +2664,7 @@ def _register_strategy(server: FastMCP) -> None:
         except AgentError as e:
             return _handle_agent_error(e)
         except Exception as e:  # noqa: BLE001
-            return _err("STRATEGY_DELETE_FAILED", str(e))
+            return _handle_upstream_error("STRATEGY_DELETE_FAILED", e)
 
     register_tool(ToolEntry(
         name="delete_strategy",
@@ -2784,7 +2791,7 @@ def _register_kb(server: FastMCP) -> None:
         try:
             return json.dumps(_dump(mangrove_ai_client().kb.glossary.get(term)))
         except Exception as e:  # noqa: BLE001
-            return _err("KB_GLOSSARY_FAILED", str(e))
+            return _handle_upstream_error("KB_GLOSSARY_FAILED", e)
 
     register_tool(ToolEntry(
         name="kb_glossary_get",
@@ -2812,7 +2819,7 @@ def _register_kb(server: FastMCP) -> None:
         try:
             return json.dumps(_dump(mangrove_ai_client().kb.documents.get(slug)))
         except Exception as e:  # noqa: BLE001
-            return _err("KB_DOCUMENT_NOT_FOUND", str(e))
+            return _handle_upstream_error("KB_DOCUMENT_NOT_FOUND", e)
 
     register_tool(ToolEntry(
         name="kb_get_document",
@@ -2850,7 +2857,7 @@ def _register_kb(server: FastMCP) -> None:
         try:
             return json.dumps([_dump(i) for i in mangrove_ai_client().kb.indicators.list(**kwargs)])
         except Exception as e:  # noqa: BLE001
-            return _err("KB_INDICATORS_FAILED", str(e))
+            return _handle_upstream_error("KB_INDICATORS_FAILED", e)
 
     register_tool(ToolEntry(
         name="kb_list_indicators",
@@ -2957,7 +2964,7 @@ def _register_kb(server: FastMCP) -> None:
         try:
             return json.dumps([_dump(t) for t in mangrove_ai_client().kb.tags.list()])
         except Exception as e:  # noqa: BLE001
-            return _err("KB_TAGS_FAILED", str(e))
+            return _handle_upstream_error("KB_TAGS_FAILED", e)
 
     register_tool(ToolEntry(
         name="kb_list_tags",

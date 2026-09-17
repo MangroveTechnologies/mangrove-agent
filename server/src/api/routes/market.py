@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from src.services import benchmark_service
 from src.shared.auth.dependency import require_api_key
 from src.shared.clients.mangrove import mangrove_ai_client
-from src.shared.errors import SdkError
+from src.shared.errors import AgentError, SdkError
 
 router = APIRouter(
     prefix="/market",
@@ -37,8 +37,10 @@ async def ohlcv(
         if provider is not None:
             kwargs["provider"] = provider
         return _dump(mangrove_ai_client().crypto_assets.get_ohlcv(**kwargs))
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"crypto_assets.get_ohlcv failed: {e}") from e
+    except AgentError:
+        raise
+    except Exception:
+        raise SdkError("crypto_assets.get_ohlcv failed at the upstream service.") from None
 
 
 @router.get("/data", summary="Current market data (price, market cap, volume)")
@@ -49,24 +51,30 @@ async def market_data(symbol: str, provider: str | None = None) -> Any:
         if provider is not None:
             kwargs["provider"] = provider
         return _dump(mangrove_ai_client().crypto_assets.get_market_data(**kwargs))
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"crypto_assets.get_market_data failed: {e}") from e
+    except AgentError:
+        raise
+    except Exception:
+        raise SdkError("crypto_assets.get_market_data failed at the upstream service.") from None
 
 
 @router.get("/trending", summary="Trending assets")
 async def trending() -> Any:
     try:
         return _dump(mangrove_ai_client().crypto_assets.get_trending())
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"crypto_assets.get_trending failed: {e}") from e
+    except AgentError:
+        raise
+    except Exception:
+        raise SdkError("crypto_assets.get_trending failed at the upstream service.") from None
 
 
 @router.get("/global", summary="Global market data (BTC dominance, total cap, 24h change)")
 async def global_market() -> Any:
     try:
         return _dump(mangrove_ai_client().crypto_assets.get_global_market())
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"crypto_assets.get_global_market failed: {e}") from e
+    except AgentError:
+        raise
+    except Exception:
+        raise SdkError("crypto_assets.get_global_market failed at the upstream service.") from None
 
 
 @router.get("/benchmark", summary="Buy-and-hold return for an asset over a window")
