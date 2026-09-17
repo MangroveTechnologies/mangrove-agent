@@ -27,6 +27,12 @@ Register the route under `x402_router` (not `api_router`). See `server/src/api/r
 
 ## Testing
 
+MCP changes must also pass `python -B scripts/mcp_contract.py` from the repo root.
+This offline guard checks registration, schemas, price bindings and existing
+direct-SDK adapter exceptions. See [MCP contracts](mcp-contracts.md) for intentional
+contract updates and opt-in live receiver comparison. Never refresh snapshots
+automatically to make an unexplained failure disappear.
+
 Tests live in `server/tests/` and mirror the `src/` layout. CI (`.github/workflows/ci.yml`) runs ruff + pytest on every PR — that's the authoritative invocation.
 
 Test runs set `MASTER_KEY_PATH` to a test-scoped path; the resulting `agent-data-test/` directory is gitignored.

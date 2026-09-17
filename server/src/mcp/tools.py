@@ -81,8 +81,9 @@ def _require(api_key: str) -> bool:
     return has_valid_api_key(api_key or get_request_api_key())
 
 
-# Shorthand for the "api_key required" parameter in the discovery catalog.
-_APIKEY = ToolParam(name="api_key", type="string", required=True, description="Valid API key")
+# Authentication is required, but the argument is optional when supplied by header.
+_APIKEY = ToolParam(name="api_key", type="string", required=False,
+                    description="Local agent API key; omit when supplied in the X-API-Key header.")
 
 
 # ---------------------------------------------------------------------------
@@ -683,7 +684,7 @@ def _register_dex(server: FastMCP) -> None:
             ToolParam(name="wallet_address", type="string", required=True, description="Wallet from local store"),
             ToolParam(name="slippage_pct", type="number", required=True, description="Slippage tolerance as DECIMAL, capped at 0.0025 (0.25%). Typical: 0.001 (0.1%), 0.002 (0.2%), 0.0025 (max). Higher values refused."),
             ToolParam(name="venue_id", type="string", required=False, description="Optional specific venue"),
-            ToolParam(name="confirm", type="boolean", required=True, description="Must be true"),
+            ToolParam(name="confirm", type="boolean", required=False, description="Must be true to execute; omission safely refuses the action."),
             _APIKEY,
         ],
     ))
@@ -970,12 +971,11 @@ def _register_market(server: FastMCP) -> None:
         """
         if not _require(api_key):
             return _auth_error()
-        from src.shared.clients.mangrove import mangrove_ai_client
-        kwargs: dict[str, Any] = {"symbol": symbol, "days": lookback_days}
-        if provider is not None:
-            kwargs["provider"] = provider
-        result = mangrove_ai_client().crypto_assets.get_ohlcv(**kwargs)
-        return json.dumps(_dump(result))
+        from src.api.routes.market import ohlcv as route
+        try:
+            return json.dumps(await route(symbol, lookback_days, provider))
+        except AgentError as e:
+            return _handle_agent_error(e)
 
     register_tool(ToolEntry(
         name="get_ohlcv",
@@ -1006,11 +1006,11 @@ def _register_market(server: FastMCP) -> None:
         """
         if not _require(api_key):
             return _auth_error()
-        from src.shared.clients.mangrove import mangrove_ai_client
-        kwargs: dict[str, Any] = {"symbol": symbol}
-        if provider is not None:
-            kwargs["provider"] = provider
-        return json.dumps(_dump(mangrove_ai_client().crypto_assets.get_market_data(**kwargs)))
+        from src.api.routes.market import market_data as route
+        try:
+            return json.dumps(await route(symbol, provider))
+        except AgentError as e:
+            return _handle_agent_error(e)
 
     register_tool(ToolEntry(
         name="get_market_data",
@@ -3023,7 +3023,7 @@ def _register_oracle(server: FastMCP) -> None:
         parameters=[
             ToolParam(
                 name="strategies",
-                type="array<Strategy>",
+                type="array",
                 required=True,
                 description="MangroveAI-shaped Strategy objects (1-99 items).",
             ),
@@ -3072,9 +3072,9 @@ def _register_oracle(server: FastMCP) -> None:
         access="auth",
         parameters=[
             ToolParam(name="table", type="string", required=True, description="'results' | 'ohlcv'"),
-            ToolParam(name="select", type="array<string>", required=True, description="Columns to return."),
-            ToolParam(name="filters", type="array<{col,op,value}>", required=False, description="Filter clauses."),
-            ToolParam(name="order_by", type="array<string>", required=False, description="Optional ORDER BY clauses."),
+            ToolParam(name="select", type="array", required=True, description="Column names to return (strings)."),
+            ToolParam(name="filters", type="array", required=False, description="Filter objects with col, op and value."),
+            ToolParam(name="order_by", type="array", required=False, description="Optional ORDER BY column names (strings)."),
             ToolParam(name="limit", type="integer", required=False, description="Default 100, max 1000."),
             ToolParam(name="offset", type="integer", required=False, description="Default 0."),
             _APIKEY,
@@ -3663,7 +3663,7 @@ def _register_x402_spend(server: FastMCP) -> None:
         ),
         access="auth",
         parameters=[
-            ToolParam(name="confirm", type="boolean", required=True,
+            ToolParam(name="confirm", type="boolean", required=False,
                       description="Must be true. Asserts the user agreed to spend more."),
             ToolParam(name="cap_usd", type="number", required=False,
                       description="Budget in dollars the user chose. Omit to keep the current size."),
@@ -3699,6 +3699,8 @@ def _register_hello_mangrove(server: FastMCP) -> None:
     from src.shared.x402.config import get_network, get_pay_to
     from src.shared.x402.server import _ensure_initialized
 
+    description = f"x402 demo: $0.05 USDC on {get_network()}. Smoke test for the payment path."
+
     def _build_payment_wrapper():
         resource_server = _ensure_initialized()  # external facilitator /supported fetch
         accepts = resource_server.build_payment_requirements(
@@ -3733,7 +3735,7 @@ def _register_hello_mangrove(server: FastMCP) -> None:
     if wrapper is not None:
         @server.tool(
             name="hello_mangrove",
-            description="x402 demo: $0.05 USDC on Base. Smoke test for the payment path.",
+            description=description,
         )
         @wrapper
         async def hello_mangrove() -> str:
@@ -3760,9 +3762,9 @@ def _register_hello_mangrove(server: FastMCP) -> None:
 
     register_tool(ToolEntry(
         name="hello_mangrove",
-        description="x402 demo: $0.05 USDC on Base. Smoke test for the payment path.",
+        description=description,
         access="x402",
         price="$0.05 USDC",
-        network="base",
+        network=get_network(),
         parameters=[],
     ))

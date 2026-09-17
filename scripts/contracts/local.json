@@ -1,0 +1,3497 @@
+{
+  "bindings": {
+    "backtest_strategy": {
+      "meters": [
+        "rest:backtest_async_submit",
+        "rest:backtest_async_status",
+        "skill:crypto_ohlcv"
+      ],
+      "variable": true
+    },
+    "create_strategy_autonomous": {
+      "meters": [
+        "rest:signals_list",
+        "rest:strategy_list_or_create",
+        "rest:backtest_async_submit",
+        "rest:backtest_async_status"
+      ],
+      "variable": true
+    },
+    "create_strategy_manual": {
+      "meters": [
+        "rest:strategy_list_or_create"
+      ],
+      "variable": false
+    },
+    "delete_strategy": {
+      "meters": [
+        "rest:strategy_detail"
+      ],
+      "variable": false
+    },
+    "evaluate_strategy": {
+      "meters": [
+        "rest:managers_evaluate_by_id",
+        "rest:managers_evaluate_by_object"
+      ],
+      "variable": true
+    },
+    "get_account_position": {
+      "meters": [],
+      "variable": false
+    },
+    "get_asset": {
+      "meters": [
+        "skill:crypto_symbol_detail"
+      ],
+      "variable": false
+    },
+    "get_backtest": {
+      "meters": [
+        "rest:backtest_get",
+        "skill:crypto_ohlcv"
+      ],
+      "variable": true
+    },
+    "get_benchmark": {
+      "meters": [
+        "skill:crypto_ohlcv"
+      ],
+      "variable": true
+    },
+    "get_chain_tvl": {
+      "meters": [
+        "skill:defi_chain_tvl"
+      ],
+      "variable": false
+    },
+    "get_doc_content": {
+      "meters": [],
+      "variable": false
+    },
+    "get_etf_flows": {
+      "meters": [
+        "skill:defi_etf_flows"
+      ],
+      "variable": false
+    },
+    "get_exchange_flows": {
+      "meters": [
+        "skill:onchain_exchange_flows"
+      ],
+      "variable": false
+    },
+    "get_global_market": {
+      "meters": [
+        "skill:crypto_global_market"
+      ],
+      "variable": false
+    },
+    "get_influence_score": {
+      "meters": [
+        "skill:social_influence"
+      ],
+      "variable": false
+    },
+    "get_lending_borrow_rates": {
+      "meters": [
+        "skill:defi_lending_rates"
+      ],
+      "variable": false
+    },
+    "get_market_data": {
+      "meters": [
+        "skill:crypto_market_data"
+      ],
+      "variable": false
+    },
+    "get_mentions": {
+      "meters": [
+        "skill:social_mentions"
+      ],
+      "variable": false
+    },
+    "get_ohlcv": {
+      "meters": [
+        "skill:crypto_ohlcv"
+      ],
+      "variable": false
+    },
+    "get_perp_funding": {
+      "meters": [
+        "skill:defi_perp_funding"
+      ],
+      "variable": false
+    },
+    "get_protocol_tvl": {
+      "meters": [
+        "skill:defi_protocol_tvl"
+      ],
+      "variable": false
+    },
+    "get_sentiment": {
+      "meters": [
+        "skill:social_sentiment"
+      ],
+      "variable": false
+    },
+    "get_signal": {
+      "meters": [
+        "rest:signals_get"
+      ],
+      "variable": false
+    },
+    "get_smart_money_dex_trades": {
+      "meters": [
+        "skill:onchain_smart_money_dex_trades"
+      ],
+      "variable": false
+    },
+    "get_smart_money_historical_holdings": {
+      "meters": [
+        "skill:onchain_smart_money_historical_holdings"
+      ],
+      "variable": false
+    },
+    "get_smart_money_perp_trades": {
+      "meters": [
+        "skill:onchain_smart_money_perp_trades"
+      ],
+      "variable": false
+    },
+    "get_smart_money_sentiment": {
+      "meters": [
+        "skill:onchain_smart_money_sentiment"
+      ],
+      "variable": false
+    },
+    "get_stablecoin_metrics": {
+      "meters": [
+        "skill:defi_stablecoins_metrics"
+      ],
+      "variable": false
+    },
+    "get_token_dex_trades": {
+      "meters": [
+        "skill:onchain_token_dex_trades"
+      ],
+      "variable": false
+    },
+    "get_token_flows": {
+      "meters": [
+        "skill:onchain_token_flows"
+      ],
+      "variable": false
+    },
+    "get_token_holders": {
+      "meters": [
+        "skill:onchain_token_holders"
+      ],
+      "variable": false
+    },
+    "get_token_unlocks": {
+      "meters": [
+        "skill:defi_token_unlocks"
+      ],
+      "variable": false
+    },
+    "get_treasuries": {
+      "meters": [
+        "skill:defi_treasuries"
+      ],
+      "variable": false
+    },
+    "get_trending": {
+      "meters": [
+        "skill:crypto_trending"
+      ],
+      "variable": false
+    },
+    "get_whale_activity": {
+      "meters": [
+        "skill:onchain_whale_activity"
+      ],
+      "variable": false
+    },
+    "get_whale_transactions": {
+      "meters": [
+        "skill:onchain_whale_transactions"
+      ],
+      "variable": false
+    },
+    "kb_get_document": {
+      "meters": [],
+      "variable": false
+    },
+    "kb_glossary_get": {
+      "meters": [],
+      "variable": false
+    },
+    "kb_list_indicators": {
+      "meters": [],
+      "variable": false
+    },
+    "kb_list_tags": {
+      "meters": [],
+      "variable": false
+    },
+    "kb_search": {
+      "meters": [],
+      "variable": false
+    },
+    "list_account_positions": {
+      "meters": [
+        "rest:managers_positions_list"
+      ],
+      "variable": false
+    },
+    "list_account_trades": {
+      "meters": [
+        "rest:managers_trades_list"
+      ],
+      "variable": false
+    },
+    "list_approved_assets": {
+      "meters": [
+        "rest:crypto_assets_all"
+      ],
+      "variable": false
+    },
+    "list_backtests": {
+      "meters": [],
+      "variable": false
+    },
+    "list_docs": {
+      "meters": [],
+      "variable": false
+    },
+    "list_signals": {
+      "meters": [
+        "rest:signals_list"
+      ],
+      "variable": true
+    },
+    "match_signals": {
+      "meters": [
+        "rest:signals_match"
+      ],
+      "variable": false
+    },
+    "oracle_backtest": {
+      "meters": [
+        "proxy:oracle_backtest"
+      ],
+      "variable": false
+    },
+    "oracle_backtest_async": {
+      "meters": [
+        "proxy:oracle_backtest"
+      ],
+      "variable": false
+    },
+    "oracle_backtest_bulk": {
+      "meters": [
+        "proxy:oracle_backtest"
+      ],
+      "variable": false
+    },
+    "oracle_backtest_poll": {
+      "meters": [
+        "proxy:oracle_backtest"
+      ],
+      "variable": false
+    },
+    "oracle_create_experiment": {
+      "meters": [
+        "proxy:api_calls"
+      ],
+      "variable": false
+    },
+    "oracle_data_query": {
+      "meters": [
+        "proxy:oracle_data_query"
+      ],
+      "variable": false
+    },
+    "oracle_delete_experiment": {
+      "meters": [
+        "proxy:api_calls"
+      ],
+      "variable": false
+    },
+    "oracle_get_experiment": {
+      "meters": [
+        "proxy:api_calls"
+      ],
+      "variable": false
+    },
+    "oracle_launch_experiment": {
+      "meters": [
+        "proxy:oracle_experiment",
+        "proxy:api_calls"
+      ],
+      "variable": true
+    },
+    "oracle_list_datasets": {
+      "meters": [],
+      "variable": false
+    },
+    "oracle_list_experiments": {
+      "meters": [
+        "proxy:api_calls"
+      ],
+      "variable": false
+    },
+    "oracle_list_results": {
+      "meters": [
+        "proxy:oracle_results_read"
+      ],
+      "variable": false
+    },
+    "oracle_list_signals": {
+      "meters": [],
+      "variable": false
+    },
+    "oracle_list_templates": {
+      "meters": [],
+      "variable": false
+    },
+    "oracle_pause_experiment": {
+      "meters": [
+        "proxy:api_calls"
+      ],
+      "variable": false
+    },
+    "oracle_update_experiment": {
+      "meters": [
+        "proxy:api_calls"
+      ],
+      "variable": false
+    },
+    "oracle_validate_experiment": {
+      "meters": [
+        "proxy:api_calls"
+      ],
+      "variable": false
+    },
+    "screen_smart_money": {
+      "meters": [
+        "skill:onchain_smart_money_screen"
+      ],
+      "variable": false
+    },
+    "search_signals": {
+      "meters": [
+        "rest:signals_search"
+      ],
+      "variable": false
+    },
+    "sieve_score": {
+      "meters": [
+        "proxy:oracle_sieve_score"
+      ],
+      "variable": false
+    },
+    "update_strategy_status": {
+      "meters": [
+        "rest:strategy_status_update"
+      ],
+      "variable": true
+    }
+  },
+  "tools": {
+    "backtest_strategy": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "include_benchmark": {
+            "default": true,
+            "type": "boolean"
+          },
+          "lookback_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "lookback_hours": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "lookback_months": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "mode": {
+            "default": "full",
+            "type": "string"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
+    "build_strategy_from_reference": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "asset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reference_id": {
+            "type": "string"
+          },
+          "timeframe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "reference_id"
+        ],
+        "type": "object"
+      }
+    },
+    "cex_balances": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "cex_connect_kraken": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "vault_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "vault_token"
+        ],
+        "type": "object"
+      }
+    },
+    "cex_status": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "cex_sync_fills": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "mode": {
+            "default": "live",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "cex_validate_order": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "ordertype": {
+            "default": "market",
+            "type": "string"
+          },
+          "pair": {
+            "type": "string"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "side": {
+            "type": "string"
+          },
+          "volume": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "pair",
+          "side",
+          "volume"
+        ],
+        "type": "object"
+      }
+    },
+    "create_strategy_autonomous": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "backtest_lookback_months": {
+            "default": 3,
+            "type": "integer"
+          },
+          "candidate_count": {
+            "default": 7,
+            "type": "integer"
+          },
+          "goal": {
+            "type": "string"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "timeframe": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset",
+          "goal",
+          "timeframe"
+        ],
+        "type": "object"
+      }
+    },
+    "create_strategy_manual": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "entry": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "execution_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "exit": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset",
+          "entry",
+          "name",
+          "timeframe"
+        ],
+        "type": "object"
+      }
+    },
+    "create_wallet": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain": {
+            "default": "evm",
+            "type": "string"
+          },
+          "chain_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 8453
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "network": {
+            "default": "mainnet",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "delete_strategy": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
+    "evaluate_strategy": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
+    "execute_swap": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer"
+          },
+          "confirm": {
+            "default": false,
+            "type": "boolean"
+          },
+          "input_token": {
+            "type": "string"
+          },
+          "output_token": {
+            "type": "string"
+          },
+          "slippage_pct": {
+            "type": "number"
+          },
+          "venue_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "wallet_address": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "chain_id",
+          "input_token",
+          "output_token",
+          "slippage_pct",
+          "wallet_address"
+        ],
+        "type": "object"
+      }
+    },
+    "get_account_position": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "position_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "position_id"
+        ],
+        "type": "object"
+      }
+    },
+    "get_allowances": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer"
+          },
+          "spender": {
+            "type": "string"
+          },
+          "wallet": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "chain_id",
+          "spender",
+          "wallet"
+        ],
+        "type": "object"
+      }
+    },
+    "get_asset": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "type": "object"
+      }
+    },
+    "get_backtest": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "backtest_id": {
+            "type": "string"
+          },
+          "include_benchmark": {
+            "default": true,
+            "type": "boolean"
+          },
+          "include_trades": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "backtest_id"
+        ],
+        "type": "object"
+      }
+    },
+    "get_balances": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "address",
+          "chain_id"
+        ],
+        "type": "object"
+      }
+    },
+    "get_benchmark": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "lookback_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "type": "object"
+      }
+    },
+    "get_chain_tvl": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "chain"
+        ],
+        "type": "object"
+      }
+    },
+    "get_dex_chart": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer"
+          },
+          "period": {
+            "default": "1h",
+            "type": "string"
+          },
+          "token0": {
+            "type": "string"
+          },
+          "token1": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "chain_id",
+          "token0",
+          "token1"
+        ],
+        "type": "object"
+      }
+    },
+    "get_doc_content": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    "get_etf_flows": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "get_exchange_flows": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "hours_back": {
+            "default": 24,
+            "type": "integer"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "get_gas_price": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "chain_id"
+        ],
+        "type": "object"
+      }
+    },
+    "get_global_market": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "get_influence_score": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username"
+        ],
+        "type": "object"
+      }
+    },
+    "get_lending_borrow_rates": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "get_market_data": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "symbol": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "type": "object"
+      }
+    },
+    "get_mentions": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "hours_back": {
+            "default": 24,
+            "type": "integer"
+          },
+          "limit": {
+            "default": 20,
+            "type": "integer"
+          },
+          "topic": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "type": "object"
+      }
+    },
+    "get_ohlcv": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "lookback_days": {
+            "default": 30,
+            "type": "integer"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "symbol": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "type": "object"
+      }
+    },
+    "get_perp_funding": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "get_protocol_tvl": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "protocol"
+        ],
+        "type": "object"
+      }
+    },
+    "get_sentiment": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "hours_back": {
+            "default": 24,
+            "type": "integer"
+          },
+          "topic": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "type": "object"
+      }
+    },
+    "get_signal": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "signal_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "signal_name"
+        ],
+        "type": "object"
+      }
+    },
+    "get_smart_money_dex_trades": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chains": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "order_by": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "page": {
+            "default": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 100,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "get_smart_money_historical_holdings": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chains": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "date_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "date_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "order_by": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "page": {
+            "default": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 100,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "get_smart_money_perp_trades": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "order_by": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "page": {
+            "default": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 100,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "get_smart_money_sentiment": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "symbol": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "type": "object"
+      }
+    },
+    "get_spot_price": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer"
+          },
+          "tokens": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "chain_id",
+          "tokens"
+        ],
+        "type": "object"
+      }
+    },
+    "get_stablecoin_metrics": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "get_strategy": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
+    "get_swap_quote": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer"
+          },
+          "input_token": {
+            "type": "string"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "output_token": {
+            "type": "string"
+          },
+          "venue_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "amount",
+          "chain_id",
+          "input_token",
+          "output_token"
+        ],
+        "type": "object"
+      }
+    },
+    "get_token_dex_trades": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "date_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "date_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "order_by": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "page": {
+            "default": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 100,
+            "type": "integer"
+          },
+          "symbol": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "type": "object"
+      }
+    },
+    "get_token_flows": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "date_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "date_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "order_by": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "page": {
+            "default": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 100,
+            "type": "integer"
+          },
+          "symbol": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "type": "object"
+      }
+    },
+    "get_token_holders": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "type": "object"
+      }
+    },
+    "get_token_info": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "address",
+          "chain_id"
+        ],
+        "type": "object"
+      }
+    },
+    "get_token_search": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "chain_id",
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    "get_token_unlocks": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "get_treasuries": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "get_trending": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "get_tx_status": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer"
+          },
+          "tx_hash": {
+            "type": "string"
+          },
+          "venue_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "chain_id",
+          "tx_hash"
+        ],
+        "type": "object"
+      }
+    },
+    "get_whale_activity": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "hours_back": {
+            "default": 24,
+            "type": "integer"
+          },
+          "symbol": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "type": "object"
+      }
+    },
+    "get_whale_transactions": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "hours_back": {
+            "default": 24,
+            "type": "integer"
+          },
+          "min_value": {
+            "default": 500000,
+            "type": "number"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "hello_mangrove": {
+      "access": "x402",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "import_wallet": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain": {
+            "default": "evm",
+            "type": "string"
+          },
+          "chain_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 8453
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "network": {
+            "default": "mainnet",
+            "type": "string"
+          },
+          "vault_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "vault_token"
+        ],
+        "type": "object"
+      }
+    },
+    "kb_get_document": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug"
+        ],
+        "type": "object"
+      }
+    },
+    "kb_glossary_get": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "term": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "term"
+        ],
+        "type": "object"
+      }
+    },
+    "kb_list_indicators": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "kb_list_tags": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "kb_search": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "type": "integer"
+          },
+          "q": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "q"
+        ],
+        "type": "object"
+      }
+    },
+    "list_account_positions": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "limit": {
+            "default": 100,
+            "type": "integer"
+          },
+          "skip": {
+            "default": 0,
+            "type": "integer"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "list_account_trades": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "asset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 100,
+            "type": "integer"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "skip": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "list_all_trades": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "type": "integer"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "strategy_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "list_approved_assets": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "limit": {
+            "default": 100,
+            "type": "integer"
+          },
+          "min_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "list_backtests": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "asset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "date_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "date_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "include_archived": {
+            "default": false,
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 20,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "type": "integer"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "list_dex_venues": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "list_docs": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "list_evaluations": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "type": "integer"
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
+    "list_signals": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 50,
+            "type": "integer"
+          },
+          "search": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "list_strategies": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "type": "integer"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "list_tools": {
+      "access": "free",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "list_trades": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "type": "integer"
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
+    "list_wallets": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "match_signals": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "similarity_threshold": {
+            "default": 0.5,
+            "type": "number"
+          },
+          "top_k": {
+            "default": 5,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "type": "object"
+      }
+    },
+    "oracle_backtest": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "interval": {
+            "type": "string"
+          },
+          "lookback_months": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 12
+          },
+          "strategy_json": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset",
+          "interval",
+          "strategy_json"
+        ],
+        "type": "object"
+      }
+    },
+    "oracle_backtest_async": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "interval": {
+            "type": "string"
+          },
+          "lookback_months": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 12
+          },
+          "strategy_json": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset",
+          "interval",
+          "strategy_json"
+        ],
+        "type": "object"
+      }
+    },
+    "oracle_backtest_bulk": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "request": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "request"
+        ],
+        "type": "object"
+      }
+    },
+    "oracle_backtest_poll": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "backtest_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backtest_id"
+        ],
+        "type": "object"
+      }
+    },
+    "oracle_create_experiment": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "config": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "config"
+        ],
+        "type": "object"
+      }
+    },
+    "oracle_data_query": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 100,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "type": "integer"
+          },
+          "order_by": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "select": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "table": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "select",
+          "table"
+        ],
+        "type": "object"
+      }
+    },
+    "oracle_delete_experiment": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "experiment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "experiment_id"
+        ],
+        "type": "object"
+      }
+    },
+    "oracle_get_experiment": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "experiment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "experiment_id"
+        ],
+        "type": "object"
+      }
+    },
+    "oracle_launch_experiment": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "experiment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "experiment_id"
+        ],
+        "type": "object"
+      }
+    },
+    "oracle_list_datasets": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "oracle_list_experiments": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "oracle_list_results": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "experiment_id": {
+            "type": "string"
+          },
+          "limit": {
+            "default": 100,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "experiment_id"
+        ],
+        "type": "object"
+      }
+    },
+    "oracle_list_signals": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "oracle_list_templates": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "oracle_pause_experiment": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "experiment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "experiment_id"
+        ],
+        "type": "object"
+      }
+    },
+    "oracle_update_experiment": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "config": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "experiment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "config",
+          "experiment_id"
+        ],
+        "type": "object"
+      }
+    },
+    "oracle_validate_experiment": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "experiment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "experiment_id"
+        ],
+        "type": "object"
+      }
+    },
+    "portfolio_defi": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "addresses": {
+            "type": "string"
+          },
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "addresses"
+        ],
+        "type": "object"
+      }
+    },
+    "portfolio_history": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "type": "object"
+      }
+    },
+    "portfolio_pnl": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "addresses": {
+            "type": "string"
+          },
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "addresses"
+        ],
+        "type": "object"
+      }
+    },
+    "portfolio_tokens": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "addresses": {
+            "type": "string"
+          },
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "addresses"
+        ],
+        "type": "object"
+      }
+    },
+    "portfolio_value": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "addresses": {
+            "type": "string"
+          },
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chain_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "addresses"
+        ],
+        "type": "object"
+      }
+    },
+    "query_knowledge": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "bounded": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "direction": {
+            "default": "both",
+            "type": "string"
+          },
+          "hops": {
+            "default": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 25,
+            "type": "integer"
+          },
+          "op": {
+            "type": "string"
+          },
+          "param": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "q": {
+            "default": "",
+            "type": "string"
+          },
+          "relation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "requires": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to": {
+            "default": "",
+            "type": "string"
+          },
+          "units": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "type": "object"
+      }
+    },
+    "screen_smart_money": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "chains": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 20,
+            "type": "integer"
+          },
+          "timeframe": {
+            "default": "24h",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "search_reference_strategies": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "goal_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 5,
+            "type": "integer"
+          },
+          "strict": {
+            "default": false,
+            "type": "boolean"
+          },
+          "timeframe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "type": "object"
+      }
+    },
+    "search_signals": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "type": "integer"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    "sieve_score": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "strategies": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "strategies"
+        ],
+        "type": "object"
+      }
+    },
+    "status": {
+      "access": "free",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "update_strategy_status": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "allocation": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
+    "x402_spend_reset": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "cap_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "confirm": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "x402_spend_status": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    }
+  },
+  "version": 1
+}
