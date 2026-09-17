@@ -17,12 +17,14 @@ Migrations:
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from functools import lru_cache
 from pathlib import Path
 
 from src.config import app_config
 from src.shared.logging import get_logger
+from src.shared.private_files import private_fd
 
 _log = get_logger(__name__)
 
@@ -42,7 +44,14 @@ def get_connection() -> sqlite3.Connection:
     """
     path = _db_path()
     if path != ":memory:":
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        parent = Path(path).parent
+        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name == "posix" and parent.name == "agent-data":
+            parent.chmod(0o700)
+        os.close(private_fd(path))
+        for suffix in ("-wal", "-shm"):
+            if Path(path + suffix).exists():
+                os.close(private_fd(path + suffix))
     # check_same_thread=False so APScheduler threads can read/write.
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row

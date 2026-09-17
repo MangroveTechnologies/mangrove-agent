@@ -57,6 +57,8 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
+from src.shared.redaction import redact_event
+
 # Contextvar holding the correlation_id for the current async task / thread.
 _correlation_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "correlation_id", default=None
@@ -87,6 +89,10 @@ def configure(env: str) -> None:
         force=True,
     )
 
+    # HTTPX INFO includes full request URLs; never emit those by default.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
     timestamper = structlog.processors.TimeStamper(fmt="iso", utc=True)
 
     shared_processors = [
@@ -94,6 +100,7 @@ def configure(env: str) -> None:
         structlog.processors.add_log_level,
         timestamper,
         _add_correlation_id,
+        redact_event,
     ]
 
     if env == "local":
@@ -115,10 +122,9 @@ def configure(env: str) -> None:
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
     """Get a logger, optionally bound to a module name."""
-    logger = structlog.get_logger()
-    if name:
-        logger = logger.bind(logger=name)
-    return logger
+    # Keep the proxy lazy: bind() here freezes the pre-startup processors
+    # and would bypass later redaction configuration in imported services.
+    return structlog.get_logger(**({"module": name} if name else {}))
 
 
 @contextmanager

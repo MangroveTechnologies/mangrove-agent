@@ -146,6 +146,10 @@ class _Config:
                 print(f"Config file not found: {file_path}")
                 sys.exit(1)
 
+            # Local config can hold API credentials. Preserve owner-only mode
+            # even when it was written outside setup.sh.
+            if environment == "local" and os.name == "posix":
+                os.chmod(file_path, 0o600)
             with open(file_path, "r") as f:
                 config_data = json.load(f)
             self._raw_config.update(config_data)

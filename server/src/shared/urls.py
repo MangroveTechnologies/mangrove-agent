@@ -11,7 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 
 def strip_query(url: str | None) -> str | None:
-    """Return `url` without its query string or fragment.
+    """Return `url` without userinfo, query string or fragment.
 
     Query strings are where credentials end up when something goes wrong
     upstream -- a token appended to a URL by a misconfigured client, a
@@ -28,4 +28,4 @@ def strip_query(url: str | None) -> str | None:
         parts = urlsplit(url)
     except ValueError:
         return None
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", "")) or None
+    return urlunsplit((parts.scheme, parts.netloc.rsplit("@", 1)[-1], parts.path, "", "")) or None
