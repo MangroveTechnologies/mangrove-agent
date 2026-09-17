@@ -48,28 +48,33 @@ def _fetch_catalog_counts() -> dict:
         "error": None,
     }
     try:
-        from src.shared.clients.mangrove import mangrove_ai_client
+        from src.shared.clients.mangrove import _api_key, mangrove_ai_client
+        # Status is anonymous/free. SDK catalog reads can incur payments when
+        # no upstream key is configured; do not initialize a payer for discovery.
+        if _api_key(app_config) is None:
+            counts["error"] = "catalog_counts_unavailable_in_payment_mode"
+            return counts
         client = mangrove_ai_client()
-    except Exception as e:  # noqa: BLE001
-        counts["error"] = f"client_init_failed: {str(e)[:200]}"
+    except Exception:  # noqa: BLE001
+        counts["error"] = "client_init_failed"
         return counts
 
     try:
         counts["signals_total"] = sum(1 for _ in client.signals.list_iter(limit_per_page=100))
-    except Exception as e:  # noqa: BLE001
-        counts["error"] = f"signals_list_failed: {str(e)[:200]}"
+    except Exception:  # noqa: BLE001
+        counts["error"] = "signals_list_failed"
 
     try:
         counts["kb_indicators_total"] = len(list(client.kb.indicators.list()))
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         if counts["error"] is None:
-            counts["error"] = f"kb_indicators_list_failed: {str(e)[:200]}"
+            counts["error"] = "kb_indicators_list_failed"
 
     try:
         counts["kb_tags_total"] = len(list(client.kb.tags.list()))
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         if counts["error"] is None:
-            counts["error"] = f"kb_tags_list_failed: {str(e)[:200]}"
+            counts["error"] = "kb_tags_list_failed"
 
     return counts
 
@@ -166,4 +171,6 @@ def _x402_spend_status() -> dict:
     tags=["discovery"],
 )
 async def tools() -> dict:
-    return {"tools": list_registered_tools()}
+    from src.services.tool_pricing import enrich_tools
+
+    return {"tools": await enrich_tools(list_registered_tools())}
