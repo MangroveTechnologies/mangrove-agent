@@ -150,7 +150,7 @@ def _get_master_key_with_source(*, allow_create: bool = True) -> tuple[bytes, st
                 )
             res = _generate_and_persist_keyfile()
         _master_key_cache = res
-        return res
+        return _master_key_cache
 
 
 def get_master_key() -> bytes:
