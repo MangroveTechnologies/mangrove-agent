@@ -44,9 +44,9 @@ Know thyself — when the user asks "where does X live" or "who decides Y", this
 
 ---
 
-## Stage 0 -- platform tour (no wallet required)
+## Stage 0 -- platform tour (paid steps depend on access mode)
 
-**Trigger:** first interaction in a fresh clone (the `.claude/.onboarded` marker is **absent**), OR the user asks for a tour. Don't skip on a genuine fresh clone -- new users need to see the product work before being asked to commit a key. Paper trading runs without a wallet; the full author -> backtest -> paper -> evaluate loop is reachable with zero on-chain exposure.
+**Trigger:** first interaction in a fresh clone (the `.claude/.onboarded` marker is **absent**), OR the user asks for a tour. Don't skip on a genuine fresh clone -- new users need to see the product work before being asked to commit a key. API-key users can paper-trade without a wallet; x402 users need a payment wallet for paid upstream requests. Apply the access-mode gate below before upstream tour calls.
 
 **Suppression (respect the marker):** if `.claude/.onboarded` **exists**, do NOT auto-fire the tour -- the user has already seen it or opted out. Go straight to Stage 1. The user can still replay it any time by asking ("give me the tour") or by removing the marker (`rm .claude/.onboarded`). A user who wants to skip up front can pass `./scripts/setup.sh --skip-tour`, which writes the marker before Claude Code first launches. The marker is gitignored (per-user, never committed).
 
@@ -64,8 +64,18 @@ Greet as the persona in `CLAUDE.md`'s Project Context, or default to a concise, 
 
 If any beat fails (bad key, unreachable URL, empty KB), surface the error and stop -- don't proceed on a broken setup.
 
+### Access-mode gate for the tour
+
+Before any upstream data/backtest beat, determine the configured access mode
+without displaying credentials. In x402 mode, start with local status/discovery
+only. Explain that even paper-trading data can cost money, and direct the user to
+`./scripts/setup.sh` for user-run payment-wallet instructions. Do not create/import
+wallets or confirm backups merely because the tour started. Resume paid beats
+only after the user completes payment setup and requests them. Missing payment
+setup is an onboarding state, not evidence of a broken installation.
+
 ### 0.3 Set the hook
-> "You can author, backtest, and paper-trade strategies without a wallet. Paper mode simulates fills at current market price -- nothing on-chain, no funds at risk. You only need a wallet when ready to go live, and we'll connect one then."
+> "Paper mode simulates trades. With API-key access, you do not need a trading wallet yet. With x402, upstream data and backtests can charge your payment wallet even though trades are simulated."
 >
 > "Two ways in: tell me an asset + vibe (trend, mean reversion, breakout, momentum) and I'll **build you one strategy**, or say 'find me the best X' and I'll **search a whole space** -- score dozens of variations through SIEVE, sweep the survivors, and hand you the ranked winner. Or just say 'pick for me.'"
 

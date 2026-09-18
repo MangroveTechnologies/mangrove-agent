@@ -5,7 +5,7 @@ Get from zero to a running trading agent. Every step has Mac and Windows instruc
 **What you will end up with:**
 - A local trading agent running at `http://localhost:9080`
 - Claude Code connected to it with 100+ trading tools (run `list_tools` for the live catalog)
-- A working paper strategy you can watch evaluate in real time
+- Local tools ready for onboarding; paid data/backtests require an API key or completed payment setup
 
 ---
 
@@ -18,9 +18,13 @@ Get from zero to a running trading agent. Every step has Mac and Windows instruc
 
 ## Quick Install (recommended)
 
+For the API-key/x402 choice described here, install the prerequisites below, clone
+the repository, and run `./scripts/setup.sh` (Step 8). The older machine installers
+below have their own API-key prompts; they are not the x402 onboarding entry point.
+
 One command installs everything automatically — Git, Python, Node.js, VS Code, Claude Code CLI — then runs setup for you.
 
-> **Before you run:** you will need a Mangrove API key. Get one at [mangrovedeveloper.ai](https://mangrovedeveloper.ai) and have it ready — the script will pause and ask for it.
+> **Access choice:** `./scripts/setup.sh` supports an API key or x402 wallet payments without signup. Wallet instructions are printed for you to execute yourself. See [the complete flow](docs/setup-x402.md).
 
 > **What does this command actually do?** It downloads the install script directly from the [official Mangrove repo on GitHub](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/scripts/install-mac.sh) and runs it. Nothing is hidden — you can open that link and read every line before running. The script only installs standard developer tools (Git, Python, Node.js, VS Code) and the Mangrove agent. It does not collect any personal data.
 
@@ -65,7 +69,7 @@ Here is how all the pieces fit together: **Claude Code** is an AI assistant that
 | **Claude Code CLI** | The AI chat interface you use to talk to the agent. | Yes |
 | **Claude Pro subscription** | Claude Code requires a paid Claude plan (Pro, Max, Team, or Enterprise). | Yes |
 | **VS Code** | Recommended editor with a built-in terminal. Not strictly required but makes everything easier. | Recommended |
-| **Mangrove API key** | Needed for market data, signals, and backtesting. Free at [mangrovedeveloper.ai](https://mangrovedeveloper.ai). | Yes |
+| **Mangrove API key** | Alternative to x402 wallet payments for MangroveAI access. | Optional with setup.sh |
 
 Do these in order — each one depends on the previous.
 
@@ -343,7 +347,10 @@ Expected: `claude X.Y.Z`
 
 ---
 
-## Step 6 — Get a Mangrove API key
+## Step 6 — Choose access: API key or x402
+
+For x402, skip account/key creation below and select wallet payments in Step 8.
+For API-key access, follow these steps:
 
 1. Go to https://mangrovedeveloper.ai
 2. Click **Sign up** and create an account.
@@ -407,29 +414,25 @@ In VS Code's terminal (inside the `mangrove-agent` folder):
 ./scripts/setup.sh
 ```
 
-**The script will pause and ask for your Mangrove API key** (from Step 6) — paste it and press Enter. It will also ask for a server URL — press Enter to accept the default.
+**On every interactive setup run, choose API-key or x402 access.** API-key entry is hidden. For x402, the final menu prints create/import/saved-wallet instructions; run those commands yourself. Setup does not create a wallet or spend money. Enter preserves the current mode. Choose the other menu option to switch; `--yes` preserves the mode without prompting.
 
 After that it runs automatically and does the following:
 
-1. Copies the example config to `server/src/config/local-config.json`
+1. Creates or safely updates `server/src/config/local-config.json`
 2. Creates `agent-data/` for local state (database, logs, pid file)
 3. Creates a Python virtual environment at `.venv/` and installs dependencies
 4. Starts the server in the background at `http://localhost:9080`
-5. Waits for the server to be healthy
+5. Verifies authenticated local access and refusal of unauthenticated wallet requests
 6. Registers the MCP server with Claude Code
 7. Runs a quick verify pass
 
 When it finishes successfully you will see:
 
 ```
-==> Done. Setup complete.
-    Agent: http://localhost:9080
-    PID:   12345  (agent-data/bare.pid)
-    Logs:  agent-data/bare.log
+Done. Local agent authenticated at http://127.0.0.1:9080. Payment readiness is separate.
 
-    Restart Claude Code in this directory to load the mangrove-agent
-    tools (run list_tools for the live catalog). Then try: "Status
-    check. List my wallets and strategies."
+For x402, complete the printed wallet steps yourself before paid use.
+Open/reconnect Claude in this directory after MCP registration.
 ```
 
 ---
@@ -479,7 +482,7 @@ If you made it this far and the tour fired, everything is working — the server
 Here is what you can do right now:
 
 - **Build your first strategy** — type something like "Build me a momentum strategy on ETH" and the agent will generate candidates, backtest them, and propose the best one.
-- **Paper trade it** — once a strategy is created, say "Promote it to paper" and it will start running on a schedule with simulated trades. No wallet or real money needed.
+- **Paper trade it** — once a strategy is created, say "Promote it to paper" and it will start running on a schedule with simulated trades. API-key users need no wallet for simulated trades. In x402 mode, paid data/backtests still need a funded payment wallet.
 - **Explore the tools** — ask "What tools do you have?" and the agent will walk you through everything available.
 - **Go live when ready** — when you want to trade with real funds, follow `tutorials/trading-app/06-wallet-setup.md` for the wallet setup flow.
 
@@ -502,20 +505,17 @@ chmod +x ./scripts/setup.sh
 ./scripts/setup.sh
 ```
 
-### "MANGROVE_API_KEY is still the placeholder"
+### Choose or change access mode
 
-The prompt during setup did not capture your key. Fix it manually:
-
-1. Open `server/src/config/local-config.json` in VS Code.
-2. Find the `MANGROVE_API_KEY` field.
-3. Replace the placeholder with your key from Step 6.
-4. Save the file.
-5. Rerun: `./scripts/setup.sh --yes --no-mcp --no-verify`
+Run `./scripts/setup.sh --auth api-key` for API-key access or
+`./scripts/setup.sh --auth x402` for wallet payments. Setup removes the example
+placeholder while keeping local authentication enabled. Never use an invalid API
+key as a way to trigger wallet-payment fallback; the modes are exclusive.
 
 ### "Health did not respond within 30s"
 
-The setup/verify scripts wait up to 30s for the agent to answer on
-`http://localhost:9080/health`. This message means the uvicorn process
+Setup waits for authenticated local access with a bounded startup deadline;
+verification is read-only and never starts another server. This message means the uvicorn process
 never bound the port — so the cause is in the **daemon log**, not the
 script output. Read it first:
 
@@ -543,7 +543,7 @@ traceback names, then rerun `./scripts/setup.sh`.
 BARE_PORT=9085 ./scripts/setup.sh
 ```
 
-`BARE_PORT` is honored end-to-end — the server, the `/health` check, the MCP registration, and the verify pass all target it.
+`BARE_PORT` is honored end-to-end — the server, authenticated readiness, the MCP registration, and the verify pass all target it.
 
 **Option 2 — free up 9080** by stopping whatever holds it:
 

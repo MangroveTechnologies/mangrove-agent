@@ -53,6 +53,11 @@ jobs:
       - name: Verify MCP registration, schemas, pricing and adapter contracts
         run: python -B scripts/mcp_contract.py
 
+      - name: Check setup flow
+        run: |
+          bash -n scripts/reveal-secret.sh scripts/confirm-backup.sh scripts/install-mac.sh scripts/setup.sh scripts/setup-mcp.sh scripts/verify_quickstart.sh
+          ruff check --config server/pyproject.toml scripts/setup_support.py scripts/wallet_backup.py server/tests/unit/test_setup_flow.py
+
       - name: Run tests
         env:
           ENVIRONMENT: test

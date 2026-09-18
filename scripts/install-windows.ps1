@@ -291,7 +291,7 @@ if ($SkipSetup) {
     info "This takes about 60 seconds the first time..."
     Write-Host ""
 
-    & $gitBash -c "export PATH=`"`$PATH`:$npmUnix`" && cd '$repoUnix' && ./scripts/setup.sh --api-key '$MANGROVE_API_KEY' --yes"
+    $MANGROVE_API_KEY | & $gitBash -c "export PATH=`"`$PATH`:$npmUnix`" && cd '$repoUnix' && ./scripts/setup.sh --api-key-stdin --yes"
 
     if ($LASTEXITCODE -ne 0) {
         fail "setup.sh failed. Check the output above for errors."

@@ -47,9 +47,17 @@ Full platform documentation and the trading knowledge base live at **https://man
 
 ---
 
-## Install as a Claude Code plugin
+## Install with setup.sh (API key or x402)
 
-The fastest way in. Tell your Claude Code agent *"install this trading bot: https://github.com/MangroveTechnologies/mangrove-agent"*, or run it yourself:
+Clone the repository and run `./scripts/setup.sh`. Choose an existing MangroveAI
+API key or wallet payments (x402, no signup). The script protects local access,
+starts the agent and registers Claude. For x402, a final menu prints wallet steps
+for you to run yourself; it never automatically creates/imports a wallet or pays.
+See [the complete setup and wallet flow](docs/setup-x402.md).
+
+## Install as a Claude Code plugin (API key required)
+
+For the existing API-key plugin flow, tell your Claude Code agent *"install this trading bot: https://github.com/MangroveTechnologies/mangrove-agent"*, or run it yourself:
 
 ```bash
 claude plugin marketplace add MangroveTechnologies/mangrove-agent
@@ -102,7 +110,7 @@ Just say **"set up Kraken"** or **"connect Kraken without a key"** in a session 
 | **Python 3.11+** | https://www.python.org/downloads/ | The agent is a Python FastAPI process. 3.11 is the minimum. |
 | **Git for Windows** (Windows only) | https://git-scm.com/download/win | Gives you Git Bash, so the `*.sh` scripts in this repo work identically to macOS / Linux. Set VSCode's default terminal to `Git Bash` via the command palette. |
 | **Claude Code** | `npm install -g @anthropic-ai/claude-code` | The chat UX. Optional if you only want the REST API. |
-| **MangroveAI API key** | Free at https://mangrovedeveloper.ai | `dev_...` or `prod_...`. The setup script will prompt for it. |
+| **MangroveAI API key** | Free at https://mangrovedeveloper.ai | Optional for setup.sh: choose API-key access or x402 wallet payments. |
 
 Docker is **optional** — see the alternate install path below. Bare-metal is the primary path because the `keyring` library can reach your OS keychain directly when the agent runs natively.
 
@@ -110,7 +118,7 @@ Docker is **optional** — see the alternate install path below. Bare-metal is t
 
 ## Quick start — bare-metal (recommended)
 
-One command. It seeds your config (prompts for the API key), creates a venv, pip-installs dependencies, starts uvicorn in the background, registers the MCP server with Claude Code, and verifies `/health`.
+One command selects API-key or x402 access, creates a venv, installs dependencies, starts the local agent, registers Claude when available, and verifies authenticated local access.
 
 ```bash
 git clone https://github.com/MangroveTechnologies/mangrove-agent.git mangrove-agent
@@ -125,12 +133,14 @@ When it's finished:
 - `./scripts/verify_quickstart.sh --bare` passed → the tool catalog returned the expected set.
 - Claude Code's MCP registration now knows about `mangrove-agent`.
 
-**Start Claude Code in the repo directory** and the agent runs a short platform tour (status / tools / market data / knowledge base / reference strategies) to prove everything is wired, then offers to help you build a strategy. You can paper-trade without a wallet at all — wallet setup lives in Chapter 06 of the tutorial, right before live trading. See *Your first trade* below.
+**Start Claude Code in the repo directory.** In x402 mode, complete the printed payment-wallet instructions before requesting paid data or backtests. API-key users can paper-trade without a payment wallet. Simulated trades do not make upstream API calls free.
 
 ### Useful `./scripts/setup.sh` flags
 
 ```
-./scripts/setup.sh --yes --api-key dev_xxx         # fully non-interactive (CI / scripts)
+./scripts/setup.sh --yes                          # preserve settings; fresh install uses x402
+./scripts/setup.sh --auth api-key                  # hidden prompt if no existing upstream key
+./scripts/setup.sh --auth x402                     # explicitly switch to wallet payments
 ./scripts/setup.sh --foreground                    # run uvicorn in your terminal (Ctrl+C to stop)
 ./scripts/setup.sh --no-mcp                        # skip Claude Code registration
 ./scripts/setup.sh --no-verify                     # skip the post-start verify pass
@@ -162,7 +172,7 @@ This section is a fast tour. The full walkthrough is in [`tutorials/trading-app/
 
 **Stage 0 — platform tour.** Start Claude Code in the repo directory. The agent runs status, list_tools, get_market_data, kb_search, and search_reference_strategies, and offers to help you build a strategy. No wallet needed yet.
 
-**Paper trading, no wallet.**
+**Paper trading (payment wallet needed for paid API calls in x402 mode).**
 
 > "Build me a momentum strategy for ETH on 1h. Use a reference."
 

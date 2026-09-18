@@ -251,7 +251,7 @@ else
     info "Installing Python dependencies, starting the server and registering with Claude Code..."
     info "This takes about 60 seconds the first time..."
     echo
-    ./scripts/setup.sh --api-key "$MANGROVE_API_KEY" --yes
+    printf '%s' "$MANGROVE_API_KEY" | ./scripts/setup.sh --api-key-stdin --yes
     ok "Setup complete"
 fi
 
