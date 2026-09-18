@@ -11,8 +11,7 @@ Every payment is an EIP-3009 `TransferWithAuthorization` signed by
 only then decrypts, signs, and discards. This module holds an address and
 never a secret. In particular it does NOT read `WALLET_SECRET`, or any
 other environment variable, for key material — that is precisely the
-anti-pattern the four scripts in `server/scripts/` still carry and that
-this service exists to replace.
+anti-pattern this service replaces, including in the payment demo scripts.
 
 What this module refuses to do, structurally
 --------------------------------------------
@@ -46,6 +45,7 @@ from eth_utils import to_checksum_address
 from x402 import x402Client, x402ClientSync
 from x402.http.clients.httpx import PaymentError as X402TransportError
 from x402.http.clients.httpx import x402AsyncTransport
+from x402.mcp import MCP_PAYMENT_RESPONSE_META_KEY, x402MCPSession
 from x402.mechanisms.evm.exact import ExactEvmClientScheme
 from x402.mechanisms.evm.types import TypedDataDomain, TypedDataField
 from x402.schemas.errors import NoMatchingRequirementsError
@@ -313,6 +313,59 @@ def _configure_payment_client(
     client.set_spend_controls({"max_amount_per_payment": _MAX_AMOUNT_PER_PAYMENT})
 
 
+async def pay_mcp(
+    session: Any,
+    *,
+    wallet_address: str | None = None,
+    name: str = "hello_mangrove",
+    resource: str,
+) -> PaymentResult:
+    """Pay a local demo MCP tool through the same custody and ledger controls.
+
+    The caller owns the MCP connection, its deadline and cleanup. The SDK makes
+    one unsigned call and at most one signed retry. Its ``payment_made`` flag
+    means a payload was sent, NOT that settlement succeeded. Only a validated
+    receipt reconciles the final reservation; every uncertain signature remains
+    counted, including cancellation and errors during the paid retry.
+    """
+    payer = resolve_payer_wallet(wallet_address)
+    wallet_manager.require_backup_confirmed(payer)
+    check_payment_budget(resource)
+    network = _require_network()
+    signer = CustodialSigner(payer, resource=resource)
+    client = build_payment_client(payer, signer=signer)
+    try:
+        paid_session = x402MCPSession(session, client, auto_payment=True)
+        await paid_session.initialize()
+        response = await paid_session.call_tool(name, {})
+        # Validate the wire dictionary, before SDK/Pydantic type coercions
+        # (for example, the string "true" must not become a valid boolean).
+        metadata = response.raw_result.meta
+        receipt = metadata.get(MCP_PAYMENT_RESPONSE_META_KEY) if isinstance(metadata, dict) else None
+        settlement = None
+        if signer.reservations and valid_settlement(receipt, payer=payer, network=network):
+            settlement = {key: receipt[key] for key in ("success", "transaction", "payer", "network")}
+        result = PaymentResult(
+            status_code=502 if response.is_error else 200,
+            body=response.content,
+            paid=settlement is not None,
+            transaction=_str_or_none(settlement, "transaction"),
+            network=_str_or_none(settlement, "network"),
+            payer=_str_or_none(settlement, "payer"),
+        )
+        _reconcile_budget(signer, result, settlement=settlement, url=resource)
+        return result
+    except AgentError:
+        raise
+    except Exception:
+        # MCP/HTTP exceptions may contain arbitrary remote content. Neither
+        # report that text nor retry/release an authorization after failure.
+        raise X402PaymentError(
+            "The MCP payment could not be completed.",
+            suggestion="Check the payment ledger before retrying; any signed authorization remains counted.",
+        ) from None
+
+
 async def pay(
     url: str,
     *,
@@ -354,7 +407,7 @@ async def pay(
     network = _require_network()
     signer = CustodialSigner(payer, resource=url)
     client = build_payment_client(payer, signer=signer)
-    transport = x402AsyncTransport(client, transport=httpx.AsyncHTTPTransport())
+    transport = x402AsyncTransport(client, transport=httpx.AsyncHTTPTransport(trust_env=False))
 
     _log.info(
         "x402.payment.started",
@@ -365,7 +418,9 @@ async def pay(
     )
 
     try:
-        async with httpx.AsyncClient(transport=transport, timeout=timeout) as http:
+        async with httpx.AsyncClient(
+            transport=transport, timeout=timeout, trust_env=False, follow_redirects=False,
+        ) as http:
             response = await http.request(method, url, headers=headers, content=content)
     except (X402TransportError, X402ProtocolError) as e:
         # Two unrelated classes both named PaymentError: the transport

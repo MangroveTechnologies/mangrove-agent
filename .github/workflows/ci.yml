@@ -26,6 +26,18 @@ jobs:
       - name: Lint with ruff
         run: ruff check server/src/
 
+      - name: Lint payment demos and their tests
+        run: >-
+          ruff check --config server/pyproject.toml
+          server/scripts/_x402_demo.py
+          server/scripts/pay_hello_mangrove.py
+          server/scripts/agent_pay_hello_mangrove.py
+          server/scripts/agent_pay_hello_mangrove_mcp.py
+          server/scripts/test_x402_mainnet.py
+          server/tests/unit/test_x402_demo_scripts.py
+          server/tests/unit/test_x402_payer.py
+          server/tests/unit/test_fernet_read_safety.py
+
       # The synced Michael skills are generated from the private MangroveAI
       # repo, which CI cannot read. The generator records a sha256 per file in
       # skills-sync-manifest.json; this fails if a committed copy was

@@ -372,9 +372,8 @@ def test_client_registers_only_the_configured_network(wallet, sepolia_network):
 
 
 def test_mainnet_requirement_cannot_be_paid_on_a_sepolia_config(wallet, sepolia_network):
-    from x402.schemas.errors import NoMatchingRequirementsError
-
     from src.services.x402_payer import build_payment_client
+    from x402.schemas.errors import NoMatchingRequirementsError
 
     client = build_payment_client(wallet)
     with pytest.raises(NoMatchingRequirementsError):
@@ -566,10 +565,9 @@ def test_guard_refusal_survives_the_transport_wrapper():
     re-raises it as a bare PaymentError. A refused envelope must still
     surface as SIGNING_ERROR carrying the guard's own explanation, rather
     than being flattened into a generic payment failure."""
-    from x402.http.clients.httpx import PaymentError
-
     from src.services.x402_payer import _translate_payment_error
     from src.shared.errors import SigningError
+    from x402.http.clients.httpx import PaymentError
 
     refusal = SigningError("Refused to sign: verifyingContract is not USDC.")
     wrapped = PaymentError("Failed to handle payment: ...")
@@ -584,9 +582,8 @@ def test_guard_refusal_survives_the_transport_wrapper():
 
 
 def test_unrecognised_failure_becomes_a_payment_error():
-    from x402.http.clients.httpx import PaymentError
-
     from src.services.x402_payer import _translate_payment_error
+    from x402.http.clients.httpx import PaymentError
 
     translated = _translate_payment_error(
         PaymentError("something odd"), safe_url="http://agent.test/x", payer=_TEST_ADDRESS, network=_SEPOLIA
@@ -598,9 +595,8 @@ def test_unrecognised_failure_becomes_a_payment_error():
 def test_unwrapped_protocol_error_is_still_shaped():
     """Selection errors derive from a *different* PaymentError than the one
     the transport wraps with, so they must be handled on their own."""
-    from x402.schemas.errors import NoMatchingRequirementsError
-
     from src.services.x402_payer import _translate_payment_error
+    from x402.schemas.errors import NoMatchingRequirementsError
 
     translated = _translate_payment_error(
         NoMatchingRequirementsError("nothing matched"),
@@ -615,9 +611,8 @@ def test_unwrapped_protocol_error_is_still_shaped():
 
 def test_translation_terminates_on_a_self_referential_cause():
     """__cause__ chains come from third-party code; a cycle must not hang."""
-    from x402.http.clients.httpx import PaymentError
-
     from src.services.x402_payer import _translate_payment_error
+    from x402.http.clients.httpx import PaymentError
 
     looped = PaymentError("loop")
     looped.__cause__ = looped
@@ -1049,3 +1044,223 @@ def test_error_text_from_a_library_is_scrubbed(wallet):
     assert "SUPERSECRET" not in scrubbed
     assert "https://api.test/v1/x" in scrubbed
     assert "after 30s" in scrubbed
+
+
+# Drive the real MCP payment SDK with a fake session and real custody/ledger.
+class _McpPaymentSession:
+    def __init__(self, *, receipt=None, requirements=None, failure=None, is_error=False, free=False):
+        self.receipt = receipt
+        self.requirements = requirements or _requirements()
+        self.failure = failure
+        self.is_error = is_error
+        self.free = free
+        self.calls = []
+        self.initialized = False
+
+    async def initialize(self):
+        self.initialized = True
+
+    async def call_tool(self, *, name, arguments, meta=None):
+        from mcp.types import CallToolResult, TextContent
+        from x402.mcp import MCP_PAYMENT_RESPONSE_META_KEY
+
+        self.calls.append((name, arguments, meta))
+        if meta is None and not self.free:
+            return CallToolResult(content=[], isError=True, structuredContent=PaymentRequired(
+                x402_version=2, accepts=[self.requirements],
+            ).model_dump(by_alias=True))
+        if self.failure:
+            raise self.failure
+        return CallToolResult(
+            content=[TextContent(type="text", text='{"message":"hello"}')], isError=self.is_error,
+            _meta={MCP_PAYMENT_RESPONSE_META_KEY: self.receipt} if self.receipt is not None else None,
+        )
+
+
+def _mcp_receipt(**overrides):
+    return {"success": True, "transaction": "0x" + "ab" * 32,
+            "payer": _TEST_ADDRESS, "network": _SEPOLIA, **overrides}
+
+
+@pytest.mark.parametrize("is_error", [False, True])
+async def test_mcp_valid_receipt_records_payment_even_when_resource_fails(wallet, sepolia_network, is_error):
+    from src.services import spend_service, x402_payer
+    from x402.mcp import MCP_PAYMENT_META_KEY
+
+    session = _McpPaymentSession(receipt=_mcp_receipt(), is_error=is_error)
+    result = await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
+    assert result.paid
+    assert result.status_code == (502 if is_error else 200)
+    assert session.initialized and len(session.calls) == 2
+    payload = session.calls[1][2][MCP_PAYMENT_META_KEY]
+    assert payload["payload"]["authorization"]["from"] == wallet
+    row = spend_service.list_payments()[0]
+    assert row["state"] == "settled"
+    assert row["transaction"] == result.transaction
+    assert spend_service.get_status()["spent_usd"] == 0.05
+
+
+@pytest.mark.parametrize("receipt", [None, {}, _mcp_receipt(success=False),
+    _mcp_receipt(success="true"), _mcp_receipt(success=1), _mcp_receipt(transaction="bad"),
+    _mcp_receipt(payer="0x" + "22" * 20), _mcp_receipt(network=_MAINNET)])
+async def test_mcp_unconfirmed_receipt_keeps_signed_budget(wallet, sepolia_network, receipt):
+    from src.services import spend_service, x402_payer
+
+    session = _McpPaymentSession(receipt=receipt)
+    result = await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
+    assert not result.paid
+    assert result.transaction is None
+    assert spend_service.list_payments()[0]["state"] == "authorized"
+    assert spend_service.get_status()["spent_usd"] == 0.05
+    assert len(session.calls) == 2
+
+
+@pytest.mark.parametrize("failure", [TimeoutError("SYNTHETIC_SECRET"), RuntimeError("SYNTHETIC_SECRET")])
+async def test_mcp_interrupted_paid_retry_retains_budget_and_sanitizes(wallet, sepolia_network, failure):
+    from src.services import spend_service, x402_payer
+    from src.shared.errors import X402PaymentError
+
+    session = _McpPaymentSession(failure=failure)
+    with pytest.raises(X402PaymentError) as caught:
+        await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
+    assert "SYNTHETIC_SECRET" not in str(caught.value)
+    assert spend_service.list_payments()[0]["state"] == "authorized"
+    assert len(session.calls) == 2
+
+
+async def test_mcp_cancellation_retains_budget(wallet, sepolia_network):
+    import asyncio
+
+    from src.services import spend_service, x402_payer
+
+    session = _McpPaymentSession(failure=asyncio.CancelledError())
+    with pytest.raises(asyncio.CancelledError):
+        await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
+    assert spend_service.list_payments()[0]["state"] == "authorized"
+
+
+async def test_mcp_backup_gate_before_initialization(unbacked_wallet, sepolia_network):
+    from src.services import spend_service, x402_payer
+    from src.shared.errors import AgentError
+
+    session = _McpPaymentSession()
+    with pytest.raises(AgentError):
+        await x402_payer.pay_mcp(session, wallet_address=unbacked_wallet, resource="http://localhost:9080/mcp/")
+    assert not session.initialized
+    assert not session.calls
+    assert not spend_service.list_payments()
+
+
+async def test_mcp_exhausted_cap_before_initialization(wallet, sepolia_network, monkeypatch):
+    from src.config import app_config
+    from src.services import spend_service, x402_payer
+    from src.shared.errors import X402SpendCapExceeded
+
+    monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 0)
+    session = _McpPaymentSession()
+    with pytest.raises(X402SpendCapExceeded):
+        await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
+    assert not session.initialized
+    assert not spend_service.list_payments()
+
+
+@pytest.mark.parametrize("requirements", [_requirements(network=_MAINNET, asset=_MAINNET_USDC),
+    _requirements(asset=_NOT_USDC), _requirements(amount="1000001")])
+async def test_mcp_unsafe_challenge_never_signs(wallet, sepolia_network, requirements, monkeypatch):
+    from src.services import spend_service, wallet_manager, x402_payer
+    from src.shared.errors import AgentError
+
+    monkeypatch.setattr(wallet_manager, "sign_x402_authorization", lambda **kw: pytest.fail("must not sign"))
+    session = _McpPaymentSession(requirements=requirements)
+    with pytest.raises(AgentError):
+        await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
+    assert len(session.calls) == 1
+    assert not spend_service.list_payments()
+
+
+async def test_mcp_free_response_cannot_claim_a_payment(wallet, sepolia_network):
+    from src.services import spend_service, x402_payer
+
+    session = _McpPaymentSession(receipt=_mcp_receipt(), free=True)
+    result = await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
+    assert result.status_code == 200 and not result.paid
+    assert not spend_service.list_payments()
+
+
+async def test_mcp_each_attempt_has_fresh_nonce(wallet, sepolia_network):
+    from src.services import spend_service, x402_payer
+    from x402.mcp import MCP_PAYMENT_META_KEY
+
+    sessions = [_McpPaymentSession(), _McpPaymentSession()]
+    for session in sessions:
+        await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
+    nonces = [s.calls[1][2][MCP_PAYMENT_META_KEY]["payload"]["authorization"]["nonce"] for s in sessions]
+    assert nonces[0] != nonces[1]
+    assert spend_service.get_status()["spent_usd"] == 0.1
+
+
+async def test_rest_demo_payer_ignores_proxy_environment_and_redirects(wallet, sepolia_network, mock_http, monkeypatch):
+    from src.services.x402_payer import pay
+
+    monkeypatch.setenv("HTTP_PROXY", "http://unreachable.invalid:1234")
+    monkeypatch.setenv("ALL_PROXY", "http://unreachable.invalid:1234")
+    monkeypatch.setenv("NO_PROXY", "")
+    mock_http.install(httpx.Response(307, headers={"Location": "http://outside.invalid/"}))
+    result = await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    assert result.status_code == 307 and not result.paid
+    assert len(mock_http.requests) == 1
+
+
+async def test_mcp_demo_over_real_http_session_with_mock_wire(wallet, sepolia_network, monkeypatch):
+    """Exercise CLI connection -> MCP protocol -> x402 SDK -> custody -> ledger."""
+    import importlib.util
+    from pathlib import Path
+
+    from src.services import spend_service, x402_payer
+    from x402.mcp import MCP_PAYMENT_META_KEY, MCP_PAYMENT_RESPONSE_META_KEY
+
+    path = Path(__file__).resolve().parents[2] / "scripts/_x402_demo.py"
+    spec = importlib.util.spec_from_file_location("_demo_wire_test", path)
+    demo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(demo)
+    calls = []
+    original_client = httpx.AsyncClient
+
+    def handler(request):
+        assert not any(key in request.headers for key in ("authorization", "x-api-key", "payment-signature"))
+        if request.method != "POST":
+            return httpx.Response(405)
+        payload = json.loads(request.content)
+        method = payload["method"]
+        if "id" not in payload:
+            return httpx.Response(202)
+        if method == "initialize":
+            result = {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}},
+                      "serverInfo": {"name": "test", "version": "1"}}
+        elif method == "tools/list":
+            result = {"tools": [{"name": "hello_mangrove", "inputSchema": {"type": "object"}}]}
+        else:
+            assert method == "tools/call"
+            calls.append(payload["params"])
+            if len(calls) == 1:
+                assert "_meta" not in payload["params"] or MCP_PAYMENT_META_KEY not in payload["params"]["_meta"]
+                result = {"isError": True, "content": [], "structuredContent": PaymentRequired(
+                    x402_version=2, accepts=[_requirements()],
+                ).model_dump(by_alias=True)}
+            else:
+                assert payload["params"]["_meta"][MCP_PAYMENT_META_KEY]["payload"]["authorization"]["from"] == wallet
+                result = {"isError": False, "content": [{"type": "text", "text": '{"message":"hello"}'}],
+                          "_meta": {MCP_PAYMENT_RESPONSE_META_KEY: _mcp_receipt()}}
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": result})
+
+    def client(**kwargs):
+        assert kwargs["trust_env"] is False and kwargs["follow_redirects"] is False
+        assert kwargs["max_redirects"] == 0
+        return original_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    result = await demo.mcp_payment("http://127.0.0.1:9080", wallet)
+    assert isinstance(result, x402_payer.PaymentResult)
+    assert result.paid and result.status_code == 200
+    assert len(calls) == 2
+    assert spend_service.list_payments()[0]["state"] == "settled"

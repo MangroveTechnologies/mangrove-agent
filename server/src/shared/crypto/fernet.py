@@ -8,13 +8,16 @@ Master key resolution order:
     2. OS Keychain via `keyring` library (macOS Keychain, GNOME Keyring,
        Windows Credential Manager). Service name from `KEYRING_SERVICE_NAME`,
        username `master`. Useful bare-metal when no keyfile is present.
-    3. If neither yields a key:
+    3. If neither yields a key, initialization/encryption callers may create one:
          - If a keyfile PATH is configured (normal case): generate a fresh
            Fernet key, write to the keyfile with chmod 0600, return it.
          - If neither keyfile nor keychain is available (test fixtures that
            stub both): raise RuntimeError. This **never** silently generates
            a volatile in-memory key — that is the bug that stranded wallets
            in pre-2026-04-22 builds.
+
+Decryption and payment preflight require an existing keyfile or keychain entry.
+They never enter step 3 or write a replacement key when the original is missing.
 
 Encryption: Fernet (AES-128-CBC + HMAC-SHA256, URL-safe base64). Ciphertext
 stored as a BLOB in SQLite.
@@ -28,7 +31,7 @@ from __future__ import annotations
 
 import os
 import stat
-from functools import lru_cache
+import threading
 from pathlib import Path
 
 import keyring
@@ -122,24 +125,32 @@ def _generate_and_persist_keyfile() -> tuple[bytes, str]:
     return key, MasterKeySource.GENERATED_KEYFILE
 
 
-@lru_cache(maxsize=1)
-def _get_master_key_with_source() -> tuple[bytes, str]:
-    """Return (master_key_bytes, source_tag) — see MasterKeySource.
+_master_key_cache: tuple[bytes, str] | None = None
+_master_key_lock = threading.Lock()
 
-    Idempotent across process lifetime via lru_cache.
+
+def _get_master_key_with_source(*, allow_create: bool = True) -> tuple[bytes, str]:
+    """Resolve one process-wide key, independently of creation permission.
+
+    Once loaded, encryption, decryption and source reporting all reuse the same
+    key, even if the backing keychain later locks. Serialize the first load so
+    concurrent callers cannot initialize/cache different keys. A failed read
+    never populates the cache; permission to create applies only on a cache miss.
     """
-    # 1. Keyfile (primary persistence path)
-    res = _read_keyfile()
-    if res is not None:
+    global _master_key_cache
+    with _master_key_lock:
+        if _master_key_cache is not None:
+            return _master_key_cache
+        res = _read_keyfile() or _read_keychain()
+        if res is None:
+            if not allow_create:
+                raise SigningError(
+                    "Existing wallet encryption key is unavailable.",
+                    suggestion="Restore the original master key or unlock the existing OS keychain. No new key was created.",
+                )
+            res = _generate_and_persist_keyfile()
+        _master_key_cache = res
         return res
-
-    # 2. Keychain (bare-metal fallback)
-    res = _read_keychain()
-    if res is not None:
-        return res
-
-    # 3. Generate + persist
-    return _generate_and_persist_keyfile()
 
 
 def get_master_key() -> bytes:
@@ -158,11 +169,19 @@ def get_master_key_source() -> str:
 
 def reset_master_key_cache() -> None:
     """Clear the cached master key (test helper)."""
-    _get_master_key_with_source.cache_clear()
+    global _master_key_cache
+    with _master_key_lock:
+        _master_key_cache = None
 
 
-def _fernet() -> Fernet:
-    return Fernet(get_master_key())
+def require_existing_master_key() -> None:
+    """Validate an existing key without generating one or returning its bytes."""
+    Fernet(_get_master_key_with_source(allow_create=False)[0])
+
+
+def _fernet(*, allow_create: bool = True) -> Fernet:
+    key = get_master_key() if allow_create else _get_master_key_with_source(allow_create=False)[0]
+    return Fernet(key)
 
 
 def encrypt(plaintext: bytes) -> bytes:
@@ -173,9 +192,9 @@ def encrypt(plaintext: bytes) -> bytes:
 
 
 def decrypt(ciphertext: bytes) -> bytes:
-    """Decrypt Fernet ciphertext. Raises SigningError on invalid token."""
+    """Decrypt with an existing key only; never create a key on a read path."""
     try:
-        return _fernet().decrypt(bytes(ciphertext))
+        return _fernet(allow_create=False).decrypt(bytes(ciphertext))
     except InvalidToken as e:
         path = _keyfile_path()
         raise SigningError(
