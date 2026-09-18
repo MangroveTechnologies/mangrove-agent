@@ -85,3 +85,7 @@ server/scripts/first_live_swap.py
 .coverage
 **/.coverage
 htmlcov/
+
+# Private atomic config remnants, including older setup versions.
+/server/src/config/.setup-*
+/server/src/config/local-config.json.setup-*

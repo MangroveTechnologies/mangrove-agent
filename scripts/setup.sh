@@ -8,12 +8,12 @@
 # Flow (bare-metal, default):
 #   0. Preflight (python3, claude CLI if we're registering MCP)
 #   1. Seed server/src/config/local-config.json from the example if missing
-#   2. Ensure MANGROVE_API_KEY is set (prompt if missing, unless --yes)
+#   2. Choose API-key or x402 access; preserve existing settings on reruns
 #   3. Ensure agent-data/ directory exists (keyfile + DB live there)
 #   4. Install deps into .venv (pip install)
 #   5. Start uvicorn in the background (honors BARE_PORT; default 9080),
 #      unless --foreground
-#   6. Wait for /health
+#   6. Verify authenticated local access
 #   7. Register the MCP server with Claude Code (unless --no-mcp)
 #   8. Run verify_quickstart.sh (unless --no-verify)
 #
@@ -21,7 +21,7 @@
 #   0. Preflight (docker daemon, python3)
 #   1-3. Same as above (config + agent-data/)
 #   4. docker compose up -d --build
-#   5. Wait for /health
+#   5. Verify authenticated local access
 #   6. Register MCP (unless --no-mcp)
 #   7. Run verify_quickstart.sh (unless --no-verify)
 #
@@ -29,21 +29,21 @@
 # or uvicorn already healthy, MCP already registered).
 
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
+REQUESTED_BASE_URL="${BASE_URL:-}"
 PORT="${BARE_PORT:-9080}"
-# Loopback only by default: this process holds wallet secrets. Set
-# BARE_HOST=0.0.0.0 only on a network you fully trust.
+# This setup flow binds loopback only because it holds wallet secrets.
 HOST="${BARE_HOST:-127.0.0.1}"
 # Exported so the child scripts (setup-mcp.sh, verify_quickstart.sh) target the
 # SAME port. Honors BARE_PORT so a busy 9080 (e.g. squatted by VSCode/Code
 # Helper) can be sidestepped end-to-end with one env var.
 export BASE_URL="${BASE_URL:-http://127.0.0.1:$PORT}"
 CONFIG_FILE="server/src/config/local-config.json"
-EXAMPLE_CONFIG="server/src/config/local-example-config.json"
 PID_FILE="agent-data/bare.pid"
 LOG_FILE="agent-data/bare.log"
 
@@ -54,7 +54,10 @@ DO_VERIFY="yes"
 ASSUME_YES="no"
 FOREGROUND="no"
 SKIP_TOUR="no"
-API_KEY_ARG=""
+API_KEY_STDIN=""
+AUTH_MODE=""
+WALLET_ACTION=""
+CONFIG_ARGS=(--url "$BASE_URL")
 MARKETS_URL_DEFAULT="https://mangrovemarkets-pcqgpciucq-uc.a.run.app"
 MARKETS_URL_ARG=""
 
@@ -94,10 +97,14 @@ Options:
   --skip-tour           Suppress the first-run platform tour by writing the
                         .claude/.onboarded marker before Claude Code launches.
                         Replay it later by asking or 'rm .claude/.onboarded'.
-  --api-key KEY         Non-interactive: set MANGROVE_API_KEY.
+  --auth MODE           api-key or x402. Existing mode is preserved by default.
+  --api-key-stdin       Read upstream key from stdin (use a private pipe).
+                        Interactive users should use --auth api-key instead.
+  --wallet ACTION       Run an explicit user-requested create/import/list/select
+                        action, then exit. Normal setup only prints instructions.
   --markets-url URL     Non-interactive: set MANGROVEMARKETS_BASE_URL.
                         Default: $MARKETS_URL_DEFAULT
-  --yes                 Accept all defaults, skip prompts.
+  --yes                 Skip prompts; new installs default to x402. No wallet actions.
   -h, --help            Show this help.
 EOF
   exit 0
@@ -112,124 +119,106 @@ while [ $# -gt 0 ]; do
     --no-mcp) DO_MCP="no"; shift ;;
     --no-verify) DO_VERIFY="no"; shift ;;
     --skip-tour) SKIP_TOUR="yes"; shift ;;
-    --api-key) API_KEY_ARG="$2"; shift 2 ;;
-    --markets-url) MARKETS_URL_ARG="$2"; shift 2 ;;
+    --api-key) fail "--api-key was removed to protect credentials. Use --auth api-key for hidden entry, or --api-key-stdin with a private pipe." ;;
+    --api-key-stdin) API_KEY_STDIN="yes"; shift ;;
+    --auth) [ $# -ge 2 ] || fail "--auth needs api-key or x402"; AUTH_MODE="$2"; shift 2 ;;
+    --wallet) [ $# -ge 2 ] || fail "--wallet needs create/import/list/select"; WALLET_ACTION="$2"; shift 2 ;;
+    --markets-url) [ $# -ge 2 ] && [ -n "$2" ] || fail "--markets-url needs a value"; MARKETS_URL_ARG="$2"; shift 2 ;;
     --yes) ASSUME_YES="yes"; shift ;;
     -h|--help) usage ;;
-    *) fail "Unknown option: $1 (try --help)" ;;
+    *) fail "Unknown option (try --help)" ;;
   esac
 done
 
-# -- 0. preflight -----------------------------------------------------------
-
-step "0. Preflight"
-if ! command -v python3 >/dev/null 2>&1; then
-  fail "python3 not on PATH. Install Python 3.11+: https://www.python.org/downloads/"
+# -- 0. validate before changing configuration or state -----------------------
+case "$AUTH_MODE" in ""|api-key|x402) ;; *) fail "--auth must be api-key or x402" ;; esac
+case "$WALLET_ACTION" in ""|create|import|list|select) ;; *) fail "--wallet must be create/import/list/select" ;; esac
+[ "$AUTH_MODE" != "x402" ] || [ -z "$API_KEY_STDIN" ] || fail "--api-key conflicts with --auth x402"
+[ "$MODE" != "docker" ] || [ "$FOREGROUND" = "no" ] || fail "--foreground cannot be combined with --docker"
+[ -z "${MANGROVE_AGENT_HOME:-}" ] || fail "Run clone setup in a terminal without MANGROVE_AGENT_HOME (plugin state override)."
+[ "$HOST" = "127.0.0.1" ] || fail "setup.sh requires the loopback bind 127.0.0.1"
+PY="$(pick_python 11)" || fail "Python 3.11+ required. Install it, then rerun setup."
+export SETUP_PYTHON="$PY"
+SUPPORT="$SCRIPT_DIR/setup_support.py"
+# A rerun must retain the selected port, including commands printed by onboarding.
+if [ -z "${BARE_PORT:-}$REQUESTED_BASE_URL" ] && [ -f "$CONFIG_FILE" ]; then
+  BASE_URL="$("$PY" - "$CONFIG_FILE" <<'PYURL'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, str(Path('scripts').resolve()))
+from setup_support import origin, read_config, SetupError
+try:
+    print(origin(read_config(Path(sys.argv[1])).get('LOCAL_AGENT_URL') or 'http://127.0.0.1:9080'))
+except SetupError as exc:
+    sys.exit(str(exc))
+PYURL
+)"
+  PORT="${BASE_URL##*:}"
+  export BASE_URL
+  CONFIG_ARGS=(--url "$BASE_URL")
 fi
-if [ "$MODE" = "docker" ]; then
-  if ! command -v docker >/dev/null 2>&1; then
-    fail "docker not on PATH. Install Docker Desktop or run without --docker."
+if [ -n "$WALLET_ACTION" ]; then
+  [ -z "$AUTH_MODE$API_KEY_STDIN$MARKETS_URL_ARG" ] && [ "$ASSUME_YES" = "no" ] && [ "$FOREGROUND" = "no" ] \
+    || fail "Run --wallet by itself; it cannot be combined with setup/configuration options."
+else
+  "$PY" - "$PORT" "$BASE_URL" "$MODE" <<'PYCHECK'
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path('scripts').resolve()))
+from setup_support import origin, SetupError
+try:
+    port = int(sys.argv[1])
+    if not 1 <= port <= 65535: raise ValueError
+    if origin(sys.argv[2]) != f'http://127.0.0.1:{port}': raise ValueError
+    if sys.argv[3] == 'docker' and port != 9080: raise ValueError
+except (ValueError, AssertionError, SetupError):
+    sys.exit('Invalid port/BASE_URL combination. Docker setup currently uses port 9080.')
+PYCHECK
+  if [ "$MODE" = "docker" ]; then
+    command -v docker >/dev/null 2>&1 || fail "Docker not found."
+    docker info >/dev/null 2>&1 || fail "Docker daemon is not running."
   fi
-  if ! docker info >/dev/null 2>&1; then
-    fail "Docker daemon is not running. Start Docker Desktop, then re-run."
+fi
+
+# Serialize all setup/configuration actions. Never steal a potentially live lock.
+mkdir -p agent-data
+chmod 700 agent-data
+LOCK_DIR="agent-data/.setup.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  fail "Another setup is active, or a previous run was interrupted. Check agent-data/.setup.lock/pid; remove the lock directory only after confirming no setup is running."
+fi
+printf '%s\n' "$$" > "$LOCK_DIR/pid"
+LOCK_OWNED=yes
+release_lock() {
+  if [ "$LOCK_OWNED" = yes ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null || true)" = "$$" ]; then
+    rm -f "$LOCK_DIR/pid"
+    rmdir "$LOCK_DIR" 2>/dev/null || true
   fi
+  LOCK_OWNED=no
+}
+cleanup() { release_lock; }
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [ -n "$WALLET_ACTION" ]; then
+  "$PY" "$SUPPORT" wallet --action "$WALLET_ACTION"
+  exit 0
 fi
 if [ "$DO_MCP" = "yes" ] && ! command -v claude >/dev/null 2>&1; then
-  info "claude CLI not found — MCP registration will be skipped"
-  info "(install: npm install -g @anthropic-ai/claude-code)"
+  info "claude CLI not found; local agent setup continues, MCP registration will be skipped."
   DO_MCP="no"
 fi
-ok "preflight clean"
 
-# -- 1. seed config ---------------------------------------------------------
-
-step "1. Config at $CONFIG_FILE"
-if [ ! -f "$CONFIG_FILE" ]; then
-  if [ ! -f "$EXAMPLE_CONFIG" ]; then
-    fail "$EXAMPLE_CONFIG missing — repo is in an inconsistent state."
-  fi
-  cp "$EXAMPLE_CONFIG" "$CONFIG_FILE"
-  info "seeded $CONFIG_FILE from example"
+step "1. Configure access"
+[ -z "$AUTH_MODE" ] || CONFIG_ARGS+=(--auth "$AUTH_MODE")
+[ "$ASSUME_YES" = "no" ] || CONFIG_ARGS+=(--yes)
+[ -z "$MARKETS_URL_ARG" ] || CONFIG_ARGS+=(--markets-url "$MARKETS_URL_ARG")
+if [ -n "$API_KEY_STDIN" ]; then
+  "$PY" "$SUPPORT" configure "${CONFIG_ARGS[@]}" --api-key-stdin
+else
+  "$PY" "$SUPPORT" configure "${CONFIG_ARGS[@]}"
 fi
-
-# Update MANGROVE_API_KEY if needed.
-CURRENT_KEY="$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('MANGROVE_API_KEY',''))")"
-if [ "$CURRENT_KEY" = "REPLACE_WITH_YOUR_DEV_OR_PROD_KEY" ] || [ -z "$CURRENT_KEY" ]; then
-  if [ -n "$API_KEY_ARG" ]; then
-    NEW_KEY="$API_KEY_ARG"
-  elif [ "$ASSUME_YES" = "yes" ]; then
-    fail "MANGROVE_API_KEY unset and --yes given. Use --api-key to provide one, or run interactively."
-  else
-    echo
-    echo "MANGROVE_API_KEY is not set. Get a free key at https://mangrovedeveloper.ai"
-    printf "Paste your dev_/prod_ key (input hidden): "
-    read -rs NEW_KEY
-    echo
-    if [ -z "$NEW_KEY" ]; then
-      fail "Empty API key. Aborted."
-    fi
-  fi
-  python3 - <<PY
-import json, os
-p = "$CONFIG_FILE"
-c = json.load(open(p))
-c["MANGROVE_API_KEY"] = os.environ.get("NEW_KEY", "") or "$NEW_KEY"
-json.dump(c, open(p, "w"), indent=2)
-open(p, "a").write("\n")
-PY
-  info "MANGROVE_API_KEY written"
-fi
-
-# Local API key (API_KEYS): this agent's own X-API-Key, distinct from
-# MANGROVE_API_KEY. Every install gets a unique one. Older installs kept the key
-# published in the example config, which let anyone who could reach the port
-# call the wallet routes (including secret reveal), so those are rotated too.
-KEY_ROTATED="no"
-if python3 - "$CONFIG_FILE" <<'PY'
-import json, secrets, sys
-path = sys.argv[1]
-cfg = json.load(open(path))
-published = {"dev-key-1", "GENERATED_BY_SETUP"}
-keys = [k.strip() for k in str(cfg.get("API_KEYS", "")).split(",") if k.strip()]
-kept = [k for k in keys if k not in published]
-if keys and kept == keys:
-    sys.exit(1)  # already unique: nothing to do
-cfg["API_KEYS"] = ",".join(kept) if kept else secrets.token_urlsafe(32)
-json.dump(cfg, open(path, "w"), indent=2)
-open(path, "a").write("\n")
-PY
-then
-  KEY_ROTATED="yes"
-  info "generated a unique local API key (API_KEYS); Claude Code's MCP registration is refreshed below"
-fi
-chmod 600 "$CONFIG_FILE"
-
-# Update MANGROVEMARKETS_BASE_URL if still localhost (the example default is
-# localhost, which is wrong for most users who want the hosted server).
-CURRENT_URL="$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('MANGROVEMARKETS_BASE_URL',''))")"
-if [ "$CURRENT_URL" = "http://localhost:9081" ]; then
-  NEW_URL="${MARKETS_URL_ARG:-$MARKETS_URL_DEFAULT}"
-  if [ "$ASSUME_YES" != "yes" ] && [ -z "$MARKETS_URL_ARG" ]; then
-    echo
-    echo "MANGROVEMARKETS_BASE_URL is currently http://localhost:9081 (self-hosted placeholder)."
-    echo "Most users want the hosted URL. Accept the default, or paste your own."
-    echo "(Self-host note: 9081 avoids the VSCode Helper :8080 collision — if you run"
-    echo " MangroveMarkets-MCP-Server locally, bind it on 9081 to match this config.)"
-    printf "[default: %s] " "$NEW_URL"
-    read -r USER_URL
-    [ -n "$USER_URL" ] && NEW_URL="$USER_URL"
-  fi
-  python3 - <<PY
-import json
-p = "$CONFIG_FILE"
-c = json.load(open(p))
-c["MANGROVEMARKETS_BASE_URL"] = "$NEW_URL"
-json.dump(c, open(p, "w"), indent=2)
-open(p, "a").write("\n")
-PY
-  info "MANGROVEMARKETS_BASE_URL set to $NEW_URL"
-fi
-ok "config ready"
+ok "config ready; existing wallets and spending records preserved"
 
 # -- 2. agent-data directory -------------------------------------------------
 
@@ -263,7 +252,8 @@ ok "agent-data/ ready"
 
 if [ "$MODE" = "docker" ]; then
   step "3. docker compose up -d --build"
-  docker compose up -d --build >/dev/null
+  # Config is atomically replaced; recreate to refresh the single-file bind mount.
+  docker compose up -d --build --force-recreate >/dev/null
   ok "container built + started"
 else
   step "3. venv + pip install"
@@ -282,37 +272,61 @@ else
   # Run from repo root so relative config paths (./agent-data/…) resolve
   # the same way Docker resolves them (CWD=/app, agent-data/ alongside src/).
   export PYTHONPATH="$REPO_ROOT/server:${PYTHONPATH:-}"
-  # A running agent loaded the old API_KEYS at startup; restart it so the
-  # rotated key (and the loopback bind) take effect.
-  if [ "$KEY_ROTATED" = "yes" ] && [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null \
-     && ps -p "$(cat "$PID_FILE")" -o command= 2>/dev/null | grep -q 'uvicorn src.app:app'; then
-    info "restarting running agent (pid $(cat "$PID_FILE")) to apply the new key"
-    kill "$(cat "$PID_FILE")" 2>/dev/null || true
-    for _ in $(seq 1 20); do kill -0 "$(cat "$PID_FILE")" 2>/dev/null || break; sleep 0.5; done
-    rm -f "$PID_FILE"
-  fi
-  if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-    info "uvicorn already running (pid $(cat "$PID_FILE"))"
-  else
-    # Refuse to start if $PORT is already occupied. Otherwise uvicorn fails to
-    # bind, and we'd fall through to the /health check and verify against the
-    # DIFFERENT process already on $PORT — a false success. (This is the
-    # squatted-9080 case the README warns about, e.g. macOS "Code Helper".)
-    if python3 -c "import socket,sys; s=socket.socket(); s.settimeout(1); rc=s.connect_ex(('127.0.0.1', $PORT)); s.close(); sys.exit(0 if rc==0 else 1)" 2>/dev/null; then
-      fail "port $PORT is already in use — refusing to start. Stop whatever holds it (a stale agent, another service, or a squatter), or re-run with BARE_PORT=<free port>."
-    fi
-    if [ "$FOREGROUND" = "yes" ]; then
-      info "running in foreground (Ctrl+C to stop)"
-      exec env ENVIRONMENT=local PYTHONPATH="$PYTHONPATH" python3 -m uvicorn src.app:app \
-        --host "$HOST" --port "$PORT" --workers 1 --timeout-keep-alive 120
+  FINGERPRINT="$("$PY" "$SUPPORT" fingerprint)"
+  if [ -f "$PID_FILE" ]; then
+    OLD_PID="$(cat "$PID_FILE")"
+    case "$OLD_PID" in ""|*[!0-9]*) fail "Invalid agent pid file; inspect it before retrying." ;; esac
+    if kill -0 "$OLD_PID" 2>/dev/null; then
+      # Only stop a process with this checkout's absolute app-dir in its argv.
+      # Older setup versions lack this evidence: ask the user to stop them.
+      COMMAND="$(ps -p "$OLD_PID" -o command=)"
+      case "$COMMAND" in
+        *"uvicorn src.app:app --app-dir $REPO_ROOT/server --host 127.0.0.1 --port "*) ;;
+        *) fail "Recorded PID cannot be identified as this setup's agent. Stop your existing agent manually, then rerun setup." ;;
+      esac
+      if [ "$FOREGROUND" = "yes" ]; then
+        fail "An agent is already running. Stop it before using --foreground."
+      fi
+      if [ "$(cat agent-data/bare.fingerprint 2>/dev/null || true)" != "$FINGERPRINT" ]; then
+        info "restarting this checkout's agent to apply configuration/code changes"
+        kill "$OLD_PID"
+        for _ in $(seq 1 40); do kill -0 "$OLD_PID" 2>/dev/null || break; sleep 0.25; done
+        if kill -0 "$OLD_PID" 2>/dev/null; then
+          fail "Agent has not stopped; inspect it before rerunning. No second process was started."
+        fi
+        rm -f "$PID_FILE"
+      else
+        info "existing agent configuration matches"
+      fi
     else
-      nohup env ENVIRONMENT=local PYTHONPATH="$PYTHONPATH" python3 -m uvicorn src.app:app \
-        --host "$HOST" --port "$PORT" --workers 1 --timeout-keep-alive 120 \
-        > "$REPO_ROOT/$LOG_FILE" 2>&1 &
-      echo $! > "$REPO_ROOT/$PID_FILE"
-      info "uvicorn started in background (pid $(cat "$PID_FILE"))"
-      info "logs: tail -f $LOG_FILE"
-      info "stop: kill \$(cat $PID_FILE)"
+      rm -f "$PID_FILE"
+    fi
+  fi
+  if [ ! -f "$PID_FILE" ]; then
+    if "$PY" - "$PORT" <<'PYPORT'
+import socket, sys
+with socket.socket() as sock:
+    sock.settimeout(1)
+    sys.exit(0 if sock.connect_ex(('127.0.0.1', int(sys.argv[1]))) == 0 else 1)
+PYPORT
+    then
+      fail "Port $PORT is already in use. Stop its owner or use BARE_PORT=<free port>."
+    fi
+    # Start first, then authenticate/register/verify in both modes. Foreground
+    # attaches below, so it does not skip the rest of setup.
+    nohup env ENVIRONMENT=local PYTHONPATH="$PYTHONPATH" python3 -m uvicorn src.app:app \
+      --app-dir "$REPO_ROOT/server" --host "$HOST" --port "$PORT" --workers 1 --timeout-keep-alive 120 \
+      >> "$REPO_ROOT/$LOG_FILE" 2>&1 < /dev/null &
+    CHILD_PID=$!
+    echo "$CHILD_PID" > "$PID_FILE"
+    info "agent started (pid $CHILD_PID); logs: $LOG_FILE"
+    if [ "$FOREGROUND" = "yes" ]; then
+      cleanup() {
+        kill "$CHILD_PID" 2>/dev/null || true
+        wait "$CHILD_PID" 2>/dev/null || true
+        if [ "$(cat "$PID_FILE" 2>/dev/null || true)" = "$CHILD_PID" ]; then rm -f "$PID_FILE"; fi
+        release_lock
+      }
     fi
   fi
   ok "server starting"
@@ -320,36 +334,21 @@ fi
 
 # -- 4. wait for /health -----------------------------------------------------
 
-step "5. Wait for /health"
-# python3 (already required) rather than curl, which preflight never checked for:
-# a curl-less PATH used to report "/health never responded" for a healthy server.
-health_ok() {
-  python3 - "$BASE_URL/health" <<'PY' 2>/dev/null
-import sys, urllib.request
-try:
-    with urllib.request.urlopen(sys.argv[1], timeout=2) as r:
-        sys.exit(0 if r.status == 200 else 1)
-except Exception:
-    sys.exit(1)
-PY
-}
-for i in $(seq 1 30); do
-  if health_ok; then
-    ok "/health 200 after ${i}s"
-    break
-  fi
-  if [ "$i" = "30" ]; then
-    if [ "$MODE" = "docker" ]; then
-      info "recent container logs:"
-      docker compose logs app --tail 20 || true
-    else
-      info "recent uvicorn logs:"
-      tail -20 "$LOG_FILE" 2>/dev/null || true
-    fi
-    fail "/health never responded"
+step "5. Verify local authenticated access"
+READY="no"
+DEADLINE=$((SECONDS + 60))
+while [ "$SECONDS" -lt "$DEADLINE" ]; do
+  if "$PY" "$SUPPORT" check >/dev/null 2>&1; then READY="yes"; break; fi
+  if [ "$MODE" = "bare" ] && ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    fail "Agent exited during startup; inspect $LOG_FILE."
   fi
   sleep 1
 done
+[ "$READY" = "yes" ] || fail "Local authenticated readiness failed. Inspect agent logs and config; MCP was not registered."
+ok "local authentication verified; no paid request made"
+if [ "$MODE" = "bare" ]; then
+  printf '%s\n' "$FINGERPRINT" > agent-data/bare.fingerprint
+fi
 
 # -- 5. register MCP ---------------------------------------------------------
 
@@ -366,25 +365,29 @@ fi
 if [ "$DO_VERIFY" = "yes" ]; then
   step "7. Verify"
   if [ "$MODE" = "docker" ]; then
-    SETUP_PARENT=1 "$SCRIPT_DIR/verify_quickstart.sh" 2>&1 | tail -12 || info "verify had warnings"
+    SETUP_PARENT=1 "$SCRIPT_DIR/verify_quickstart.sh" 2>&1 | tail -12 || fail "Verification failed; setup is incomplete."
   else
-    SETUP_PARENT=1 "$SCRIPT_DIR/verify_quickstart.sh" --bare 2>&1 | tail -12 || info "verify had warnings"
+    SETUP_PARENT=1 "$SCRIPT_DIR/verify_quickstart.sh" --bare 2>&1 | tail -12 || fail "Verification failed; setup is incomplete."
   fi
 fi
 
 echo
-printf "${GREEN}Done.${CLR} mangrove-agent is running at $BASE_URL\n\n"
-echo "Next:"
-if [ "$SKIP_TOUR" = "yes" ]; then
-  echo "  - Restart Claude Code in this directory. The first-run tour is"
-  echo "    suppressed (.claude/.onboarded present) — ask for it any time"
-  echo "    or 'rm .claude/.onboarded' to replay it."
+if [ "$DO_MCP" = "yes" ]; then
+  echo "Claude MCP registration saved. Open/reconnect Claude in this directory to load tools."
 else
-  echo "  - Restart Claude Code in this directory. The agent runs a short"
-  echo "    platform tour (status, market data, knowledge base, reference"
-  echo "    strategies), then offers to build you a strategy. Backtesting and"
-  echo "    paper trading need no wallet; wallet setup comes right before"
-  echo "    going live. The agent never accepts a pasted private key: to"
-  echo "    import a wallet it will point you to ./scripts/stash-secret.sh."
+  echo "Claude MCP is not registered. Install Claude CLI and rerun setup when ready."
 fi
-echo
+GUIDE_ARGS=(guide)
+[ "$ASSUME_YES" = "no" ] || GUIDE_ARGS+=(--yes)
+[ "$MODE" != "docker" ] || GUIDE_ARGS+=(--docker)
+"$PY" "$SUPPORT" "${GUIDE_ARGS[@]}"
+printf "${GREEN}Done.${CLR} Local agent authenticated at %s. Payment readiness is separate.\n" "$BASE_URL"
+if [ "$SKIP_TOUR" = "yes" ]; then
+  echo "First-run tour suppressed; ask for it later if desired."
+fi
+if [ "$FOREGROUND" = "yes" ]; then
+  # Release the setup lock after onboarding while retaining signal cleanup.
+  release_lock
+  echo "Agent attached to this terminal. Ctrl+C stops it. Logs: $LOG_FILE"
+  wait "$CHILD_PID"
+fi
