@@ -68,7 +68,7 @@ mangrovemarkets>=1.1.0,<2.0.0
 apscheduler[sqlalchemy]>=3.10
 cryptography>=42
 keyring>=24
-structlog>=24
+structlog>=26.1.0
 
 # Dev/test
 pytest>=8.0.0
