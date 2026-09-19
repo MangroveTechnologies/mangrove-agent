@@ -10,7 +10,7 @@ x402[evm,fastapi]>=2.2.0
 cdp-sdk>=1.0.0
 # <2: mcp 2.x renamed FastMCP -> MCPServer (mcp.server.fastmcp is gone), so an
 # unbounded range makes fresh installs crash at import. Port to 2.x separately.
-mcp[cli]>=1.2.0,<2
+mcp[cli]>=2.2.0,<3
 google-cloud-secret-manager>=2.20.0
 PyJWT>=2.9.0
 
