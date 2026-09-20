@@ -486,12 +486,66 @@ def test_mcp_registration_uses_local_key_and_saved_port(checkout):
     assert denied_file.returncode != 0
     assert output_file.read_text() == ''
     assert cfg['API_KEYS'] not in denied_file.stderr
+    if os.name != 'nt':
+        import pty
+
+        master, terminal = pty.openpty()
+        try:
+            denied_terminal = subprocess.run(shlex.split(registration['headersHelper']), env=env,
+                                             stdout=terminal, stderr=subprocess.PIPE, text=True, timeout=10)
+            assert denied_terminal.returncode != 0
+            assert cfg['API_KEYS'] not in denied_terminal.stderr
+            os.set_blocking(master, False)
+            with pytest.raises(BlockingIOError):
+                os.read(master, 4096)  # No credential or other output reached the terminal.
+        finally:
+            os.close(terminal)
+            os.close(master)
     env['CLAUDE_CODE_MCP_SERVER_URL'] = 'https://example.invalid/mcp/'
     denied = subprocess.run(shlex.split(registration['headersHelper']), env=env,
                             capture_output=True, text=True)
     assert denied.returncode != 0
     assert cfg['API_KEYS'] not in denied.stdout + denied.stderr
     assert cfg['API_KEYS'] not in result.stdout + result.stderr
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX socketpair subprocess stdout')
+@pytest.mark.parametrize('metadata', ['valid', 'wrong-name', 'wrong-url', 'missing'])
+def test_headers_helper_socket_stdout(tmp_path, metadata):
+    """Real socket-backed stdout matches Node/Bun, unlike subprocess.PIPE."""
+    repo = tmp_path / 'repo'
+    (repo / 'scripts').mkdir(parents=True)
+    (repo / 'server/src/config').mkdir(parents=True)
+    shutil.copy(ROOT / 'scripts/setup_support.py', repo / 'scripts/setup_support.py')
+    key = 'synthetic-local-key'
+    (repo / 'server/src/config/local-config.json').write_text(json.dumps({
+        'AUTH_ENABLED': True, 'API_KEYS': key, 'LOCAL_AGENT_URL': 'http://127.0.0.1:9082',
+    }))
+    env = dict(os.environ, CLAUDE_CODE_MCP_SERVER_NAME='mangrove-agent',
+               CLAUDE_CODE_MCP_SERVER_URL='http://127.0.0.1:9082/mcp/')
+    if metadata == 'wrong-name':
+        env['CLAUDE_CODE_MCP_SERVER_NAME'] = 'another-server'
+    elif metadata == 'wrong-url':
+        env['CLAUDE_CODE_MCP_SERVER_URL'] = 'https://example.invalid/mcp/'
+    elif metadata == 'missing':
+        env.pop('CLAUDE_CODE_MCP_SERVER_NAME')
+        env.pop('CLAUDE_CODE_MCP_SERVER_URL')
+    reader, writer = socket.socketpair()
+    with reader, writer:
+        reader.settimeout(5)
+        result = subprocess.run([sys.executable, str(repo / 'scripts/setup_support.py'), 'headers'],
+                                env=env, stdout=writer, stderr=subprocess.PIPE, text=True, timeout=10)
+        writer.shutdown(socket.SHUT_WR)
+        output = bytearray()
+        while chunk := reader.recv(4096):
+            output.extend(chunk)
+    assert key not in result.stderr
+    if metadata == 'valid':
+        assert result.returncode == 0, result.stderr
+        assert json.loads(output) == {'X-API-Key': key}
+    else:
+        assert result.returncode != 0
+        assert not output
 
 
 def test_authorized_period_cap_cannot_be_silently_overridden(interactive, monkeypatch):

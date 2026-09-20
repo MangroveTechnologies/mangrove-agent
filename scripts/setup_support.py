@@ -416,11 +416,14 @@ def main():
             if args.command == 'headers':
                 require_auth(cfg)
                 expected = origin(cfg.get('LOCAL_AGENT_URL', '')) + '/mcp/'
-                if (not stat.S_ISFIFO(os.fstat(sys.stdout.fileno()).st_mode)
+                output_mode = os.fstat(sys.stdout.fileno()).st_mode
+                # Node/Bun subprocess stdio can use a socketpair rather than a
+                # FIFO. Both are IPC channels; neither proves peer identity.
+                if (not (stat.S_ISFIFO(output_mode) or stat.S_ISSOCK(output_mode))
                         or os.environ.get('CLAUDE_CODE_MCP_SERVER_NAME') != 'mangrove-agent'
                         or os.environ.get('CLAUDE_CODE_MCP_SERVER_URL') != expected):
-                    raise SetupError('Headers require a pipe to the configured Claude MCP connection.')
-                # Intentional credential protocol output to Claude's stdout pipe,
+                    raise SetupError('Headers require a pipe or socket to the configured Claude MCP connection.')
+                # Intentional credential protocol output to Claude's IPC channel,
                 # not a log. The guard above rejects terminals and regular files;
                 # the configured server name/URL must also match. Do not move this
                 # payload into diagnostics or remove it: Claude needs the raw header.
