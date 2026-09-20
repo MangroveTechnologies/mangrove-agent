@@ -306,6 +306,7 @@ HTTPServer(('127.0.0.1', int(sys.argv[sys.argv.index('--port')+1])), Handler).se
         try:
             os.kill(int(pid.read_text()), signal.SIGTERM)
         except ProcessLookupError:
+            # Setup may have already stopped the mock server before teardown.
             pass
 
 
@@ -477,6 +478,14 @@ def test_mcp_registration_uses_local_key_and_saved_port(checkout):
     helper = subprocess.run(shlex.split(registration['headersHelper']), env=env,
                             capture_output=True, text=True, check=True)
     assert json.loads(helper.stdout) == {'X-API-Key': cfg['API_KEYS']}
+    # Even correct MCP metadata must not allow a credential dump to a log file.
+    output_file = repo / 'headers-output.log'
+    with output_file.open('w') as stream:
+        denied_file = subprocess.run(shlex.split(registration['headersHelper']), env=env,
+                                     stdout=stream, stderr=subprocess.PIPE, text=True)
+    assert denied_file.returncode != 0
+    assert output_file.read_text() == ''
+    assert cfg['API_KEYS'] not in denied_file.stderr
     env['CLAUDE_CODE_MCP_SERVER_URL'] = 'https://example.invalid/mcp/'
     denied = subprocess.run(shlex.split(registration['headersHelper']), env=env,
                             capture_output=True, text=True)
@@ -608,6 +617,7 @@ def test_backup_transport_never_forwards_or_prints_secrets(backup, tmp_path, mon
             try:
                 self.wfile.write(b'synthetic-sensitive-body' if failure != 'oversize' else b'x' * (1024 * 1024 + 1))
             except (BrokenPipeError, ConnectionResetError):
+                # The bounded-response client deliberately closes oversized replies.
                 pass
 
         do_POST = do_GET

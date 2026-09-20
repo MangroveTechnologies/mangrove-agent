@@ -35,6 +35,9 @@ def run(action, value, by_address=False):
         if by_address and addr != value:
             raise SetupError('Returned wallet address does not match the requested wallet.')
         print('Wallet secret: save this outside the agent in your private backup.\n')
+        # Intentional user-requested backup display, not application logging.
+        # The terminal guard above rejects redirected files and pipes before
+        # fetching the secret. Redacting this would make wallet backup impossible.
         print(secret)
         print('\nClear terminal scrollback after saving your backup.')
         print('Then run: ./scripts/confirm-backup.sh ' + (addr or '<wallet-address>'))
