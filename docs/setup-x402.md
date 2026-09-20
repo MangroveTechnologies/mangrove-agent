@@ -22,6 +22,12 @@ at connection time. No key is passed to the Claude CLI or stored in its server
 registration. Use a current Claude Code version, restart it in this checkout, and
 approve the helper/workspace if prompted. The helper requires the matching MCP
 server name and URL; if you change the local port, rerun setup to register it.
+Its credential output is restricted to subprocess pipes or sockets (Claude's
+runtime may use either); terminals and regular files are rejected. This checks
+the output channel and configured target, not the identity of the receiving process.
+After setup or a helper update, reconnect from `/mcp` and ask for your x402 spend
+status. That local read should work without shell commands or an explicit key
+argument. A connected status alone does not prove authenticated tool execution.
 See [Claude's dynamic-header documentation](https://code.claude.com/docs/en/mcp#use-dynamic-headers-for-custom-authentication).
 
 The explicit reveal command only writes secrets to a terminal; redirecting its

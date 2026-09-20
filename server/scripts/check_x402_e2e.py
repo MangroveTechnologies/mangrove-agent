@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manual Base Sepolia test. Quote-only unless --pay is explicitly supplied."""
+"""Manual Base/Sepolia test. Quote-only unless --pay is explicitly supplied."""
 from __future__ import annotations
 
 import argparse
@@ -23,9 +23,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", choices=("hello", "signals"), required=True)
     parser.add_argument("--receiver", required=True, help="Expected receiver PUBLIC address")
-    parser.add_argument("--pay", action="store_true", help="Authorize ONE testnet payment")
+    parser.add_argument("--pay", action="store_true", help="Authorize ONE payment on the selected network")
+    parser.add_argument("--network", choices=("sepolia", "mainnet"), default="sepolia")
+    parser.add_argument("--allow-mainnet", action="store_true",
+                        help="Explicitly permit real USDC spending with --network mainnet --pay")
     parser.add_argument("--log", type=Path, default=Path("agent-data/x402-e2e.jsonl"))
     args = parser.parse_args()
+    if args.pay and args.network == "mainnet" and not args.allow_mainnet:
+        parser.error("Mainnet payment requires --allow-mainnet; omit --pay to inspect a quote only.")
+    if args.network == "mainnet" and args.case != "signals":
+        parser.error("The mainnet smoke test supports only signals (maximum 0.001 USDC).")
+    network = "eip155:8453" if args.network == "mainnet" else NETWORK
+    chain_id = 8453 if args.network == "mainnet" else 84532
+    usdc = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" if args.network == "mainnet" else USDC
+    rpc_url = "https://mainnet.base.org" if args.network == "mainnet" else RPC
+    domain_name = "USD Coin" if args.network == "mainnet" else "USDC"
+    explorer = "https://basescan.org/tx/" if args.network == "mainnet" else "https://sepolia.basescan.org/tx/"
     root = Path(__file__).resolve().parents[2]
     if Path.cwd().resolve() != root:
         parser.error(f"Run from the repository root: {root}")
@@ -103,12 +116,14 @@ def main():
                     amount = int(amount)
                     event("quote", network=offer.get("network"), asset=offer.get("asset"),
                           receiver=offer.get("payTo"), amount_usdc=str(Decimal(amount) / 1000000),
-                          domain_valid=offer.get("extra", {}).get("name") == "USDC" and offer.get("extra", {}).get("version") == "2")
-                    if (offer.get("scheme") != "exact" or offer.get("network") != NETWORK
-                            or str(offer.get("asset", "")).lower() != USDC.lower()
+                          domain_valid=offer.get("extra", {}).get("name") == domain_name and offer.get("extra", {}).get("version") == "2")
+                    if (offer.get("scheme") != "exact" or offer.get("network") != network
+                            or str(offer.get("asset", "")).lower() != usdc.lower()
                             or str(offer.get("payTo", "")).lower() != receiver.lower()
+                            or offer.get("extra", {}).get("name") != domain_name
+                            or offer.get("extra", {}).get("version") != "2"
                             or not 0 < amount <= limit):
-                        raise RuntimeError("Quote differs from allowed testnet, USDC, receiver or price")
+                        raise RuntimeError("Quote differs from allowed network, USDC, receiver, domain or price")
                     quote_amount = amount
                 except Exception:
                     response.close()
@@ -120,7 +135,7 @@ def main():
 
     def rpc(method, params):
         with httpx.Client(timeout=20, trust_env=False) as http:
-            response = http.post(RPC, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+            response = http.post(rpc_url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
             response.raise_for_status()
             data = response.json()
         if "error" in data:
@@ -129,12 +144,13 @@ def main():
 
     def balance(address, block="latest"):
         data = "0x70a08231" + address[2:].lower().rjust(64, "0")
-        return int(rpc("eth_call", [{"to": USDC, "data": data}, block]), 16)
+        return int(rpc("eth_call", [{"to": usdc, "data": data}, block]), 16)
 
     try:
-        event("start", case=args.case, pay=args.pay, maximum_usdc=str(Decimal(limit) / 1000000))
-        if str(app_config.X402_NETWORK) != NETWORK:
-            raise RuntimeError("Agent configuration must use Base Sepolia")
+        event("start", case=args.case, pay=args.pay, network=network,
+              maximum_usdc=str(Decimal(limit) / 1000000))
+        if str(app_config.X402_NETWORK) != network:
+            raise RuntimeError("Agent configuration must match the selected test network")
         if not args.pay:
             with httpx.Client(transport=ObservedTransport(), timeout=20, trust_env=False) as http:
                 response = http.get(url)
@@ -148,12 +164,12 @@ def main():
         payer = x402_payer.resolve_payer_wallet()
         wallet_manager.require_backup_confirmed(payer)
         x402_payer.check_payment_budget(url)
-        if int(rpc("eth_chainId", []), 16) != 84532:
-            raise RuntimeError("RPC is not Base Sepolia")
+        if int(rpc("eth_chainId", []), 16) != chain_id:
+            raise RuntimeError("RPC does not match the selected network")
         before = {"payer": balance(payer), "receiver": balance(receiver)}
         event("balances_before", payer=payer, receiver=receiver, micro_usdc=before)
         if before["payer"] < limit:
-            raise RuntimeError("Payer has insufficient testnet USDC for this test limit")
+            raise RuntimeError("Payer has insufficient USDC on the selected network for this test limit")
         prior_ids = {row["id"] for row in spend_service.list_payments(limit=500)}
         try:
             if args.case == "signals":
@@ -190,7 +206,7 @@ def main():
             raise RuntimeError("No successful on-chain receipt yet; do not repeat payment automatically")
         def matches(log):
             topics = log.get("topics", [])
-            return (log.get("address", "").lower() == USDC.lower() and len(topics) == 3
+            return (log.get("address", "").lower() == usdc.lower() and len(topics) == 3
                     and topics[0].lower() == TRANSFER
                     and topics[1][-40:].lower() == payer[2:].lower()
                     and topics[2][-40:].lower() == receiver[2:].lower()
@@ -198,7 +214,7 @@ def main():
         if not any(matches(log) for log in receipt.get("logs", [])):
             raise RuntimeError("Receipt does not contain the expected USDC transfer")
         event("onchain_verified", transaction=tx, block=int(receipt["blockNumber"], 16),
-              explorer="https://sepolia.basescan.org/tx/" + tx)
+              explorer=explorer + tx)
         # The successful receipt and exact Transfer event above are required
         # proof. Historical balance snapshots are supplementary: public RPCs
         # may not serve state for a just-mined block or may rate-limit reads.
