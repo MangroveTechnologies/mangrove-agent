@@ -768,8 +768,14 @@ def unconfirmed_response_error(response: httpx.Response, reservations) -> X402Pa
             parsed = json.loads(raw)
             if isinstance(parsed, dict):
                 body = parsed
-    except (ValueError, httpx.HTTPError, httpx.StreamError, RecursionError):
-        pass
+    except (ValueError, httpx.HTTPError, httpx.StreamError, RecursionError) as error:
+        # Best effort by design: this response is already being discarded as
+        # uncertain, and an unparseable body must not mask that outcome. Only
+        # the exception TYPE is recorded -- a remote payment body can carry
+        # credentials, so neither its text nor a traceback is logged. Falling
+        # through with an empty `body` yields no reason and no correlation id,
+        # which is the correct "we could not tell" answer.
+        _log.debug("x402.payment.unconfirmed_body_undecodable", error_type=type(error).__name__)
     reason = body.get("error")
     if not isinstance(reason, str) or reason not in {"payment_settlement_unconfirmed", "payment_verification_failed",
                       "payment_temporarily_unavailable", "payment_identity_unavailable"}:
