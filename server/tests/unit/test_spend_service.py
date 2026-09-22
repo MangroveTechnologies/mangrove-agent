@@ -133,7 +133,7 @@ def test_sub_cent_amounts_do_not_drift(temp_db):
     from src.services import spend_service
 
     for _ in range(1000):
-        _reserve(_MILLI)
+        spend_service.settle(_reserve(_MILLI), transaction="0x" + "ab" * 32)
     assert spend_service.get_status()["spent_usd"] == 1.0
 
 
@@ -165,7 +165,7 @@ def test_spending_the_budget_stops_further_payments(temp_db):
     from src.services import spend_service
     from src.shared.errors import X402SpendCapExceeded
 
-    _reserve(5_000_000)              # exactly the $5 budget -- allowed, then spent
+    spend_service.settle(_reserve(5_000_000), transaction="0x" + "ab" * 32)              # exactly the $5 budget -- allowed, then spent
     status = spend_service.get_status()
     assert status["exhausted"] is True
     assert status["remaining_usd"] == 0.0
@@ -183,7 +183,7 @@ def test_raising_the_config_cap_does_not_refill_the_budget(temp_db, monkeypatch)
     from src.services import spend_service
     from src.shared.errors import X402SpendCapExceeded
 
-    _reserve(5_000_000)
+    spend_service.settle(_reserve(5_000_000), transaction="0x" + "ab" * 32)
     monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 50, raising=False)
     assert spend_service.get_status()["exhausted"] is True
     with pytest.raises(X402SpendCapExceeded, match="budget is spent"):
@@ -285,7 +285,12 @@ def test_settling_a_retry_retains_the_earlier_authorization(temp_db):
     from src.services import spend_service
 
     first = _reserve(5 * _CENT)
-    second = _reserve(5 * _CENT)
+    # Simulate legacy rows created before the one-authorization gate.
+    second = _reserve(5 * _CENT, wallet_address="0x" + "22" * 20)
+    from src.shared.db.sqlite import get_connection
+    conn = get_connection()
+    conn.execute("UPDATE x402_payments SET wallet_address = ? WHERE id = ?", ("0x" + "11" * 20, second))
+    conn.commit()
     assert spend_service.get_status()["spent_usd"] == 0.10
 
     spend_service.settle([first, second], transaction="0x" + "fe" * 32)
@@ -314,7 +319,7 @@ def test_reset_clears_the_latch_keeps_history_and_resumes(temp_db):
     from src.services import spend_service
 
     rid = _reserve(5_000_000)
-    spend_service.settle(rid, transaction="0x1")
+    spend_service.settle(rid, transaction="0x" + "ab" * 32)
     assert spend_service.get_status()["exhausted"] is True
 
     out = spend_service.reset()
@@ -372,7 +377,7 @@ def test_concurrent_reservations_never_exceed_the_cap(temp_db, monkeypatch):
     def attempt():
         start.wait()
         try:
-            rid = _reserve(250_000)          # $0.25 -- exactly 4 fit in $1
+            rid = _reserve(250_000, wallet_address=f"0x{threading.get_ident():040x}")          # $0.25 -- exactly 4 fit in $1
         except X402SpendCapExceeded:
             return
         with lock:
@@ -423,7 +428,7 @@ def test_top_up_records_the_budget_the_human_chose(temp_db):
     to, recorded at the moment they agreed to it."""
     from src.services import spend_service
 
-    _reserve(5_000_000)                       # spends the $5 config budget
+    spend_service.settle(_reserve(5_000_000), transaction="0x" + "ab" * 32)                       # spends the $5 config budget
     assert spend_service.get_status()["exhausted"] is True
 
     after = spend_service.reset(cap_usd=50)
@@ -553,7 +558,7 @@ def test_the_stop_message_does_not_argue_with_itself(temp_db):
     from src.services import spend_service
 
     rid = _reserve(5 * _CENT)
-    _reserve(4_950_000)                       # fills the $5 budget
+    _reserve(4_950_000, wallet_address="0x" + "22" * 20)                       # fills the $5 budget
     assert spend_service.get_status()["exhausted"] is True
 
     spend_service.release(rid, reason="rejected_by_receiver")

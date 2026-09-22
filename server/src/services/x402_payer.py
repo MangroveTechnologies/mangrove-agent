@@ -36,6 +36,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -51,8 +52,8 @@ from x402.mechanisms.evm.types import TypedDataDomain, TypedDataField
 from x402.schemas.errors import NoMatchingRequirementsError
 from x402.schemas.errors import PaymentError as X402ProtocolError
 
-from src.services import spend_service, wallet_manager
-from src.shared.errors import AgentError, ValidationError, X402PaymentError, X402SpendCapExceeded
+from src.services import payment_operations, spend_service, wallet_manager
+from src.shared.errors import AgentError, ValidationError, X402PaymentError, X402PaymentUncertain, X402SpendCapExceeded
 from src.shared.logging import get_logger
 from src.shared.urls import strip_query
 from src.shared.x402.config import get_network, get_payer_wallet
@@ -133,6 +134,7 @@ class CustodialSigner:
         # audit. The signer never sees a URL otherwise — the scheme hands it
         # a struct, not a request.
         self._resource = resource
+        self.operation_id = payment_operations.current_operation.get()
         # Budget reservations this signer has taken out, oldest first. The
         # caller that drove the request reconciles them once it knows the
         # outcome; see `pay`. Held here because the signer is the only
@@ -234,6 +236,7 @@ class CustodialSigner:
             valid_after=fields.get("validAfter"),
             authorization_nonce=fields.get("nonce"),
             asset=domain.get("verifyingContract"),
+            operation_id=self.operation_id,
         )
         self._reservations.append(reservation)
         return reservation
@@ -313,6 +316,7 @@ def _configure_payment_client(
     client.set_spend_controls({"max_amount_per_payment": _MAX_AMOUNT_PER_PAYMENT})
 
 
+@payment_operations.tracked_payment
 async def pay_mcp(
     session: Any,
     *,
@@ -360,12 +364,15 @@ async def pay_mcp(
     except Exception:
         # MCP/HTTP exceptions may contain arbitrary remote content. Neither
         # report that text nor retry/release an authorization after failure.
+        if signer.reservations:
+            raise X402PaymentUncertain(reservation_ids=signer.reservations) from None
         raise X402PaymentError(
             "The MCP payment could not be completed.",
             suggestion="Check the payment ledger before retrying; any signed authorization remains counted.",
         ) from None
 
 
+@payment_operations.tracked_payment
 async def pay(
     url: str,
     *,
@@ -379,7 +386,8 @@ async def pay(
 
     The transport handles the round trip: send, and on a 402 decode the
     envelope, build a fresh payment authorization and retry with its signature.
-    Earlier signatures are never reused or assumed canceled by a server cache.
+    Pending operations recover with their original authorization only when the
+    receiver supports durable idempotency; they never create a second payment.
 
     Nothing here contacts the facilitator. Verification and settlement are
     the receiver's side of the protocol, so an unreachable facilitator can
@@ -407,7 +415,8 @@ async def pay(
     network = _require_network()
     signer = CustodialSigner(payer, resource=url)
     client = build_payment_client(payer, signer=signer)
-    transport = x402AsyncTransport(client, transport=httpx.AsyncHTTPTransport(trust_env=False))
+    from src.shared.x402.operation_transport import OperationAsyncTransport
+    transport = x402AsyncTransport(client, transport=OperationAsyncTransport(httpx.AsyncHTTPTransport(trust_env=False)))
 
     _log.info(
         "x402.payment.started",
@@ -429,8 +438,12 @@ async def pay(
         # derive from x402.schemas.errors.PaymentError and are only
         # incidentally wrapped. Catching one and not the other would let a
         # protocol failure escape as a bare exception with no error shape.
+        if signer.reservations:
+            raise X402PaymentUncertain(reservation_ids=signer.reservations) from None
         raise _translate_payment_error(e, safe_url=safe_url, payer=payer, network=network) from None
     except httpx.HTTPError as e:
+        if signer.reservations:
+            raise X402PaymentUncertain(reservation_ids=signer.reservations) from None
         # Reservations are deliberately NOT released here. A connection that
         # dropped after the signed retry went out may still have been
         # received and settled; only the receiver knows. An unreleased
@@ -453,6 +466,11 @@ async def pay(
     )
 
     _reconcile_budget(signer, result, settlement=settlement, url=safe_url)
+    if response.headers.get("X-Payment-Operation-State") == "pending":
+        error = X402PaymentUncertain(reservation_ids=signer.reservations)
+        error.payment_state = "settled" if settlement else "unresolved"
+        raise error
+
 
     if result.paid:
         # A settlement naming a different payer means the receiver credited
@@ -561,12 +579,20 @@ def _reconcile_budget(
     injects payment into an SDK client -- agrees on what a response means
     and none of them has to re-derive it.
     """
-    spend_service.reconcile(
-        signer.reservations,
-        status_code=result.status_code,
-        settlement=settlement,
-        resource=url,
-    )
+    try:
+        spend_service.reconcile(
+            signer.reservations,
+            status_code=result.status_code,
+            settlement=settlement,
+            resource=url,
+        )
+    except Exception as error:
+        if signer.reservations:
+            _log.warning("x402.payment.reconciliation_failed", error_type=type(error).__name__)
+            raise X402PaymentUncertain(reservation_ids=signer.reservations) from None
+        raise
+    if signer.reservations and settlement is None:
+        raise X402PaymentUncertain(reservation_ids=signer.reservations, upstream_status=result.status_code)
 
 
 def _network_from_domain(domain: dict) -> str | None:
@@ -724,6 +750,37 @@ def decode_settlement(response: httpx.Response, *, payer: str | None = None,
         _log.warning("x402.settlement.invalid")
         return None
     return {key: decoded[key] for key in ("success", "transaction", "payer", "network")}
+
+
+def unconfirmed_response_error(response: httpx.Response, reservations) -> X402PaymentUncertain:
+    """Retain only allowlisted error metadata from a discarded uncertain response."""
+    body = {}
+    try:
+        raw = bytearray()
+        if response.is_stream_consumed:
+            raw.extend(response.content[:16385])
+        else:
+            for chunk in response.iter_raw():
+                raw.extend(chunk[:max(0, 16385 - len(raw))])
+                if len(raw) > 16384:
+                    break
+        if len(raw) <= 16384:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                body = parsed
+    except (ValueError, httpx.HTTPError, httpx.StreamError, RecursionError):
+        pass
+    reason = body.get("error")
+    if not isinstance(reason, str) or reason not in {"payment_settlement_unconfirmed", "payment_verification_failed",
+                      "payment_temporarily_unavailable", "payment_identity_unavailable"}:
+        reason = None
+    correlation = response.headers.get("X-Correlation-Id") or body.get("correlation_id")
+    try:
+        correlation = str(uuid.UUID(str(correlation)))
+    except ValueError:
+        correlation = None
+    return X402PaymentUncertain(reservation_ids=reservations, upstream_status=response.status_code,
+                                upstream_error=reason, correlation_id=correlation)
 
 
 def _decode_body(response: httpx.Response) -> Any:

@@ -16,6 +16,7 @@ import httpx  # noqa: E402
 import pytest  # noqa: E402
 from eth_account import Account  # noqa: E402
 from eth_account.messages import encode_typed_data  # noqa: E402
+from src.shared.errors import X402PaymentUncertain  # noqa: E402
 from x402.http.utils import encode_payment_required_header  # noqa: E402
 from x402.mechanisms.evm.exact import ExactEvmClientScheme  # noqa: E402
 from x402.mechanisms.evm.types import TypedDataDomain, TypedDataField  # noqa: E402
@@ -54,6 +55,34 @@ async def test_async_payer_rejects_url_credentials_before_wallet_access(monkeypa
 
 
 # -- fixtures ----------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('url', ['http://payments.test/a', 'ftp://payments.test/a', '/relative'])
+async def test_async_payer_rejects_insecure_urls_before_wallet_access(monkeypatch, url):
+    from src.services import x402_payer
+    from src.shared.errors import ValidationError
+    monkeypatch.setattr(x402_payer, 'resolve_payer_wallet', lambda *a: pytest.fail('wallet accessed'))
+    with pytest.raises(ValidationError, match='HTTPS'):
+        await x402_payer.pay(url)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('timeout', [None, 0, -1, float('inf'), float('nan')])
+async def test_async_payer_rejects_unbounded_timeout_before_wallet_access(monkeypatch, timeout):
+    from src.services import x402_payer
+    from src.shared.errors import ValidationError
+    monkeypatch.setattr(x402_payer, 'resolve_payer_wallet', lambda *a: pytest.fail('wallet accessed'))
+    with pytest.raises(ValidationError, match='timeout'):
+        await x402_payer.pay('https://payments.test/a', timeout=timeout)
+
+
+def test_recovery_and_refund_material_redacted():
+    from src.shared.redaction import redact_diagnostics
+    fields = {key: 'SYNTHETIC_SECRET' for key in (
+        'payment_headers', 'recovery_headers', 'signed_transaction', 'signature', 'payment_header',
+    )}
+    assert 'SYNTHETIC_SECRET' not in str(redact_diagnostics({'nested': [fields]}))
 
 
 @pytest.fixture
@@ -169,7 +198,7 @@ def test_signer_holds_no_secret(wallet):
     signer = CustodialSigner(wallet)
     # An address, an audit label, and its budget reservations -- no key
     # material, and nothing derived from any.
-    assert sorted(vars(signer)) == ["_address", "_reservations", "_resource"]
+    assert sorted(vars(signer)) == ["_address", "_reservations", "_resource", "operation_id"]
     assert _TEST_PRIVKEY not in repr(vars(signer))
 
 
@@ -222,6 +251,9 @@ def test_every_payment_gets_a_fresh_nonce(wallet):
     """A nonce is burned by the receiver before verification, so a replayed
     signature always fails. Two payments must never share one."""
     first = _sign_through_scheme(wallet, _requirements())
+    from src.services import spend_service
+    _sign_through_scheme(wallet, _requirements())
+    spend_service.settle(spend_service.list_payments()[0]["id"], transaction="0x" + "ab" * 32)
     second = _sign_through_scheme(wallet, _requirements())
 
     assert first["authorization"]["nonce"] != second["authorization"]["nonce"]
@@ -449,7 +481,7 @@ async def test_free_resource_is_not_a_payment(wallet, sepolia_network, mock_http
 
     mock_http.install(httpx.Response(200, json={"message": "hello"}))
 
-    result = await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    result = await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
     assert result.status_code == 200
     assert result.paid is False
@@ -471,7 +503,7 @@ async def test_402_is_paid_and_settlement_is_reported(wallet, sepolia_network, m
         ),
     )
 
-    result = await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    result = await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
     assert result.status_code == 200
     assert result.paid is True
@@ -484,9 +516,8 @@ async def test_402_is_paid_and_settlement_is_reported(wallet, sepolia_network, m
     assert any("payment" in name.lower() for name in mock_http.requests[1].headers)
 
 
-async def test_failed_resource_is_not_charged(wallet, sepolia_network, mock_http):
-    """REST skips settlement for any status >= 400 — caller paid but did not
-    receive their resource, so they are not charged (§6.4)."""
+async def test_failed_resource_retains_uncertain_authorization(wallet, sepolia_network, mock_http):
+    """An HTTP failure cannot prove that the authorization was unspent."""
     from src.services.x402_payer import pay
 
     mock_http.install(
@@ -494,18 +525,16 @@ async def test_failed_resource_is_not_charged(wallet, sepolia_network, mock_http
         httpx.Response(500, json={"error": "upstream exploded"}),
     )
 
-    result = await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
-
-    assert result.status_code == 500
-    assert result.paid is False
-    assert result.transaction is None
+    with pytest.raises(X402PaymentUncertain) as caught:
+        await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    assert caught.value.to_dict()["retry_payment"] is False
 
 
-async def test_undecodable_settlement_header_does_not_fail_the_call(
+
+async def test_undecodable_settlement_header_is_explicitly_uncertain(
     wallet, sepolia_network, mock_http
 ):
-    """The resource arrived and the money moved. Losing the receipt costs an
-    audit field, not the call."""
+    """A malformed receipt cannot establish settlement even with HTTP 200."""
     from src.services.x402_payer import pay
 
     mock_http.install(
@@ -513,28 +542,24 @@ async def test_undecodable_settlement_header_does_not_fail_the_call(
         httpx.Response(200, json={"ok": True}, headers={"x-payment-response": "not-base64!!"}),
     )
 
-    result = await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
-
-    assert result.status_code == 200
-    assert result.paid is False
-    assert result.body == {"ok": True}
+    with pytest.raises(X402PaymentUncertain) as caught:
+        await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    assert caught.value.to_dict()["retry_payment"] is False
 
 
-async def test_rejected_payment_is_reported_as_unpaid(wallet, sepolia_network, mock_http):
-    """A 402 that survives the payment attempt means the receiver refused
-    the signature — a burned nonce, an expired window, an empty balance.
-    Nothing delivered, nothing charged."""
+
+async def test_rejected_payment_is_reported_as_uncertain(wallet, sepolia_network, mock_http):
+    """A signed 402 leaves payment uncertainty explicit and prevents re-signing."""
     from src.services.x402_payer import pay
 
     mock_http.install(
         httpx.Response(402, headers={"PAYMENT-REQUIRED": _payment_required_header()})
     )
 
-    result = await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    with pytest.raises(X402PaymentUncertain) as caught:
+        await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    assert caught.value.to_dict()["retry_payment"] is False
 
-    assert result.status_code == 402
-    assert result.paid is False
-    assert result.transaction is None
     # The 402, the paid retry, and the transport's one recovery attempt.
     assert len(mock_http.requests) >= 2
 
@@ -555,7 +580,7 @@ async def test_backup_gate_runs_before_any_request(unbacked_wallet, sepolia_netw
     mock_http.install(httpx.Response(200, json={}))
 
     with pytest.raises(SigningError, match="not backed up"):
-        await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=unbacked_wallet)
+        await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=unbacked_wallet)
 
     assert mock_http.requests == []
 
@@ -574,7 +599,7 @@ def test_guard_refusal_survives_the_transport_wrapper():
     wrapped.__cause__ = refusal
 
     translated = _translate_payment_error(
-        wrapped, safe_url="http://agent.test/x", payer=_TEST_ADDRESS, network=_SEPOLIA
+        wrapped, safe_url="https://agent.test/x", payer=_TEST_ADDRESS, network=_SEPOLIA
     )
 
     assert translated is refusal
@@ -586,7 +611,7 @@ def test_unrecognised_failure_becomes_a_payment_error():
     from x402.http.clients.httpx import PaymentError
 
     translated = _translate_payment_error(
-        PaymentError("something odd"), safe_url="http://agent.test/x", payer=_TEST_ADDRESS, network=_SEPOLIA
+        PaymentError("something odd"), safe_url="https://agent.test/x", payer=_TEST_ADDRESS, network=_SEPOLIA
     )
 
     assert translated.code == "X402_PAYMENT_ERROR"
@@ -600,7 +625,7 @@ def test_unwrapped_protocol_error_is_still_shaped():
 
     translated = _translate_payment_error(
         NoMatchingRequirementsError("nothing matched"),
-        safe_url="http://agent.test/x",
+        safe_url="https://agent.test/x",
         payer=_TEST_ADDRESS,
         network=_SEPOLIA,
     )
@@ -618,7 +643,7 @@ def test_translation_terminates_on_a_self_referential_cause():
     looped.__cause__ = looped
 
     translated = _translate_payment_error(
-        looped, safe_url="http://agent.test/x", payer=_TEST_ADDRESS, network=_SEPOLIA
+        looped, safe_url="https://agent.test/x", payer=_TEST_ADDRESS, network=_SEPOLIA
     )
 
     assert translated.code == "X402_PAYMENT_ERROR"
@@ -640,7 +665,7 @@ async def test_non_usdc_asset_is_refused_before_the_wallet_is_asked(
     )
 
     with pytest.raises(X402PaymentError, match="no payment option"):
-        await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+        await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
     # The 402 was received; the retry-with-payment never happened.
     assert len(mock_http.requests) == 1
@@ -656,7 +681,7 @@ async def test_unreachable_server_reports_a_payment_error(wallet, sepolia_networ
     monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda *a, **k: httpx.MockTransport(_boom))
 
     with pytest.raises(X402PaymentError, match="interrupted"):
-        await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+        await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
 
 async def test_no_wallet_secret_env_var_is_ever_read(wallet, sepolia_network, mock_http, monkeypatch):
@@ -670,7 +695,7 @@ async def test_no_wallet_secret_env_var_is_ever_read(wallet, sepolia_network, mo
         httpx.Response(200, json={"ok": True}, headers={"x-payment-response": _settlement_header()}),
     )
 
-    result = await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    result = await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
     assert result.paid is True
     assert "WALLET_SECRET" not in os.environ
@@ -719,7 +744,7 @@ def test_signing_writes_a_ledger_row(wallet):
     from src.services import spend_service
     from src.services.x402_payer import CustodialSigner
 
-    signer = CustodialSigner(wallet, resource="http://agent.test/api/x402/hello-mangrove?k=v")
+    signer = CustodialSigner(wallet, resource="https://agent.test/api/x402/hello-mangrove?k=v")
     ExactEvmClientScheme(signer).create_payment_payload(_requirements())
 
     row = spend_service.list_payments()[0]
@@ -729,7 +754,7 @@ def test_signing_writes_a_ledger_row(wallet):
     assert row["payee"] == _PAYEE
     # Read off the struct being signed, not copied from X402_NETWORK.
     assert row["network"] == _SEPOLIA
-    assert row["resource"] == "http://agent.test/api/x402/hello-mangrove"
+    assert row["resource"] == "https://agent.test/api/x402/hello-mangrove"
     assert signer.reservations == (row["id"],)
     assert spend_service.get_status()["spent_usd"] == 0.05
 
@@ -816,13 +841,13 @@ async def test_spent_budget_refuses_before_any_request(wallet, sepolia_network, 
     mock_http.install(httpx.Response(200, json={}))
 
     with pytest.raises(X402SpendCapExceeded, match="needs authorizing again"):
-        await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+        await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
     assert mock_http.requests == []
 
     # The user authorizes more; payment resumes.
     spend_service.reset()
-    result = await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    result = await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
     assert result.status_code == 200
 
 
@@ -838,7 +863,7 @@ async def test_settled_payment_is_recorded_with_its_transaction(
                        headers={"x-payment-response": _settlement_header()}),
     )
 
-    await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
     row = spend_service.list_payments()[0]
     assert row["state"] == "settled"
@@ -856,7 +881,9 @@ async def test_errored_resource_retains_the_budget(wallet, sepolia_network, mock
         httpx.Response(500, json={"error": "upstream exploded"}),
     )
 
-    await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    with pytest.raises(X402PaymentUncertain) as caught:
+        await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    assert caught.value.to_dict()["retry_payment"] is False
 
     assert spend_service.get_status()["spent_usd"] == 0.05
     assert spend_service.list_payments()[0]["release_reason"] is None
@@ -871,7 +898,9 @@ async def test_rejected_payment_retains_the_budget(wallet, sepolia_network, mock
         httpx.Response(402, headers={"PAYMENT-REQUIRED": _payment_required_header()})
     )
 
-    await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    with pytest.raises(X402PaymentUncertain) as caught:
+        await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    assert caught.value.to_dict()["retry_payment"] is False
 
     assert spend_service.get_status()["spent_usd"] == 0.05
     assert {p["state"] for p in spend_service.list_payments()} == {"authorized"}
@@ -894,9 +923,10 @@ async def test_missing_receipt_still_counts_against_the_budget(
         httpx.Response(200, json={"ok": True}),
     )
 
-    result = await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    with pytest.raises(X402PaymentUncertain) as caught:
+        await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    assert caught.value.to_dict()["retry_payment"] is False
 
-    assert result.paid is False
     assert spend_service.get_status()["spent_usd"] == 0.05
     assert spend_service.list_payments()[0]["state"] == "authorized"
 
@@ -908,7 +938,7 @@ async def test_free_resource_leaves_no_ledger_row(wallet, sepolia_network, mock_
 
     mock_http.install(httpx.Response(200, json={"message": "hello"}))
 
-    await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
     assert spend_service.list_payments() == []
     assert spend_service.get_status()["spent_usd"] == 0.0
@@ -934,7 +964,7 @@ async def test_cap_refusal_survives_the_transport_wrapper(wallet, sepolia_networ
     )
 
     with pytest.raises(X402SpendCapExceeded) as excinfo:
-        await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+        await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
     assert excinfo.value.code == "X402_SPEND_CAP_EXCEEDED"
     # The 402 was received; the paid retry never went out.
@@ -977,7 +1007,11 @@ async def test_pay_reconciles_without_releasing_uncertain_payments(
     }[responses]
     mock_http.install(required, second)
 
-    await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    if expected_state == "settled":
+        await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    else:
+        with pytest.raises(X402PaymentUncertain):
+            await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
     ledger = spend_service.list_payments()
     assert [p["state"] for p in ledger] == [expected_state]
@@ -996,7 +1030,7 @@ async def test_a_settled_payment_records_its_transaction(wallet, sepolia_network
                        headers={"x-payment-response": _settlement_header(transaction="0x" + "fe" * 32)}),
     )
 
-    await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
 
     assert spend_service.list_payments()[0]["transaction"] == "0x" + "fe" * 32
 
@@ -1012,7 +1046,7 @@ async def test_no_path_out_of_pay_leaks_a_query_string(wallet, sepolia_network, 
     from src.services.x402_payer import pay
     from src.shared.errors import AgentError
 
-    leaky = "http://agent.test/api/x402/hello-mangrove?api_key=SUPERSECRET"
+    leaky = "https://agent.test/api/x402/hello-mangrove?api_key=SUPERSECRET"
 
     # 1. transport failure -- httpx errors embed the request URL
     def _boom(request: httpx.Request) -> httpx.Response:
@@ -1107,9 +1141,9 @@ async def test_mcp_unconfirmed_receipt_keeps_signed_budget(wallet, sepolia_netwo
     from src.services import spend_service, x402_payer
 
     session = _McpPaymentSession(receipt=receipt)
-    result = await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
-    assert not result.paid
-    assert result.transaction is None
+    with pytest.raises(X402PaymentUncertain) as caught:
+        await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
+    assert caught.value.to_dict()["retry_payment"] is False
     assert spend_service.list_payments()[0]["state"] == "authorized"
     assert spend_service.get_status()["spent_usd"] == 0.05
     assert len(session.calls) == 2
@@ -1191,7 +1225,7 @@ async def test_mcp_each_attempt_has_fresh_nonce(wallet, sepolia_network):
     from src.services import spend_service, x402_payer
     from x402.mcp import MCP_PAYMENT_META_KEY
 
-    sessions = [_McpPaymentSession(), _McpPaymentSession()]
+    sessions = [_McpPaymentSession(receipt=_mcp_receipt()), _McpPaymentSession(receipt=_mcp_receipt())]
     for session in sessions:
         await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
     nonces = [s.calls[1][2][MCP_PAYMENT_META_KEY]["payload"]["authorization"]["nonce"] for s in sessions]
@@ -1206,7 +1240,7 @@ async def test_rest_demo_payer_ignores_proxy_environment_and_redirects(wallet, s
     monkeypatch.setenv("ALL_PROXY", "http://unreachable.invalid:1234")
     monkeypatch.setenv("NO_PROXY", "")
     mock_http.install(httpx.Response(307, headers={"Location": "http://outside.invalid/"}))
-    result = await pay("http://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
+    result = await pay("https://agent.test/api/x402/hello-mangrove", wallet_address=wallet)
     assert result.status_code == 307 and not result.paid
     assert len(mock_http.requests) == 1
 
@@ -1264,3 +1298,63 @@ async def test_mcp_demo_over_real_http_session_with_mock_wire(wallet, sepolia_ne
     assert result.paid and result.status_code == 200
     assert len(calls) == 2
     assert spend_service.list_payments()[0]["state"] == "settled"
+
+
+async def test_async_receipt_persistence_failure_is_non_retryable(wallet, sepolia_network, mock_http, monkeypatch):
+    from src.services import spend_service
+    from src.services.x402_payer import pay
+
+    mock_http.install(
+        httpx.Response(402, headers={'PAYMENT-REQUIRED': _payment_required_header()}),
+        httpx.Response(200, headers={'payment-response': _settlement_header()}),
+    )
+    def unavailable(*args, **kwargs):
+        raise RuntimeError('SYNTHETIC_SECRET')
+    monkeypatch.setattr(spend_service, 'reconcile', unavailable)
+    with pytest.raises(X402PaymentUncertain) as error:
+        await pay('https://agent.test/resource', wallet_address=wallet)
+    assert error.value.to_dict()['retry_payment'] is False
+    assert 'SYNTHETIC_SECRET' not in str(error.value)
+    assert spend_service.list_payments()[0]['state'] == 'authorized'
+
+
+async def test_async_recovery_reuses_persisted_signature_after_timeout(wallet, sepolia_network, monkeypatch):
+    from src.services import x402_payer
+    requests = []
+    def handle(request):
+        requests.append(request)
+        if 'PAYMENT-SIGNATURE' not in request.headers:
+            return httpx.Response(402, headers={'PAYMENT-REQUIRED': _payment_required_header(), 'X-Payment-Idempotency': 'v1'})
+        signed = [r for r in requests if 'PAYMENT-SIGNATURE' in r.headers]
+        if len(signed) == 1:
+            raise httpx.ReadError('synthetic-timeout')
+        return httpx.Response(200, json={'recovered': True}, headers={'payment-response': _settlement_header()})
+    monkeypatch.setattr(httpx, 'AsyncHTTPTransport', lambda **kwargs: httpx.MockTransport(handle))
+    with pytest.raises(X402PaymentUncertain):
+        await x402_payer.pay('https://agent.test/recover', wallet_address=wallet)
+    from src.services import spend_service
+    from src.shared.db import sqlite
+    sqlite.reset_connection()
+    result = await x402_payer.pay('https://agent.test/recover', wallet_address=wallet)
+    assert result.body == {'recovered': True}
+    signed = [r for r in requests if 'PAYMENT-SIGNATURE' in r.headers]
+    assert len(signed) == 2
+    assert signed[0].headers['PAYMENT-SIGNATURE'] == signed[1].headers['PAYMENT-SIGNATURE']
+    assert len(spend_service.list_payments()) == 1
+
+
+async def test_async_pending_paid_operation_stays_recoverable(wallet, sepolia_network, mock_http):
+    from src.services import x402_payer
+    mock_http.install(
+        httpx.Response(402, headers={'PAYMENT-REQUIRED': _payment_required_header(), 'X-Payment-Idempotency': 'v1'}),
+        httpx.Response(409, json={'error': 'payment_operation_pending'},
+                       headers={'payment-response': _settlement_header(), 'X-Payment-Operation-State': 'pending'}),
+        httpx.Response(200, json={'done': True}, headers={'payment-response': _settlement_header()}),
+    )
+    with pytest.raises(X402PaymentUncertain) as error:
+        await x402_payer.pay('https://agent.test/pending', wallet_address=wallet)
+    assert error.value.payment_state == 'settled'
+    result = await x402_payer.pay('https://agent.test/pending', wallet_address=wallet)
+    assert result.body == {'done': True}
+    from src.services import spend_service
+    assert len(spend_service.list_payments()) == 1

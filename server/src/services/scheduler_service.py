@@ -121,6 +121,17 @@ def _on_job_event(event: Any) -> None:
 def start() -> None:
     """Start the scheduler. Called from the FastAPI lifespan startup."""
     sched = get_scheduler()
+    from src.services.payment_reconciliation_worker import configured_urls
+    if configured_urls():
+        sched.add_job('src.services.payment_reconciliation_worker:run_once', trigger='interval', seconds=15,
+                      id='x402-reconciliation', replace_existing=True, coalesce=True, max_instances=1)
+    elif sched.get_job('x402-reconciliation'):
+        sched.remove_job('x402-reconciliation')
+    if configured_urls():
+        sched.add_job('src.services.refund_service:run_once', trigger='interval', seconds=30,
+                      id='x402-refunds', replace_existing=True, coalesce=True, max_instances=1)
+    elif sched.get_job('x402-refunds'):
+        sched.remove_job('x402-refunds')
     if not sched.running:
         sched.start()
     _log.info("scheduler.started", jobstore=_jobstore_url())

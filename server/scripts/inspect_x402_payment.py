@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect one authorization using public finalized chain state; never mutate it."""
+"""Inspect finalized chain evidence; --apply explicitly records a proven ledger correction."""
 from __future__ import annotations
 
 import argparse
@@ -12,6 +12,8 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reservation", required=True)
+    parser.add_argument("--transaction", help="Candidate transaction to match against the exact nonce and transfer")
+    parser.add_argument("--apply", action="store_true", help="Record proven reconciliation; never signs, transfers or resets a budget")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     if Path.cwd().resolve() != root or os.environ.get("ENVIRONMENT") != "local" or os.environ.get("MANGROVE_AGENT_HOME"):
@@ -20,9 +22,8 @@ def main():
     import sqlite3
 
     import httpx
-
     from src.config import app_config
-    from src.services.x402_inspection import inspect_authorization
+    from src.services.x402_inspection import inspect_authorization, inspect_transaction
     from src.shared.redaction import redact_diagnostics
     # Open in SQLite read-only mode; never create/migrate the live database.
     try:
@@ -44,7 +45,13 @@ def main():
                 if "error" in payload or "result" not in payload:
                     raise ValueError("RPC evidence unavailable")
                 return payload["result"]
-            result = inspect_authorization(dict(row), rpc)
+            if args.apply:
+                from src.services.x402_reconciliation import reconcile_authorization
+                result = reconcile_authorization(args.reservation, rpc, transaction=args.transaction)
+            elif args.transaction:
+                result = inspect_transaction(dict(row), args.transaction, rpc)
+            else:
+                result = inspect_authorization(dict(row), rpc)
         print(json.dumps(redact_diagnostics(result)))
         return 0
     except Exception as error:

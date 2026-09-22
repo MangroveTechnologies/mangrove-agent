@@ -184,6 +184,36 @@ class X402PaymentError(AgentError):
     code = "X402_PAYMENT_ERROR"
     http_status = 502
 
+    def to_dict(self) -> dict:
+        return {**super().to_dict(), "retry_payment": False}
+
+
+class X402PaymentUncertain(X402PaymentError):
+    """Uncertain payment: retain its amount and forbid automatic retries."""
+
+    code = "X402_PAYMENT_UNCERTAIN"
+    http_status = 409
+
+    def __init__(self, *, reservation_ids=(), upstream_status=None, correlation_id=None, upstream_error=None,
+                 operation_id=None, pause_until=None):
+        super().__init__(
+            "This operation's payment outcome is unresolved; its amount remains reserved.",
+            suggestion="Other requests can proceed within the remaining budget. Recover this operation using its existing identity; do not create a replacement payment or paid fallback. Background reconciliation can resolve its payment separately.",
+            correlation_id=correlation_id,
+        )
+        self.reservation_ids = list(reservation_ids)
+        self.upstream_status = upstream_status
+        self.upstream_error = upstream_error
+        self.operation_id = operation_id
+        self.payment_state = "unresolved"
+        self.pause_until = None
+
+    def to_dict(self) -> dict:
+        return {**super().to_dict(), "retry_payment": False,
+                "payment_state": self.payment_state, "reservation_ids": self.reservation_ids,
+                "operation_id": self.operation_id, "pause_until": None,
+                "upstream_status": self.upstream_status, "upstream_error": self.upstream_error}
+
 
 class X402SpendCapExceeded(AgentError):
     """The agent refused to make an outbound x402 payment on budget grounds.
