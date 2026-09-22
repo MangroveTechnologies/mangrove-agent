@@ -14,7 +14,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-
 from src.config import app_config
 from src.services import spend_service, wallet_manager, x402_payer
 from src.shared.db import sqlite
@@ -53,7 +52,7 @@ def _process_reserve(path, start, result):
     spend_service._spent_micro_usd = slow_read
     try:
         start.wait(timeout=15)
-        spend_service.reserve(value=60000, wallet_address=PAYER, network=NETWORK)
+        spend_service.reserve(value=60000, wallet_address=f"0x{os.getpid():040x}", network=NETWORK)
         result.put("reserved")
     except X402SpendCapExceeded:
         result.put("refused")
@@ -155,7 +154,6 @@ def test_invalid_import_hides_input_and_exception_chain():
 
 def test_http_and_structured_logs_hide_credentials_and_addresses(capsys):
     import structlog
-
     from src.shared.logging import configure, get_logger
     early_logger = get_logger("imported_before_configuration")
     previous = structlog.get_config()
@@ -331,7 +329,7 @@ def test_unsigned_refusal_does_not_lock_an_unspent_budget(database, monkeypatch)
 
 def test_unsigned_rollback_keeps_other_authorizations_counted(database):
     first = spend_service.reserve(value=60000, wallet_address=PAYER)
-    second = spend_service.reserve(value=40000, wallet_address=PAYER)
+    second = spend_service.reserve(value=40000, wallet_address="0x" + "22" * 20)
     assert spend_service.get_status()["exhausted"]
     spend_service.release_unsigned(first)
     assert spend_service.get_status()["spent_usd"] == .04
@@ -346,7 +344,7 @@ def test_unsigned_rollback_keeps_other_authorizations_counted(database):
 def test_old_period_unsigned_rollback_does_not_clear_new_exhaustion(database):
     old = spend_service.reserve(value=100000, wallet_address=PAYER)
     spend_service.reset(.1)
-    spend_service.reserve(value=100000, wallet_address=PAYER)
+    spend_service.reserve(value=100000, wallet_address="0x" + "22" * 20)
     spend_service.release_unsigned(old)
     assert spend_service.get_status()["exhausted"]
     assert spend_service.get_status()["spent_usd"] == .1
@@ -385,7 +383,7 @@ def _process_release_and_reset(path, start, result, reservation, action):
             spend_service.release_unsigned(reservation)
         else:
             spend_service.reset(.1)
-            spend_service.reserve(value=100000, wallet_address=PAYER)
+            spend_service.reserve(value=100000, wallet_address="0x" + "22" * 20)
         result.put("ok")
     finally:
         sqlite.reset_connection()

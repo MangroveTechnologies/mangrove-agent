@@ -18,12 +18,16 @@ environment variables or SDK internals.
 
 ## Payment behavior
 
-- Send an unsigned request, then at most one signed retry on a 402. A subsequent
-  call creates a fresh nonce; authorizations are never replayed from earlier calls.
+- Send an unsigned request, then at most one new signed attempt on a 402.
+  An unresolved operation retains its authorization and budget reservation.
+  Other requests can proceed immediately. Identical pending HTTP requests recover
+  the same persisted proof only when the receiver advertises idempotency support;
+  they never generate a replacement nonce. Explicit UUID operation IDs also recover
+  completed results. See [operation recovery](x402-payment-uncertainty.md).
 - Reserve budget in an SQLite IMMEDIATE transaction on a dedicated connection,
   serializing cap checks and period resets across processes as well as threads.
 - Keep uncertain signed authorizations counted, including HTTP 402/500 errors and
-  earlier attempts. Only failure before signature disclosure releases a reservation.
+  earlier attempts. Only proven non-payment releases a reservation, through pre-disclosure rollback or audited finalized reconciliation.
   Its atomic rollback clears an exhaustion latch only when releasing that positive
   current-period reservation reduces usage from full to below the cap.
 - Validate receipt success, transaction shape, payer and network before recording
@@ -109,7 +113,7 @@ The financial ledger intentionally retains exact public addresses for accounting
 Run the anonymous quote first (no wallet use, no payment):
 
 ```sh
-cd /Users/neel/Documents/Work/mangrove-agent
+cd /path/to/mangrove-agent
 python3 server/scripts/watch_x402_quote.py --log agent-data/x402-quotes.jsonl
 ```
 
@@ -154,3 +158,8 @@ settles non-read methods before execution. Failed paid execution carries its
 receipt and is recorded for refund review. A client must retain any uncertain
 authorization and must not automatically sign a replacement. Revalidate the live
 flow after restart; regression tests send no funds.
+
+Current uncertainty handling and explicit evidence-based ledger correction are
+documented in [payment uncertainty](x402-payment-uncertainty.md). Migration 011
+and this policy supersede historical retry and read-only-only reconciliation
+limitations described above.

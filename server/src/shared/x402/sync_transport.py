@@ -2,20 +2,23 @@
 
 Each request gets its own signer and payment client. The HTTP pool and session
 identity can be shared across threads, but authorizations and reservations cannot.
-There is one paid retry per call; another SDK attempt starts unsigned and creates
-a fresh nonce. Settlement and accounting remain in the existing payer services.
+There is one authorization per operation. Pending SDK retries recover the same
+operation without a fresh nonce. Settlement and accounting remain in the payer services.
 """
 from __future__ import annotations
 
+import base64
 import math
+import secrets
 import uuid
 from collections.abc import Sequence
+from types import SimpleNamespace
 
 import httpx
 from x402.http import x402HTTPClientSync
 
-from src.services import spend_service, wallet_manager, x402_payer
-from src.shared.errors import AgentError, ValidationError, X402PaymentError
+from src.services import payment_operations, spend_service, wallet_manager, x402_payer
+from src.shared.errors import AgentError, ValidationError, X402PaymentError, X402PaymentUncertain
 from src.shared.logging import get_logger
 from src.shared.urls import strip_query
 from src.shared.x402.config import get_payer_wallet
@@ -66,7 +69,7 @@ class X402SyncTransport(httpx.BaseTransport):
         self._wallet_address = wallet_address
         self._timeout = httpx.Timeout(timeout).as_dict()
         self._session_id = str(uuid.uuid4())
-        self._transport = transport if transport is not None else httpx.HTTPTransport()
+        self._transport = transport if transport is not None else httpx.HTTPTransport(trust_env=False)
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         if _origin(request.url) not in self._origins or request.url.userinfo:
@@ -82,6 +85,7 @@ class X402SyncTransport(httpx.BaseTransport):
         request.read()
         headers = httpx.Headers(request.headers)
         headers.pop("X-Wallet-Address", None)
+        headers.pop("X-Payment-Recovery-Token", None)
         headers["X-Mcp-Session-Id"] = self._session_id
         extensions = dict(request.extensions)
         # mangroveai 1.16 passes timeout=None on normal service calls, overriding
@@ -119,48 +123,125 @@ class X402SyncTransport(httpx.BaseTransport):
 
         # A discarded challenge must release its connection even if parsing,
         # wallet lookup, or signing fails. The final response belongs to httpx.
+        signer = None
+        operation = None
+        created = False
+        operation_token = None
         try:
             response.read()
             try:
                 body = response.json()
             except ValueError:
                 body = None
+            if isinstance(body, dict) and body.get("retry_payment") is False:
+                raise X402PaymentError("The receiver requires payment reconciliation before another authorization.")
             payer = payer or x402_payer.resolve_payer_wallet(self._wallet_address)
-            wallet_manager.require_backup_confirmed(payer)
-            x402_payer.check_payment_budget(str(request.url))
-            signer = x402_payer.CustodialSigner(payer, resource=str(request.url))
-            client = x402_payer.build_sync_payment_client(payer, signer=signer)
-            http_client = x402HTTPClientSync(client)
-            required = http_client.get_payment_required_response(response.headers.get, body)
-            payload = client.create_payment_payload(required)
-            headers["X-Wallet-Address"] = payer
-            headers.update(http_client.encode_payment_signature_header(payload))
+            digest = payment_operations.fingerprint(payer, x402_payer.get_network(), request.method,
+                                                    str(request.url), request.content)
+            operation, created = payment_operations.begin(digest, headers.get("X-Payment-Operation-Id"))
+            headers["X-Payment-Operation-Id"] = operation["id"]
+            if not created:
+                if operation["response"] is not None:
+                    cached = payment_operations.unseal(operation["response"])
+                    if "status_code" in cached:
+                        cached_headers = {}
+                        if cached.get("paid"):
+                            import json
+                            cached_headers["payment-response"] = base64.b64encode(json.dumps({
+                                "success": True, "transaction": cached["transaction"], "network": cached["network"], "payer": cached["payer"],
+                            }).encode()).decode()
+                        return httpx.Response(cached["status_code"], headers=cached_headers, json=cached["body"])
+                    return httpx.Response(cached["status"], headers=cached["headers"],
+                                          content=base64.b64decode(cached["body"]))
+                ids = payment_operations.reservation_ids(operation["id"])
+                if operation["payment_headers"] is None:
+                    raise X402PaymentUncertain(operation_id=operation["id"], reservation_ids=ids)
+                recovery = payment_operations.unseal(operation["payment_headers"])
+                if recovery.get("idempotency") != "v1":
+                    raise X402PaymentUncertain(operation_id=operation["id"], reservation_ids=ids)
+                headers.update(recovery["headers"])
+                signer = SimpleNamespace(reservations=ids)
+            else:
+                wallet_manager.require_backup_confirmed(payer)
+                x402_payer.check_payment_budget(str(request.url))
+                operation_token = payment_operations.current_operation.set(operation["id"])
+                signer = x402_payer.CustodialSigner(payer, resource=str(request.url))
+                client = x402_payer.build_sync_payment_client(payer, signer=signer)
+                http_client = x402HTTPClientSync(client)
+                required = http_client.get_payment_required_response(response.headers.get, body)
+                payload = client.create_payment_payload(required)
+                headers["X-Wallet-Address"] = payer
+                payment_headers = dict(http_client.encode_payment_signature_header(payload))
+                payment_headers["X-Payment-Recovery-Token"] = secrets.token_urlsafe(32)
+                headers.update(payment_headers)
+                # Persist before disclosure. A restart must reuse this signature,
+                # never manufacture a replacement for an uncertain operation.
+                payment_operations.save_headers(operation["id"], {
+                    "idempotency": response.headers.get("X-Payment-Idempotency"),
+                    "headers": dict(payment_headers),
+                })
+
         except AgentError:
+            if operation is not None and created:
+                payment_operations.abandon_unsigned(operation["id"])
             raise
         except Exception as error:
             # Remote envelopes/errors may contain credentials or payment data.
             # Keep raw text out of logs and the public error (including causes).
             _log.warning("x402.sync.payment_failed", error_type=type(error).__name__)
+            if signer is not None and signer.reservations:
+                raise X402PaymentUncertain(reservation_ids=signer.reservations,
+                                       operation_id=operation["id"] if operation else None) from None
+            if operation is not None and created:
+                payment_operations.abandon_unsigned(operation["id"])
             raise X402PaymentError(
                 "Could not authorize the x402 payment.",
                 suggestion="Check the server's payment requirements, configured network, and USDC balance.",
             ) from None
         finally:
+            if operation_token is not None:
+                payment_operations.current_operation.reset(operation_token)
             response.close()
 
         # A network failure after signing is ambiguous: retain its reservation.
         # Never silently retry that failure or claim that no money moved.
-        paid_response = send(headers)
         try:
+            paid_response = send(headers)
+        except Exception:
+            raise X402PaymentUncertain(reservation_ids=signer.reservations,
+                                       operation_id=operation["id"] if operation else None) from None
+        try:
+            settlement = x402_payer.decode_settlement(paid_response, payer=payer, network=x402_payer.get_network())
             spend_service.reconcile(
                 signer.reservations,
                 status_code=paid_response.status_code,
-                settlement=x402_payer.decode_settlement(paid_response, payer=payer, network=x402_payer.get_network()),
+                settlement=settlement,
                 resource=strip_query(str(request.url)),
             )
-        except Exception:
+            if signer.reservations and settlement is None:
+                error = x402_payer.unconfirmed_response_error(paid_response, signer.reservations)
+                error.operation_id = operation["id"]
+                raise error
+            if paid_response.headers.get("X-Payment-Operation-State") == "pending":
+                error = X402PaymentUncertain(operation_id=operation["id"], reservation_ids=signer.reservations)
+                error.payment_state = "settled" if settlement else "unresolved"
+                raise error
+            paid_response.read()
+            if len(paid_response.content) <= payment_operations.MAX_RESULT_BYTES:
+                payment_operations.complete(operation["id"], {
+                    "status": paid_response.status_code,
+                    "headers": {k: v for k, v in paid_response.headers.items()
+                                if k.lower() in {"content-type", "x-payment-response", "payment-response"}},
+                    "body": base64.b64encode(paid_response.content).decode(),
+                })
+        except X402PaymentUncertain:
             paid_response.close()
             raise
+        except Exception as error:
+            paid_response.close()
+            _log.warning("x402.sync.reconciliation_failed", error_type=type(error).__name__)
+            raise X402PaymentUncertain(reservation_ids=signer.reservations,
+                                       operation_id=operation["id"] if operation else None) from None
         return paid_response
 
     def close(self) -> None:

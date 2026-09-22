@@ -62,7 +62,8 @@ def test_spend_status_reports_a_fresh_budget(client):
 
 
 def test_ledger_lists_payments_newest_first(client):
-    _reserve(10_000)
+    from src.services import spend_service
+    spend_service.settle(_reserve(10_000), transaction="0x" + "ab" * 32)
     _reserve(20_000)
 
     body = client.get("/api/v1/agent/x402/spend/payments", headers=_AUTH).json()

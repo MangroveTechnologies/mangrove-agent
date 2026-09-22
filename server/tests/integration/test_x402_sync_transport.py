@@ -9,16 +9,15 @@ import httpx
 import pytest
 from eth_account import Account
 from eth_account.messages import encode_typed_data
-from x402.http.utils import encode_payment_required_header
-from x402.schemas.payments import PaymentRequired, PaymentRequirements
-
 from src.config import app_config
 from src.services import spend_service, wallet_manager, x402_payer
 from src.shared.clients.mangrove import create_x402_mangrove_client
 from src.shared.crypto import fernet
 from src.shared.db import sqlite
-from src.shared.errors import AgentError, ValidationError, X402PaymentError, X402SpendCapExceeded
+from src.shared.errors import AgentError, ValidationError, X402PaymentError, X402PaymentUncertain, X402SpendCapExceeded
 from src.shared.x402.sync_transport import X402SyncTransport
+from x402.http.utils import encode_payment_required_header
+from x402.schemas.payments import PaymentRequired, PaymentRequirements
 
 ORIGIN = "https://payments.test"
 URL = ORIGIN + "/api/v1/signals/"
@@ -239,7 +238,6 @@ def test_real_sdk_uses_desktop_defaults_without_changing_payment_network(
 
 def test_normal_mcp_http_request_pays_with_local_header_auth(wallet, automatic_client, monkeypatch):
     from fastapi.testclient import TestClient
-
     from src.app import create_app
 
     monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
@@ -363,7 +361,9 @@ def test_rejected_or_errored_call_reconciles_without_retry_loop(wallet, status):
         return challenge() if len(seen) == 1 else httpx.Response(status, json={"error": "rejected"})
 
     with client(handle, wallet) as http:
-        assert http.get(URL).status_code == status
+        with pytest.raises(X402PaymentUncertain) as caught:
+            http.get(URL)
+        assert caught.value.upstream_status == status
     assert len(seen) == 2
     assert spend_service.list_payments()[0]["state"] == "authorized"
     assert spend_service.get_status()["spent_usd"] == .001
@@ -385,12 +385,13 @@ def test_uncertain_outcome_keeps_authorized_budget(wallet, outcome):
                 http.get(URL)
             assert "token=private" not in str(error.value)
         else:
-            assert http.get(URL).status_code == 200
+            with pytest.raises(X402PaymentUncertain):
+                http.get(URL)
     assert spend_service.list_payments()[0]["state"] == "authorized"
     assert spend_service.get_status()["spent_usd"] == .001
 
 
-def test_next_attempt_has_fresh_nonce_and_separate_reservation(wallet):
+def test_next_attempt_cannot_sign_after_uncertainty(wallet):
     nonces = []
 
     def handle(request):
@@ -402,11 +403,12 @@ def test_next_attempt_has_fresh_nonce_and_separate_reservation(wallet):
         return httpx.Response(200, headers={"x-payment-response": receipt(wallet)})
 
     with client(handle, wallet) as http:
-        assert http.get(URL).status_code == 402
-        assert http.get(URL).status_code == 200
-    assert len(set(nonces)) == 2
-    assert sorted(row["state"] for row in spend_service.list_payments()) == ["authorized", "settled"]
-    assert spend_service.get_status()["spent_usd"] == .002
+        for _ in range(2):
+            with pytest.raises(X402PaymentUncertain):
+                http.get(URL)
+    assert len(nonces) == 1
+    assert [row["state"] for row in spend_service.list_payments()] == ["authorized"]
+    assert spend_service.get_status()["spent_usd"] == .001
 
 
 def test_free_resource_needs_neither_wallet_nor_budget(database, monkeypatch):
@@ -546,7 +548,8 @@ def test_overlapping_requests_do_not_share_reservations(wallet):
         return httpx.Response(200, headers={"payment-response": receipt(wallet)})
 
     with client(handle, wallet) as http:
-        assert http.get(ORIGIN + "/outer").status_code == 402
+        with pytest.raises(X402PaymentUncertain):
+            http.get(ORIGIN + "/outer")
     rows = {row["resource"]: row for row in spend_service.list_payments()}
     assert rows[ORIGIN + "/outer"]["state"] == "authorized"
     assert rows[ORIGIN + "/inner"]["state"] == "settled"
@@ -569,7 +572,6 @@ def test_missing_backup_refuses_before_signing_and_closes_challenge(wallet, monk
 
 
 def test_sdk_does_not_automatically_repeat_a_failed_paid_call(wallet):
-    from mangrove_ai.exceptions import ServiceUnavailableError
 
     seen = []
 
@@ -583,7 +585,7 @@ def test_sdk_does_not_automatically_repeat_a_failed_paid_call(wallet):
         environment="dev", base_url=ORIGIN + "/api/v1", kb_base_url=ORIGIN + "/kb",
         wallet_address=wallet, transport=httpx.MockTransport(handle),
     ) as sdk:
-        with pytest.raises(ServiceUnavailableError):
+        with pytest.raises(X402PaymentUncertain):
             sdk.signals.list()
     assert len(seen) == 2
     assert len(spend_service.list_payments()) == 1
@@ -649,7 +651,7 @@ def test_manual_checker_payment_outcomes(wallet, monkeypatch, capsys, tmp_path, 
     assert len(calls) == 2
     if outcome == "signed_402":
         assert '"error_code": "insufficient_funds"' in output
-        assert '"error_type": "HTTPStatusError"' in output
+        assert '"error_type": "X402PaymentUncertain"' in output
         assert spend_service.list_payments()[0]["state"] == "authorized"
     elif outcome == "wrong_transfer":
         assert "Receipt does not contain the expected USDC transfer" in output
@@ -671,7 +673,8 @@ def test_signer_persists_public_authorization_identity(wallet):
         seen.append(payment(request)["authorization"])
         return httpx.Response(503)
     with client(handle, wallet) as http:
-        assert http.get(URL).status_code == 503
+        with pytest.raises(X402PaymentUncertain):
+            http.get(URL)
     row = spend_service.list_payments()[0]
     signed = seen[0]
     assert row["authorization_nonce"] == signed["nonce"].lower()
@@ -816,3 +819,188 @@ async def test_other_rest_routes_sanitize_errors_and_preserve_cap(
         await calls[route]()
     assert sentinel not in json.dumps(error.value.to_dict())
     assert spend_service.list_payments() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,reason', [(404, None), (503, 'payment_settlement_unconfirmed')])
+async def test_mcp_preserves_uncertainty_without_blocking_other_operations(wallet, automatic_client, monkeypatch, status, reason):
+    from src.mcp.server import create_mcp_server
+
+    correlation = '11111111-2222-4333-8444-555555555555'
+    monkeypatch.setattr(app_config, 'X402_PAYER_WALLET', wallet)
+    signed = []
+    def handle(request):
+        if 'PAYMENT-SIGNATURE' not in request.headers:
+            return challenge()
+        signed.append(request)
+        return httpx.Response(status, json={'error': reason or {'secret': 'SYNTHETIC_SECRET'},
+            'message': 'SYNTHETIC_SECRET', 'retry_payment': False, 'correlation_id': correlation})
+    automatic_client(handle)
+    tools = create_mcp_server()._tool_manager._tools
+    first = json.loads(await tools['get_whale_activity'].run({'api_key': 'test-key-1', 'symbol': 'BTC'}))
+    assert first['code'] == 'X402_PAYMENT_UNCERTAIN'
+    assert first['retry_payment'] is False
+    assert first['upstream_status'] == status
+    assert first['upstream_error'] == reason
+    assert first['correlation_id'] == correlation
+    assert 'SYNTHETIC_SECRET' not in json.dumps(first)
+    second = json.loads(await tools['list_signals'].run({'api_key': 'test-key-1', 'limit': 1}))
+    assert second['code'] == 'X402_PAYMENT_UNCERTAIN'
+    assert second['retry_payment'] is False
+    assert len(signed) == 2
+    assert len(spend_service.list_payments()) == 2
+
+
+def test_free_read_remains_available_during_pause(wallet):
+    spend_service.reserve(value=1000, wallet_address=wallet, network='eip155:84532')
+    with client(lambda request: httpx.Response(200, json={'free': True}), wallet) as http:
+        assert http.get(URL).json() == {'free': True}
+
+
+def test_receiver_no_retry_marker_cannot_trigger_signing(wallet):
+    def handle(request):
+        assert 'PAYMENT-SIGNATURE' not in request.headers
+        response = challenge()
+        return httpx.Response(402, headers=response.headers, json={'retry_payment': False})
+    with client(handle, wallet) as http:
+        with pytest.raises(X402PaymentError):
+            http.get(URL)
+    assert spend_service.list_payments() == []
+
+
+@pytest.mark.parametrize('failure', ['transport', 'ledger'])
+def test_unexpected_post_signature_failure_stays_uncertain_and_closes_response(wallet, monkeypatch, failure):
+    signed = []
+    stream = RecordingStream()
+    def handle(request):
+        if 'PAYMENT-SIGNATURE' not in request.headers:
+            return challenge()
+        signed.append(request)
+        if failure == 'transport':
+            raise RuntimeError('SYNTHETIC_SECRET')
+        return httpx.Response(200, headers={'payment-response': receipt(wallet)}, stream=stream)
+    if failure == 'ledger':
+        def unavailable(*args, **kwargs):
+            raise RuntimeError('SYNTHETIC_SECRET')
+        monkeypatch.setattr(spend_service, 'reconcile', unavailable)
+    with client(handle, wallet) as http:
+        for _ in range(2):
+            with pytest.raises(X402PaymentUncertain) as error:
+                http.get(URL)
+            assert 'SYNTHETIC_SECRET' not in json.dumps(error.value.to_dict())
+    assert len(signed) == 1
+    assert spend_service.list_payments()[0]['state'] == 'authorized'
+    if failure == 'ledger':
+        assert stream.closed
+
+
+def test_new_paid_request_after_five_minutes_keeps_old_authorization_reserved(wallet):
+    from datetime import datetime, timedelta, timezone
+    signed = []
+    def handle(request):
+        if 'PAYMENT-SIGNATURE' not in request.headers:
+            return challenge()
+        signed.append(payment(request)['authorization']['nonce'])
+        if len(signed) == 1:
+            return httpx.Response(503, json={'error': 'payment_settlement_unconfirmed'})
+        return httpx.Response(200, json={'ok': True}, headers={'payment-response': receipt(wallet)})
+    with client(handle, wallet) as http:
+        with pytest.raises(X402PaymentUncertain):
+            http.get(URL)
+        old = spend_service.list_payments()[0]['id']
+        conn = sqlite.get_connection()
+        conn.execute('UPDATE x402_payments SET created_at = ? WHERE id = ?',
+                     ((datetime.now(timezone.utc) - timedelta(seconds=301)).isoformat(), old))
+        conn.commit()
+        assert spend_service.get_status()['payment_pauses'] == []
+        assert len(signed) == 1  # Timer expiry itself makes no request.
+        assert http.get(ORIGIN + '/new-request').status_code == 200
+    assert len(set(signed)) == 2
+    rows = {row['id']: row for row in spend_service.list_payments()}
+    assert rows[old]['state'] == 'authorized'
+    assert sorted(row['state'] for row in rows.values()) == ['authorized', 'settled']
+    assert spend_service.get_status()['spent_usd'] == .002
+
+
+def test_lost_response_recovers_same_authorization_after_agent_restart(wallet):
+    signed = []
+    oid = '11111111-2222-4333-8444-555555555555'
+    def handle(request):
+        if 'PAYMENT-SIGNATURE' not in request.headers:
+            response = challenge()
+            response.headers['X-Payment-Idempotency'] = 'v1'
+            return response
+        signed.append(request.headers['PAYMENT-SIGNATURE'])
+        assert request.headers['X-Payment-Operation-Id'] == oid
+        if len(signed) == 1:
+            raise httpx.ReadError('synthetic lost response')
+        return httpx.Response(200, json={'result': 'original'}, headers={'payment-response': receipt(wallet)})
+    with client(handle, wallet) as http:
+        with pytest.raises(X402PaymentUncertain) as error:
+            http.post(URL, json={'x': 1}, headers={'X-Payment-Operation-Id': oid})
+    assert error.value.operation_id == oid
+    row = sqlite.get_connection().execute('SELECT * FROM x402_operations WHERE id = ?', (oid,)).fetchone()
+    assert row['payment_headers'] and signed[0].encode() not in row['payment_headers']
+    sqlite.reset_connection()
+    with client(handle, wallet) as http:
+        assert http.post(URL, json={'x': 1}, headers={'X-Payment-Operation-Id': oid}).json() == {'result': 'original'}
+        # Same explicit operation returns its cached result, without signing.
+        assert http.post(URL, json={'x': 1}, headers={'X-Payment-Operation-Id': oid}).json() == {'result': 'original'}
+    assert len(signed) == 2 and signed[0] == signed[1]
+    assert len(spend_service.list_payments()) == 1
+    assert spend_service.get_status()['spent_usd'] == .001
+    assert spend_service.list_payments()[0]['state'] == 'settled'
+
+
+def test_pending_with_confirmed_receipt_is_not_cached_as_final_result(wallet):
+    attempts = []
+    def handle(request):
+        if 'PAYMENT-SIGNATURE' not in request.headers:
+            response = challenge()
+            response.headers['X-Payment-Idempotency'] = 'v1'
+            return response
+        attempts.append(request.headers['PAYMENT-SIGNATURE'])
+        if len(attempts) == 1:
+            return httpx.Response(409, headers={'payment-response': receipt(wallet), 'X-Payment-Operation-State': 'pending'},
+                                  json={'error': 'payment_operation_pending'})
+        return httpx.Response(200, headers={'payment-response': receipt(wallet)}, json={'finished': True})
+    with client(handle, wallet) as http:
+        with pytest.raises(X402PaymentUncertain) as error:
+            http.get(URL)
+        assert error.value.to_dict()['payment_state'] == 'settled'
+        assert http.get(URL).json() == {'finished': True}
+    assert attempts[0] == attempts[1]
+    assert len(spend_service.list_payments()) == 1
+
+
+def test_retry_without_receiver_support_cannot_sign_again_but_other_request_works(wallet):
+    signed = []
+    def handle(request):
+        if 'PAYMENT-SIGNATURE' not in request.headers:
+            return challenge()
+        signed.append(request)
+        if request.url.path == '/uncertain':
+            raise httpx.ReadError('synthetic timeout')
+        return httpx.Response(200, headers={'payment-response': receipt(wallet)})
+    with client(handle, wallet) as http:
+        for _ in range(2):
+            with pytest.raises(X402PaymentUncertain):
+                http.get(ORIGIN + '/uncertain')
+        assert http.get(ORIGIN + '/independent').status_code == 200
+    assert len(signed) == 2
+    assert spend_service.get_status()['spent_usd'] == .002
+    assert sorted(r['state'] for r in spend_service.list_payments()) == ['authorized', 'settled']
+
+
+def test_reentrant_duplicate_during_signing_cannot_abandon_original_owner(wallet, monkeypatch):
+    original = wallet_manager.sign_x402_authorization
+    def sign(*args, **kwargs):
+        with pytest.raises(X402PaymentUncertain):
+            http.get(URL)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(wallet_manager, 'sign_x402_authorization', sign)
+    def handle(request):
+        return challenge() if 'PAYMENT-SIGNATURE' not in request.headers else httpx.Response(200, headers={'payment-response': receipt(wallet)})
+    with client(handle, wallet) as http:
+        assert http.get(URL).status_code == 200
+    assert len(spend_service.list_payments()) == 1

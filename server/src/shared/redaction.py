@@ -8,7 +8,8 @@ from src.shared.urls import strip_query
 _ADDRESS = re.compile(r"(?<![0-9a-fA-F])0x[0-9a-fA-F]{40}(?![0-9a-fA-F])")
 _URL = re.compile(r"https?://[^\s<>\"']+")
 _SENSITIVE = {"secret", "private_key", "mnemonic", "seed_phrase", "password",
-              "api_key", "authorization", "payment-signature", "x-payment", "vault_token"}
+              "api_key", "authorization", "payment-signature", "x-payment", "vault_token", "x-payment-recovery-token",
+              "payment_headers", "recovery_headers", "signed_transaction", "payment_header", "signature"}
 
 
 def redact_diagnostics(value):

@@ -9,6 +9,7 @@ server nonce caches and later successful attempts cannot prove an earlier
 signature unusable. Only a failure before signature disclosure releases budget.
 Even expiry alone cannot prove that a signature was never settled; there is no
 automatic refund or retry. Old uncertain rows require review against chain data.
+Unrelated operations can proceed immediately within the remaining budget.
 
 The cap is agent-wide rather than per-wallet. Integer micro-USDC units avoid
 rounding when summing payments. An oversized quote is refused without latching;
@@ -56,11 +57,9 @@ _MICRO_USD_PER_USD = 1_000_000
 # than allowed to reach the insert.
 _MAX_STORABLE_MICRO_USD = 2**63 - 1
 
-# How long after an authorization is written it can still plausibly be
-# in flight. Past this, `authorized` no longer means "we are waiting" -- an
-# EIP-3009 authorization is dead at `validBefore` (+300s by convention), so
-# nothing can still be settling. Used only to spot reservations nobody ever
-# closed out; it never releases anything on its own.
+# Age threshold for flagging old authorizations for investigation. Expiry
+# alone says nothing about whether settlement happened before the deadline.
+# This threshold never releases money or blocks a new operation.
 _AUTHORIZATION_GRACE_S = 300
 
 # States that consume budget. `released` is the only one that does not.
@@ -230,7 +229,12 @@ def _spent_micro_usd(period_id: int, conn=None) -> int:
         f"WHERE period_id = ? AND state IN ({placeholders})",
         (period_id, *_COUNTING_STATES),
     ).fetchone()
-    return int(row["v"])
+    refunds = (conn if conn is not None else get_connection()).execute(
+        "SELECT COALESCE(SUM(r.amount_micro_usd), 0) FROM x402_refunds r "
+        "JOIN x402_payments p ON p.id = r.reservation_id "
+        "WHERE p.period_id = ? AND p.state = 'settled' AND r.state = 'confirmed'", (period_id,),
+    ).fetchone()[0]
+    return max(0, int(row["v"]) - int(refunds))
 
 
 def _coerce_unix_seconds(value: object, *, allow_zero: bool = False) -> int | None:
@@ -302,6 +306,8 @@ def _coerce_micro_usd(value: object) -> int:
 
 def get_status() -> dict:
     """Current budget state, for /status, the REST route, and the MCP tool."""
+    from src.services.payment_operations import pending_status
+
     state = _get_state()
     cap = _cap_micro_usd(state)
     spent = _spent_micro_usd(state["period_id"])
@@ -316,6 +322,9 @@ def get_status() -> dict:
             "config" if _config_cap_is_set() else "default"
         ),
         "spent_usd": _to_usd(spent),
+        "refunds": [dict(row) for row in get_connection().execute(
+            "SELECT reservation_id, state, network, refund_tx, amount_micro_usd FROM x402_refunds "
+            "ORDER BY updated_at DESC LIMIT 20")],
         # Clamped at zero: a caller reads this to answer "can I afford the
         # next call", and a negative remainder is not a more useful no.
         "remaining_usd": _to_usd(max(cap - spent, 0)),
@@ -323,9 +332,26 @@ def get_status() -> dict:
         # Expired authorizations with uncertain outcomes require investigation.
         # Reconciliation cannot infer non-settlement from an HTTP error.
         "unreconciled_count": unreconciled_count(state["period_id"]),
+        # Compatibility fields: payment uncertainty never pauses a wallet.
+        "payment_pauses": [],
+        "payment_pause_seconds": 0,
+        "pending_operations": pending_status(),
+        "unresolved_payments": unresolved_payments(),
         "period_id": state["period_id"],
         "period_started_at": state["period_started_at"],
     }
+
+
+def unresolved_payments() -> list[dict]:
+    """Unresolved amounts remain visible without blocking other operations."""
+    rows = get_connection().execute(
+        "SELECT lower(wallet_address) AS wallet_address, network, COUNT(*) AS count, "
+        "SUM(amount_micro_usd) AS reserved "
+        "FROM x402_payments WHERE state = 'authorized' "
+        "GROUP BY lower(wallet_address), network ORDER BY wallet_address, network"
+    ).fetchall()
+    return [{"wallet_address": r["wallet_address"], "network": r["network"],
+             "authorization_count": r["count"], "reserved_usd": _to_usd(r["reserved"])} for r in rows]
 
 
 def unreconciled_count(period_id: int | None = None) -> int:
@@ -453,6 +479,7 @@ def reserve(
     valid_before: object = None,
     authorization_nonce: object = None,
     asset: object = None,
+    operation_id: str | None = None,
     valid_after: object = None,
 ) -> str:
     """Claim budget for one payment. Raises rather than overspending.
@@ -483,6 +510,9 @@ def reserve(
     asset = asset.lower() if isinstance(asset, str) and re.fullmatch(r"0x[0-9a-fA-F]{40}", asset) else None
 
     with _budget_transaction() as conn:
+        if operation_id is not None:
+            from src.services.payment_operations import require_unsigned
+            require_unsigned(conn, operation_id)
         state = _get_state(conn)
         cap = _cap_micro_usd(state)
         spent = _spent_micro_usd(state["period_id"], conn)
@@ -516,10 +546,10 @@ def reserve(
             """INSERT INTO x402_payments (id, period_id, state, amount_micro_usd,
                  wallet_address, payee, network, resource, transaction_hash,
                  valid_before, release_reason, created_at, updated_at,
-                 authorization_nonce, asset, valid_after)
-               VALUES (?, ?, 'authorized', ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?)""",
+                 authorization_nonce, asset, valid_after, operation_id)
+               VALUES (?, ?, 'authorized', ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?)""",
             (reservation_id, state["period_id"], amount, wallet_address, payee,
-             network, resource, valid_before, now, now, authorization_nonce, asset, valid_after),
+             network, resource, valid_before, now, now, authorization_nonce, asset, valid_after, operation_id),
         )
 
         spent_after = spent + amount
@@ -667,8 +697,8 @@ def _as_id_list(value: list[str] | tuple[str, ...] | str | None) -> list[str]:
 def reset(cap_usd: float | None = None) -> dict:
     """Top up: start a fresh budget period, optionally with a new size.
 
-    This is the human-consent step, and it is the ONLY thing that resumes
-    payment. `cap_usd` records what they actually agreed to for this period
+    This is the human-consent step that renews an exhausted budget.
+    It does not clear unresolved authorizations . `cap_usd` records what they actually agreed to for this period
     and overrides config from here on; omit it to keep the current budget
     size and simply start again.
 
