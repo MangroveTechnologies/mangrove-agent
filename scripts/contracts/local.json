@@ -266,8 +266,13 @@
       "variable": false
     },
     "list_signals": {
+      "alternatives": [
+        "browse",
+        "search"
+      ],
       "meters": [
-        "rest:signals_list"
+        "rest:signals_list",
+        "rest:signals_search"
       ],
       "variable": true
     },
@@ -2502,6 +2507,28 @@
           "limit": {
             "default": 50,
             "type": "integer"
+          },
+          "regime_direction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "search": {
             "anyOf": [
