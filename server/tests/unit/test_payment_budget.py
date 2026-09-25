@@ -21,10 +21,14 @@ def test_scope_preserves_unit_price_and_payment_bound():
 
 def test_scopes_reset_on_failure_without_releasing_ledger_reservations():
     with payment_budget(3) as outer:
-        with pytest.raises(RuntimeError):
+        try:
             with payment_budget(1) as inner:
                 inner.consume(1000)
                 raise RuntimeError("stop")
+        except RuntimeError as exc:
+            assert str(exc) == "stop"
+        else:
+            pytest.fail("The payment budget scope suppressed the exception.")
         assert current_budget.get() is outer
         assert outer.payments == 0
     assert current_budget.get() is None
