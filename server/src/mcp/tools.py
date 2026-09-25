@@ -14,7 +14,6 @@ namespace is enough. See docs/specification.md MCP Tools table.
 from __future__ import annotations
 
 import json
-from itertools import islice
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -1177,43 +1176,38 @@ def _register_market(server: FastMCP) -> None:
 def _register_signals(server: FastMCP) -> None:
     @server.tool()
     async def list_signals(category: str | None = None, search: str | None = None,
-                           limit: int = 50, api_key: str = "") -> str:
-        """List available signals (optionally filtered by category or search)."""
+                           limit: int = 50, api_key: str = "",
+                           regime_direction: str | None = None, role: str | None = None) -> str:
+        """Collect up to limit signals; each upstream page is a separate request.
+
+        Search uses keyword search and its own price. Regime and role apply only
+        to browsing. Total is the number returned, not the catalogue size.
+        """
         if not _require(api_key):
             return _auth_error()
-        if limit < 1 or limit > 1000:
-            return _err("VALIDATION_ERROR", "Signal limit must be between 1 and 1000.")
-        category = (category.strip().lower() or None) if category else None
-        from src.shared.clients.mangrove import mangrove_ai_client
+        from starlette.concurrency import run_in_threadpool
+
+        from src.services.signals import list_signals as list_signals_service
         try:
-            client = mangrove_ai_client()
-            if search:
-                from mangrove_ai.models import SearchSignalsRequest
-                page = client.signals.search(SearchSignalsRequest(query=search, limit=limit))
-                items = [_dump(s) for s in getattr(page, "items", [])]
-            else:
-                # Stop before fetching another billable page once the requested
-                # count is met. Do not materialize the entire upstream catalog.
-                kwargs = {"category": category} if category else {}
-                signals = client.signals.list_iter(limit_per_page=min(limit, 100), **kwargs)
-                items = [_dump(s) for s in islice(signals, limit)]
-            if category:
-                items = [s for s in items if (s.get("category") or "").lower() == category.lower()]
-            return json.dumps({"items": items, "total": len(items)})
+            result = await run_in_threadpool(
+                list_signals_service, category=category, search=search, limit=limit,
+                regime_direction=regime_direction, role=role, collect=True,
+            )
+            return json.dumps(result)
         except AgentError as e:
             return _handle_agent_error(e)
-        except Exception:  # Upstream errors can contain echoed credentials or user input.
-            return _err("SIGNAL_LIST_FAILED", "Could not list signals from the upstream service.")
 
     register_tool(ToolEntry(
         name="list_signals",
-        description="List / search available signals.",
+        description="List / search available signals; browsing may require multiple paid pages.",
         access="auth",
         parameters=[
             ToolParam(name="category", type="string", required=False, description="Filter by category"),
             ToolParam(name="search", type="string", required=False, description="Search query"),
             ToolParam(name="limit", type="integer", required=False, description="Max results"),
             _APIKEY,
+            ToolParam(name="regime_direction", type="string", required=False, description="Browse by regime"),
+            ToolParam(name="role", type="string", required=False, description="Browse by signal role"),
         ],
     ))
 

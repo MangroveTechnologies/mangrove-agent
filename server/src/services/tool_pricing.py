@@ -198,8 +198,10 @@ def _enrich(entries: list[dict]) -> list[dict]:
             entry.pop("price", None)
             entry.pop("network", None)
             components = []
-            for meter in binding.meters:
+            for index, meter in enumerate(binding.meters):
                 component = {"meter": meter, "price_usd": snapshot.prices.get(meter) if snapshot else None}
+                if binding.alternatives:
+                    component["applies_when"] = binding.alternatives[index]
                 components.append(component)
             available = bool(components) and all(c["price_usd"] is not None for c in components)
             pricing = {
@@ -213,6 +215,8 @@ def _enrich(entries: list[dict]) -> list[dict]:
                 "network_matches_configuration": snapshot.network == app_config.X402_NETWORK if snapshot else None,
             }
             entry["pricing"] = pricing
+            if binding.alternatives:
+                pricing["combination"] = "alternatives"
             if available and len(components) == 1:
                 entry["price"] = f"${components[0]['price_usd']} USDC per upstream request"
             if snapshot:
@@ -230,8 +234,13 @@ def price_hint(pricing: dict) -> str:
     """Bounded plain-text hint for clients that only show tool descriptions."""
     if pricing["status"] == "unavailable":
         return "Wallet-payment price unavailable; do not assume this tool is free."
-    amounts = ", ".join(f"{c['price_usd']} USDC" for c in pricing["components"])
+    amounts = ", ".join(
+        f"{c.get('applies_when', c['meter'])}: {c['price_usd']} USDC"
+        for c in pricing["components"]
+    )
     hint = f"Wallet-payment prices per upstream request: {amounts} on {pricing['network']}."
+    if pricing.get("combination") == "alternatives":
+        hint += " Browse and search are alternative operations, not combined charges."
     if pricing["variable_total"]:
         hint += " Total varies with requests, pagination, polling and options; these are component prices, not a total quote."
     if pricing["status"] == "stale":

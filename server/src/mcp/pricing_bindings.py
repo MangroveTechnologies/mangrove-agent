@@ -12,6 +12,7 @@ from dataclasses import dataclass
 class PriceBinding:
     meters: tuple[str, ...]
     variable: bool = False
+    alternatives: tuple[str, ...] = ()
 
 
 TOOL_PRICING: dict[str, PriceBinding] = {
@@ -22,7 +23,10 @@ TOOL_PRICING: dict[str, PriceBinding] = {
     "list_approved_assets": PriceBinding(("rest:crypto_assets_all",)),
     "get_asset": PriceBinding(("skill:crypto_symbol_detail",)),
     "get_global_market": PriceBinding(("skill:crypto_global_market",)),
-    "list_signals": PriceBinding(("rest:signals_list",), variable=True),
+    "list_signals": PriceBinding(
+        ("rest:signals_list", "rest:signals_search"), variable=True,
+        alternatives=("browse", "search"),
+    ),
     "get_signal": PriceBinding(("rest:signals_get",)),
     "match_signals": PriceBinding(("rest:signals_match",)),
     "search_signals": PriceBinding(("rest:signals_search",)),

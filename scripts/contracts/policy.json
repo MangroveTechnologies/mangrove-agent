@@ -184,10 +184,6 @@
       "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
       "sha256": "14c7187d1717909abe47c72b187ea3ae4f274be6390e7b8ff84dd683fc406715"
     },
-    "list_signals": {
-      "reason": "Bounded MCP aggregation up to 1000 differs from single-page REST; preserve pagination/payment limits until shared logic is designed.",
-      "sha256": "fb863fba9e6e3ab3352476ccb60b3eabb4469c7e5a1047555d5c1da38de38e27"
-    },
     "match_signals": {
       "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
       "sha256": "a8916051738d74d2fc905f52b6a5f21463db8390ce6d4a085b6c593083ad4530"
