@@ -16,6 +16,9 @@ from dataclasses import dataclass
 from src.services import spend_service
 from src.shared.crypto.fernet import decrypt, encrypt, require_existing_master_key
 from src.shared.errors import ValidationError, X402PaymentUncertain
+from src.shared.logging import get_logger
+
+_log = get_logger(__name__)
 
 current_operation: ContextVar[str | None] = ContextVar('x402_operation', default=None)
 MAX_RESULT_BYTES = 8 * 1024 * 1024
@@ -245,17 +248,25 @@ def tracked_payment(function):
                 error = X402PaymentUncertain(operation_id=oid, reservation_ids=reservation_ids(oid))
                 error.payment_state = 'settled' if result.paid else 'unresolved'
                 raise error
-            if reservation_ids(oid):
-                encoded = json.loads(json.dumps(asdict(result), default=lambda value: value.model_dump(by_alias=True)))
-                if len(json.dumps(encoded).encode()) <= MAX_RESULT_BYTES:
-                    complete(oid, encoded)
+            try:
+                if reservation_ids(oid):
+                    encoded = json.loads(json.dumps(asdict(result), default=lambda value: value.model_dump(by_alias=True)))
+                    if len(json.dumps(encoded).encode()) <= MAX_RESULT_BYTES:
+                        complete(oid, encoded)
+            except Exception:
+                error = X402PaymentUncertain(operation_id=oid)
+                error.payment_state = 'settled' if result.paid else 'unresolved'
+                raise error from None
             return result
         except X402PaymentUncertain as error:
             error.operation_id = oid
             raise
         finally:
             current_operation.reset(token)
-            abandon_unsigned(oid)
+            try:
+                abandon_unsigned(oid)
+            except Exception as error:
+                _log.warning('x402.operation.cleanup_pending', operation_id=oid, error_type=type(error).__name__)
     return wrapped
 
 
