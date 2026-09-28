@@ -11,6 +11,7 @@ import json
 import math
 import uuid
 from contextvars import ContextVar
+from dataclasses import dataclass
 
 from src.services import spend_service
 from src.shared.crypto.fernet import decrypt, encrypt, require_existing_master_key
@@ -18,6 +19,14 @@ from src.shared.errors import ValidationError, X402PaymentUncertain
 
 current_operation: ContextVar[str | None] = ContextVar('x402_operation', default=None)
 MAX_RESULT_BYTES = 8 * 1024 * 1024
+
+
+@dataclass
+class PaymentAttempt:
+    operation_id: str
+
+
+current_attempt: ContextVar[PaymentAttempt | None] = ContextVar('payment_attempt', default=None)
 
 
 def fingerprint(payer: str, network: str, method: str, resource: str, content: bytes) -> str:
@@ -128,6 +137,17 @@ def tracked_payment(function):
         resource = values.get('url') or values.get('resource')
         if any(k.lower() in {'authorization', 'x-api-key', 'payment-signature', 'x-payment'} for k in headers) or httpx.URL(resource).userinfo:
             raise ValidationError('Payment requests cannot contain credentials or an existing signature.')
+        if values.get('resource'):
+            url = httpx.URL(resource)
+            if not url.host or url.query or url.fragment or not (url.scheme == 'https' or (url.scheme == 'http' and url.host in {'localhost', '127.0.0.1', '::1'})):
+                raise ValidationError('MCP resources require HTTPS or HTTP loopback without queries or fragments.')
+            arguments = values.get('arguments')
+            if not isinstance(values.get('name'), str) or not values['name'] or (arguments is not None and not isinstance(arguments, dict)):
+                raise ValidationError('MCP calls require a tool name and an argument object.')
+            try:
+                values['arguments'] = json.loads(json.dumps(arguments or {}, allow_nan=False))
+            except (ValueError, TypeError):
+                raise ValidationError('MCP arguments must be JSON values.') from None
         if values.get('url'):
             url = httpx.URL(resource)
             if not url.host or not (url.scheme == 'https' or (
@@ -145,10 +165,15 @@ def tracked_payment(function):
         content = values.get('content') or b''
         if isinstance(content, str):
             content = content.encode()
+        if values.get('resource') and values['arguments']:
+            content = json.dumps({'name': values['name'], 'arguments': values['arguments']}, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
         method = values.get('method') or 'MCP:' + values.get('name', '')
         digest = fingerprint(payer, network, method, resource, content)
-        operation, created = begin(digest, headers.get('X-Payment-Operation-Id'))
+        operation, created = begin(digest, values.get('operation_id') or headers.get('X-Payment-Operation-Id'))
         oid = operation['id']
+        attempt = current_attempt.get()
+        if values.get('resource') and attempt is not None:
+            attempt.operation_id = oid
         if not created:
             if operation['response']:
                 cached = unseal(operation['response'])
@@ -158,7 +183,28 @@ def tracked_payment(function):
                     settlement = x402_payer.decode_settlement(response, payer=payer, network=network)
                     return x402_payer.PaymentResult(status_code=response.status_code, body=x402_payer._decode_body(response), paid=settlement is not None,
                                                    transaction=settlement.get('transaction') if settlement else None, network=network, payer=payer)
+                if values.get('resource'):
+                    from mcp.types import CallToolResult
+                    raw = cached.get('mcp_result') or {'content': cached['body']}
+                    cached['body'] = CallToolResult.model_validate(raw).content
                 return x402_payer.PaymentResult(**cached)
+            if values.get('resource') and operation['payment_headers']:
+                recovery = unseal(operation['payment_headers'])
+                if recovery.get('transport') == 'mcp' and recovery.get('idempotency') == 'v1':
+                    try:
+                        session = values['session']
+                        await session.initialize()
+                        raw = await session.call_tool(name=values['name'], arguments=values['arguments'], meta=recovery['meta'])
+                        result = x402_payer.mcp_payment_result(raw, payer=payer, reservations=reservation_ids(oid), resource=resource)
+                        encoded = json.loads(json.dumps(asdict(result), default=lambda value: value.model_dump(by_alias=True)))
+                        if len(json.dumps(encoded).encode()) <= MAX_RESULT_BYTES:
+                            complete(oid, encoded)
+                        return result
+                    except X402PaymentUncertain as error:
+                        error.operation_id = oid
+                        raise
+                    except Exception:
+                        raise X402PaymentUncertain(operation_id=oid, reservation_ids=reservation_ids(oid)) from None
             if values.get('url') and operation['payment_headers']:
                 recovery = unseal(operation['payment_headers'])
                 if recovery.get('idempotency') == 'v1':

@@ -35,9 +35,12 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import re
 import uuid
 from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -57,9 +60,11 @@ from src.shared.errors import AgentError, ValidationError, X402PaymentError, X40
 from src.shared.logging import get_logger
 from src.shared.urls import strip_query
 from src.shared.x402.config import get_network, get_payer_wallet
+from src.shared.x402.mcp_diagnostics import protect_mcp_diagnostics
 from src.shared.x402.receipts import valid_settlement
 
 _log = get_logger(__name__)
+protect_mcp_diagnostics()
 
 # Only eip155 (EVM) networks are payable. The signing guard is EVM-only by
 # construction — it validates an EIP-3009 struct against a per-chain USDC
@@ -113,6 +118,7 @@ class PaymentResult:
     transaction: str | None = None
     network: str | None = None
     payer: str | None = None
+    mcp_result: dict[str, Any] | None = None
 
 
 class CustodialSigner:
@@ -316,60 +322,169 @@ def _configure_payment_client(
     client.set_spend_controls({"max_amount_per_payment": _MAX_AMOUNT_PER_PAYMENT})
 
 
+def mcp_payment_result(raw, *, payer: str, reservations: list[str], resource: str) -> PaymentResult:
+    metadata = raw.meta if isinstance(raw.meta, dict) else {}
+    receipt = metadata.get(MCP_PAYMENT_RESPONSE_META_KEY)
+    settlement = None
+    if reservations and valid_settlement(receipt, payer=payer, network=get_network()):
+        settlement = {key: receipt[key] for key in ("success", "transaction", "payer", "network")}
+    result = PaymentResult(
+        status_code=502 if raw.isError else 200, body=raw.content,
+        paid=settlement is not None, transaction=_str_or_none(settlement, "transaction"),
+        network=_str_or_none(settlement, "network"), payer=_str_or_none(settlement, "payer"),
+        mcp_result=raw.model_dump(by_alias=True, exclude_none=True),
+    )
+    from types import SimpleNamespace
+    _reconcile_budget(SimpleNamespace(reservations=reservations), result, settlement=settlement, url=resource)
+    recovery = metadata.get("mangrove/payment")
+    if isinstance(recovery, dict) and recovery.get("state") == "pending":
+        error = X402PaymentUncertain(reservation_ids=reservations)
+        error.payment_state = "settled" if settlement else "unresolved"
+        raise error
+    return result
+
+
+class _PaymentSession:
+    """Persist signed MCP requests before disclosure, using the existing ledger."""
+
+    def __init__(self, session):
+        self.session = session
+        self.idempotency = None
+
+    async def initialize(self):
+        await self.session.initialize()
+
+    async def call_tool(self, *, name, arguments, meta=None):
+        if meta is not None:
+            import secrets
+            oid = payment_operations.current_operation.get()
+            meta = {**meta, "mangrove/payment": {
+                "operation_id": oid, "recovery_token": secrets.token_urlsafe(32),
+            }}
+            payment_operations.save_headers(oid, {
+                "transport": "mcp", "idempotency": self.idempotency, "meta": meta,
+                "headers": {
+                    "PAYMENT-SIGNATURE": base64.b64encode(json.dumps(meta["x402/payment"], sort_keys=True,
+                        separators=(",", ":"), allow_nan=False).encode()).decode("ascii"),
+                    "X-Payment-Operation-Id": oid,
+                    "X-Payment-Recovery-Token": meta["mangrove/payment"]["recovery_token"],
+                },
+            })
+        result = await self.session.call_tool(name=name, arguments=arguments, **({"meta": meta} if meta else {}))
+        if meta is None:
+            recovery = (result.meta or {}).get("mangrove/payment", {})
+            self.idempotency = recovery.get("idempotency") if isinstance(recovery, dict) else None
+            if isinstance(result.structuredContent, dict) and result.structuredContent.get("retry_payment") is False:
+                raise X402PaymentError("The receiver requires payment reconciliation before another authorization.")
+        return result
+
+
 @payment_operations.tracked_payment
 async def pay_mcp(
     session: Any,
     *,
     wallet_address: str | None = None,
     name: str = "hello_mangrove",
+    arguments: dict[str, Any] | None = None,
     resource: str,
+    operation_id: str | None = None,
 ) -> PaymentResult:
-    """Pay a local demo MCP tool through the same custody and ledger controls.
-
-    The caller owns the MCP connection, its deadline and cleanup. The SDK makes
-    one unsigned call and at most one signed retry. Its ``payment_made`` flag
-    means a payload was sent, NOT that settlement succeeded. Only a validated
-    receipt reconciles the final reservation; every uncertain signature remains
-    counted, including cancellation and errors during the paid retry.
-    """
+    """Pay a tool on a caller-owned session; the caller owns deadlines and cleanup."""
     payer = resolve_payer_wallet(wallet_address)
     wallet_manager.require_backup_confirmed(payer)
     check_payment_budget(resource)
-    network = _require_network()
     signer = CustodialSigner(payer, resource=resource)
     client = build_payment_client(payer, signer=signer)
     try:
-        paid_session = x402MCPSession(session, client, auto_payment=True)
+        paid_session = x402MCPSession(_PaymentSession(session), client, auto_payment=True)
         await paid_session.initialize()
-        response = await paid_session.call_tool(name, {})
-        # Validate the wire dictionary, before SDK/Pydantic type coercions
-        # (for example, the string "true" must not become a valid boolean).
-        metadata = response.raw_result.meta
-        receipt = metadata.get(MCP_PAYMENT_RESPONSE_META_KEY) if isinstance(metadata, dict) else None
-        settlement = None
-        if signer.reservations and valid_settlement(receipt, payer=payer, network=network):
-            settlement = {key: receipt[key] for key in ("success", "transaction", "payer", "network")}
-        result = PaymentResult(
-            status_code=502 if response.is_error else 200,
-            body=response.content,
-            paid=settlement is not None,
-            transaction=_str_or_none(settlement, "transaction"),
-            network=_str_or_none(settlement, "network"),
-            payer=_str_or_none(settlement, "payer"),
-        )
-        _reconcile_budget(signer, result, settlement=settlement, url=resource)
-        return result
+        response = await paid_session.call_tool(name, arguments or {})
+        return mcp_payment_result(response.raw_result, payer=payer,
+                                  reservations=signer.reservations, resource=resource)
     except AgentError:
         raise
     except Exception:
-        # MCP/HTTP exceptions may contain arbitrary remote content. Neither
-        # report that text nor retry/release an authorization after failure.
         if signer.reservations:
             raise X402PaymentUncertain(reservation_ids=signer.reservations) from None
-        raise X402PaymentError(
-            "The MCP payment could not be completed.",
-            suggestion="Check the payment ledger before retrying; any signed authorization remains counted.",
-        ) from None
+        raise X402PaymentError("The MCP payment could not be completed.") from None
+
+
+_remote_mcp_active: ContextVar[bool] = ContextVar("remote_mcp_active", default=False)
+
+
+@contextmanager
+def _private_mcp_diagnostics():
+    """SDK debug messages contain signed metadata; suppress them only for this call."""
+    class PaymentLogFilter(logging.Filter):
+        def filter(self, record):
+            return not _remote_mcp_active.get()
+
+    guard = PaymentLogFilter()
+    loggers = [logging.getLogger(name) for name in ("mcp.client.streamable_http", "client")]
+    token = _remote_mcp_active.set(True)
+    for logger in loggers:
+        logger.addFilter(guard)
+    try:
+        yield
+    finally:
+        for logger in loggers:
+            logger.removeFilter(guard)
+        _remote_mcp_active.reset(token)
+
+
+async def pay_remote_mcp(
+    endpoint: str, *, name: str, arguments: dict[str, Any] | None = None,
+    wallet_address: str | None = None, operation_id: str | None = None,
+    timeout: float = _DEFAULT_TIMEOUT_S,
+) -> PaymentResult:
+    """Call an explicitly selected HTTPS (or loopback) MCP endpoint in wallet mode."""
+    import math
+
+    import anyio
+    from mcp.client.streamable_http import streamable_http_client
+
+    from mcp import ClientSession
+
+    try:
+        url = httpx.URL(endpoint)
+    except (TypeError, httpx.InvalidURL):
+        raise ValidationError("Invalid MCP endpoint.") from None
+    if (not url.host or url.userinfo or url.query or url.fragment or not (
+        url.scheme == "https" or (url.scheme == "http" and url.host in {"localhost", "127.0.0.1", "::1"})
+    )):
+        raise ValidationError("MCP endpoints require HTTPS or HTTP loopback without credentials, queries or fragments.")
+    if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+        raise ValidationError("MCP timeout must be finite and positive.")
+    operation_id = operation_id or str(uuid.uuid4())
+    attempt = payment_operations.PaymentAttempt(operation_id)
+    attempt_token = payment_operations.current_attempt.set(attempt)
+    try:
+        with _private_mcp_diagnostics(), anyio.fail_after(timeout):
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False) as http:
+                async with streamable_http_client(str(url), http_client=http) as (read, write, _):
+                    async with ClientSession(read, write) as session:
+                        return await pay_mcp(session, name=name, arguments=arguments, resource=str(url),
+                                             wallet_address=wallet_address, operation_id=operation_id)
+    except AgentError:
+        raise
+    except Exception as error:
+        _log.warning("x402.mcp.transport_failed", error_type=type(error).__name__)
+        pending = [error]
+        while pending:
+            nested = pending.pop()
+            if isinstance(nested, AgentError):
+                raise nested from None
+            if isinstance(nested, BaseExceptionGroup):
+                pending.extend(nested.exceptions)
+        try:
+            reservations = payment_operations.reservation_ids(attempt.operation_id)
+        except Exception:
+            reservations = []
+        if reservations:
+            raise X402PaymentUncertain(operation_id=attempt.operation_id, reservation_ids=reservations) from None
+        raise X402PaymentError("The remote MCP request was interrupted; check pending payments before retrying.") from None
+    finally:
+        payment_operations.current_attempt.reset(attempt_token)
 
 
 @payment_operations.tracked_payment
