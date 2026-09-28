@@ -223,7 +223,10 @@ def direct_sdk_tools(source):
         if direct:
             name = next((kw.value.value for d in decorators for kw in d.keywords
                          if kw.arg == "name" and isinstance(kw.value, ast.Constant)), node.name)
-            found[name] = hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest()
+            # Python 3.13+ omits empty fields unless explicitly requested.
+            options = {"show_empty": True} if sys.version_info >= (3, 13) else {}
+            normalized = ast.dump(node, include_attributes=False, **options)
+            found[name] = hashlib.sha256(normalized.encode()).hexdigest()
     return found
 
 

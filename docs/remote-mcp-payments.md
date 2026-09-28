@@ -72,6 +72,14 @@ reservations. Consult existing payment status/reconciliation rather than resetti
 the budget. Paid failures retain the existing refund observer's recovery headers;
 refund eligibility and configuration are unchanged.
 
+If payment succeeds but local result storage fails, the async payer returns
+`X402PaymentUncertain` with the original operation ID and reports the payment as
+settled when a valid receipt was received. The pending operation retains its
+encrypted recovery proof. Retry that same operation after storage is restored;
+do not authorize another payment. Failure of unsigned-operation cleanup cannot
+replace the original payment error or cancellation with a raw database error.
+The same result-storage protection applies to the explicit async REST payer.
+
 ## Versions and verification
 
 Verified client versions: MCP 1.30.0, x402 2.22.0, mangroveai 1.17.0. These match
