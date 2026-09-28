@@ -26,32 +26,17 @@ async def list_signals(
     search: str | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
+    regime_direction: str | None = None,
+    role: str | None = None,
 ) -> dict:
-    category = (category.strip().lower() or None) if category else None
-    try:
-        client = mangrove_ai_client()
-        if search:
-            from mangrove_ai.models import SearchSignalsRequest
-            page = client.signals.search(SearchSignalsRequest(query=search, limit=limit, offset=offset))
-        else:
-            kwargs = {"category": category} if category else {}
-            page = client.signals.list(limit=limit, offset=offset, **kwargs)
-    except AgentError:
-        raise
-    except Exception:
-        raise SdkError("Could not list signals from the upstream service.") from None
+    from starlette.concurrency import run_in_threadpool
 
-    items = [_dump(s) for s in getattr(page, "items", [])]
-    if category:
-        cat_lower = category.lower()
-        items = [s for s in items if (s.get("category") or "").lower() == cat_lower]
+    from src.services.signals import list_signals as list_signals_service
 
-    return {
-        "items": items,
-        "total": getattr(page, "total", len(items)),
-        "limit": limit,
-        "offset": offset,
-    }
+    return await run_in_threadpool(
+        list_signals_service, category=category, search=search, limit=limit, offset=offset,
+        regime_direction=regime_direction, role=role,
+    )
 
 
 @router.get("/{name}", summary="Signal detail with parameter spec")

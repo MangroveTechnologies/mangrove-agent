@@ -145,7 +145,8 @@ def local_contract(runtime, catalog, bindings):
                            "access": next(row["access"] for row in catalog if row["name"] == tool["name"])}
             for tool in runtime
         },
-        "bindings": {name: {"meters": list(binding.meters), "variable": binding.variable}
+        "bindings": {name: {"meters": list(binding.meters), "variable": binding.variable,
+                            **({"alternatives": list(binding.alternatives)} if binding.alternatives else {})}
                      for name, binding in sorted(bindings.items())},
     }
 
@@ -178,6 +179,9 @@ def check_bindings(bindings, names, policy, upstream):
         errors.append("Pricing exceptions require a reason")
     ids = set(upstream["billing_ids"])
     for name, binding in sorted(bindings.items()):
+        if binding.alternatives and (len(binding.alternatives) != len(binding.meters)
+                                     or len(set(binding.alternatives)) != len(binding.alternatives)):
+            errors.append(f"{name}: pricing alternatives must name each meter exactly once")
         if len(binding.meters) != len(set(binding.meters)):
             errors.append(f"{name}: repeated billing identifier")
         for meter in binding.meters:

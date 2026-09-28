@@ -72,7 +72,11 @@ def test_anonymous_discovery_does_not_use_sdk_or_wallet(mock_http, monkeypatch):
     mock_http(handler)
     rows = [{"name": "list_signals"}, {"name": "get_signal"}, {"name": "list_wallets"}]
     result = pricing._enrich(rows)
-    assert result[0]["price"] == "$0.001 USDC per upstream request"
+    assert "price" not in result[0]
+    assert result[0]["pricing"]["combination"] == "alternatives"
+    assert result[0]["pricing"]["components"][0] == {
+        "meter": "rest:signals_list", "price_usd": "0.001", "applies_when": "browse",
+    }
     assert result[0]["pricing"]["variable_total"] is True
     assert result[1]["pricing"]["variable_total"] is False
     assert result[2] == rows[2]
@@ -310,3 +314,20 @@ def test_too_many_pages_and_entries_are_bounded(mock_http, monkeypatch):
     mock_http(lambda r: httpx.Response(200, json=envelope()))
     with pytest.raises(ValueError, match="entries"):
         pricing._fetch_prices("https://upstream.example/mcp/")
+
+
+def test_signal_browse_and_search_prices_are_alternatives(mock_http):
+    mock_http(lambda r: httpx.Response(200, json=envelope([
+        {"id": "rest:signals_list", "mangrove/x402_price_usd": "0.001"},
+        {"id": "rest:signals_search", "mangrove/x402_price_usd": "0.002"},
+    ])))
+    result = pricing._enrich([{"name": "list_signals"}])[0]
+    assert "price" not in result
+    quoted = result["pricing"]
+    assert quoted["status"] == "fresh"
+    assert quoted["combination"] == "alternatives"
+    assert quoted["components"] == [
+        {"meter": "rest:signals_list", "price_usd": "0.001", "applies_when": "browse"},
+        {"meter": "rest:signals_search", "price_usd": "0.002", "applies_when": "search"},
+    ]
+    assert "not combined charges" in pricing.price_hint(quoted)

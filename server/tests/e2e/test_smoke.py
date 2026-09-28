@@ -48,7 +48,7 @@ def _stub_sdk() -> MagicMock:
     # signals
     sig = MagicMock()
     sig.model_dump.return_value = {"name": "rsi_oversold", "category": "overbought_oversold"}
-    page = MagicMock(items=[sig], total=1)
+    page = MagicMock(items=[sig], total=1, offset=0, limit=30, has_more=False, next_offset=None, filter=None)
     sdk.signals.list.return_value = page
     sdk.signals.search.return_value = page
     sdk.signals.get.return_value = sig
@@ -159,6 +159,7 @@ def client(tmp_path, monkeypatch):
         "src.api.routes.market.mangrove_ai_client",
         "src.api.routes.on_chain.mangrove_ai_client",
         "src.api.routes.signals.mangrove_ai_client",
+        "src.services.signals.mangrove_ai_client",
         "src.api.routes.kb.mangrove_ai_client",
         "src.api.routes.wallet.mangrove_markets_client",
         "src.api.routes.dex.mangrove_markets_client",

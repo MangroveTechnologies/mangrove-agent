@@ -105,7 +105,7 @@ def automatic_client(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("limit,search,expected_payments", [(1, None, 1), (101, None, 2), (1, "trend", 1)])
+@pytest.mark.parametrize("limit,search,expected_payments", [(1, None, 1), (100, None, 4), (101, None, 4), (250, None, 9), (1, "trend", 1)])
 async def test_normal_mcp_tool_automatically_pays_only_needed_pages(
     wallet, automatic_client, monkeypatch, limit, search, expected_payments,
 ):
@@ -132,10 +132,14 @@ async def test_normal_mcp_tool_automatically_pays_only_needed_pages(
         nonces.append(signed["authorization"]["nonce"])
         if search:
             body = json.loads(request.content)
+            assert request.method == "POST"
+            assert request.url.path == "/api/v1/signals/search"
             assert body["query"] == search
             size, offset = body["limit"], 0
         else:
-            size, offset = int(request.url.params["limit"]), int(request.url.params["offset"])
+            assert request.method == "GET"
+            assert request.url.path == "/api/v1/signals/"
+            size, offset = min(30, int(request.url.params["limit"])), int(request.url.params["offset"])
         return httpx.Response(200, json={
             "signals": [{"name": f"signal_{i}", "category": "trend"} for i in range(offset, offset + size)],
             "total": 10000, "limit": size, "offset": offset,
@@ -154,7 +158,7 @@ async def test_normal_mcp_tool_automatically_pays_only_needed_pages(
     rows = spend_service.list_payments()
     assert len(rows) == expected_payments
     assert all(row["state"] == "settled" for row in rows)
-    assert spend_service.check_before_payment()["spent_usd"] == expected_payments * 0.001
+    assert spend_service.check_before_payment()["spent_usd"] == pytest.approx(expected_payments * 0.001)
 
 
 @pytest.mark.asyncio
@@ -1004,3 +1008,38 @@ def test_reentrant_duplicate_during_signing_cannot_abandon_original_owner(wallet
     with client(handle, wallet) as http:
         assert http.get(URL).status_code == 200
     assert len(spend_service.list_payments()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["price_increase", "uncertain"])
+async def test_signal_workflow_stops_on_second_page_payment_failure(wallet, automatic_client, monkeypatch, failure):
+    from src.mcp.server import create_mcp_server
+
+    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
+    signed_offsets = []
+
+    def handler(request):
+        offset = int(request.url.params["offset"])
+        if "PAYMENT-SIGNATURE" not in request.headers:
+            return challenge("2000" if offset and failure == "price_increase" else "1000")
+        signed_offsets.append(offset)
+        if offset:
+            raise httpx.ReadTimeout("lost response", request=request)
+        return httpx.Response(200, json={
+            "signals": [{"name": f"s{i}", "category": "trend"} for i in range(30)],
+            "offset": 0, "limit": 30, "total": 100, "has_more": True, "next_offset": 30,
+        }, headers={"payment-response": receipt(wallet)})
+
+    automatic_client(handler)
+    tool = create_mcp_server()._tool_manager._tools["list_signals"]
+    result = json.loads(await tool.run({"api_key": "test-key-1", "limit": 100}))
+    if failure == "price_increase":
+        assert result["code"] == "X402_SPEND_CAP_EXCEEDED"
+        assert signed_offsets == [0]
+    else:
+        assert result["code"] == "X402_PAYMENT_UNCERTAIN"
+        assert result["retry_payment"] is False
+        assert result["reservation_ids"]
+        assert signed_offsets == [0, 30]
+    assert len(spend_service.list_payments()) == len(signed_offsets)
+    assert spend_service.check_before_payment()["spent_usd"] == len(signed_offsets) * 0.001

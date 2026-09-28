@@ -52,6 +52,11 @@ def client(tmp_path, monkeypatch):
     page = MagicMock()
     page.items = [sig]
     page.total = 1
+    page.offset = 0
+    page.limit = 30
+    page.has_more = False
+    page.next_offset = None
+    page.filter = None
     sdk.signals.list.return_value = page
     sdk.signals.search.return_value = page
     sdk.signals.get.return_value = sig
@@ -64,6 +69,7 @@ def client(tmp_path, monkeypatch):
         "src.api.routes.market.mangrove_ai_client",
         "src.api.routes.on_chain.mangrove_ai_client",
         "src.api.routes.signals.mangrove_ai_client",
+        "src.services.signals.mangrove_ai_client",
         "src.api.routes.kb.mangrove_ai_client",
     ):
         monkeypatch.setattr(path, lambda s=sdk: s)
@@ -141,11 +147,11 @@ def test_list_signals(client):
     assert body["items"][0]["name"] == "rsi_oversold"
 
 
-def test_list_signals_filters_by_category(client):
+def test_list_signals_trusts_upstream_category_filter(client):
     r = client.get("/api/v1/agent/signals", params={"category": "breakout"}, headers=_auth())
     assert r.status_code == 200
-    # Only item is category overbought_oversold → filtered out
-    assert r.json()["items"] == []
+    # Browsing must not implement a second category taxonomy locally.
+    assert r.json()["items"][0]["name"] == "rsi_oversold"
 
 
 def test_get_signal(client):
@@ -191,5 +197,5 @@ def test_auth_required_on_all_passthrough_routes(client):
 
 @pytest.mark.parametrize("query", ["limit=0", "limit=101", "offset=-1"])
 def test_signals_invalid_page_never_calls_upstream(client, monkeypatch, query):
-    monkeypatch.setattr("src.api.routes.signals.mangrove_ai_client", lambda: pytest.fail("invalid page reached upstream"))
+    monkeypatch.setattr("src.services.signals.mangrove_ai_client", lambda: pytest.fail("invalid page reached upstream"))
     assert client.get(f"/api/v1/agent/signals?{query}", headers=_auth()).status_code == 422

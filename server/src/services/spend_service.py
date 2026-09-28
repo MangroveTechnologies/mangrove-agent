@@ -509,6 +509,12 @@ def reserve(
         authorization_nonce = None
     asset = asset.lower() if isinstance(asset, str) and re.fullmatch(r"0x[0-9a-fA-F]{40}", asset) else None
 
+    from src.services.payment_budget import current_budget
+
+    workflow_budget = current_budget.get()
+    if workflow_budget is not None:
+        workflow_budget.consume(amount)
+
     with _budget_transaction() as conn:
         if operation_id is not None:
             from src.services.payment_operations import require_unsigned

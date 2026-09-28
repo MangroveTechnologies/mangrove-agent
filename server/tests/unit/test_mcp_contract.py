@@ -88,7 +88,7 @@ def test_optional_nullable_parameters_are_not_required():
 
 
 def test_binding_classifications_and_hidden_rest_meter():
-    bindings = {"read": SimpleNamespace(meters=("rest:hidden_read",)), "kb": SimpleNamespace(meters=())}
+    bindings = {"read": SimpleNamespace(meters=("rest:hidden_read",), alternatives=()), "kb": SimpleNamespace(meters=(), alternatives=())}
     policy = {"without_upstream_pricing": {"wallet": "Local custody"}, "unknown_pricing": {"kb": "Separate KB origin"}}
     upstream = {"tools": {}, "billing_ids": ["rest:hidden_read"]}
     assert not checks.check_bindings(bindings, {"read", "kb", "wallet"}, policy, upstream)
