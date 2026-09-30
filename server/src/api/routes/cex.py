@@ -23,7 +23,7 @@ from src.config import app_config
 from src.services import cex_oauth_service, cex_service
 from src.services.secret_vault import vault
 from src.shared.auth.dependency import require_api_key
-from src.shared.errors import SdkError
+from src.shared.errors import CexCredentialsMissing, SdkError
 
 router = APIRouter(
     prefix="/cex",
@@ -76,6 +76,8 @@ async def status() -> dict:
 async def balances() -> dict:
     try:
         return {"balances": cex_service.get_balances()}
+    except CexCredentialsMissing:
+        raise
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"cex balances failed: {e}") from e
 
@@ -87,6 +89,8 @@ async def validate_order(req: ValidateOrderRequest) -> dict:
             pair=req.pair, side=req.side, volume=req.volume,
             ordertype=req.ordertype, price=req.price,
         )
+    except CexCredentialsMissing:
+        raise
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"cex validate-order failed: {e}") from e
 
@@ -95,6 +99,8 @@ async def validate_order(req: ValidateOrderRequest) -> dict:
 async def sync_fills(req: SyncFillsRequest) -> dict:
     try:
         return cex_service.sync_fills(mode=req.mode)
+    except CexCredentialsMissing:
+        raise
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"cex sync-fills failed: {e}") from e
 

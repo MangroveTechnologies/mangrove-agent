@@ -191,6 +191,16 @@ def configure(args):
                 '1' if key else '2')]
         else:
             mode = 'api-key' if key else 'x402'
+    if mode == 'api-key' and key and not args.yes and not args.api_key_stdin:
+        choice = choose(
+            'An upstream API key is already configured. Which key should setup use?',
+            {'1': 'Use the existing API key', '2': 'Enter a new API key'},
+            '1',
+        )
+        if choice == '2':
+            # Clear only the in-memory candidate. Cancellation or invalid input
+            # must leave the saved configuration untouched.
+            key = None
     if mode == 'api-key' and not key:
         if args.yes:
             raise SetupError('API-key mode needs a configured key; run interactively with --auth api-key.')

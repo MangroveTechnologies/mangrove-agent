@@ -42,6 +42,17 @@ Config values are resolved from the JSON config file. If a value starts with `se
 
 The config file is the single source of truth. To change a value, edit your `local-config.json` and restart the app.
 
+### Local backend with API-key access
+
+For a backend running on a different port than the SDK default, set
+`"MANGROVEAI_BASE_URL": "http://127.0.0.1:5002/api/v1"` in the agent config and
+restart the agent. This optional setting controls the core API destination in
+API-key mode; it does not change credentials or enable wallet payments. It also
+lets the SDK derive the matching `/api/v2` URL. Leave it absent for existing SDK
+URL resolution. HTTPS is required except for loopback HTTP addresses.
+`X402_MANGROVE_BASE_URL` applies to wallet mode only. Changing the API key does
+not automatically copy wallet-mode destination settings.
+
 ## Key Categories
 
 Config keys are defined in `src/config/configuration-keys.json`:

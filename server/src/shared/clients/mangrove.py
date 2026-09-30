@@ -54,12 +54,38 @@ def mangrove_ai_client() -> MangroveAI:
             if key:
                 client = MangroveAI(
                     api_key=key, load_dotenv=False,
+                    base_url=_api_key_base_url(config),
                     timeout=float(config.MANGROVE_SDK_TIMEOUT_SECONDS),
                 )
             else:
                 client = create_x402_mangrove_client(**_payment_destination(config))
             _clients["ai"] = client
         return _clients["ai"]
+
+
+def _api_key_base_url(config) -> str | None:
+    """Explicit API-key destination; absent overrides retain SDK defaults."""
+    from urllib.parse import urlsplit
+
+    value = getattr(config, "MANGROVEAI_BASE_URL", None)
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise ValidationError("MANGROVEAI_BASE_URL must be a URL string or null.")
+    value = value.strip()
+    try:
+        url = urlsplit(value)
+        valid = (url.scheme in {"http", "https"} and url.hostname
+                 and not url.username and not url.password and not url.query and not url.fragment
+                 and url.path.rstrip("/") == "/api/v1"
+                 and (url.scheme == "https" or url.hostname in {"localhost", "127.0.0.1", "::1"}))
+        _ = url.port
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ValidationError("MANGROVEAI_BASE_URL must be HTTPS (or loopback HTTP), end in /api/v1, "
+                              "and contain no credentials, query or fragment.")
+    return value.rstrip("/")
 
 
 def _api_key(config) -> str | None:

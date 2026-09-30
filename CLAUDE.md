@@ -34,6 +34,15 @@ Full extension workflow: [`docs/contributing.md`](docs/contributing.md).
 - Risk management (engine gates + portfolio kill switch — what happens behind the scenes): `.claude/rules/risk-management.md`
 - Git workflow: `.claude/rules/git-workflow.md`
 
+## User-facing tool failures
+
+For every tool error, state the failed action, the error and its supported reason
+in one or two short sentences, then stop. If the response gives no specific reason,
+say so rather than guessing. Do not append retry offers, troubleshooting questions,
+"want technical details?", or unrelated alternatives. Apply the error-reply rules
+in `.claude/rules/trading-bot-workflow.md` to every tool, not just signals. Preserve
+material partial-completion and uncertain-payment information.
+
 ## Configuration
 
 `ENVIRONMENT` selects the config file (`local`, `dev`, `test`, `prod` -> `server/src/config/<env>-config.json`). Secrets use `secret:name:property` syntax for GCP Secret Manager.

@@ -22,6 +22,7 @@ from src.config import app_config
 from src.services import cex_credentials
 from src.services.secret_vault import vault
 from src.shared.clients.mangrove import mangrove_markets_client
+from src.shared.errors import CexCredentialsMissing
 
 _VENUE = "kraken"
 
@@ -35,10 +36,7 @@ def _kraken_base() -> str:
 def _client(client_factory: ClientFactory | None = None) -> Any:
     creds = cex_credentials.load(_VENUE)
     if not creds:
-        raise RuntimeError(
-            "No Kraken credentials connected. Run scripts/stash-kraken-secret.sh "
-            "in a terminal, then connect with the returned vault_token."
-        )
+        raise CexCredentialsMissing()
     api_key, api_secret = creds
     if client_factory is not None:
         return client_factory(api_key, api_secret)

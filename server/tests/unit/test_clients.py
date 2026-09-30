@@ -12,7 +12,6 @@ import httpx
 import pytest
 from mangrove_ai import MangroveAI
 from mangrove_markets import MangroveMarkets
-
 from src.config import app_config
 from src.shared.clients import mangrove
 from src.shared.clients.mangrove import (
@@ -196,3 +195,40 @@ def test_keyless_markets_does_not_use_payment_transport(monkeypatch):
     monkeypatch.setattr(mangrove, "create_x402_mangrove_client", lambda **kw: pytest.fail("markets payment"))
     mangrove_markets_client()
     assert factory.call_args.kwargs["api_key"] is None
+
+
+def test_api_key_destination_override_routes_real_sdk_without_payment(monkeypatch):
+    config = SimpleNamespace(MANGROVE_API_KEY='local_test_key',
+                             MANGROVEAI_BASE_URL='http://127.0.0.1:5002/api/v1',
+                             MANGROVE_SDK_TIMEOUT_SECONDS=5)
+    monkeypatch.setattr(mangrove, '_get_config', lambda: config)
+    monkeypatch.setenv('MANGROVE_BASE_URL', 'http://localhost:5001/api/v1')
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert str(request.url).startswith('http://127.0.0.1:5002/api/v1/signals/')
+        assert request.headers['Authorization'] == 'Bearer local_test_key'
+        assert 'payment-signature' not in request.headers
+        return httpx.Response(200, json={'signals': [], 'total': 0, 'limit': 10,
+                                        'offset': 0, 'has_more': False, 'next_offset': None})
+
+    sdk_class = MangroveAI
+    monkeypatch.setattr(mangrove, 'MangroveAI', lambda **kw: sdk_class(
+        **kw, httpx_client=httpx.Client(transport=httpx.MockTransport(handler))))
+    client = mangrove_ai_client()
+    assert client.signals.list(limit=10).items == []
+    assert client._config.core_v2_base_url == 'http://127.0.0.1:5002/api/v2'
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('value', ['http://remote.test/api/v1', 'https://user:secret@host/api/v1',
+                                  'https://host/api/v1?key=secret', 'https://host/api/v1#secret',
+                                  'https://host:bad/api/v1', 'https://host/wrong', 42])
+def test_api_key_destination_rejects_unsafe_or_invalid_override(value):
+    with pytest.raises(ValidationError):
+        mangrove._api_key_base_url(SimpleNamespace(MANGROVEAI_BASE_URL=value))
+
+
+def test_missing_api_key_destination_preserves_sdk_defaults():
+    assert mangrove._api_key_base_url(SimpleNamespace()) is None

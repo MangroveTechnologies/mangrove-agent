@@ -16,11 +16,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from httpx import HTTPStatusError
+from mangrove_ai.exceptions import APIError as AIAPIError
+from mangrove_markets.exceptions import APIError as MarketsAPIError
 from mcp.server.fastmcp import FastMCP
 
 from src.mcp.registry import ToolEntry, ToolParam, clear_tools, register_tool
 from src.shared.auth.middleware import get_request_api_key, has_valid_api_key
-from src.shared.errors import AgentError
+from src.shared.errors import AgentError, upstream_access_error
 from src.shared.logging import get_logger
 
 _log = get_logger(__name__)
@@ -49,14 +52,17 @@ def _auth_error() -> str:
     )
 
 
-def _handle_agent_error(e: AgentError) -> str:
-    return json.dumps(e.to_dict())
+def _handle_agent_error(e: Exception) -> str:
+    return _handle_upstream_error("SDK_ERROR", e)
 
 
 def _handle_upstream_error(code: str, error: Exception) -> str:
     """Preserve agent errors while withholding untrusted SDK error text."""
+    access_error = upstream_access_error(error)
+    if access_error is not None:
+        return json.dumps(access_error.to_dict())
     if isinstance(error, AgentError):
-        return _handle_agent_error(error)
+        return json.dumps(error.to_dict())
     return _err(code, "The upstream service request failed.")
 
 
@@ -172,7 +178,7 @@ def _register_wallet(server: FastMCP) -> None:
             from src.services.wallet_manager import create_wallet as svc
             result = svc(chain=chain, network=network, chain_id=chain_id, label=label)
             return json.dumps(result.model_dump(mode="json"))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -222,7 +228,7 @@ def _register_wallet(server: FastMCP) -> None:
                 chain_id=chain_id, label=label,
             )
             return json.dumps(result.model_dump(mode="json"))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -267,7 +273,7 @@ def _register_wallet(server: FastMCP) -> None:
             from src.shared.clients.mangrove import mangrove_markets_client
             result = mangrove_markets_client().dex.balances(chain_id=chain_id, wallet=address)
             return json.dumps(_dump(result))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -304,7 +310,7 @@ def _register_wallet(server: FastMCP) -> None:
             )
             return json.dumps(_dump(result))
         except Exception as e:  # noqa: BLE001
-            return _err("PORTFOLIO_VALUE_FAILED", str(e))
+            return _handle_upstream_error("PORTFOLIO_VALUE_FAILED", e)
 
     register_tool(ToolEntry(
         name="portfolio_value",
@@ -335,7 +341,7 @@ def _register_wallet(server: FastMCP) -> None:
             )
             return json.dumps(_dump(result))
         except Exception as e:  # noqa: BLE001
-            return _err("PORTFOLIO_PNL_FAILED", str(e))
+            return _handle_upstream_error("PORTFOLIO_PNL_FAILED", e)
 
     register_tool(ToolEntry(
         name="portfolio_pnl",
@@ -366,7 +372,7 @@ def _register_wallet(server: FastMCP) -> None:
             )
             return json.dumps(_dump(result))
         except Exception as e:  # noqa: BLE001
-            return _err("PORTFOLIO_TOKENS_FAILED", str(e))
+            return _handle_upstream_error("PORTFOLIO_TOKENS_FAILED", e)
 
     register_tool(ToolEntry(
         name="portfolio_tokens",
@@ -393,7 +399,7 @@ def _register_wallet(server: FastMCP) -> None:
             )
             return json.dumps(_dump(result))
         except Exception as e:  # noqa: BLE001
-            return _err("PORTFOLIO_DEFI_FAILED", str(e))
+            return _handle_upstream_error("PORTFOLIO_DEFI_FAILED", e)
 
     register_tool(ToolEntry(
         name="portfolio_defi",
@@ -425,7 +431,7 @@ def _register_wallet(server: FastMCP) -> None:
             )
             return json.dumps([_dump(i) for i in items])
         except Exception as e:  # noqa: BLE001
-            return _err("PORTFOLIO_HISTORY_FAILED", str(e))
+            return _handle_upstream_error("PORTFOLIO_HISTORY_FAILED", e)
 
     register_tool(ToolEntry(
         name="portfolio_history",
@@ -463,7 +469,7 @@ def _register_dex(server: FastMCP) -> None:
 
     # -- CEX (Kraken) BYOK tools --------------------------------------------
     def _cex_err(e: Exception) -> str:
-        return json.dumps({"error": True, "code": "CEX_ERROR", "message": str(e)})
+        return _handle_upstream_error("CEX_ERROR", e)
 
     @server.tool()
     async def cex_status(api_key: str = "") -> str:
@@ -599,7 +605,7 @@ def _register_dex(server: FastMCP) -> None:
                 mode=mode,
             )
             return json.dumps(q)
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -663,7 +669,7 @@ def _register_dex(server: FastMCP) -> None:
                 "fill_price": trade.fill_price, "fees": trade.fees,
                 "trade_log_id": trade.id,
             })
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -710,7 +716,7 @@ def _register_dex(server: FastMCP) -> None:
             )
             return json.dumps(_dump(result))
         except Exception as e:  # noqa: BLE001
-            return _err("DEX_TX_STATUS_FAILED", str(e))
+            return _handle_upstream_error("DEX_TX_STATUS_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_tx_status",
@@ -752,7 +758,7 @@ def _register_dex(server: FastMCP) -> None:
             )
             return json.dumps(_dump(result))
         except Exception as e:  # noqa: BLE001
-            return _err("DEX_TOKEN_INFO_FAILED", str(e))
+            return _handle_upstream_error("DEX_TOKEN_INFO_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_token_info",
@@ -790,7 +796,7 @@ def _register_dex(server: FastMCP) -> None:
             )
             return json.dumps(_dump(result))
         except Exception as e:  # noqa: BLE001
-            return _err("DEX_SPOT_PRICE_FAILED", str(e))
+            return _handle_upstream_error("DEX_SPOT_PRICE_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_spot_price",
@@ -827,7 +833,7 @@ def _register_dex(server: FastMCP) -> None:
             result = mangrove_markets_client().dex.gas_price(chain_id=chain_id)
             return json.dumps(_dump(result))
         except Exception as e:  # noqa: BLE001
-            return _err("DEX_GAS_PRICE_FAILED", str(e))
+            return _handle_upstream_error("DEX_GAS_PRICE_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_gas_price",
@@ -859,7 +865,7 @@ def _register_dex(server: FastMCP) -> None:
             )
             return json.dumps([_dump(r) for r in results])
         except Exception as e:  # noqa: BLE001
-            return _err("DEX_TOKEN_SEARCH_FAILED", str(e))
+            return _handle_upstream_error("DEX_TOKEN_SEARCH_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_token_search",
@@ -899,7 +905,7 @@ def _register_dex(server: FastMCP) -> None:
             )
             return json.dumps([_dump(c) for c in result])
         except Exception as e:  # noqa: BLE001
-            return _err("DEX_CHART_FAILED", str(e))
+            return _handle_upstream_error("DEX_CHART_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_dex_chart",
@@ -932,7 +938,7 @@ def _register_dex(server: FastMCP) -> None:
             )
             return json.dumps(_dump(result))
         except Exception as e:  # noqa: BLE001
-            return _err("DEX_ALLOWANCES_FAILED", str(e))
+            return _handle_upstream_error("DEX_ALLOWANCES_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_allowances",
@@ -973,7 +979,7 @@ def _register_market(server: FastMCP) -> None:
         from src.api.routes.market import ohlcv as route
         try:
             return json.dumps(await route(symbol, lookback_days, provider))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -1008,7 +1014,7 @@ def _register_market(server: FastMCP) -> None:
         from src.api.routes.market import market_data as route
         try:
             return json.dumps(await route(symbol, provider))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -1068,7 +1074,7 @@ def _register_market(server: FastMCP) -> None:
             return json.dumps(svc(
                 asset, start_date=start_date, end_date=end_date, lookback_days=lookback_days,
             ))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -1194,7 +1200,7 @@ def _register_signals(server: FastMCP) -> None:
                 regime_direction=regime_direction, role=role, collect=True,
             )
             return json.dumps(result)
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -1224,10 +1230,10 @@ def _register_signals(server: FastMCP) -> None:
         try:
             from src.shared.clients.mangrove import mangrove_ai_client
             return json.dumps(_dump(mangrove_ai_client().signals.get(signal_name)))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
-        except Exception:  # Never expose raw upstream errors to the conversation.
-            return _err("SIGNAL_GET_FAILED", "Could not fetch signal details from the upstream service.")
+        except Exception as e:  # Never expose raw upstream errors to the conversation.
+            return _handle_upstream_error("SIGNAL_GET_FAILED", e)
 
     register_tool(ToolEntry(
         name="get_signal",
@@ -1262,10 +1268,10 @@ def _register_signals(server: FastMCP) -> None:
                 similarity_threshold=similarity_threshold,
             )
             return json.dumps(_dump(r))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
-        except Exception:  # Never expose raw upstream errors to the conversation.
-            return _err("SIGNAL_MATCH_FAILED", "Could not match signals from the upstream service.")
+        except Exception as e:  # Never expose raw upstream errors to the conversation.
+            return _handle_upstream_error("SIGNAL_MATCH_FAILED", e)
 
     register_tool(ToolEntry(
         name="match_signals",
@@ -1302,10 +1308,10 @@ def _register_signals(server: FastMCP) -> None:
                 "total": getattr(page, "total", len(items)),
                 "limit": limit, "offset": offset,
             })
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
-        except Exception:  # Never expose raw upstream errors to the conversation.
-            return _err("SIGNAL_SEARCH_FAILED", "Could not search signals from the upstream service.")
+        except Exception as e:  # Never expose raw upstream errors to the conversation.
+            return _handle_upstream_error("SIGNAL_SEARCH_FAILED", e)
 
     register_tool(ToolEntry(
         name="search_signals",
@@ -2065,7 +2071,7 @@ def _register_strategy(server: FastMCP) -> None:
             ))
             return json.dumps({"strategy": detail.model_dump(mode="json"),
                                "generation_report": report})
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -2103,7 +2109,7 @@ def _register_strategy(server: FastMCP) -> None:
                 execution_config=execution_config,
             ))
             return json.dumps(detail.model_dump(mode="json"))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -2275,7 +2281,7 @@ def _register_strategy(server: FastMCP) -> None:
         try:
             from src.services.strategy_service import get_strategy as svc
             return json.dumps(svc(strategy_id).model_dump(mode="json"))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -2308,7 +2314,7 @@ def _register_strategy(server: FastMCP) -> None:
                 status=status, confirm=confirm, allocation=alloc,
             ))
             return json.dumps(detail.model_dump(mode="json"))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -2385,7 +2391,7 @@ def _register_strategy(server: FastMCP) -> None:
                 config=config,
                 include_benchmark=include_benchmark,
             )))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -2449,7 +2455,7 @@ def _register_strategy(server: FastMCP) -> None:
                 asset=asset, status=status, date_from=date_from, date_to=date_to,
                 limit=limit, offset=offset, include_archived=include_archived,
             ))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -2489,7 +2495,7 @@ def _register_strategy(server: FastMCP) -> None:
             return json.dumps(svc(
                 backtest_id, include_trades=include_trades, include_benchmark=include_benchmark,
             ))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -2512,7 +2518,7 @@ def _register_strategy(server: FastMCP) -> None:
         try:
             from src.api.routes.strategies import evaluate
             return json.dumps(await evaluate(strategy_id))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -2655,7 +2661,7 @@ def _register_strategy(server: FastMCP) -> None:
             detail = get_strategy(strategy_id)
             r = mangrove_ai_client().strategies.delete(detail.mangrove_id)
             return json.dumps(_dump(r))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
         except Exception as e:  # noqa: BLE001
             return _handle_upstream_error("STRATEGY_DELETE_FAILED", e)
@@ -2920,7 +2926,7 @@ def _register_kb(server: FastMCP) -> None:
             )
         try:
             return json.dumps(svc(req))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3003,7 +3009,7 @@ def _register_oracle(server: FastMCP) -> None:
             from src.services.oracle import sieve_score as svc
             result = svc(SieveScoreInput(strategies=strategies))
             return json.dumps(result)
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3054,7 +3060,7 @@ def _register_oracle(server: FastMCP) -> None:
                 offset=offset,
             ))
             return json.dumps(result)
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3100,7 +3106,7 @@ def _register_oracle(server: FastMCP) -> None:
                 lookback_months=lookback_months,
             ))
             return json.dumps(result)
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3147,7 +3153,7 @@ def _register_oracle(server: FastMCP) -> None:
                 lookback_months=lookback_months,
             ))
             return json.dumps(result)
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3172,7 +3178,7 @@ def _register_oracle(server: FastMCP) -> None:
             from src.services.oracle import backtest_poll as svc
             result = svc(backtest_id)
             return json.dumps(result)
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3202,7 +3208,7 @@ def _register_oracle(server: FastMCP) -> None:
             from src.services.oracle import backtest_bulk as svc
             result = svc(request)
             return json.dumps(result)
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3239,7 +3245,7 @@ def _register_oracle(server: FastMCP) -> None:
         try:
             from src.services.oracle import create_experiment as svc
             return json.dumps(svc(config))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3266,7 +3272,7 @@ def _register_oracle(server: FastMCP) -> None:
         try:
             from src.services.oracle import list_experiments as svc
             return json.dumps(svc())
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3284,7 +3290,7 @@ def _register_oracle(server: FastMCP) -> None:
         try:
             from src.services.oracle import get_experiment as svc
             return json.dumps(svc(experiment_id))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3311,7 +3317,7 @@ def _register_oracle(server: FastMCP) -> None:
         try:
             from src.services.oracle import update_experiment as svc
             return json.dumps(svc(experiment_id, config))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3333,7 +3339,7 @@ def _register_oracle(server: FastMCP) -> None:
         try:
             from src.services.oracle import delete_experiment as svc
             return json.dumps(svc(experiment_id))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3359,7 +3365,7 @@ def _register_oracle(server: FastMCP) -> None:
         try:
             from src.services.oracle import validate_experiment as svc
             return json.dumps(svc(experiment_id))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3390,7 +3396,7 @@ def _register_oracle(server: FastMCP) -> None:
         try:
             from src.services.oracle import launch_experiment as svc
             return json.dumps(svc(experiment_id))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3411,7 +3417,7 @@ def _register_oracle(server: FastMCP) -> None:
         try:
             from src.services.oracle import pause_experiment as svc
             return json.dumps(svc(experiment_id))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3443,7 +3449,7 @@ def _register_oracle(server: FastMCP) -> None:
         try:
             from src.services.oracle import list_results as svc
             return json.dumps(svc(experiment_id, limit=limit, offset=offset))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3474,7 +3480,7 @@ def _register_oracle(server: FastMCP) -> None:
         try:
             from src.services.oracle import list_datasets as svc
             return json.dumps(svc())
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3498,7 +3504,7 @@ def _register_oracle(server: FastMCP) -> None:
         try:
             from src.services.oracle import list_signals as svc
             return json.dumps(svc())
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3516,7 +3522,7 @@ def _register_oracle(server: FastMCP) -> None:
         try:
             from src.services.oracle import list_templates as svc
             return json.dumps(svc())
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3599,7 +3605,7 @@ def _register_x402_spend(server: FastMCP) -> None:
             # appears in both, at which point one silently wins and no test
             # notices.
             return json.dumps({"budget": status, **payments})
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
@@ -3645,7 +3651,7 @@ def _register_x402_spend(server: FastMCP) -> None:
             from src.api.routes.x402_spend import SpendResetRequest
             from src.api.routes.x402_spend import reset_spend_cap as route
             return json.dumps(await route(SpendResetRequest(cap_usd=cap_usd)))
-        except AgentError as e:
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(

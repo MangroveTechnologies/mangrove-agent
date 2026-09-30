@@ -577,9 +577,14 @@ def test_existing_install_always_offers_access_menu(config, monkeypatch, existin
     args = arguments()
     args.yes = False
     setup.configure(args)
-    menu.assert_called_once()
-    assert set(menu.call_args.args[1]) == {'1', '2'}
-    assert menu.call_args.args[2] == ('1' if existing_key else '2')
+    expects_key_menu = bool(existing_key) and selection in {'1', 'default'}
+    assert menu.call_count == (2 if expects_key_menu else 1)
+    assert set(menu.call_args_list[0].args[1]) == {'1', '2'}
+    assert menu.call_args_list[0].args[2] == ('1' if existing_key else '2')
+    if expects_key_menu:
+        assert menu.call_args_list[1].args[1] == {
+            '1': 'Use the existing API key', '2': 'Enter a new API key'}
+        assert menu.call_args_list[1].args[2] == '1'
     after = json.loads(config.read_text())
     expected_key = existing_key if selection == 'default' else (existing_key or 'prod_new') if selection == '1' else ''
     assert after['MANGROVE_API_KEY'] == expected_key
@@ -752,3 +757,66 @@ def test_backup_success_preserves_both_wallet_families(backup, tmp_path, monkeyp
     assert 'untrusted message' not in output
     assert ('synthetic wallet backup' in output) is (action == 'reveal')
     assert wire.call_args.args[0]['LOCAL_AGENT_URL'] == 'http://127.0.0.1:9080'
+
+
+@pytest.mark.parametrize('explicit_mode', [False, True])
+@pytest.mark.parametrize('selection', ['', '1', '2'])
+def test_interactive_existing_key_choice(config, interactive, monkeypatch, capsys,
+                                        explicit_mode, selection):
+    setup.configure(arguments())
+    before = json.loads(config.read_text())
+    before.update(MANGROVE_API_KEY='prod_old_sentinel', custom={'keep': True})
+    config.write_text(json.dumps(before))
+    replies = iter(([selection] if explicit_mode else ['1', selection]))
+    monkeypatch.setattr('builtins.input', lambda _: next(replies))
+    secret_prompt = Mock(return_value='prod_new_sentinel')
+    monkeypatch.setattr(setup.getpass, 'getpass', secret_prompt)
+    args = arguments()
+    args.yes = False
+    args.auth = 'api-key' if explicit_mode else None
+    setup.configure(args)
+    after = json.loads(config.read_text())
+    expected = dict(before)
+    expected['MANGROVE_API_KEY'] = 'prod_new_sentinel' if selection == '2' else 'prod_old_sentinel'
+    assert after == expected
+    assert secret_prompt.call_count == (1 if selection == '2' else 0)
+    output = capsys.readouterr().out
+    assert 'Use the existing API key' in output
+    assert 'Enter a new API key' in output
+    assert 'prod_old_sentinel' not in output and 'prod_new_sentinel' not in output
+    assert config.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize('replacement', ['', KeyboardInterrupt(), EOFError()])
+def test_failed_replacement_keeps_saved_key(config, interactive, monkeypatch, replacement):
+    setup.configure(arguments())
+    cfg = json.loads(config.read_text())
+    cfg['MANGROVE_API_KEY'] = 'prod_existing'
+    config.write_text(json.dumps(cfg))
+    before = config.read_bytes()
+    monkeypatch.setattr('builtins.input', lambda _: '2')
+    prompt = Mock(side_effect=replacement) if isinstance(replacement, BaseException) else Mock(return_value=replacement)
+    monkeypatch.setattr(setup.getpass, 'getpass', prompt)
+    args = arguments()
+    args.yes = False
+    args.auth = 'api-key'
+    with pytest.raises((setup.SetupError, KeyboardInterrupt, EOFError)):
+        setup.configure(args)
+    assert config.read_bytes() == before
+
+
+def test_stdin_replacement_bypasses_interactive_key_choice(config, monkeypatch):
+    import io
+
+    setup.configure(arguments())
+    cfg = json.loads(config.read_text())
+    cfg['MANGROVE_API_KEY'] = 'prod_existing'
+    config.write_text(json.dumps(cfg))
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('prod_replacement'))
+    monkeypatch.setattr(setup, 'choose', Mock(side_effect=AssertionError('Unexpected prompt')))
+    monkeypatch.setattr(setup, 'hidden', Mock(side_effect=AssertionError('Unexpected secret prompt')))
+    args = arguments()
+    args.yes = False
+    args.api_key_stdin = True
+    setup.configure(args)
+    assert json.loads(config.read_text())['MANGROVE_API_KEY'] == 'prod_replacement'

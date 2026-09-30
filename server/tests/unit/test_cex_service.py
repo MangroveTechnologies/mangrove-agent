@@ -8,11 +8,11 @@ from datetime import datetime, timezone
 os.environ.setdefault("ENVIRONMENT", "test")
 
 import pytest
-
 from src.config import app_config
 from src.services import cex_credentials, cex_service
 from src.services.secret_vault import vault
 from src.shared.crypto import fernet
+from src.shared.errors import CexCredentialsMissing
 
 
 @pytest.fixture
@@ -94,5 +94,5 @@ def test_sync_fills_emits_to_telemetry(tmp_env):
 
 
 def test_operations_without_creds_raise(tmp_env):
-    with pytest.raises(RuntimeError):
+    with pytest.raises(CexCredentialsMissing, match="No Kraken account is connected"):
         cex_service.get_balances(client_factory=_FakeKraken)
