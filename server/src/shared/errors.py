@@ -157,9 +157,84 @@ class InsufficientData(AgentError):
 # -- External / internal -----------------------------------------------
 
 
+class CexCredentialsMissing(AgentError):
+    """A local exchange account must be connected before using its tools."""
+
+    code = "CEX_CREDENTIALS_MISSING"
+    http_status = 409
+
+    def __init__(self) -> None:
+        super().__init__("No Kraken account is connected on this agent.")
+
+
 class SdkError(AgentError):
     code = "SDK_ERROR"
     http_status = 502
+
+
+class UpstreamAccessError(SdkError):
+    """Sanitized upstream access denial, distinct from local auth and spend caps."""
+
+    def __init__(self, status: int) -> None:
+        if status not in (401, 403):
+            raise ValueError("UpstreamAccessError requires 401 or 403")
+        self.http_status = status
+        self.upstream_status = status
+        self.code = "UPSTREAM_AUTHENTICATION_FAILED" if status == 401 else "UPSTREAM_ACCESS_DENIED"
+        message = (
+            "The upstream service rejected the configured credential (HTTP 401)."
+            if status == 401 else
+            "The upstream service denied access to the requested operation (HTTP 403)."
+        )
+        super().__init__(message, suggestion=(
+            "Briefly state the failed action, the access error and its supported reason, then stop. "
+            "Do not append questions, retry offers or offers of technical details. "
+            + ("Explain that the configured upstream credential was rejected. "
+               if status == 401 else
+               "Explain that permissions or account access may not allow the operation; do not assert a specific missing permission. ")
+            + "Do not inspect local files, logs or configuration, print credentials, retry with another key, "
+              "or switch to wallet payment. Troubleshoot only if the user explicitly requests it."
+        ))
+
+    def to_dict(self) -> dict:
+        return {**super().to_dict(), "upstream_status": self.upstream_status,
+                "retryable": False, "retry_payment": False}
+
+
+def upstream_access_error(error: Exception) -> UpstreamAccessError | None:
+    """Recognize typed access failures, including explicitly chained SDK wrappers.
+
+    Never infer status from message text or arbitrary attributes. Preserve domain
+    errors (especially payment uncertainty and spend caps), and follow only SDK
+    wrappers' explicit causes, with cycle protection.
+    """
+    from httpx import HTTPStatusError
+    from mangrove_ai.exceptions import APIError as AIAPIError
+    from mangrove_markets.exceptions import APIError as MarketsAPIError
+
+    correlation_id = getattr(error, "correlation_id", None)
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, UpstreamAccessError):
+            return current
+        if type(current) is SdkError:
+            current = current.__cause__
+            continue
+        if isinstance(current, (AIAPIError, MarketsAPIError)):
+            status = current.status_code
+        elif isinstance(current, HTTPStatusError):
+            status = current.response.status_code
+        else:
+            return None
+        if status not in (401, 403):
+            return None
+        result = UpstreamAccessError(status)
+        if correlation_id is not None:
+            result.correlation_id = correlation_id
+        return result
+    return None
 
 
 class SigningError(AgentError):
@@ -266,6 +341,7 @@ async def agent_error_handler(request: Request, exc: AgentError) -> JSONResponse
     # Lazy import so errors.py stays usable by tests that don't configure logging.
     from src.shared.logging import get_logger
 
+    exc = upstream_access_error(exc) or exc
     event_name = exc.code.lower().replace("_", ".")
     get_logger(__name__).error(
         event_name,

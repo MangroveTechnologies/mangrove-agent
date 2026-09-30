@@ -1,32 +1,32 @@
 {
   "direct_sdk_adapters": {
     "delete_strategy": {
-      "reason": "Existing upstream execution/strategy adapter with local ID or filter semantics; preserve during the separate ownership consolidation.",
-      "sha256": "35443aff3fabc90cea816cdeef0bd4c27fdcdfa75b1f1b71065b2f514422cade"
+      "reason": "Existing upstream execution/strategy adapter with local ID or filter semantics; preserve during the separate ownership consolidation. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "0e275a1a4088b3f1dee2c7a0829b121336609cf49d567d822bfcd442b06990ea"
     },
     "get_account_position": {
       "reason": "Existing upstream execution/strategy adapter with local ID or filter semantics; preserve during the separate ownership consolidation.",
       "sha256": "ac79cae50259a3e517e08e41bbf2f0c08959028c352d231f2b010ea4a1ccf574"
     },
     "get_allowances": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
-      "sha256": "89a8b5105863ee04e5ee7e3b1e324bb261300848a1924c60475b1dba9a7cb956"
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "a96c22ec94a34f4576665ea35864d5c6c485c7bfa857e906dd84ee36f69c45e0"
     },
     "get_asset": {
       "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
       "sha256": "a46c9ced40d80329bea19adc390cfe12385b93bb237fd9c0b5275af4f3039498"
     },
     "get_balances": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
-      "sha256": "e0a1cada5aed6d4b28a45ff84325dc247723743325b111543e551e371137e675"
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "c61a5e5c9e04667cad0a7497a8ab0536f3ccec358d90de6c17143efae312e46b"
     },
     "get_chain_tvl": {
       "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
       "sha256": "5921bccdef23972543c0cb3012139afb97deea1e6e42b3a693e19887d1c80b3e"
     },
     "get_dex_chart": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
-      "sha256": "9dc9c9150d7f606e5f95e9888ce4758c7b2ee1835449941f678d8139be29cbd2"
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "b44e0bcd214b150f8c5885af17923ad00059100ba408cbef5c9f240a07f8fa65"
     },
     "get_doc_content": {
       "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
@@ -41,8 +41,8 @@
       "sha256": "74ea7e5fbb48d7f57f62e66b7f6f9ca0cb669adb844a6e300a5374edb6c15c53"
     },
     "get_gas_price": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
-      "sha256": "b54698e75f5384db3d9d09a19f623ecad9a8404528939fdc1f76524a0a672875"
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "aa972e321110b3803f9b42fd0af0d5e385bf36797c21e8ab62fa3447131e0aa8"
     },
     "get_global_market": {
       "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
@@ -73,8 +73,8 @@
       "sha256": "e2d7fc526f91ebbd7b81e62549536ef9e42ac4c151106d7f48438ace9932e7d4"
     },
     "get_signal": {
-      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
-      "sha256": "2c9ea7bd522233cf60c81293b636de7e7ecbbfc900d89ff62dd227b858e0a547"
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "645d3e568452980b881949775de1e8a311b2afe3905335a94e0f0379c1da66b1"
     },
     "get_smart_money_dex_trades": {
       "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
@@ -93,8 +93,8 @@
       "sha256": "1c782ed14261bab7fd3750efd573e642c25ef82a6fb6e3a8ccdcbe40123bc016"
     },
     "get_spot_price": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
-      "sha256": "5f83ab8431e8bd2fbd3e04ab8f2c60adad479740195cac94d3ab5b7f4ff947bb"
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "23b8b9ce62ded456e5f9f5fb8926b224ed48a73974eb81aa4c1aefd50c30b68d"
     },
     "get_stablecoin_metrics": {
       "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
@@ -113,12 +113,12 @@
       "sha256": "3cb612296b958027ef6e682be3411ed06ad15cc07a0966ae4393f43225c832fb"
     },
     "get_token_info": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
-      "sha256": "eb0b1a00c0f67b7872876803a130ee251843a77d5b0cc62ea1f9a30972c78213"
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "6a7955f4eb22cafa48a005a8140555a475489d37e4f6750e48330bf6a0ae3f3b"
     },
     "get_token_search": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
-      "sha256": "0ece83d75381240c2b8dca2cf38671bb8a3f9dc372004775881bd6b483078270"
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "8009e33c4649a549d62272117a9b59fb9e4385b455e58261d0770b49139eeb88"
     },
     "get_token_unlocks": {
       "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
@@ -133,8 +133,8 @@
       "sha256": "3ba087a2b1e480a8ffe11259817d7a81bd5854dc1277374fd5cdfd36ea01d34e"
     },
     "get_tx_status": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
-      "sha256": "30f2075d45eccb58e5f9f2c98feae4954ee5fbff5db3d19a25cf456ea09b57bc"
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "36abfa3499a195fe28de2a7320a326b87e9ce37f636236bb4507bb2ca54507b3"
     },
     "get_whale_activity": {
       "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
@@ -185,36 +185,36 @@
       "sha256": "14c7187d1717909abe47c72b187ea3ae4f274be6390e7b8ff84dd683fc406715"
     },
     "match_signals": {
-      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
-      "sha256": "a8916051738d74d2fc905f52b6a5f21463db8390ce6d4a085b6c593083ad4530"
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "971f284a94163d042943600a9bedaccad7b609ed9154f9d62e9031aba49276ca"
     },
     "portfolio_defi": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
-      "sha256": "a2db1afbd50e4ddaa3165bf7347731b7afffc95cefe80daa666e908d5bd23480"
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "b8ef29c3d2e95b59ec0f1767813fefce899fcf273cf9cdb57af0da79f14f68d6"
     },
     "portfolio_history": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
-      "sha256": "fea8731846f0d03b412231364bdcf89b021301a86b1e02aa4d2d0ddc0522fedc"
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "c6ee25545706af25f3a2c49e71b3db3119a88b85dcba5951403d02af8a20dc39"
     },
     "portfolio_pnl": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
-      "sha256": "0bf1c014171920961567f5811219c142a77b70cf97448fb4ae887b74de7fdacb"
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "a68c7d78a2b8795479bbeea2821ba6b517bbcbb766aefa21d5df6568c1338d43"
     },
     "portfolio_tokens": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
-      "sha256": "2a59546d60c80729753caf40e41750e2f680b5fef47f25910c6e4fa1a541f6f4"
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "a810ef9242ceaf3ec8fdefa242fbbbc356f2fd6eec581e22ca59b00c6b65ff31"
     },
     "portfolio_value": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
-      "sha256": "7adbb5d7fc10ff170b9b869ca6310e6d3896b1c96d59f0764456c4c8f9959e67"
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "6fbf8ee9e0d1f53bd09ef553161c65637dedcfa5332b97988e420edc7a937944"
     },
     "screen_smart_money": {
       "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
       "sha256": "ce512194751fd342546de16a0e691e776c15caf0e95caa0065a6ad3340c4cfa7"
     },
     "search_signals": {
-      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred.",
-      "sha256": "c1b79e7c859d5c2ff455540b8e2375b0e534dc38e0fa0d21da2be94cd778df67"
+      "reason": "Existing SDK adapter at B7 baseline; some capabilities lack local REST counterparts. Share route/service logic when changing this adapter; broad business consolidation is deferred. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
+      "sha256": "afd2323c3762130a94c4023248147db0e0e93c4dc7684e3d37567751585d7fc6"
     }
   },
   "unknown_pricing": {

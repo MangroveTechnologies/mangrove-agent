@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from src.services import benchmark_service
 from src.shared.auth.dependency import require_api_key
 from src.shared.clients.mangrove import mangrove_ai_client
-from src.shared.errors import AgentError, SdkError
+from src.shared.errors import AgentError, SdkError, upstream_access_error
 
 router = APIRouter(
     prefix="/market",
@@ -39,7 +39,10 @@ async def ohlcv(
         return _dump(mangrove_ai_client().crypto_assets.get_ohlcv(**kwargs))
     except AgentError:
         raise
-    except Exception:
+    except Exception as exc:
+        access_error = upstream_access_error(exc)
+        if access_error is not None:
+            raise access_error from None
         raise SdkError("crypto_assets.get_ohlcv failed at the upstream service.") from None
 
 
@@ -53,7 +56,10 @@ async def market_data(symbol: str, provider: str | None = None) -> Any:
         return _dump(mangrove_ai_client().crypto_assets.get_market_data(**kwargs))
     except AgentError:
         raise
-    except Exception:
+    except Exception as exc:
+        access_error = upstream_access_error(exc)
+        if access_error is not None:
+            raise access_error from None
         raise SdkError("crypto_assets.get_market_data failed at the upstream service.") from None
 
 
@@ -63,7 +69,10 @@ async def trending() -> Any:
         return _dump(mangrove_ai_client().crypto_assets.get_trending())
     except AgentError:
         raise
-    except Exception:
+    except Exception as exc:
+        access_error = upstream_access_error(exc)
+        if access_error is not None:
+            raise access_error from None
         raise SdkError("crypto_assets.get_trending failed at the upstream service.") from None
 
 
@@ -73,7 +82,10 @@ async def global_market() -> Any:
         return _dump(mangrove_ai_client().crypto_assets.get_global_market())
     except AgentError:
         raise
-    except Exception:
+    except Exception as exc:
+        access_error = upstream_access_error(exc)
+        if access_error is not None:
+            raise access_error from None
         raise SdkError("crypto_assets.get_global_market failed at the upstream service.") from None
 
 

@@ -158,3 +158,109 @@ def test_older_sdk_is_rejected_before_any_billable_request(sdk_factory, monkeypa
     monkeypatch.delattr(models, "SignalListPage")
     with pytest.raises(SdkError, match="updated MangroveAI SDK"):
         list_signals(client=sdk_factory(lambda r: pytest.fail("outdated SDK reached upstream")))
+
+
+@pytest.mark.parametrize("status,code", [
+    (401, "UPSTREAM_AUTHENTICATION_FAILED"), (403, "UPSTREAM_ACCESS_DENIED"),
+])
+@pytest.mark.parametrize("search", [None, "momentum"])
+def test_access_denial_preserves_safe_status_and_stops_collection(sdk_factory, status, code, search):
+    from src.shared.errors import UpstreamAccessError
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert "payment-signature" not in request.headers
+        return httpx.Response(status, json={"message": "private-key-sentinel", "code": "untrusted-code"})
+
+    with pytest.raises(UpstreamAccessError) as error:
+        list_signals(client=sdk_factory(handler), limit=100, collect=True, search=search)
+    payload = error.value.to_dict()
+    assert payload["code"] == code
+    assert payload["upstream_status"] == error.value.http_status == status
+    assert payload["retryable"] is False and payload["retry_payment"] is False
+    assert "private-key-sentinel" not in json.dumps(payload)
+    assert "untrusted-code" not in json.dumps(payload)
+    assert "Do not inspect local files" in payload["suggestion"]
+    assert error.value.__suppress_context__ is True
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403])
+async def test_mcp_and_rest_preserve_sdk_access_denial(sdk_factory, monkeypatch, status):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from mcp.server.fastmcp import FastMCP
+    from src.api.routes.signals import router
+    from src.mcp import tools
+    from src.services import signals
+    from src.shared.auth.dependency import require_api_key
+    from src.shared.errors import AgentError, agent_error_handler
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(status, json={"message": "secret-upstream-body"})
+
+    sdk = sdk_factory(handler)
+    monkeypatch.setattr(signals, "mangrove_ai_client", lambda: sdk)
+    monkeypatch.setattr(tools, "_require", lambda _: True)
+    server = FastMCP("signal-access-regression")
+    tools._register_signals(server)
+    tool = server._tool_manager._tools["list_signals"]
+    result = json.loads(await tool.run({"limit": 10}))
+    assert result["error"] is True
+    assert result["upstream_status"] == status
+    assert result["retryable"] is False
+    assert result["retry_payment"] is False
+    assert "secret-upstream-body" not in json.dumps(result)
+    assert len(calls) == 1
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[require_api_key] = lambda: "local-test-identity"
+    app.add_exception_handler(AgentError, agent_error_handler)
+    with TestClient(app) as client:
+        response = client.get("/signals?limit=10")
+    assert response.status_code == status
+    assert response.json()["code"] == result["code"]
+    assert response.json()["upstream_status"] == status
+    assert "secret-upstream-body" not in response.text
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_http_status_error_is_not_flattened_to_generic_failure(status):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from src.shared.errors import UpstreamAccessError
+
+    request = httpx.Request("GET", "https://signals.test")
+    response = httpx.Response(status, request=request)
+    upstream = Mock(side_effect=httpx.HTTPStatusError("secret-body", request=request, response=response))
+    client = SimpleNamespace(signals=SimpleNamespace(list=upstream))
+    with pytest.raises(UpstreamAccessError) as error:
+        list_signals(client=client, limit=10, collect=True)
+    assert error.value.upstream_status == status
+    assert "secret-body" not in json.dumps(error.value.to_dict())
+    upstream.assert_called_once()
+
+
+def test_unknown_signal_failure_does_not_claim_access_is_valid():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    upstream = Mock(side_effect=RuntimeError("secret-body"))
+    client = SimpleNamespace(signals=SimpleNamespace(list=upstream))
+    with pytest.raises(SdkError) as error:
+        list_signals(client=client, limit=10, collect=True)
+    payload = error.value.to_dict()
+    assert payload["code"] == "SDK_ERROR"
+    assert "no specific reason was returned" in payload["suggestion"]
+    assert "Do not speculate" in payload["suggestion"]
+    assert "secret-body" not in json.dumps(payload)
+    upstream.assert_called_once()

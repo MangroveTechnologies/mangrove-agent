@@ -8,9 +8,11 @@ from __future__ import annotations
 from math import ceil
 from typing import TYPE_CHECKING
 
+from mangrove_ai.exceptions import APIError
+
 from src.services.payment_budget import payment_budget
 from src.shared.clients.mangrove import mangrove_ai_client
-from src.shared.errors import AgentError, SdkError, ValidationError
+from src.shared.errors import AgentError, SdkError, UpstreamAccessError, ValidationError, upstream_access_error
 
 if TYPE_CHECKING:
     from mangrove_ai import MangroveAI
@@ -106,5 +108,17 @@ def list_signals(*, limit: int = 50, offset: int = 0, category: str | None = Non
         raise SdkError("The signal response exceeded its page budget.")
     except AgentError:
         raise
-    except Exception:
+    except APIError as exc:
+        if exc.status_code in (401, 403):
+            raise UpstreamAccessError(exc.status_code) from None
         raise SdkError("Could not list signals from the upstream service.") from None
+    except Exception as exc:
+        access_error = upstream_access_error(exc)
+        if access_error is not None:
+            raise access_error from None
+        raise SdkError(
+            "Could not list signals from the upstream service.",
+            suggestion="Briefly state that the operation failed and no specific reason was returned, then stop. "
+            "Do not speculate, append questions, offer retries or offer technical details. "
+            "Do not retry or diagnose the machine unless the user asks.",
+        ) from None

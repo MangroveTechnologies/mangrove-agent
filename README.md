@@ -139,7 +139,7 @@ When it's finished:
 
 ```
 ./scripts/setup.sh --yes                          # preserve settings; fresh install uses x402
-./scripts/setup.sh --auth api-key                  # hidden prompt if no existing upstream key
+./scripts/setup.sh --auth api-key                  # keep existing key or enter a new one (hidden)
 ./scripts/setup.sh --auth x402                     # explicitly switch to wallet payments
 ./scripts/setup.sh --foreground                    # run uvicorn in your terminal (Ctrl+C to stop)
 ./scripts/setup.sh --no-mcp                        # skip Claude Code registration
