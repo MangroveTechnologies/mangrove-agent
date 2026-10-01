@@ -101,6 +101,8 @@ def register(server: FastMCP):
     clear_tools()
     _register_discovery(server)
     _register_wallet(server)
+    from src.mcp.marketplace_tools import register_marketplace
+    register_marketplace(server)
     _register_dex(server)
     _register_market(server)
     _register_signals(server)
@@ -170,7 +172,7 @@ def _register_wallet(server: FastMCP) -> None:
         the response carries a `vault_token` referencing an in-process vault.
         Tell the user to run the `reveal_cmd` in a terminal to back up the
         secret. The id is TTL-bound (default 300s) and single-read.
-        EVM only in v1. Base mainnet (chain_id 8453) is the default.
+        EVM and XRPL wallets. Base mainnet (chain_id 8453) remains the default.
         """
         if not _require(api_key):
             return _auth_error()
@@ -186,11 +188,11 @@ def _register_wallet(server: FastMCP) -> None:
         description=(
             "Create + encrypt a wallet. Response carries only vault_token + "
             "reveal_cmd — plaintext never enters the Claude Code transcript. "
-            "EVM only in v1."
+            "Supports EVM and XRPL family-seed wallets."
         ),
         access="auth",
         parameters=[
-            ToolParam(name="chain", type="string", required=False, description="evm (default). xrpl stubbed 501 in v1."),
+            ToolParam(name="chain", type="string", required=False, description="evm (default) or xrpl; chain_id is ignored for xrpl."),
             ToolParam(name="network", type="string", required=False, description="mainnet (default) | testnet"),
             ToolParam(name="chain_id", type="integer", required=False, description="Default 8453 (Base mainnet)"),
             ToolParam(name="label", type="string", required=False, description="Human-friendly name"),
@@ -213,7 +215,8 @@ def _register_wallet(server: FastMCP) -> None:
         tell the agent to import that id. The private key NEVER enters
         Claude Code's conversation context — this tool only handles the id.
 
-        Do NOT accept a raw private key or mnemonic as input to this tool,
+        Supports EVM keys/mnemonics and XRPL family seeds.
+        Do NOT accept a raw private key, mnemonic or seed as input to this tool,
         and do NOT suggest the user paste one. If a user pastes a key in
         chat, tell them to run stash-secret.sh instead and purge the key
         from their message.
@@ -241,7 +244,7 @@ def _register_wallet(server: FastMCP) -> None:
         access="auth",
         parameters=[
             ToolParam(name="vault_token", type="string", required=True, description="From scripts/stash-secret.sh output"),
-            ToolParam(name="chain", type="string", required=False, description="evm (default)"),
+            ToolParam(name="chain", type="string", required=False, description="evm (default) or xrpl"),
             ToolParam(name="network", type="string", required=False, description="mainnet (default) | testnet"),
             ToolParam(name="chain_id", type="integer", required=False, description="Default 8453 (Base mainnet)"),
             ToolParam(name="label", type="string", required=False, description="Human-friendly name"),

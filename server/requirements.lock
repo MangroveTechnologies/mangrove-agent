@@ -522,7 +522,9 @@ wrapt==2.4.1
 x402==2.22.0
     # via -r requirements.txt
 xrpl-py==4.5.0
-    # via mangrovemarkets
+    # via
+    #   -r requirements.txt
+    #   mangrovemarkets
 yarl==1.24.5
     # via aiohttp
 zipp==4.1.0 ; python_full_version < '3.12'

@@ -15,6 +15,7 @@ from src.api.routes.kb import router as kb_router
 from src.api.routes.knowledge import router as knowledge_router
 from src.api.routes.logs import router as logs_router
 from src.api.routes.market import router as market_router
+from src.api.routes.marketplace import router as marketplace_router
 from src.api.routes.on_chain import router as on_chain_router
 from src.api.routes.oracle import router as oracle_router
 from src.api.routes.portfolio import router as portfolio_router
@@ -34,6 +35,7 @@ agent_router.include_router(wallet_router)
 agent_router.include_router(cex_router)
 agent_router.include_router(dex_router)
 agent_router.include_router(market_router)
+agent_router.include_router(marketplace_router)
 agent_router.include_router(on_chain_router)
 agent_router.include_router(signals_router)
 agent_router.include_router(strategies_router)

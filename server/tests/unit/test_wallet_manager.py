@@ -164,12 +164,23 @@ def test_create_wallet_generates_locally_no_markets_client(temp_db, stub_keyring
     assert not hasattr(wm, "mangrove_markets_client")
 
 
-def test_create_wallet_xrpl_raises(temp_db, stub_keyring, mock_sdk_create):
-    from src.services.wallet_manager import create_wallet
-    from src.shared.errors import ChainNotSupportedInV1
+def test_create_wallet_xrpl_persists_encrypted_and_requires_backup(temp_db, stub_keyring):
+    from src.services import wallet_manager as wm
+    from src.shared.crypto.fernet import decrypt
+    from src.shared.db.sqlite import get_connection
+    from src.shared.errors import SigningError
 
-    with pytest.raises(ChainNotSupportedInV1):
-        create_wallet(chain="xrpl", network="testnet")
+    result = wm.create_wallet(chain="xrpl", network="testnet")
+    row = get_connection().execute("SELECT * FROM wallets WHERE address=?", (result.address,)).fetchone()
+    seed = decrypt(row["encrypted_secret"]).decode()
+    assert wm._xrpl_wallet(seed).classic_address == result.address
+    assert result.secret_type == "seed"
+    assert result.chain_id is None
+    assert seed not in result.model_dump_json()
+    with pytest.raises(SigningError, match="not backed up"):
+        wm.require_backup_confirmed(result.address)
+    wm.confirm_backup(result.address)
+    wm.require_backup_confirmed(result.address)
 
 
 def test_create_wallet_duplicate_raises(temp_db, stub_keyring, mock_sdk_create):
@@ -1041,3 +1052,17 @@ class TestX402SignGuard:
         self._make_wallet()
         with pytest.raises(SigningError, match="disabled"):
             sign_message("gm", _TEST_ADDRESS)
+
+
+@pytest.mark.parametrize("algorithm", ["ed25519", "secp256k1"])
+def test_import_xrpl_seed_retains_algorithm(temp_db, stub_keyring, algorithm):
+    from xrpl.constants import CryptoAlgorithm
+    from xrpl.wallet import Wallet
+    from src.services import wallet_manager as wm
+    from src.services.secret_vault import vault
+    wallet = Wallet.create(algorithm=CryptoAlgorithm(algorithm))
+    result = wm.import_wallet(vault_token=vault.stash(wallet.seed), chain="xrpl", network="testnet")
+    assert result.address == wallet.classic_address
+    assert result.chain_id is None
+    wm.require_backup_confirmed(result.address)
+    assert wallet.seed not in result.model_dump_json()
