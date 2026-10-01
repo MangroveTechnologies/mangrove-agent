@@ -7,7 +7,7 @@ Rules for `create_wallet`, `import_wallet`, `get_balances`, and any future walle
 Wallet **key generation, storage, and signing all happen on this machine, in
 the agent process** -- the private key never crosses the network:
 
-- `create_wallet` mints the keypair **in-process via `eth_account`** (see
+- `create_wallet` mints the keypair **in-process via `eth_account` (EVM) or `xrpl-py` (XRPL)** (see
   `wallet_manager.create_wallet`). It does NOT call a remote server to generate
   keys. (`sign()` likewise decrypts + signs locally.)
 - **`LOCAL_AGENT_URL`** (default `http://localhost:9080`) is this agent's own
@@ -139,3 +139,14 @@ Your key never touches this conversation.
 - Show non-zero balances unless user asks for full detail.
 - Convert raw amounts to human-readable units (USDC = 6 decimals, most ERC-20s = 18).
 - Show token symbols, not contract addresses (address in parentheses for verification).
+
+
+## XRPL marketplace wallets
+
+For an explicitly requested XRPL wallet, use chain `xrpl`, network `testnet`,
+and no EVM chain ID. Mainnet requires an explicit user request. XRPL secrets
+are family seeds, imported through the same terminal-only `stash-secret.sh`
+flow. Show the appropriate XRPL explorer, never MetaMask import instructions.
+The backup requirement and private-key custody rules apply unchanged.
+Marketplace ownership signing supports Ed25519 and secp256k1 master seeds;
+it does not enable arbitrary messages or XRPL transaction/payment signing.

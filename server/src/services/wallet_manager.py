@@ -439,7 +439,7 @@ def _validate_x402_authorization(
 # ---------------------------------------------------------------------------
 
 
-SecretType = Literal["private_key", "mnemonic"]
+SecretType = Literal["private_key", "mnemonic", "seed"]
 
 
 class WalletCreateResponse(BaseModel):
@@ -516,6 +516,8 @@ class WalletListItem(BaseModel):
 
 
 def _deposit_instructions(address: str, chain: str, network: str) -> str:
+    if chain == "xrpl":
+        return f"XRPL {network} address: {address}. Use XRP on this network only; ownership signing does not fund or activate the account."
     net_label = "mainnet (real funds)" if network == "mainnet" else f"{network}"
     chain_label = chain.upper() if chain == "evm" else chain
     return (
@@ -525,6 +527,18 @@ def _deposit_instructions(address: str, chain: str, network: str) -> str:
         "before sending more. This wallet is dedicated to the agent — keep it "
         "separate from your personal holdings."
     )
+
+
+def _validate_xrpl_network(network: str) -> None:
+    if network not in {"mainnet", "testnet", "devnet"}:
+        raise SigningError("Select mainnet, testnet or devnet for the XRPL wallet.")
+
+
+def _xrpl_wallet(seed: str):
+    from xrpl.core.addresscodec import decode_seed
+    from xrpl.wallet import Wallet
+    _, algorithm = decode_seed(seed.strip())
+    return Wallet.from_seed(seed.strip(), algorithm=algorithm)
 
 
 def _detect_secret_type(secret: str) -> SecretType:
@@ -558,6 +572,8 @@ def _safety_note(secret_type: SecretType, master_key_source: str) -> str:
         if secret_type == "private_key"
         else "MetaMask → Import Account → Secret Recovery Phrase"
     )
+    if secret_type == "seed":
+        import_ui = "an XRPL wallet supporting family-seed import"
     return (
         f"Your secret (type: {secret_type}) is encrypted at rest with a Fernet "
         f"master key stored in {src_blurb}. Run the reveal_cmd ONCE to back it "
@@ -597,29 +613,18 @@ def create_wallet(
     plaintext in the in-process vault, returns a vault_token.
     """
     chain_normalized = chain.lower()
-    if chain_normalized in {"xrpl", "xrp"}:
-        raise ChainNotSupportedInV1(
-            "XRPL wallet creation is not supported in v1.",
-            suggestion="Use an EVM chain (e.g. Base, Ethereum, Arbitrum). XRPL support is planned for a future release.",
-        )
-    if chain_normalized != "evm":
-        raise ChainNotSupportedInV1(
-            f"Chain '{chain}' is not supported in v1.",
-            suggestion="Supported: evm (with a valid chain_id).",
-        )
-
-    # Generate the keypair LOCALLY, in-process — the private key is never
-    # requested from or transmitted to any remote server. eth_account is the
-    # same library sign() uses. This is the custody invariant: wallet keys are
-    # born, stored, and signed with entirely on this machine; the MangroveMarkets
-    # server only ever sees keyless routing/quotes (see MANGROVEMARKETS_BASE_URL).
-    # EVM-only in v1 (guarded above); a fresh secp256k1 private key is chain-agnostic.
-    acct = Account.create()
-    secret = acct.key.hex()
-    if not secret.startswith("0x"):
-        secret = "0x" + secret
-    address = acct.address
-    secret_type: SecretType = "private_key"
+    if chain_normalized == "xrpl":
+        from xrpl.wallet import Wallet
+        _validate_xrpl_network(network)
+        wallet = Wallet.create()
+        secret, address, secret_type = wallet.seed, wallet.classic_address, "seed"
+        chain_id = None
+    elif chain_normalized == "evm":
+        acct = Account.create()
+        secret = "0x" + acct.key.hex().removeprefix("0x")
+        address, secret_type = acct.address, "private_key"
+    else:
+        raise ChainNotSupportedInV1("Supported wallet chains are evm and xrpl.")
 
     conn = get_connection()
     existing = conn.execute(
@@ -701,11 +706,11 @@ def import_wallet(
     The private key never enters Claude Code's conversation context.
     """
     chain_normalized = chain.lower()
-    if chain_normalized != "evm":
-        raise ChainNotSupportedInV1(
-            f"Chain '{chain}' is not supported for import in v1.",
-            suggestion="Supported: evm (with a valid chain_id).",
-        )
+    if chain_normalized not in {"evm", "xrpl"}:
+        raise ChainNotSupportedInV1("Supported wallet chains are evm and xrpl.")
+    if chain_normalized == "xrpl":
+        _validate_xrpl_network(network)
+        chain_id = None
 
     try:
         secret = vault.reveal(vault_token)
@@ -720,11 +725,12 @@ def import_wallet(
         ) from e
 
     try:
-        address = _derive_address(secret)
+        address = (_xrpl_wallet(secret).classic_address if chain_normalized == "xrpl"
+                   else _derive_address(secret))
     except Exception:  # noqa: BLE001
         raise SigningError(
-            "Could not derive an EVM address from the provided secret.",
-            suggestion="Verify the secret is a valid 0x-prefixed private key or BIP39 mnemonic.",
+            "Could not derive the selected wallet address from the provided secret.",
+            suggestion="Use an XRPL family seed for xrpl, or an EVM private key or BIP39 mnemonic for evm.",
         ) from None
 
     conn = get_connection()
@@ -1120,6 +1126,55 @@ def sign_x402_authorization(
         value_usd=value / 10**_USDC_DECIMALS,
     )
     return bytes(signed.signature)
+
+
+def sign_marketplace_proof(challenge: dict, *, operation: str, arguments: dict,
+                           wallet_address: str, audience: str, identity: dict,
+                           chain_id: int | None, xrpl_network: str | None = None) -> dict:
+    """Sign a validated ownership action using the selected wallet's chain adapter."""
+    from eth_account.messages import encode_defunct
+
+    from src.services.marketplace_authorization import validate_challenge
+
+    row = _get_wallet_row(wallet_address)
+    if not row:
+        raise SigningError("Select a stored marketplace wallet.")
+    chain = "xrpl" if row["chain"] == "xrpl" else "base"
+    if chain == "xrpl":
+        _validate_xrpl_network(xrpl_network)
+        if row["network"] != xrpl_network:
+            raise SigningError("XRPL wallet network does not match the marketplace configuration.")
+    elif (row["chain"] != "evm" or chain_id not in {8453, 84532}
+          or row["chain_id"] != chain_id):
+        raise SigningError("Marketplace authorization requires the selected local Base wallet.")
+    require_backup_confirmed(wallet_address)
+    message = validate_challenge(challenge, operation=operation, arguments=arguments,
+                                 wallet=wallet_address, audience=audience, identity=identity, chain=chain)
+    secret = _load_secret(wallet_address)
+    try:
+        if chain == "xrpl":
+            from xrpl.core import keypairs
+            wallet = _xrpl_wallet(secret)
+            if wallet.classic_address != wallet_address:
+                raise ValueError
+            proof = {"signature": keypairs.sign(message.encode(), wallet.private_key),
+                     "public_key": wallet.public_key}
+        else:
+            account = _account_from_secret(secret)
+            if account.address.lower() != wallet_address.lower():
+                raise ValueError
+            proof = {"signature": account.sign_message(encode_defunct(text=message)).signature.hex()}
+    except Exception:
+        raise SigningError("Failed to sign the marketplace authorization with the selected wallet.") from None
+    finally:
+        del secret
+    _log.info("wallet.signed_marketplace_authorization", wallet_address=wallet_address,
+              chain=chain, operation=operation)
+    return proof
+
+
+def sign_marketplace_authorization(challenge: dict, **kwargs) -> str:
+    return sign_marketplace_proof(challenge, **kwargs)["signature"]
 
 
 def sign_message(message: str | bytes, wallet_address: str) -> str:

@@ -2621,6 +2621,55 @@
         "type": "object"
       }
     },
+    "marketplace_prepare": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "arguments": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "wallet_address": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "arguments",
+          "operation",
+          "wallet_address"
+        ],
+        "type": "object"
+      }
+    },
+    "marketplace_submit": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "approval_id": {
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "approval_id"
+        ],
+        "type": "object"
+      }
+    },
     "match_signals": {
       "access": "auth",
       "inputSchema": {

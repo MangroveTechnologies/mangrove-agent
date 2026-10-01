@@ -260,6 +260,8 @@
     "list_tools": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
     "list_trades": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
     "list_wallets": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
+    "marketplace_prepare": "Local wallet-approval coordination for MangroveMarkets; outside MangroveAI metering. No automatic payment authorization.",
+    "marketplace_submit": "Local wallet-approval coordination for MangroveMarkets; outside MangroveAI metering. No automatic payment authorization.",
     "portfolio_defi": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
     "portfolio_history": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
     "portfolio_pnl": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",

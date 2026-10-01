@@ -104,6 +104,12 @@ Just say **"set up Kraken"** or **"connect Kraken without a key"** in a session 
 
 ## Prerequisites
 
+For marketplace listings and other ownership-protected actions, see
+[Marketplace wallet approvals](docs/marketplace-wallets.md). Claude can prepare
+an action, show it for approval, then have the local agent sign and submit it to
+MangroveMarkets. This requires explicit marketplace configuration and a backed-up
+Base or XRPL wallet. Payment settlement is a separate integration.
+
 | Tool | Install | Why |
 |---|---|---|
 | **VSCode** | https://code.visualstudio.com/download | Universal editor + integrated terminal that works the same on macOS / Linux / Windows. Every instruction below assumes you open the repo in VSCode and use its built-in terminal (``Ctrl/Cmd+` ``). |

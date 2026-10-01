@@ -73,3 +73,6 @@ structlog>=24
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 ruff>=0.8.0
+
+# Local XRPL wallet creation and ownership signatures.
+xrpl-py>=4.5.0,<5

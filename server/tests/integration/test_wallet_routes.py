@@ -173,14 +173,18 @@ def test_confirm_backup_flips_flag(client):
     assert "unlocked" in body["message"].lower() or "confirmed" in body["message"].lower()
 
 
-def test_create_wallet_xrpl_returns_501(client):
+def test_create_wallet_xrpl_returns_backup_handoff(client):
     r = client.post(
         "/api/v1/agent/wallet/create",
         headers=_auth(),
         json={"chain": "xrpl", "network": "testnet"},
     )
-    assert r.status_code == 501
-    assert r.json()["code"] == "CHAIN_NOT_SUPPORTED_IN_V1"
+    assert r.status_code == 201
+    data = r.json()
+    assert data["chain"] == "xrpl" and data["network"] == "testnet"
+    assert data["chain_id"] is None and data["backup_required"]
+    assert data["secret_type"] == "seed" and data["vault_token"]
+    assert not {"seed", "private_key", "secret", "encrypted_secret"}.intersection(data)
 
 
 def test_auth_required(client):

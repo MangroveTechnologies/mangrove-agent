@@ -58,7 +58,7 @@ router = APIRouter(
 
 
 class WalletCreateRequest(BaseModel):
-    chain: str = Field("evm", description="evm | xrpl (xrpl stubbed 501 in v1)")
+    chain: str = Field("evm", description="evm | xrpl")
     network: str = Field("mainnet", description="mainnet | testnet")
     chain_id: int | None = Field(8453, description="Required for evm; default 8453 (Base)")
     label: str | None = None
@@ -73,7 +73,7 @@ class WalletImportRequest(BaseModel):
 
 
 class StashSecretRequest(BaseModel):
-    secret: str = Field(..., description="Plaintext private key or mnemonic")
+    secret: str = Field(..., description="Plaintext private key, mnemonic or XRPL seed")
     address_hint: str | None = Field(
         None,
         description="Optional — tags the vault entry so reveal-by-address can find it later",

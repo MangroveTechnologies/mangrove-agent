@@ -59,7 +59,7 @@ INPUT="$(cat)"
 EVM_KEY_RE='(^|[^0-9a-fA-F])0x[0-9a-fA-F]{64}([^0-9a-fA-F]|$)'
 
 # Key-context field names (for tool-mode context check).
-KEY_FIELD_RE='"(private_key|seed_phrase|secret|mnemonic|wallet_secret|master_key|key)"[[:space:]]*:'
+KEY_FIELD_RE='"(private_key|seed|seed_phrase|secret|mnemonic|wallet_secret|master_key|key)"[[:space:]]*:'
 
 # BIP39 mnemonic detection.
 #
@@ -98,6 +98,10 @@ PY
 }
 
 HIT=""
+XRPL_SEED_RE='(^|[^a-zA-Z0-9])s(Ed[1-9A-HJ-NP-Za-km-z]{28}|[1-9A-HJ-NP-Za-km-z]{28})([^a-zA-Z0-9]|$)'
+if printf '%s' "$INPUT" | grep -qE "$XRPL_SEED_RE"; then
+    HIT="xrpl_family_seed"
+fi
 
 if [ "$MODE" = "user" ]; then
     # Strict: any pattern match blocks.
