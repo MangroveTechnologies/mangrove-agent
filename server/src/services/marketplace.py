@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import secrets
 import sqlite3
 import time
 import uuid
@@ -56,8 +58,25 @@ def _settings() -> dict:
         "authority": _url(getattr(app_config, "MANGROVEAI_BASE_URL", None)),
         "audience": audience, "chain_id": chain_id,
         **({"xrpl_network": xrpl_network} if xrpl_network is not None else {}),
-        "credential": hashlib.sha256(key.encode()).hexdigest(),
     }
+
+
+def _credential_binding(salt: bytes) -> str:
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", app_config.MANGROVE_API_KEY.encode(), salt, 600_000, dklen=32,
+    )
+    return f"pbkdf2-sha256-600000${salt.hex()}${digest.hex()}"
+
+
+def _credential_matches(binding: object) -> bool:
+    if not isinstance(binding, str):
+        return False
+    parts = binding.split("$")
+    if (len(parts) != 3 or parts[0] != "pbkdf2-sha256-600000"
+            or len(parts[1]) != 32 or len(parts[2]) != 64
+            or any(c not in "0123456789abcdef" for c in parts[1] + parts[2])):
+        return False
+    return hmac.compare_digest(binding, _credential_binding(bytes.fromhex(parts[1])))
 
 
 def _request(method: str, url: str, body: dict | None = None) -> dict:
@@ -177,7 +196,8 @@ def prepare(operation: str, arguments: dict, wallet_address: str) -> dict:
     approval_id = str(uuid.uuid4())
     expires_at = challenge["ownership_proof"]["expires_at"]
     payload = {"settings": settings, "operation": operation, "arguments": arguments,
-               "wallet": wallet["address"], "identity": identity, "challenge": challenge}
+               "wallet": wallet["address"], "identity": identity, "challenge": challenge,
+               "credential_binding": _credential_binding(secrets.token_bytes(16))}
     with closing(_db()) as connection:
         connection.execute("DELETE FROM marketplace_approvals WHERE id IN "
                            "(SELECT id FROM marketplace_approvals WHERE state = 'prepared' AND expires_at <= ? LIMIT 1000)",
@@ -203,7 +223,7 @@ def submit(approval_id: str, confirm: bool = False) -> dict:
         if row is None:
             raise MarketplaceError("Marketplace approval was not found.")
         payload = json.loads(row["payload"])
-        if payload["settings"] != settings:
+        if payload["settings"] != settings or not _credential_matches(payload.get("credential_binding")):
             raise MarketplaceError("Marketplace configuration or API key changed; approval is invalid.")
         if row["state"] == "completed":
             return json.loads(row["result"])

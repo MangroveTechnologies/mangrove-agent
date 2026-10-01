@@ -36,10 +36,11 @@ def env(tmp_path, monkeypatch):
     from src.config import app_config
     from src.shared.db import sqlite as db
     monkeypatch.setattr(app_config, 'DB_PATH', str(tmp_path / 'agent.db'))
+    monkeypatch.setattr(app_config, 'MANGROVE_API_KEY', 'test-marketplace-credential')
     db.reset_connection()
     db.init_db()
     settings = dict(markets='http://localhost:8081', authority='http://localhost:5002/api/v1',
-                    audience='test-market', chain_id=84532, credential='test-fingerprint')
+                    audience='test-market', chain_id=84532)
     monkeypatch.setattr(svc, '_settings', lambda: settings.copy())
     wallet = Account.create()
     row = dict(address=wallet.address, chain='evm', chain_id=84532, backup_confirmed_at='yes')
@@ -141,12 +142,60 @@ def test_concurrent_submissions_sign_once(env):
     assert len(env.decrypted) == 1
 
 
-def test_changed_key_invalidates_approval(env):
+@pytest.mark.parametrize('completed', [False, True])
+def test_changed_key_invalidates_approval(env, monkeypatch, completed):
     approval = prepare(env)
-    env.settings['credential'] = 'new-key'
+    if completed:
+        svc.submit(approval['approval_id'], True)
+    env.decrypted.clear()
+    env.calls.clear()
+    monkeypatch.setattr(svc.app_config, 'MANGROVE_API_KEY', 'replacement-test-credential')
     with pytest.raises(svc.MarketplaceError, match='changed'):
         svc.submit(approval['approval_id'], True)
     assert not env.decrypted
+    assert not env.calls
+
+
+def test_approval_credentials_are_salted_and_not_stored_in_plaintext(env):
+    approvals = [prepare(env), prepare(env)]
+    bindings = []
+    with svc.closing(svc._db()) as connection:
+        for approval in approvals:
+            raw = connection.execute('SELECT payload FROM marketplace_approvals WHERE id = ?',
+                                     (approval['approval_id'],)).fetchone()['payload']
+            assert svc.app_config.MANGROVE_API_KEY not in raw
+            payload = json.loads(raw)
+            assert 'credential' not in payload['settings']
+            binding = payload['credential_binding']
+            assert svc._credential_matches(binding)
+            bindings.append(binding)
+    assert bindings[0] != bindings[1]
+    assert bindings[0].split('$')[1] != bindings[1].split('$')[1]
+
+
+@pytest.mark.parametrize('binding', [None, {}, 'a' * 64,
+    'pbkdf2-sha256-1$' + 'a' * 32 + '$' + 'b' * 64,
+    'pbkdf2-sha256-600000$' + 'g' * 32 + '$' + 'b' * 64,
+    'pbkdf2-sha256-600000$aa$bb',
+    'pbkdf2-sha256-600000$' + 'a' * 32 + '$' + 'b' * 64])
+def test_invalid_or_legacy_credential_binding_fails_before_signing(env, binding):
+    approval = prepare(env)
+    with svc.closing(svc._db()) as connection:
+        row = connection.execute('SELECT payload FROM marketplace_approvals WHERE id = ?',
+                                 (approval['approval_id'],)).fetchone()
+        payload = json.loads(row['payload'])
+        if binding is None:
+            payload.pop('credential_binding')
+            payload['settings']['credential'] = 'legacy-fingerprint'
+        else:
+            payload['credential_binding'] = binding
+        connection.execute('UPDATE marketplace_approvals SET payload = ? WHERE id = ?',
+                           (json.dumps(payload), approval['approval_id']))
+    env.calls.clear()
+    with pytest.raises(svc.MarketplaceError, match='changed'):
+        svc.submit(approval['approval_id'], True)
+    assert not env.decrypted
+    assert not env.calls
 
 
 def test_revoked_permission_invalidates_approval(env):

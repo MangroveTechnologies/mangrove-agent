@@ -135,6 +135,16 @@ but no private key, API key or signed proof. Treat the local database as private
 Expired unsigned approvals are pruned in bounded batches; completed and uncertain
 records remain available for investigation.
 
+Each approval binds the configured API key using PBKDF2-HMAC-SHA256 with
+600,000 iterations and a fresh 16-byte random salt. Submission checks that
+binding with a constant-time comparison before signing or returning a cached
+result. Changing the API key invalidates the approval.
+
+Approvals created with the earlier plain SHA-256 fingerprint are rejected after
+this upgrade. Unsubmitted actions need a fresh preview and approval. For completed
+or uncertain actions, inspect the existing Markets record instead of preparing a
+replacement. Existing records are retained; no schema migration is required.
+
 Automated tests use test keys, isolated SQLite and synthetic remote services.
 Actual Claude Code acceptance and Base Sepolia payment settlement are separate
 release checks; no deployment or payment is performed by adding this integration.
