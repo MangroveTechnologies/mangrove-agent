@@ -157,10 +157,15 @@ async def test_recovery_deadline_preserves_resolved_operation(receiver, wallet, 
     receiver['failure'] = 'timeout'
     with pytest.raises(X402PaymentUncertain) as retry:
         await x402_payer.pay_remote_mcp(ORIGIN, timeout=0.15, **kwargs)
-    assert retry.value.operation_id == original
-    assert retry.value.reservation_ids == payment_operations.reservation_ids(original)
-    assert receiver['calls'][-1]['_meta'] == signed
-    assert len(spend_service.list_payments()) == 1
+    if identity == 'original':
+        assert retry.value.operation_id == original
+        assert receiver['calls'][-1]['_meta'] == signed
+        assert len(spend_service.list_payments()) == 1
+    else:
+        assert retry.value.operation_id != original
+        assert receiver['calls'][-1]['_meta'] != signed
+        assert len(spend_service.list_payments()) == 2
+    assert retry.value.reservation_ids == payment_operations.reservation_ids(retry.value.operation_id)
     assert payment_operations.current_attempt.get() is None
     receiver['failure'] = None
     kwargs['operation_id'] = original
@@ -175,7 +180,8 @@ async def test_concurrent_recovery_deadlines_keep_separate_identities(receiver, 
     assert all(isinstance(error, X402PaymentUncertain) for error in original)
     assert original[0].operation_id != original[1].operation_id
     receiver['failure'] = 'timeout'
-    recovered = await asyncio.gather(*(x402_payer.pay_remote_mcp(url, timeout=0.15, **kwargs) for url in endpoints), return_exceptions=True)
+    recovered = await asyncio.gather(*(x402_payer.pay_remote_mcp(url, timeout=0.15, operation_id=error.operation_id, **kwargs)
+                                       for url, error in zip(endpoints, original)), return_exceptions=True)
     assert all(isinstance(error, X402PaymentUncertain) for error in recovered)
     assert [error.operation_id for error in recovered] == [error.operation_id for error in original]
     assert len(spend_service.list_payments()) == 2

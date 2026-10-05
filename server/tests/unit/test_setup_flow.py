@@ -61,7 +61,7 @@ def test_rerun_keeps_keys_wallet_cap_and_other_settings(config):
         assert after[key] == cfg[key]
 
 
-def test_explicit_switch_clears_only_upstream_key(config):
+def test_explicit_switch_preserves_key_and_selects_wallet_mode(config):
     setup.configure(arguments())
     cfg = json.loads(config.read_text())
     cfg['MANGROVE_API_KEY'] = 'prod_previous'
@@ -70,7 +70,9 @@ def test_explicit_switch_clears_only_upstream_key(config):
     args.auth = 'x402'
     setup.configure(args)
     after = json.loads(config.read_text())
-    assert after['MANGROVE_API_KEY'] == ''
+    assert after['MANGROVE_API_KEY'] == 'prod_previous'
+    assert after['MANGROVE_ACCESS_MODE'] == 'x402'
+    assert setup.upstream_key(after) == ''
     assert after['API_KEYS'] == cfg['API_KEYS']
 
 
@@ -268,7 +270,8 @@ def checkout(tmp_path):
     (repo / '.claude').mkdir()
     for name in ['setup.sh', 'setup_support.py', 'verify_quickstart.sh', 'setup-mcp.sh']:
         shutil.copy2(ROOT / 'scripts' / name, repo / 'scripts' / name)
-    shutil.copy2(ROOT / 'server/src/config/local-example-config.json', repo / 'server/src/config/local-example-config.json')
+    for name in ('local-example-config.json', 'mangrove-endpoints.json'):
+        shutil.copy2(ROOT / 'server/src/config' / name, repo / 'server/src/config' / name)
     (repo / 'server/requirements.lock').write_text('# synthetic lockfile\n')
     venv = repo / '.venv/bin'
     venv.mkdir(parents=True)
@@ -290,6 +293,8 @@ class Handler(BaseHTTPRequestHandler):
             body = {'tools':[{'name':n} for n in ['create_wallet','import_wallet','list_wallets','list_signals']]}
             code = 200
         elif self.path == '/health': body, code = {'scheduler_running': True}, 200
+        elif self.path.endswith('/marketplace/readiness'):
+            body, code = {'ownership_discovery': 'ready'}, 200 if valid else 401
         else: body, code = [], 200 if valid else 401
         self.send_response(code); self.end_headers(); self.wfile.write(json.dumps(body).encode())
 HTTPServer(('127.0.0.1', int(sys.argv[sys.argv.index('--port')+1])), Handler).serve_forever()
@@ -316,6 +321,57 @@ def run_setup(checkout, *args, input=None):
                           capture_output=True, text=True, timeout=25, input=input)
 
 
+@pytest.mark.parametrize('option', [None, '--yes'])
+def test_setup_does_not_open_chat_even_when_interactive(checkout, option):
+    import pty
+    import select
+    import time
+
+    repo, env = checkout
+    first = run_setup(checkout, '--yes', '--no-mcp', '--no-verify')
+    assert first.returncode == 0, first.stderr
+    original_pid = (repo / 'agent-data/bare.pid').read_text()
+    shutil.copytree(ROOT / '.claude/hooks', repo / '.claude/hooks')
+    binary = repo / 'fake-bin'
+    binary.mkdir()
+    capture = repo / 'chat-capture.json'
+    claude = binary / 'claude'
+    claude.write_text('#!' + sys.executable + '\n' + '''
+import json, os, pathlib, sys
+if sys.argv[1] == 'mcp':
+    sys.exit(0)
+args = sys.argv[1:]
+pathlib.Path(os.environ['CHAT_CAPTURE']).write_text(json.dumps(args))
+''')
+    claude.chmod(0o700)
+    env = dict(env, PATH=f'{binary}{os.pathsep}{env["PATH"]}', CHAT_CAPTURE=str(capture))
+    master, slave = pty.openpty()
+    command = ['bash', str(repo / 'scripts/setup.sh'), '--auth', 'x402', '--no-verify']
+    if option:
+        command.append(option)
+    proc = subprocess.Popen(command, cwd=repo, env=env, stdin=slave, stdout=slave, stderr=slave)
+    os.close(slave)
+    output = bytearray()
+    try:
+        os.write(master, b'4\n')
+        deadline = time.monotonic() + 25
+        while proc.poll() is None and time.monotonic() < deadline:
+            if select.select([master], [], [], 0.1)[0]:
+                try:
+                    output.extend(os.read(master, 65536))
+                except OSError:
+                    break
+        assert proc.wait(timeout=3) == 0, output.decode(errors='replace')
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=3)
+        os.close(master)
+    assert not capture.exists()
+    assert (repo / 'agent-data/bare.pid').read_text() == original_pid
+
+
+
 def test_shell_fresh_no_key_rerun_and_mode_switch(checkout):
     first = run_setup(checkout, '--yes', '--no-mcp')
     assert first.returncode == 0, first.stdout + first.stderr
@@ -333,8 +389,10 @@ def test_shell_fresh_no_key_rerun_and_mode_switch(checkout):
     assert after['API_KEYS'] == cfg['API_KEYS']
     assert after['MANGROVE_API_KEY'] == 'prod_synthetic'
     assert 'prod_synthetic' not in switched.stdout + switched.stderr
+    assert 'Marketplace ownership discovery verified' in switched.stdout
     requests = [json.loads(line)['path'] for line in (repo / 'requests.jsonl').read_text().splitlines()]
-    assert set(requests) == {'/api/v1/agent/wallet/list', '/api/v1/agent/tools', '/health'}
+    assert set(requests) == {'/api/v1/agent/wallet/list', '/api/v1/agent/tools', '/health',
+                             '/api/v1/agent/marketplace/readiness'}
 
 
 def test_shell_verification_failure_is_failure(checkout):
@@ -586,7 +644,7 @@ def test_existing_install_always_offers_access_menu(config, monkeypatch, existin
             '1': 'Use the existing API key', '2': 'Enter a new API key'}
         assert menu.call_args_list[1].args[2] == '1'
     after = json.loads(config.read_text())
-    expected_key = existing_key if selection == 'default' else (existing_key or 'prod_new') if selection == '1' else ''
+    expected_key = existing_key if selection == 'default' else (existing_key or 'prod_new') if selection == '1' else existing_key
     assert after['MANGROVE_API_KEY'] == expected_key
     for field in ['API_KEYS', 'X402_PAYER_WALLET', 'X402_SPEND_CAP_USD']:
         assert after[field] == cfg[field]
@@ -777,6 +835,7 @@ def test_interactive_existing_key_choice(config, interactive, monkeypatch, capsy
     setup.configure(args)
     after = json.loads(config.read_text())
     expected = dict(before)
+    expected['MANGROVE_ACCESS_MODE'] = 'api-key'
     expected['MANGROVE_API_KEY'] = 'prod_new_sentinel' if selection == '2' else 'prod_old_sentinel'
     assert after == expected
     assert secret_prompt.call_count == (1 if selection == '2' else 0)
@@ -820,3 +879,54 @@ def test_stdin_replacement_bypasses_interactive_key_choice(config, monkeypatch):
     args.api_key_stdin = True
     setup.configure(args)
     assert json.loads(config.read_text())['MANGROVE_API_KEY'] == 'prod_replacement'
+
+
+def test_markets_setup_check_is_read_only(monkeypatch, capsys):
+    call = Mock(return_value={'ownership_discovery': 'ready'})
+    monkeypatch.setattr(setup, 'request', call)
+    cfg = {'MANGROVE_API_KEY': 'private-key'}
+    setup.check_markets(cfg)
+    call.assert_called_once_with(cfg, '/api/v1/agent/marketplace/readiness')
+    assert 'verified' in capsys.readouterr().out
+
+
+def test_markets_setup_check_reports_unavailable_without_blocking_other_tools(monkeypatch, capsys):
+    monkeypatch.setattr(setup, 'request', Mock(side_effect=setup.SetupError('private response')))
+    setup.check_markets({'MANGROVE_API_KEY': 'private-key'})
+    output = capsys.readouterr().out
+    assert 'unavailable' in output
+    assert 'private' not in output
+
+
+def test_keyless_setup_checks_public_ownership_discovery(monkeypatch, capsys):
+    call = Mock(return_value={'ownership_discovery': 'ready'})
+    monkeypatch.setattr(setup, 'request', call)
+    setup.check_markets({})
+    call.assert_called_once_with({}, '/api/v1/agent/marketplace/readiness')
+    assert 'verified' in capsys.readouterr().out
+
+
+def test_x402_setup_configures_recovery_without_changing_custom_rpc(config):
+    cfg = setup.read_config(setup.EXAMPLE)
+    cfg['X402_RECONCILIATION_RPC_URLS'] = {'eip155:8453': 'https://operator.example/rpc'}
+    setup.atomic_config(cfg)
+    args = arguments()
+    args.auth = 'x402'
+    setup.configure(args)
+    saved = json.loads(config.read_text())
+    assert saved['X402_RECONCILIATION_RPC_URLS'] == {
+        'eip155:8453': 'https://operator.example/rpc', 'eip155:84532': 'https://sepolia.base.org'}
+
+
+@pytest.mark.parametrize('value', [[], {'eip155:84532': 'http://remote.example'},
+                                  {'eip155:84532': 'https://user:secret@rpc.example'}])
+def test_invalid_recovery_config_does_not_replace_saved_config(config, value):
+    cfg = setup.read_config(setup.EXAMPLE)
+    cfg['X402_RECONCILIATION_RPC_URLS'] = value
+    setup.atomic_config(cfg)
+    before = config.read_bytes()
+    args = arguments()
+    args.auth = 'x402'
+    with pytest.raises(setup.SetupError):
+        setup.configure(args)
+    assert config.read_bytes() == before

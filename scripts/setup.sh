@@ -346,6 +346,7 @@ while [ "$SECONDS" -lt "$DEADLINE" ]; do
 done
 [ "$READY" = "yes" ] || fail "Local authenticated readiness failed. Inspect agent logs and config; MCP was not registered."
 ok "local authentication verified; no paid request made"
+"$PY" "$SUPPORT" markets-check
 if [ "$MODE" = "bare" ]; then
   printf '%s\n' "$FINGERPRINT" > agent-data/bare.fingerprint
 fi
@@ -373,7 +374,7 @@ fi
 
 echo
 if [ "$DO_MCP" = "yes" ]; then
-  echo "Claude MCP registration saved. Open/reconnect Claude in this directory to load tools."
+  echo "Claude MCP registration saved. Start ./scripts/chat.sh when ready."
 else
   echo "Claude MCP is not registered. Install Claude CLI and rerun setup when ready."
 fi

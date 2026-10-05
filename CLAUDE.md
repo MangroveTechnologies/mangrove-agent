@@ -31,7 +31,6 @@ Full extension workflow: [`docs/contributing.md`](docs/contributing.md).
 
 - Trading bot behavior: `.claude/rules/trading-bot-workflow.md`
 - Wallet handling: `.claude/rules/wallet-presentation.md`
-- Marketplace wallet approvals: `.claude/rules/marketplace.md`
 - Risk management (engine gates + portfolio kill switch — what happens behind the scenes): `.claude/rules/risk-management.md`
 - Git workflow: `.claude/rules/git-workflow.md`
 

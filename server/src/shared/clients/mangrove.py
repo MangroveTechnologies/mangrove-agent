@@ -13,6 +13,7 @@ Usage:
 """
 from __future__ import annotations
 
+import uuid
 from threading import RLock
 
 import httpx
@@ -89,13 +90,19 @@ def _api_key_base_url(config) -> str | None:
 
 
 def _api_key(config) -> str | None:
-    value = getattr(config, "MANGROVE_API_KEY", None)
-    if value is None:
+    mode = getattr(config, "MANGROVE_ACCESS_MODE", None)
+    if mode not in {None, "api-key", "x402"}:
+        raise ValidationError("MANGROVE_ACCESS_MODE must be api-key or x402.")
+    if mode == "x402":
         return None
-    if not isinstance(value, str):
+    value = getattr(config, "MANGROVE_API_KEY", None)
+    if value is not None and not isinstance(value, str):
         raise ValidationError("MANGROVE_API_KEY must be a string or null.")
-    key = value.strip()
-    return None if key.lower() in {"", "none", "null"} else key
+    key = value.strip() if value else ""
+    key = None if key.lower() in {"", "none", "null"} else key
+    if mode == "api-key" and key is None:
+        raise ValidationError("API-key access requires a configured Mangrove API key.")
+    return key
 
 
 def _payment_setting(config, name: str) -> str | None:
@@ -195,8 +202,13 @@ def create_x402_mangrove_client(
         transport=transport,
         timeout=timeout,
     )
+    def identify_request(request: httpx.Request) -> None:
+        if "X-Payment-Operation-Id" not in request.headers:
+            request.headers["X-Payment-Operation-Id"] = str(uuid.uuid4())
+
     http = httpx.Client(
         transport=payment_transport, timeout=timeout,
+        event_hooks={"request": [identify_request]},
         follow_redirects=False, trust_env=False,
     )
     try:

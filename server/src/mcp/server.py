@@ -24,7 +24,23 @@ class PricedFastMCP(FastMCP):
                     "meta": {**(tool.meta or {}), "mangrove/pricing": pricing},
                 })
             result.append(tool)
-        return result
+        from src.mcp import marketplace_proxy
+        from src.shared.errors import AgentError
+
+        try:
+            remote = await marketplace_proxy.list_tools()
+        except AgentError:
+            remote = []
+        local_names = {tool.name for tool in result}
+        return result + [tool for tool in remote if tool.name not in local_names]
+
+    async def call_tool(self, name, arguments):
+        from src.mcp import marketplace_proxy
+        from src.services.marketplace_catalog import LOCAL_TOOLS
+
+        if name.startswith("marketplace_") and name not in LOCAL_TOOLS:
+            return await marketplace_proxy.call_tool(name, arguments)
+        return await super().call_tool(name, arguments)
 
 
 def reset_mcp_server() -> None:

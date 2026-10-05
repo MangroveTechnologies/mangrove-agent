@@ -40,12 +40,36 @@ def fingerprint(payer: str, network: str, method: str, resource: str, content: b
     return digest.hexdigest()
 
 
+def _recover_pending(digest: str, operation_id: str | None) -> None:
+    from src.services import payment_reconciliation_worker as worker
+
+    try:
+        with spend_service._budget_transaction() as conn:
+            row = conn.execute(
+                "SELECT id FROM x402_operations WHERE fingerprint = ? AND state = 'pending' "
+                "AND (? IS NULL OR id = ?) ORDER BY created_at, id LIMIT 1",
+                (digest, operation_id, operation_id),
+            ).fetchone()
+        if row is not None:
+            from src.services.x402_reconciliation import reconcile_unspendable
+            for reservation_id in reservation_ids(row['id']):
+                result = reconcile_unspendable(reservation_id)
+                if result and result.get('ledger_changed'):
+                    _log.info('x402.operation.authorization_closed', operation_id=row['id'],
+                              reservation_id=reservation_id, outcome=result['outcome'])
+            if worker.configured_urls():
+                worker.run_once(operation_id=row['id'], batch_size=1)
+    except Exception as error:
+        _log.warning('x402.operation.recovery_unavailable', error_type=type(error).__name__)
+
+
 def begin(digest: str, operation_id: str | None = None) -> tuple[dict, bool]:
     if operation_id is not None:
         try:
             operation_id = str(uuid.UUID(operation_id))
         except (ValueError, TypeError, AttributeError):
             raise ValidationError('Payment operation identity must be a UUID.') from None
+    _recover_pending(digest, operation_id)
     with spend_service._budget_transaction() as conn:
         row = conn.execute('SELECT * FROM x402_operations WHERE id = ?', (operation_id,)).fetchone() if operation_id else None
         if row is not None:
@@ -57,19 +81,18 @@ def begin(digest: str, operation_id: str | None = None) -> tuple[dict, bool]:
                     # A previously signed, reconciled attempt is closed. New
                     # attempts require a new identity at the receiver too.
                     raise ValidationError('This payment attempt is closed; use a new operation identity.')
-                pending = conn.execute("SELECT * FROM x402_operations WHERE fingerprint = ? AND state = 'pending'", (digest,)).fetchone()
-                if pending is not None:
-                    return dict(pending), False
                 # A failure before any reservation is safe to reclaim.
                 conn.execute("UPDATE x402_operations SET state = 'pending', updated_at = ? WHERE id = ?",
                              (spend_service._now(), row['id']))
                 return {**dict(row), 'state': 'pending'}, True
             return dict(row), False
-        # Without a caller identity, identical pending work is recovery. With
-        # one, a different ID still cannot replace this outstanding payment.
-        row = conn.execute("SELECT * FROM x402_operations WHERE fingerprint = ? AND state = 'pending'", (digest,)).fetchone()
-        if row is not None:
-            return dict(row), False
+        if operation_id is None:
+            row = conn.execute(
+                "SELECT * FROM x402_operations WHERE fingerprint = ? AND state = 'pending' ORDER BY created_at, id LIMIT 1",
+                (digest,),
+            ).fetchone()
+            if row is not None:
+                return dict(row), False
         oid, now = operation_id or str(uuid.uuid4()), spend_service._now()
         conn.execute("INSERT INTO x402_operations(id, fingerprint, state, created_at, updated_at) VALUES (?, ?, 'pending', ?, ?)",
                      (oid, digest, now, now))
@@ -170,9 +193,14 @@ def tracked_payment(function):
             content = content.encode()
         if values.get('resource') and values['arguments']:
             content = json.dumps({'name': values['name'], 'arguments': values['arguments']}, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+        if values.get('expected_payment') is not None:
+            content += json.dumps(values['expected_payment'], sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
         method = values.get('method') or 'MCP:' + values.get('name', '')
         digest = fingerprint(payer, network, method, resource, content)
-        operation, created = begin(digest, values.get('operation_id') or headers.get('X-Payment-Operation-Id'))
+        import anyio
+        operation, created = await anyio.to_thread.run_sync(
+            begin, digest, values.get('operation_id') or headers.get('X-Payment-Operation-Id'),
+        )
         oid = operation['id']
         attempt = current_attempt.get()
         if values.get('resource') and attempt is not None:

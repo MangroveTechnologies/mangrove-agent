@@ -95,9 +95,11 @@ Validated only if present in your config file. If a key is present but has an em
 
 The agent selects upstream authentication once per process:
 
-- A non-empty `MANGROVE_API_KEY` uses the existing SDK API-key path. A rejected
+- `MANGROVE_ACCESS_MODE` selects `api-key` or `x402` independently of a saved key.
+  If unset, a non-empty `MANGROVE_API_KEY` selects the existing SDK API-key path. A rejected
   key never falls back to spending wallet funds.
-- An omitted, null or blank key selects x402. The literal strings `none` and
+- With no explicit mode, an omitted, null or blank key selects x402.
+  Explicit API-key mode requires a usable key and never falls back to wallet spending. The literal strings `none` and
   `null` also mean unset, consistent with configuration normalization.
 - `API_KEYS` and `AUTH_ENABLED` still protect the local agent. Keep local
   authentication enabled: an upstream wallet payment does not authorize access

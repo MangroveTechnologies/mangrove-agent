@@ -307,10 +307,15 @@ def _coerce_micro_usd(value: object) -> int:
 def get_status() -> dict:
     """Current budget state, for /status, the REST route, and the MCP tool."""
     from src.services.payment_operations import pending_status
+    from src.services.payment_reconciliation_worker import configured_urls
 
     state = _get_state()
     cap = _cap_micro_usd(state)
     spent = _spent_micro_usd(state["period_id"])
+    reserved = int(get_connection().execute(
+        "SELECT COALESCE(SUM(amount_micro_usd), 0) FROM x402_payments WHERE period_id = ? AND state = 'authorized'",
+        (state["period_id"],),
+    ).fetchone()[0])
     return {
         "exhausted": state["exhausted"],
         "exhausted_at": state["exhausted_at"],
@@ -322,6 +327,8 @@ def get_status() -> dict:
             "config" if _config_cap_is_set() else "default"
         ),
         "spent_usd": _to_usd(spent),
+        "settled_usd": _to_usd(max(0, spent - reserved)),
+        "reserved_usd": _to_usd(reserved),
         "refunds": [dict(row) for row in get_connection().execute(
             "SELECT reservation_id, state, network, refund_tx, amount_micro_usd FROM x402_refunds "
             "ORDER BY updated_at DESC LIMIT 20")],
@@ -336,6 +343,7 @@ def get_status() -> dict:
         "payment_pauses": [],
         "payment_pause_seconds": 0,
         "pending_operations": pending_status(),
+        "reconciliation": {"configured_networks": sorted(configured_urls())},
         "unresolved_payments": unresolved_payments(),
         "period_id": state["period_id"],
         "period_started_at": state["period_started_at"],

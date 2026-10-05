@@ -139,7 +139,7 @@ When it's finished:
 - `./scripts/verify_quickstart.sh --bare` passed → the tool catalog returned the expected set.
 - Claude Code's MCP registration now knows about `mangrove-agent`.
 
-**Start Claude Code in the repo directory.** In x402 mode, complete the printed payment-wallet instructions before requesting paid data or backtests. API-key users can paper-trade without a payment wallet. Simulated trades do not make upstream API calls free.
+**After setup, start Claude separately with `./scripts/chat.sh`.** The session has shell/file tools disabled and uses only Mangrove MCP. See [restricted chat](docs/restricted-chat.md); bare `claude` remains available for development. In x402 mode, complete the printed payment-wallet instructions before requesting paid data or backtests. API-key users can paper-trade without a payment wallet. Simulated trades do not make upstream API calls free.
 
 ### Useful `./scripts/setup.sh` flags
 
@@ -202,7 +202,7 @@ Wallet setup and live trading are in Chapters 06 and 07 of the tutorial. The sum
 ## Safety model at a glance
 
 - **Your private keys never touch this chat.** `create_wallet` returns a `vault_token`, not the plaintext. Revealing is a separate CLI (`reveal-secret.sh`) that prints to your terminal only.
-- **Harness hooks block key pastes.** If you try to paste a key into Claude Code, `.claude/hooks/block-wallet-secrets.sh` refuses the prompt with an educational message. The hook is in `.claude/settings.json` — disabling it requires a commit.
+- **Harness hooks block key pastes.** If you try to paste a key into Claude Code, `.claude/hooks/block-wallet-secrets.sh` refuses the prompt with an educational message. The hook is in `.claude/settings.json` — the machine owner can change this configuration.
 - **Live trading is gated on explicit backup confirmation.** After you save a wallet's secret off-agent, `./scripts/confirm-backup.sh <addr>` flips a flag. `execute_swap` and `update_strategy_status → live` refuse on wallets without it.
 - **Master key stays local.** Bare-metal: OS keychain. Docker: `./agent-data/master.key` (chmod 600, gitignored).
 

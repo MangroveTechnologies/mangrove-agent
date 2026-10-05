@@ -83,7 +83,7 @@ _UNSET_CONFIG_VALUES = frozenset({"", "none", "null"})
 # pinning the same number in source means a library default change cannot
 # silently raise what one call is allowed to spend. This is a sanity bound
 # on a single charge — priced Mangrove meters run $0.001–$0.05 — and not a
-# budget. Raising it is a reviewed source change.
+# budget. Explicit purchase approvals may set an exact per-asset ceiling.
 _MAX_AMOUNT_PER_PAYMENT = "$1"
 
 # The only EIP-712 struct the wallet guard will sign, and so the only one
@@ -130,11 +130,12 @@ class CustodialSigner:
     one guarded call and is never an attribute of this object.
     """
 
-    def __init__(self, wallet_address: str, *, resource: str | None = None) -> None:
+    def __init__(self, wallet_address: str, *, resource: str | None = None, expected_payment: dict | None = None) -> None:
         # Checksummed once, here, so the same canonical form goes into the
         # authorization's `from` field, the guard's payer comparison and the
         # audit log. Deliberately no DB access: constructing a signer is not
         # signing, and the gates belong on the paying path.
+        self._expected_payment = dict(expected_payment) if expected_payment is not None else None
         self._address = _checksum(wallet_address)
         # What is being paid for, recorded on the ledger row purely for
         # audit. The signer never sees a URL otherwise — the scheme hands it
@@ -187,6 +188,16 @@ class CustodialSigner:
         wallet_manager.require_backup_confirmed(self._address)
 
         domain_dict = _domain_to_dict(domain)
+        if self._expected_payment is not None:
+            expected = self._expected_payment
+            if (primary_type != _EIP3009_PRIMARY_TYPE
+                    or _network_from_domain(domain_dict) != expected["network"]
+                    or str(domain_dict.get("verifyingContract", "")).lower() != expected["asset"].lower()
+                    or str(message.get("to", "")).lower() != expected["payTo"].lower()
+                    or str(message.get("value")) != expected["amount"]):
+                raise X402PaymentError("Payment terms differ from the approved purchase. Nothing was signed.")
+            from src.services.purchase_balance import require_purchase_balance
+            require_purchase_balance(self._address, expected)
         reservation = self._reserve_budget(primary_type, domain_dict, message)
 
         try:
@@ -319,7 +330,12 @@ def _configure_payment_client(
     network = _require_network()
     signer = signer or CustodialSigner(wallet_address, resource=resource)
     client.register(network, ExactEvmClientScheme(signer))
-    client.set_spend_controls({"max_amount_per_payment": _MAX_AMOUNT_PER_PAYMENT})
+    controls = {"max_amount_per_payment": _MAX_AMOUNT_PER_PAYMENT}
+    expected = getattr(signer, "_expected_payment", None)
+    if expected is not None:
+        controls["allowed_assets"] = [{"network": expected["network"], "asset": expected["asset"],
+                                       "max_amount_per_payment": expected["amount"]}]
+    client.set_spend_controls(controls)
 
 
 def mcp_payment_result(raw, *, payer: str, reservations: list[str], resource: str) -> PaymentResult:
@@ -375,7 +391,11 @@ class _PaymentSession:
             recovery = (result.meta or {}).get("mangrove/payment", {})
             self.idempotency = recovery.get("idempotency") if isinstance(recovery, dict) else None
             if isinstance(result.structuredContent, dict) and result.structuredContent.get("retry_payment") is False:
-                raise X402PaymentError("The receiver requires payment reconciliation before another authorization.")
+                if isinstance(recovery, dict) and recovery.get("state") == "pending":
+                    message = "The receiver reports a pending payment; reconcile the original operation before retrying."
+                else:
+                    message = "The receiver rejected the request before payment authorization; no payment was signed for this attempt."
+                raise X402PaymentError(message)
         return result
 
 
@@ -388,12 +408,13 @@ async def pay_mcp(
     arguments: dict[str, Any] | None = None,
     resource: str,
     operation_id: str | None = None,
+    expected_payment: dict | None = None,
 ) -> PaymentResult:
     """Pay a tool on a caller-owned session; the caller owns deadlines and cleanup."""
     payer = resolve_payer_wallet(wallet_address)
     wallet_manager.require_backup_confirmed(payer)
     check_payment_budget(resource)
-    signer = CustodialSigner(payer, resource=resource)
+    signer = CustodialSigner(payer, resource=resource, **({"expected_payment": expected_payment} if expected_payment else {}))
     client = build_payment_client(payer, signer=signer)
     try:
         paid_session = x402MCPSession(_PaymentSession(session), client, auto_payment=True)
@@ -403,9 +424,18 @@ async def pay_mcp(
                                   reservations=signer.reservations, resource=resource)
     except AgentError:
         raise
-    except Exception:
+    except Exception as error:
         if signer.reservations:
             raise X402PaymentUncertain(reservation_ids=signer.reservations) from None
+        from src.shared.errors import upstream_access_error
+        pending = [error]
+        while pending:
+            child = pending.pop()
+            access = upstream_access_error(child)
+            if access is not None:
+                raise access from None
+            if isinstance(child, BaseExceptionGroup):
+                pending.extend(child.exceptions)
         raise X402PaymentError("The MCP payment could not be completed.") from None
 
 

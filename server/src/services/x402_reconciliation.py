@@ -7,6 +7,38 @@ from src.services import spend_service
 from src.services.x402_inspection import inspect_authorization, inspect_transaction
 from src.shared.db.sqlite import get_connection
 from src.shared.errors import ValidationError
+from src.shared.logging import get_logger
+
+_log = get_logger(__name__)
+
+
+def reconcile_unspendable(reservation_id: str) -> dict | None:
+    from src.services import payment_operations
+    from src.services.payment_rejection import unspendable_evidence
+
+    row = get_connection().execute("SELECT * FROM x402_payments WHERE id = ?", (reservation_id,)).fetchone()
+    if (row is None or row['state'] != 'authorized' or not row['operation_id']
+            or row['transaction_hash']):
+        return None
+    original = dict(row)
+    if (str(original['payee']).lower() != '0x' + '00' * 20
+            and not (isinstance(original['valid_before'], int) and isinstance(original['valid_after'], int)
+                     and original['valid_before'] <= original['valid_after'])):
+        return None
+    operation = get_connection().execute(
+        "SELECT payment_headers FROM x402_operations WHERE id = ? AND state = 'pending'",
+        (original['operation_id'],),
+    ).fetchone()
+    if operation is None or not operation['payment_headers']:
+        return None
+    try:
+        saved = payment_operations.unseal(operation['payment_headers'])
+    except Exception as error:
+        _log.warning('x402.rejection.proof_unavailable', reservation_id=reservation_id,
+                     error_type=type(error).__name__)
+        return None
+    evidence = unspendable_evidence(original, saved)
+    return _record_evidence(original, evidence) if evidence else None
 
 
 def reconcile_authorization(reservation_id: str, rpc, *, transaction: str | None = None) -> dict:
@@ -28,6 +60,12 @@ def reconcile_authorization(reservation_id: str, rpc, *, transaction: str | None
     outcome = evidence["outcome"]
     if outcome not in {"expired_unused_at_finalized_block", "cancelled_at_finalized_block", "settled_at_finalized_block"}:
         return evidence
+    return _record_evidence(original, evidence)
+
+
+def _record_evidence(original: dict, evidence: dict) -> dict:
+    reservation_id = original['id']
+    outcome = evidence['outcome']
     state = "settled" if outcome == "settled_at_finalized_block" else "released"
     with spend_service._budget_transaction() as conn:
         current = conn.execute("SELECT * FROM x402_payments WHERE id = ?", (reservation_id,)).fetchone()

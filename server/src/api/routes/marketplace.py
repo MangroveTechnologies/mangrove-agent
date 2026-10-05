@@ -21,6 +21,12 @@ class SubmitRequest(BaseModel):
     confirm: bool = False
 
 
+@router.get("/readiness")
+def readiness() -> dict:
+    """Inspect ownership discovery without signing or creating an approval."""
+    return marketplace.readiness()
+
+
 @router.post("/prepare")
 def prepare(request: PrepareRequest) -> dict:
     """Return an exact action preview without signing."""

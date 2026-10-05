@@ -25,9 +25,7 @@
 #   0  — allow
 #   2  — block, pass stderr message back to Claude for user-visible reply
 #
-# This hook is harness-enforced in .claude/settings.json. Neither the
-# user nor the agent can disable it mid-session. Changes to its behavior
-# require a git commit (visible in review).
+# Client hooks are defense in depth; the machine owner can change them.
 
 set -uo pipefail
 

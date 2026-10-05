@@ -1,10 +1,25 @@
 # Marketplace actions with a local wallet
 
-Claude Code calls the local agent's `marketplace_prepare` and
-`marketplace_submit` MCP tools. The agent discovers the supported ownership
-schema and invokes the existing MangroveMarkets tools over native MCP. Markets
+The agent discovers marketplace tools through the configured Markets MCP
+`tools/list` endpoint. Markets supplies descriptions, input schemas and versioned
+read/ownership metadata; the agent has no copied listing, offer or search models.
+Read tools forward requests. Ownership tools prepare a local approval, and
+`marketplace_submit` signs and sends it only after confirmation. The generic
+`marketplace_prepare` control remains available for clients using that interface. Markets
 owns listings, offers, delivery state, ratings, permissions and replay checks.
 The agent owns wallet selection, local approval records and signing.
+
+An optional API key identifies the account and its permissions; a wallet signature proves
+control of the participant address required by Markets. Reading public listings
+in API-key mode needs no wallet. An empty local wallet store does not prove that
+the person lacks ownership of a remote resource.
+
+Markets rejections are preserved during preparation and submission, including
+their error code and message. MCP marks these responses as errors. A rejected
+preparation creates no local approval and signs nothing. Capability availability
+comes from the discovered catalog; an unsupported action is not an ownership
+denial. Client instructions guide concise presentation without duplicating
+Markets authorization rules.
 
 The same local service is available through authenticated REST:
 `POST /api/v1/agent/marketplace/prepare` and `/marketplace/submit`.
@@ -19,56 +34,55 @@ wallet on Base Sepolia (84532) or Base (8453). XRPL wallets can also be created 
 through the same terminal-only workflow. Ed25519 and secp256k1 master seeds are
 supported; regular-key and multisignature wallets are not.
 
-Configure these fields in the selected agent environment configuration, then
-restart the agent. For isolated local acceptance:
+Run the normal `scripts/setup.sh` workflow and select API-key or x402 access.
+API-key writes require Execution Manage permission; wallet-only actions do not
+require a MangroveAI account or key. Setup checks Markets ownership discovery without
+signing, paying or creating a listing. If Markets is unavailable, setup reports
+that marketplace actions are unavailable while leaving other agent tools usable.
+The selected wallet's backup and network are checked when preparing an action.
 
-```json
-{
-  "MANGROVEMARKETS_BASE_URL": "http://127.0.0.1:8081",
-  "MANGROVEAI_BASE_URL": "http://localhost:5002/api/v1",
-  "MARKETPLACE_OWNERSHIP_AUDIENCE": "mangrove-markets-local-ownership-test",
-  "MARKETPLACE_CHAIN_ID": 84532,
-  "MARKETPLACE_XRPL_NETWORK": "testnet"
-}
-```
+The agent fetches `/.well-known/mangrove-marketplace` from the configured
+`MANGROVEMARKETS_BASE_URL`. It validates version 1, the ownership audience and
+optional XRPL network. That public ownership document receives no credentials.
+MCP tool discovery uses the upstream API key only when API-key mode is selected. Neither
+discovery path follows redirects or accepts replacement service URLs. HTTPS is required except
+for loopback development endpoints. `MANGROVEAI_BASE_URL` remains the separate
+identity authority for API-key access; wallet-only actions do not call it.
 
-Use the existing secure setup for `MANGROVE_API_KEY`, with Execution Manage
-permission. Do not put credentials in prompts. The audience must exactly match
-the Markets deployment. Both URLs must be explicitly trusted; HTTP is permitted
-only for loopback. Outside local testing use HTTPS. The chain ID is a local
-wallet-selection guard: ownership-v1 messages bind a deployment audience and
-`base`, not a numeric chain ID. Configure each deployment with a distinct audience
-and the appropriate network. This does not change the remote payment network. For XRPL, set
-`MARKETPLACE_XRPL_NETWORK` to match the Markets deployment
-`XRPL_NETWORK` (testnet, devnet or mainnet). The selected wallet must match.
-The same two tools select Base or XRPL from the stored wallet; the model does
-not choose a cryptographic algorithm. Base configuration remains supported
-without an XRPL setting, and an XRPL-only setup may omit the Base chain ID.
+No audience or Base chain ID needs to be copied into the agent. Markets discovery
+supplies Base mainnet (8453) or Base Sepolia (84532); the selected backed-up wallet
+must match it. XRPL wallets must also match the advertised network. Existing
+`MARKETPLACE_OWNERSHIP_AUDIENCE`, `MARKETPLACE_CHAIN_ID` and
+`MARKETPLACE_XRPL_NETWORK` values remain optional pins; mismatches fail closed.
+This ownership selection does not change x402 payment settings.
 
-Missing marketplace configuration disables these actions without affecting
-other agent tools. Use a dedicated test agent data directory when testing with
-existing funded wallets elsewhere; configuration examples do not isolate data
-automatically.
+Markets operators configure a distinct `MARKETPLACE_OWNERSHIP_AUDIENCE` per
+production deployment. Explicit `ENVIRONMENT=local` (or `APP_ENV=local`) provides
+the local test audience automatically. Production has no default identity.
+Discovery and signature verification use the same identity. Before submission,
+the agent rediscovers settings and checks the selected wallet against the saved
+approval; changes invalidate approval before signing.
+
+For isolated local acceptance, keep the existing local Markets and MangroveAI
+URLs. No manual ownership configuration edit is needed. Configuration examples
+do not isolate existing wallet or payment data automatically.
 
 ## Example conversation
 
 User: "List my weather dataset for 1 USDC using my seller wallet."
 
 Claude chooses the user's wallet from `list_wallets`, asking if the choice is
-ambiguous, then calls:
+ambiguous, then calls the discovered `marketplace_create_listing` tool:
 
 ```json
 {
-  "operation": "marketplace_create_listing",
-  "wallet_address": "<selected local wallet address>",
-  "arguments": {
-    "title": "Weather dataset",
-    "description": "Daily weather observations",
-    "category": "data",
-    "price_xrp": 1,
-    "chain": "base",
-    "currency": "USDC"
-  }
+  "title": "Weather dataset",
+  "description": "Daily weather observations",
+  "category": "data",
+  "price_xrp": 1,
+  "chain": "base",
+  "currency": "USDC",
+  "_agent": {"wallet_address": "<selected local wallet address>"}
 }
 ```
 
@@ -119,8 +133,15 @@ The signer reconstructs the ownership-v1 message, including normalized defaults,
 argument hash, user, organization, API-key credential type, audience, wallet,
 operation, nonce and expiry. The identity is independently read from the
 configured MangroveAI authority. General-purpose message signing remains disabled.
-Remote tool discovery is an allowlist compatibility check, not automatic trust
-in newly advertised tools. Only the five reviewed contracts are supported.
+Only version-1 metadata from the configured Markets service is accepted.
+Ownership actions must use the supported ownership-v1 protocol. The agent binds
+the actor to the selected wallet, applies server-declared defaults and preparation
+constraints, and validates the schema without fetching external references.
+Discovery never grants approval: every ownership action needs its own local
+preview and confirmation. The full discovered contract is hashed into the approval
+and checked again before signing and sending. A changed contract requires a new
+preview; legacy pending approvals without that binding cannot be submitted.
+Completed records and payment recovery data are preserved.
 
 Approvals persist in the existing local SQLite database. An atomic transition
 claims each approval before any key is decrypted or signature is transmitted.
@@ -148,3 +169,107 @@ replacement. Existing records are retained; no schema migration is required.
 Automated tests use test keys, isolated SQLite and synthetic remote services.
 Actual Claude Code acceptance and Base Sepolia payment settlement are separate
 release checks; no deployment or payment is performed by adding this integration.
+
+## Marketplace reads
+
+Markets currently advertises `marketplace_search` and `marketplace_get_listing`.
+The agent exposes their server-owned schemas with a reserved `_agent` object for
+local credentials, wallet selection and recovery operation IDs. Those controls are
+stripped before forwarding; server business arguments and native MCP results are
+preserved. Search freshness guidance is owned by Markets. Their upstream mode follows the same configuration rule as signals:
+a configured `MANGROVE_API_KEY` selects API-key access and server-enforced quota;
+without a key, the agent uses `pay_mcp()` and its local EVM wallet.
+The caller's local agent API key is never forwarded to Markets.
+
+API-key mode does not require a wallet, backup confirmation, encryption key or
+payment budget. After tool discovery, it sends an authenticated MCP tool call. Authentication,
+quota and payment-required errors do not cause automatic wallet fallback, even if
+a wallet argument is supplied. Markets enforces billing and prices; MangroveAI
+maintains the shared subscription allowance.
+
+Wallet mode uses the existing signer, spending limits and encrypted payment ledger.
+Select a backed-up EVM wallet on `X402_NETWORK`, or configure the existing default
+payer wallet. Markets must support anonymous MCP initialization and its standard
+x402 challenge, receipt and recovery contract for the two allowed read tools.
+Ownership writes retain their separate authentication and confirmation requirements.
+
+Both modes connect only to `MANGROVEMARKETS_BASE_URL`. Endpoints must use HTTPS
+(HTTP is allowed only on loopback), without URL credentials, queries or fragments.
+Requests do not follow redirects or environment proxies.
+
+For an uncertain wallet payment, retain the returned `operation_id` and repeat the
+same read arguments, wallet and Markets endpoint while still in wallet mode. The
+payer resends its stored proof and private recovery token without authorizing a
+replacement payment. Switching to API-key mode does not recover a pending wallet
+payment or return a cached wallet result; use the existing payment status tools to
+track it. API-key reads do not use the wallet operation ledger.
+
+For an uncertain quota read, retain the operation ID from the result's
+`_meta["mangrove/quota"]` or the error's recovery suggestion. Repeat the same
+arguments and `_agent.operation_id` in API-key mode. The agent generates an ID before
+sending each new call; Markets returns its saved result and MangroveAI's quota
+operation is idempotent. A fresh operation ID requests a new billable read.
+
+## Discovery compatibility
+
+Start the updated Markets service before restarting the agent and reconnecting
+Claude. If Markets is unavailable or has incompatible metadata, its dynamic tools
+are not advertised; local wallet tools remain available. MCP discovery is bounded
+by deadlines, schema size/depth and pagination limits. Tool names cannot replace
+local preparation or submission controls. No new endpoint may be supplied by a
+remote tool description.
+
+Static agent contract snapshots cover local controls only. Remote schemas are
+validated at runtime and exercised through MCP integration tests; they are not
+copied into the agent's production registry. Test fixtures contain representative
+server contracts solely for isolated signing regression tests.
+
+## Server-owned network binding
+
+Markets discovery supplies the EVM network and chain ID. The selected wallet must
+match it; a wallet never chooses the marketplace network. Optional local network
+pins must match discovery. The agent verifies the exact network in the signed
+authorization and invalidates approvals if discovery changes before submission.
+The approval preview includes `settlement_network` (`eip155:84532` for Base Sepolia,
+`eip155:8453` for Base mainnet). `price.chain: base` in a listing is a family label;
+use its recorded `price.network` to determine the purchase network.
+
+Upgrade Markets and agents together and prepare fresh approvals. Older servers
+without network discovery fail closed; there is no wallet-derived fallback.
+
+
+## Approved USDC purchases
+
+Markets supplies the payment terms in its ownership challenge. The local preview
+shows the seller recipient, exact token amount and network before any signature.
+`marketplace_submit(confirm=true)` persists the offer response and continues its
+standard x402 MCP challenge using the existing payer and durable payment ledger.
+The signer rejects any changed recipient, amount, token or network. Only that
+approved asset/amount may exceed the generic $1 per-call limit; the total spending
+budget and wallet-backup requirement remain enforced.
+
+A repeated submission uses the same approval/payment operation and offer. If a
+payment response was lost, it sends the saved payment proof rather than signing
+a replacement debit. A settled response is cached. A changed tool contract,
+identity or configured endpoint invalidates approval. An expired approval cannot
+start a new payment; existing signed-payment recovery remains possible. If initial
+offer creation itself was interrupted, use Markets' signed offer history and
+prepare payment for the existing offer rather than creating another one.
+
+This continuation supports Base USDC purchases, including Base Sepolia when
+configured by Markets. Tool-read fees still go to the configured organization
+recipient; dataset payments go to the seller. API-key quota covers reads, not the
+purchase price. No private keys or signed payment payloads are included in logs.
+
+Before signing an approved purchase, the agent checks the wallet's USDC balance
+using the configured network RPC, verifies the chain ID, and reads the token at a
+canonical block hash. It checks before creating the offer and again before payment
+signing. Insufficient funds returns `PURCHASE_INSUFFICIENT_FUNDS` with the balance,
+price and shortfall; an unverifiable balance returns `PURCHASE_BALANCE_UNAVAILABLE`.
+Neither result creates a new payment authorization or budget reservation. If an
+offer already exists, retrying uses that offer. Recovery of a previously signed
+payment does not require the current balance to cover the purchase again.
+
+The spending cap is permission to spend, not the wallet's token balance. These
+checks do not lock on-chain funds: another transaction can still change the
+balance, so Markets verification, settlement and durable recovery remain required.

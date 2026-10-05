@@ -17,7 +17,7 @@ from eth_utils import keccak
 from src.config import app_config
 from src.services import spend_service
 from src.services.x402_inspection import TOKENS, inspect_authorization
-from src.services.x402_reconciliation import reconcile_authorization
+from src.services.x402_reconciliation import reconcile_authorization, reconcile_unspendable
 from src.shared.logging import get_logger
 
 _log = get_logger(__name__)
@@ -41,15 +41,21 @@ def configured_urls() -> dict[str, str]:
 class ReadOnlyRPC:
     def __init__(self, url):
         self.url = url
+        self.deadline = time.monotonic() + 8
         self.client = httpx.Client(timeout=5, trust_env=False, follow_redirects=False)
 
     def __call__(self, method, params):
         if method not in _READ_METHODS:
             raise ValueError('Reconciliation only supports read methods')
-        with self.client.stream('POST', self.url, json={'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params}) as response:
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('Reconciliation deadline exceeded')
+        with self.client.stream('POST', self.url, timeout=min(5, remaining), json={'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params}) as response:
             response.raise_for_status()
             body = bytearray()
             for chunk in response.iter_bytes():
+                if time.monotonic() >= self.deadline:
+                    raise TimeoutError('Reconciliation deadline exceeded')
                 body.extend(chunk)
                 if len(body) > 1024 * 1024:
                     raise ValueError('RPC response exceeds reconciliation limit')
@@ -87,24 +93,28 @@ def _find_transaction(row, evidence, rpc):
     return None, start - 1
 
 
-def run_once(*, urls=None, rpc_factory=ReadOnlyRPC, now=None, batch_size=5):
+def run_once(*, urls=None, rpc_factory=ReadOnlyRPC, now=None, batch_size=5, operation_id=None):
     destinations = configured_urls() if urls is None else urls
     if not destinations:
         return 0
     now = time.time() if now is None else now
+    batch_size = min(max(int(batch_size), 1), 5)
     # Claim work durably before any network I/O. Crashed workers become eligible
     # again after a bounded lease. Concurrent inspections remain CAS-protected.
     with spend_service._budget_transaction() as conn:
-        conn.execute("INSERT OR IGNORE INTO x402_reconciliation_jobs(reservation_id) SELECT id FROM x402_payments WHERE state = 'authorized'")
+        conn.execute("INSERT OR IGNORE INTO x402_reconciliation_jobs(reservation_id) SELECT id FROM x402_payments WHERE state = 'authorized' AND (? IS NULL OR operation_id = ?)", (operation_id, operation_id))
         rows = conn.execute("SELECT p.*, j.attempts, j.scan_block FROM x402_payments p JOIN x402_reconciliation_jobs j ON j.reservation_id = p.id "
-                            "WHERE p.state = 'authorized' AND j.next_check <= ? ORDER BY j.next_check, p.created_at LIMIT ?", (now, batch_size)).fetchall()
+                            "WHERE p.state = 'authorized' AND j.next_check <= ? AND (? IS NULL OR p.operation_id = ?) ORDER BY j.next_check, p.created_at LIMIT ?", (now, operation_id, operation_id, batch_size)).fetchall()
         for row in rows:
             conn.execute('UPDATE x402_reconciliation_jobs SET next_check = ? WHERE reservation_id = ?', (now + 300, row['id']))
     for raw in rows:
         row = dict(raw)
         outcome, scan_block, rpc = 'rpc_not_configured', row['scan_block'], None
         try:
-            if row['network'] in destinations:
+            local = reconcile_unspendable(row['id'])
+            if local is not None:
+                outcome = local['outcome']
+            elif row['network'] in destinations:
                 rpc = rpc_factory(destinations[row['network']])
                 evidence = inspect_authorization(row, rpc)
                 outcome = evidence['outcome']
@@ -120,6 +130,8 @@ def run_once(*, urls=None, rpc_factory=ReadOnlyRPC, now=None, batch_size=5):
             if rpc is not None and hasattr(rpc, 'close'):
                 rpc.close()
         delay = min(3600, 15 * 2 ** min(row['attempts'], 8)) + random.uniform(0, 5)
+        if outcome == 'unused_not_expired':
+            delay = min(delay, max(15, int(row['valid_before']) - now + 15))
         with spend_service._budget_transaction() as conn:
             conn.execute('UPDATE x402_reconciliation_jobs SET attempts = attempts + 1, next_check = ?, outcome = ?, scan_block = ? WHERE reservation_id = ?',
                          (now + delay, outcome, scan_block, row['id']))
