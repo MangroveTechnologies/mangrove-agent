@@ -17,9 +17,9 @@ from mcp.client.streamable_http import streamablehttp_client
 
 from mcp import ClientSession
 from src.config import app_config
-from src.shared.clients.mangrove import _api_key
 from src.services.marketplace_authorization import contract_digest, normalize_arguments, validate_challenge
 from src.services.wallet_manager import _get_wallet_row, sign_marketplace_proof
+from src.shared.clients.mangrove import _api_key
 from src.shared.errors import AgentError, SigningError, UpstreamAccessError, upstream_access_error
 from src.shared.x402.mcp_diagnostics import protect_mcp_diagnostics
 

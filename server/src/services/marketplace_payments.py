@@ -7,10 +7,10 @@ import time
 
 import anyio
 import httpx
-from mcp import ClientSession
-from mcp.types import CallToolResult
 from mcp.client.streamable_http import streamable_http_client
+from mcp.types import CallToolResult
 
+from mcp import ClientSession
 from src.config import app_config
 from src.services import marketplace, marketplace_catalog, payment_operations, x402_payer
 from src.services.marketplace_authorization import contract_digest, normalize_arguments, validate_challenge
