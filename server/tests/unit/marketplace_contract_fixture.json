@@ -1,0 +1,902 @@
+{
+  "marketplace_list_offers": {
+    "name": "marketplace_list_offers",
+    "description": "Read my offers and their payment/delivery status from Markets.\n\nPrivate, free history for the proven participant wallet; role is buyer,\nseller or all. Use the caller's wallet through prepare/submit to sign a\nread authorization, which moves no funds and creates no offer. Wallet-only\naccess is supported; API-key callers also need execution:read.\nFollow next_cursor for another page.\nLocal approval records are not evidence that a server offer exists.\n",
+    "inputSchema": {
+      "properties": {
+        "participant_address": {
+          "title": "Participant Address",
+          "type": "string"
+        },
+        "chain": {
+          "default": "base",
+          "title": "Chain",
+          "type": "string"
+        },
+        "role": {
+          "default": "all",
+          "title": "Role",
+          "type": "string"
+        },
+        "limit": {
+          "default": 20,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cursor"
+        },
+        "ownership_proof": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ownership Proof"
+        }
+      },
+      "required": [
+        "participant_address"
+      ],
+      "title": "list_offersArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "title": "Result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "list_offersOutput",
+      "type": "object"
+    },
+    "_meta": {
+      "mangrove/marketplace": {
+        "version": 1,
+        "mode": "ownership",
+        "protocol": "ownership-v1",
+        "actor_field": "participant_address",
+        "wallet_defaults": {
+          "base": {
+            "chain": "base"
+          },
+          "xrpl": {
+            "chain": "xrpl"
+          }
+        }
+      }
+    }
+  },
+  "marketplace_get_offer": {
+    "name": "marketplace_get_offer",
+    "description": "Check the current server status of my existing offer without paying again.\n\nFree private read for its buyer or seller with a participant-wallet read\nsignature via prepare/submit. Wallet-only access is supported; API-key\ncallers also need execution:read.\nAwaiting payment is not a purchase; payment_unconfirmed must be reconciled;\ncompleted means confirmed payment and delivery. Never inspect local files\nto infer remote offer status. This read does not retry or settle payment.\n",
+    "inputSchema": {
+      "properties": {
+        "offer_id": {
+          "title": "Offer Id",
+          "type": "string"
+        },
+        "participant_address": {
+          "title": "Participant Address",
+          "type": "string"
+        },
+        "chain": {
+          "default": "base",
+          "title": "Chain",
+          "type": "string"
+        },
+        "ownership_proof": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ownership Proof"
+        }
+      },
+      "required": [
+        "offer_id",
+        "participant_address"
+      ],
+      "title": "get_offerArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "title": "Result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "get_offerOutput",
+      "type": "object"
+    },
+    "_meta": {
+      "mangrove/marketplace": {
+        "version": 1,
+        "mode": "ownership",
+        "protocol": "ownership-v1",
+        "actor_field": "participant_address",
+        "wallet_defaults": {
+          "base": {
+            "chain": "base"
+          },
+          "xrpl": {
+            "chain": "xrpl"
+          }
+        }
+      }
+    }
+  },
+  "marketplace_create_listing": {
+    "name": "marketplace_create_listing",
+    "description": "Create a new listing on the Mangrove Marketplace.\n\nArgs:\n    seller_address: Seller's wallet address (XRPL r..., EVM 0x..., or Solana base58).\n    price_xrp: Price amount. Denominated in `currency` on `chain`.\n    currency: Settlement currency -- 'XRP' (default), 'USDC', etc.\n    chain: Settlement chain -- 'xrpl' (default), 'solana', 'base'.\n    fulfillment_type: 'digital' (default), 'service', or 'physical'.\n    delivery_evidence_schema: Optional JSON Schema the delivery proof must\n        satisfy before escrow release (used by verifiable-delivery flows).\n",
+    "inputSchema": {
+      "properties": {
+        "seller_address": {
+          "title": "Seller Address",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "price_xrp": {
+          "title": "Price Xrp",
+          "type": "number"
+        },
+        "listing_type": {
+          "default": "static",
+          "title": "Listing Type",
+          "type": "string"
+        },
+        "currency": {
+          "default": "XRP",
+          "title": "Currency",
+          "type": "string"
+        },
+        "chain": {
+          "default": "xrpl",
+          "title": "Chain",
+          "type": "string"
+        },
+        "fulfillment_type": {
+          "default": "digital",
+          "title": "Fulfillment Type",
+          "type": "string"
+        },
+        "delivery_evidence_schema": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delivery Evidence Schema"
+        },
+        "storage_uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Storage Uri"
+        },
+        "content_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Hash"
+        },
+        "subcategory": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subcategory"
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tags"
+        },
+        "ownership_proof": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ownership Proof"
+        }
+      },
+      "required": [
+        "seller_address",
+        "title",
+        "description",
+        "category",
+        "price_xrp"
+      ],
+      "title": "create_listingArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "title": "Result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "create_listingOutput",
+      "type": "object"
+    },
+    "_meta": {
+      "mangrove/marketplace": {
+        "version": 1,
+        "mode": "ownership",
+        "protocol": "ownership-v1",
+        "actor_field": "seller_address",
+        "wallet_defaults": {
+          "base": {
+            "chain": "base",
+            "currency": "USDC"
+          },
+          "xrpl": {
+            "chain": "xrpl",
+            "currency": "XRP"
+          }
+        }
+      }
+    }
+  },
+  "marketplace_update_listing": {
+    "name": "marketplace_update_listing",
+    "description": "Update an active listing with its seller's wallet authorization.\n\nRead the listing first and pass its revision as expected_revision. Supply\nonly changed title, description, tags or price_amount; omitted/null fields\nstay unchanged. Price uses the listing's existing currency and chain.\nSeller, category, delivery terms and identity cannot be changed. Reserved,\nexpired and sold listings cannot be edited. A stale revision requires a\nfresh review and approval.\n\nUse the caller's selected wallet for preparation, even when it differs\nfrom the listing's seller. Markets checks authorization before issuing\na signing challenge. Do not refuse locally based on an address comparison\nor substitute the listing owner's address for the caller's wallet.\nIf the client offers a preparation/approval flow, request preparation\nfirst; signing and submission still require explicit user approval.\nThe server's refusal message is the complete user-facing explanation.\n\nArgs:\n    seller_address: Caller's selected wallet address to authorize. Markets\n        verifies that it controls the listing; do not copy the listing's\n        owner address when the caller selected a different wallet.\n",
+    "inputSchema": {
+      "properties": {
+        "listing_id": {
+          "title": "Listing Id",
+          "type": "string"
+        },
+        "seller_address": {
+          "title": "Seller Address",
+          "type": "string"
+        },
+        "expected_revision": {
+          "title": "Expected Revision",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tags"
+        },
+        "price_amount": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price Amount"
+        },
+        "ownership_proof": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ownership Proof"
+        }
+      },
+      "required": [
+        "listing_id",
+        "seller_address",
+        "expected_revision"
+      ],
+      "title": "update_listingArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "title": "Result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "update_listingOutput",
+      "type": "object"
+    },
+    "_meta": {
+      "mangrove/marketplace": {
+        "version": 1,
+        "mode": "ownership",
+        "protocol": "ownership-v1",
+        "actor_field": "seller_address"
+      }
+    }
+  },
+  "marketplace_search": {
+    "name": "marketplace_search",
+    "description": "Search listings using API-key quota or $0.01 USDC wallet payment.\n\nprice.chain identifies the blockchain family; price.network identifies\nthe settlement network. Never infer mainnet from chain=\"base\". A null\nnetwork is unconfirmed and cannot be used for a purchase.\nMake a fresh call for each new marketplace search: availability and prices\ncan change. Reuse conversation results only when the user explicitly asks\nabout those earlier results. Recovery retries reuse the original operation\nID and unchanged arguments; a new search is a new operation.\nUse the x402 MCP payment and recovery metadata returned by the server.\nThe payment argument remains available for legacy clients.\n",
+    "inputSchema": {
+      "properties": {
+        "query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Query"
+        },
+        "category": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Category"
+        },
+        "min_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Price"
+        },
+        "max_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Price"
+        },
+        "listing_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Listing Type"
+        },
+        "limit": {
+          "default": 20,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "payment": {
+          "default": "",
+          "title": "Payment",
+          "type": "string"
+        }
+      },
+      "title": "searchArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "_meta": {
+      "mangrove/marketplace": {
+        "version": 1,
+        "mode": "read"
+      }
+    }
+  },
+  "marketplace_get_listing": {
+    "name": "marketplace_get_listing",
+    "description": "Get listing details using API-key quota or $0.01 USDC wallet payment.\n\nprice.network is the recorded settlement network; chain=\"base\" alone\ndoes not mean mainnet. A null network requires operator confirmation.\n\nUse the x402 MCP payment and recovery metadata returned by the server.\nThe payment argument remains available for legacy clients.\n",
+    "inputSchema": {
+      "properties": {
+        "listing_id": {
+          "title": "Listing Id",
+          "type": "string"
+        },
+        "payment": {
+          "default": "",
+          "title": "Payment",
+          "type": "string"
+        }
+      },
+      "required": [
+        "listing_id"
+      ],
+      "title": "get_listingArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "_meta": {
+      "mangrove/marketplace": {
+        "version": 1,
+        "mode": "read"
+      }
+    }
+  },
+  "marketplace_make_offer": {
+    "name": "marketplace_make_offer",
+    "description": "Make an offer on a marketplace listing.\n\nRoutes to XRP escrow, RLUSD x402, or Base/USDC x402 based on chain/currency.\nFor a new offer, read the listing and pass its revision as expected_revision\nto bind approval to the reviewed terms. Existing payment retries retain\ntheir original arguments and offer ID.\n\n**XRP escrow path** (chain='xrpl', currency='XRP'):\n  1. Call with no payment -- returns offer_id and escrow creation params.\n  2. Call escrow_create with the returned params to get an unsigned tx.\n  3. Sign and broadcast the tx via wallet_xrpl_broadcast.\n  4. Call marketplace_accept_offer with the offer_id and escrow_sequence.\n\n**RLUSD x402 path** (chain='xrpl', currency='RLUSD'):\n  1. Call with no payment -- returns offer_id and x402 payment requirements.\n  2. Sign the RLUSD payment using the x402 SDK.\n  3. Call again with the same offer_id and the base64-encoded payment.\n\n**Base/USDC x402 path** (chain='base', currency='USDC'):\n  1. Call with no payment -- returns offer_id and x402 payment requirements.\n  2. Sign the USDC payment on Base using the x402 EVM SDK.\n  3. Call again with the same offer_id and the base64-encoded payment.\n\nArgs:\n    listing_id: ID of the listing to make an offer on.\n    buyer_address: Buyer's address (XRPL classic r... or EVM 0x...).\n    chain: Payment chain -- 'xrpl' or 'base'.\n    currency: Payment currency -- 'XRP', 'RLUSD', or 'USDC'.\n    payment: Base64-encoded x402 payment (RLUSD/USDC path second call).\n    offer_id: Offer ID from the first call (RLUSD/USDC path second call).\n",
+    "inputSchema": {
+      "properties": {
+        "listing_id": {
+          "title": "Listing Id",
+          "type": "string"
+        },
+        "buyer_address": {
+          "title": "Buyer Address",
+          "type": "string"
+        },
+        "chain": {
+          "default": "xrpl",
+          "title": "Chain",
+          "type": "string"
+        },
+        "currency": {
+          "default": "XRP",
+          "title": "Currency",
+          "type": "string"
+        },
+        "payment": {
+          "default": "",
+          "title": "Payment",
+          "type": "string"
+        },
+        "offer_id": {
+          "default": "",
+          "title": "Offer Id",
+          "type": "string"
+        },
+        "expected_revision": {
+          "default": "",
+          "title": "Expected Revision",
+          "type": "string"
+        },
+        "ownership_proof": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ownership Proof"
+        }
+      },
+      "required": [
+        "listing_id",
+        "buyer_address"
+      ],
+      "title": "make_offerArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "title": "Result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "make_offerOutput",
+      "type": "object"
+    },
+    "_meta": {
+      "mangrove/marketplace": {
+        "version": 1,
+        "mode": "ownership",
+        "protocol": "ownership-v1",
+        "actor_field": "buyer_address",
+        "wallet_defaults": {
+          "base": {
+            "chain": "base",
+            "currency": "USDC"
+          },
+          "xrpl": {
+            "chain": "xrpl",
+            "currency": "XRP"
+          }
+        },
+        "prepare_constraints": {
+          "payment": "",
+          "offer_id": ""
+        }
+      }
+    }
+  },
+  "marketplace_pay_offer": {
+    "name": "marketplace_pay_offer",
+    "description": "Complete an approved offer's seller payment with standard x402 MCP metadata.\n\nBuyer signature required. Reuse the original offer and payment operation\nfor recovery; a paid offer returns its receipt without another charge.\n",
+    "inputSchema": {
+      "properties": {
+        "offer_id": {
+          "title": "Offer Id",
+          "type": "string"
+        },
+        "buyer_address": {
+          "title": "Buyer Address",
+          "type": "string"
+        },
+        "payment": {
+          "default": "",
+          "title": "Payment",
+          "type": "string"
+        },
+        "ownership_proof": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ownership Proof"
+        }
+      },
+      "required": [
+        "offer_id",
+        "buyer_address"
+      ],
+      "title": "pay_offerArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "_meta": {
+      "mangrove/marketplace": {
+        "version": 1,
+        "mode": "ownership",
+        "protocol": "ownership-v1",
+        "actor_field": "buyer_address",
+        "prepare_constraints": {
+          "payment": ""
+        }
+      }
+    }
+  },
+  "marketplace_accept_offer": {
+    "name": "marketplace_accept_offer",
+    "description": "Seller accepts an offer on their listing.\n\n**XRP escrow path**: escrow_sequence is required. Provide the Sequence\nfield from the on-chain EscrowCreate transaction the buyer broadcast.\nTransitions the listing to 'escrowed' status.\n\n**RLUSD path**: escrow_sequence is not required. The offer should already\nbe in 'accepted' status after the buyer completed x402 payment.\n\nArgs:\n    offer_id: ID of the offer to accept.\n    seller_address: Seller's XRPL address (must match the listing seller).\n    escrow_sequence: Sequence from EscrowCreate tx (XRP path only).\n",
+    "inputSchema": {
+      "properties": {
+        "offer_id": {
+          "title": "Offer Id",
+          "type": "string"
+        },
+        "seller_address": {
+          "title": "Seller Address",
+          "type": "string"
+        },
+        "escrow_sequence": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Escrow Sequence"
+        },
+        "ownership_proof": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ownership Proof"
+        }
+      },
+      "required": [
+        "offer_id",
+        "seller_address"
+      ],
+      "title": "accept_offerArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "title": "Result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "accept_offerOutput",
+      "type": "object"
+    },
+    "_meta": {
+      "mangrove/marketplace": {
+        "version": 1,
+        "mode": "ownership",
+        "protocol": "ownership-v1",
+        "actor_field": "seller_address"
+      }
+    }
+  },
+  "marketplace_confirm_delivery": {
+    "name": "marketplace_confirm_delivery",
+    "description": "Buyer confirms they have received the deliverable.\n\n**XRP escrow path**: Returns unsigned EscrowFinish transaction parameters.\nCall escrow_release with the returned params, then sign and broadcast via\nwallet_xrpl_broadcast to release XRP to the seller.\n\n**RLUSD path**: Marks the transaction as completed immediately (payment was\npre-settled via the x402 facilitator).\n\nArgs:\n    offer_id: ID of the accepted offer.\n    buyer_address: Buyer's XRPL address (must match the offer buyer).\n",
+    "inputSchema": {
+      "properties": {
+        "offer_id": {
+          "title": "Offer Id",
+          "type": "string"
+        },
+        "buyer_address": {
+          "title": "Buyer Address",
+          "type": "string"
+        },
+        "ownership_proof": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ownership Proof"
+        }
+      },
+      "required": [
+        "offer_id",
+        "buyer_address"
+      ],
+      "title": "confirm_deliveryArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "title": "Result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "confirm_deliveryOutput",
+      "type": "object"
+    },
+    "_meta": {
+      "mangrove/marketplace": {
+        "version": 1,
+        "mode": "ownership",
+        "protocol": "ownership-v1",
+        "actor_field": "buyer_address"
+      }
+    }
+  },
+  "marketplace_rate": {
+    "name": "marketplace_rate",
+    "description": "Rate a completed marketplace transaction (buyer or seller).\n\nCan be called by either party after delivery is confirmed.\nScore must be 1 (worst) to 5 (best).\n\nArgs:\n    offer_id: ID of the completed offer.\n    rater_address: Address of the rater (buyer or seller).\n    score: Rating score from 1 to 5.\n    comment: Optional text feedback.\n",
+    "inputSchema": {
+      "properties": {
+        "offer_id": {
+          "title": "Offer Id",
+          "type": "string"
+        },
+        "rater_address": {
+          "title": "Rater Address",
+          "type": "string"
+        },
+        "score": {
+          "title": "Score",
+          "type": "integer"
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comment"
+        },
+        "ownership_proof": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ownership Proof"
+        }
+      },
+      "required": [
+        "offer_id",
+        "rater_address",
+        "score"
+      ],
+      "title": "rateArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "title": "Result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "rateOutput",
+      "type": "object"
+    },
+    "_meta": {
+      "mangrove/marketplace": {
+        "version": 1,
+        "mode": "ownership",
+        "protocol": "ownership-v1",
+        "actor_field": "rater_address"
+      }
+    }
+  }
+}

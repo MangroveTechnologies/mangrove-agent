@@ -18,5 +18,9 @@
       "base_url": "https://api.mangrovedeveloper.ai/api/v1",
       "kb_base_url": "https://kb.mangrovedeveloper.ai/api"
     }
+  },
+  "reconciliation_rpc_urls": {
+    "eip155:84532": "https://sepolia.base.org",
+    "eip155:8453": "https://mainnet.base.org"
   }
 }

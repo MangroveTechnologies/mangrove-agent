@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -62,7 +63,9 @@ def atomic_config(cfg, path=CONFIG):
         Path(name).unlink(missing_ok=True)
 
 
-def upstream_key(cfg):
+def upstream_key(cfg, *, include_saved=False):
+    if not include_saved and cfg.get('MANGROVE_ACCESS_MODE') == 'x402':
+        return ''
     value = cfg.get('MANGROVE_API_KEY')
     if value is None:
         return ''
@@ -150,6 +153,19 @@ def check(cfg):
     return wallets
 
 
+def check_markets(cfg):
+    try:
+        result = request(cfg, '/api/v1/agent/marketplace/readiness')
+        if not isinstance(result, dict) or result.get('ownership_discovery') != 'ready':
+            raise SetupError('Invalid ownership readiness response.')
+    except SetupError:
+        print('Marketplace ownership discovery is unavailable. Check the configured Markets server; '
+              'other agent tools remain available.')
+        return
+    print('Marketplace ownership discovery verified. Wallet backup and network are checked when selected; '
+          'no signing or payment was performed.')
+
+
 def hidden(prompt):
     if not sys.stdin.isatty():
         raise SetupError('Secret entry requires an interactive terminal. No secret was read.')
@@ -171,11 +187,38 @@ def choose(prompt, options, default):
         print('Choose one of the listed options.')
 
 
+def configure_reconciliation(cfg):
+    network(cfg)
+    selected = cfg['X402_NETWORK']
+    path = ROOT / 'server/src/config/mangrove-endpoints.json'
+    defaults = json.loads(path.read_text())['reconciliation_rpc_urls']
+    urls = cfg.get('X402_RECONCILIATION_RPC_URLS')
+    if urls is None or urls == '':
+        urls = {}
+    if isinstance(urls, str):
+        try:
+            urls = json.loads(urls)
+        except ValueError:
+            raise SetupError('Reconciliation RPC configuration must be a JSON object.') from None
+    if not isinstance(urls, dict):
+        raise SetupError('Reconciliation RPC configuration must map networks to URLs.')
+    urls = dict(urls)
+    for chain, value in urls.items():
+        if not isinstance(value, str):
+            raise SetupError('Invalid reconciliation RPC URL.')
+        parsed = urllib.parse.urlsplit(value)
+        if (chain not in defaults or not parsed.hostname or parsed.username or parsed.password or parsed.fragment
+                or not (parsed.scheme == 'https' or (parsed.scheme == 'http' and parsed.hostname in {'localhost', '127.0.0.1', '::1'}))):
+            raise SetupError('Invalid reconciliation RPC URL.')
+    urls.setdefault(selected, defaults[selected])
+    cfg['X402_RECONCILIATION_RPC_URLS'] = urls
+
+
 def configure(args):
     exists = CONFIG.exists()
     cfg = read_config(CONFIG if exists else EXAMPLE)
     old = dict(cfg)
-    key = upstream_key(cfg)
+    key = upstream_key(cfg, include_saved=True)
     mode = args.auth
     if args.api_key_stdin:
         supplied = sys.stdin.read().strip()
@@ -188,9 +231,9 @@ def configure(args):
             mode = {'1': 'api-key', '2': 'x402'}[choose(
                 'How would you like to access MangroveAI?',
                 {'1': 'Use an API key', '2': 'Pay with a wallet (x402; no signup)'},
-                '1' if key else '2')]
+                '2' if cfg.get('MANGROVE_ACCESS_MODE') == 'x402' else '1' if key else '2')]
         else:
-            mode = 'api-key' if key else 'x402'
+            mode = cfg.get('MANGROVE_ACCESS_MODE') or ('api-key' if key else 'x402')
     if mode == 'api-key' and key and not args.yes and not args.api_key_stdin:
         choice = choose(
             'An upstream API key is already configured. Which key should setup use?',
@@ -207,7 +250,10 @@ def configure(args):
         key = hidden('MangroveAI API key (hidden): ')
         if not key or not upstream_key({'MANGROVE_API_KEY': key}):
             raise SetupError('A real API key is required for API-key mode.')
-    cfg['MANGROVE_API_KEY'] = key if mode == 'api-key' else ''
+    cfg['MANGROVE_API_KEY'] = key or ''
+    cfg['MANGROVE_ACCESS_MODE'] = mode
+    if mode == 'x402':
+        configure_reconciliation(cfg)
     raw = cfg.get('API_KEYS', '')
     if raw is None:
         raw = ''
@@ -232,6 +278,7 @@ def configure(args):
     if mode == 'api-key':
         print('Upstream API-key validity/quota have not been checked. Failed keys never trigger wallet payments.')
     else:
+        print('Automatic payment reconciliation configured for the selected network; RPC availability is checked during recovery.')
         print('Setup will not create/import a wallet, confirm a backup, or make a payment.')
 
 
@@ -250,7 +297,7 @@ def address(value):
 
 def guide(cfg, *, yes=False, docker=False):
     if upstream_key(cfg):
-        print('Open Claude in this directory. MangroveAI calls use your API key.')
+        print('MangroveAI calls use your API key. Start ./scripts/chat.sh when ready.')
         return
     chain, _, label = network(cfg)
     suffix = ' --docker' if docker else ''
@@ -285,7 +332,7 @@ def guide(cfg, *, yes=False, docker=False):
             ('Select the payer - choose the saved wallet and review its spending limit.', f'{cmd} --wallet select'),
             ('Apply the settings - restarts the agent if needed and verifies local access.', f'{cmd} --yes{suffix}'),
             (f'Fund the selected address - send USDC on {label} only after checking the service accepts this network.', None),
-            ('Open Claude - start with your wallet list and spending status before requesting a paid tool.', 'claude'),
+            ('Open restricted chat; start with your wallet list and spending status.', './scripts/chat.sh'),
         ])
         print('\nRun each command yourself in this checkout, in order:')
         for number, (description, command) in enumerate(steps, 1):
@@ -401,9 +448,68 @@ def wallet_action(action, cfg):
     print('No payment was made.')
 
 
+def chat_settings() -> dict:
+    def hook(name: str, *args: str) -> dict:
+        path = ROOT / '.claude/hooks' / name
+        if not path.is_file():
+            raise SetupError('Required chat hook is missing; repair the installation.')
+        return {'type': 'command', 'command': shlex.join(['bash', str(path), *args]), 'timeout': 5}
+
+    return {
+        'autoMemoryEnabled': False,
+        'permissions': {
+            'allow': ['mcp__mangrove-agent__*'],
+            'deny': ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'NotebookEdit',
+                     'Agent', 'Task', 'Skill', 'WebFetch', 'WebSearch', 'LSP'],
+            'disableBypassPermissionsMode': 'disable',
+        },
+        'hooks': {
+            'UserPromptSubmit': [{'hooks': [hook('block-wallet-secrets.sh', '--mode', 'user')]}],
+            'PostToolUse': [{'hooks': [hook('block-wallet-secrets.sh', '--mode', 'tool')]}],
+            'PreToolUse': [{
+                'matcher': 'mcp__mangrove-agent__execute_swap',
+                'hooks': [hook('preflight-swap.sh')],
+            }],
+        },
+    }
+
+
+def chat_command(claude: str, cfg: dict, settings_path: Path) -> list[str]:
+    require_auth(cfg)
+    connection = {
+        'type': 'http', 'url': origin(cfg.get('LOCAL_AGENT_URL', '')) + '/mcp/',
+        'headersHelper': shlex.join([sys.executable, str(ROOT / 'scripts/setup_support.py'), 'headers']),
+    }
+    args = [
+        claude, '--tools', '', '--strict-mcp-config',
+        '--mcp-config', json.dumps({'mcpServers': {'mangrove-agent': connection}}),
+        '--setting-sources', '', '--settings', str(settings_path),
+        '--permission-mode', 'default', '--no-chrome',
+    ]
+    return args
+
+
+def launch_chat(cfg: dict) -> int:
+    claude = shutil.which('claude')
+    if claude is None:
+        raise SetupError('Install Claude Code before starting chat.')
+    profile = chat_settings()
+    require_auth(cfg)
+    workspace = ROOT / 'agent-data/chat'
+    workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
+    env = dict(os.environ, ENABLE_TOOL_SEARCH='false',
+               LOCAL_AGENT_URL=origin(cfg.get('LOCAL_AGENT_URL', '')))
+    with tempfile.TemporaryDirectory(prefix='mangrove-chat-') as directory:
+        path = Path(directory) / 'settings.json'
+        path.write_text(json.dumps(profile))
+        os.chmod(path, 0o600)
+        return subprocess.run(chat_command(claude, cfg, path),
+                              cwd=workspace, env=env, check=False).returncode
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['configure', 'check', 'verify', 'guide', 'wallet', 'fingerprint', 'headers', 'register'])
+    parser.add_argument('command', choices=['configure', 'check', 'markets-check', 'verify', 'guide', 'wallet', 'fingerprint', 'headers', 'register', 'chat'])
     parser.add_argument('--auth', choices=['api-key', 'x402'])
     parser.add_argument('--api-key-stdin', action='store_true')
     parser.add_argument('--yes', action='store_true')
@@ -423,7 +529,9 @@ def main():
             print(digest.hexdigest())
         else:
             cfg = read_config()
-            if args.command == 'headers':
+            if args.command == 'chat':
+                return launch_chat(cfg)
+            elif args.command == 'headers':
                 require_auth(cfg)
                 expected = origin(cfg.get('LOCAL_AGENT_URL', '')) + '/mcp/'
                 output_mode = os.fstat(sys.stdout.fileno()).st_mode
@@ -448,7 +556,9 @@ def main():
                                          json.dumps(registration)], capture_output=True, check=False)
                 if result.returncode:
                     raise SetupError('Claude MCP registration failed; update Claude Code and retry setup.')
-                print('Registration saved. Restart Claude Code here and approve the header helper if prompted.')
+                print('Registration saved. Start ./scripts/chat.sh; approve the header helper if prompted.')
+            elif args.command == 'markets-check':
+                check_markets(cfg)
             elif args.command in {'check', 'verify'}:
                 check(cfg)
                 if args.command == 'verify':

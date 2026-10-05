@@ -198,7 +198,7 @@ def test_signer_holds_no_secret(wallet):
     signer = CustodialSigner(wallet)
     # An address, an audit label, and its budget reservations -- no key
     # material, and nothing derived from any.
-    assert sorted(vars(signer)) == ["_address", "_reservations", "_resource", "operation_id"]
+    assert sorted(vars(signer)) == ["_address", "_expected_payment", "_reservations", "_resource", "operation_id"]
     assert _TEST_PRIVKEY not in repr(vars(signer))
 
 
@@ -1358,3 +1358,35 @@ async def test_async_pending_paid_operation_stays_recoverable(wallet, sepolia_ne
     assert result.body == {'done': True}
     from src.services import spend_service
     assert len(spend_service.list_payments()) == 1
+
+
+def test_zero_recipient_never_signed_and_unsigned_budget_released(wallet, monkeypatch):
+    from src.services import spend_service, wallet_manager
+    from src.shared.errors import SigningError
+
+    def reject_secret_access(*args, **kwargs):
+        pytest.fail('Invalid recipient reached private key access')
+
+    monkeypatch.setattr(wallet_manager, '_load_secret', reject_secret_access)
+    before = spend_service.get_status()['spent_usd']
+    requirements = _requirements().model_copy(update={'pay_to': '0x' + '00' * 20})
+    with pytest.raises(SigningError, match='zero address'):
+        _sign_through_scheme(wallet, requirements)
+    assert spend_service.get_status()['spent_usd'] == before
+    assert all(row['state'] != 'authorized' for row in spend_service.list_payments())
+
+
+@pytest.mark.parametrize('before,after', [(10, 10), (9, 10)])
+def test_empty_validity_window_is_refused(wallet, before, after):
+    from src.services.wallet_manager import sign_x402_authorization
+    from src.shared.errors import SigningError
+    from x402.mechanisms.evm.eip712 import AUTHORIZATION_TYPES
+
+    with pytest.raises(SigningError, match='validity window is empty'):
+        sign_x402_authorization(
+            domain={'name': 'USDC', 'version': '2', 'chainId': 84532, 'verifyingContract': _SEPOLIA_USDC},
+            types=AUTHORIZATION_TYPES, primary_type='TransferWithAuthorization',
+            message={'from': wallet, 'to': _PAYEE, 'value': 1000,
+                     'validAfter': after, 'validBefore': before, 'nonce': b'\xab' * 32},
+            wallet_address=wallet,
+        )

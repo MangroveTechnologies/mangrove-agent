@@ -126,3 +126,156 @@ def test_worker_durable_lease_prevents_concurrent_inspections(database):
         assert worker.run_once(urls={NETWORK: 'synthetic'}, rpc_factory=lambda _: pytest.fail('duplicate'), now=1001) == 0
         return RPC()
     worker.run_once(urls={NETWORK: 'synthetic'}, rpc_factory=factory, now=1000)
+
+
+def test_normal_retry_reconciles_expired_unused_before_new_attempt(database, monkeypatch):
+    first, _ = operations.begin('same-request')
+    rid = reserve(operation_id=first['id'])
+    monkeypatch.setattr(worker, 'configured_urls', lambda: {NETWORK: 'synthetic'})
+    run = worker.run_once
+    monkeypatch.setattr(worker, 'run_once', lambda **kwargs: run(rpc_factory=lambda _: RPC(), **kwargs))
+    retried, created = operations.begin('same-request')
+    assert created and retried['id'] != first['id']
+    assert sqlite.get_connection().execute('SELECT state FROM x402_payments WHERE id=?', (rid,)).fetchone()[0] == 'released'
+    assert sqlite.get_connection().execute('SELECT state FROM x402_operations WHERE id=?', (first['id'],)).fetchone()[0] == 'unsigned_failed'
+    assert spend_service.get_status()['spent_usd'] == 0
+    assert len(spend_service.list_payments()) == 1
+
+
+def test_recovery_does_not_sign_replacement_for_ambiguous_payment(database, monkeypatch):
+    first, _ = operations.begin('same-request')
+    reserve(operation_id=first['id'])
+    monkeypatch.setattr(worker, 'configured_urls', lambda: {NETWORK: 'synthetic'})
+    run = worker.run_once
+    def unavailable(*args):
+        raise TimeoutError('SECRET')
+    monkeypatch.setattr(worker, 'run_once', lambda **kwargs: run(rpc_factory=lambda _: unavailable, **kwargs))
+    recovered, created = operations.begin('same-request')
+    assert not created and recovered['id'] == first['id']
+    assert spend_service.get_status()['spent_usd'] == .001
+    assert len(spend_service.list_payments()) == 1
+
+
+def test_different_request_does_not_wait_for_old_recovery(database, monkeypatch):
+    first, _ = operations.begin('first-tool')
+    reserve(operation_id=first['id'])
+    monkeypatch.setattr(worker, 'configured_urls', lambda: {NETWORK: 'synthetic'})
+    monkeypatch.setattr(worker, 'run_once', lambda **kwargs: pytest.fail('Unrelated request waited for recovery'))
+    other, created = operations.begin('other-tool')
+    assert created and other['id'] != first['id']
+    reserve(operation_id=other['id'])
+    assert spend_service.get_status()['spent_usd'] == .002
+
+
+def test_targeted_recovery_does_not_process_another_operation(database):
+    first, _ = operations.begin('first')
+    second, _ = operations.begin('second')
+    rid = reserve(operation_id=first['id'])
+    other = reserve(operation_id=second['id'])
+    assert worker.run_once(urls={NETWORK: 'synthetic'}, rpc_factory=lambda _: RPC(), operation_id=first['id']) == 1
+    rows = {r['id']: r['state'] for r in sqlite.get_connection().execute('SELECT id,state FROM x402_payments')}
+    assert rows[rid] == 'released' and rows[other] == 'authorized'
+
+
+def test_rpc_inspection_has_total_deadline(monkeypatch):
+    rpc = worker.ReadOnlyRPC('https://rpc.test')
+    try:
+        monkeypatch.setattr(worker.time, 'monotonic', lambda: rpc.deadline + 1)
+        with pytest.raises(TimeoutError):
+            rpc('eth_chainId', [])
+    finally:
+        rpc.close()
+
+
+def test_confirmed_settlement_keeps_original_operation_for_result_recovery(database, monkeypatch):
+    first, _ = operations.begin('same-request')
+    rid = reserve(operation_id=first['id'])
+    with spend_service._budget_transaction() as conn:
+        conn.execute('UPDATE x402_payments SET transaction_hash=? WHERE id=?', (TX, rid))
+    monkeypatch.setattr(worker, 'configured_urls', lambda: {NETWORK: 'synthetic'})
+    run = worker.run_once
+    monkeypatch.setattr(worker, 'run_once', lambda **kwargs: run(rpc_factory=lambda _: RPC(used=1), **kwargs))
+    recovered, created = operations.begin('same-request')
+    assert not created and recovered['id'] == first['id']
+    assert sqlite.get_connection().execute('SELECT state FROM x402_payments WHERE id=?', (rid,)).fetchone()[0] == 'settled'
+    assert spend_service.get_status()['spent_usd'] == .001
+
+
+def test_concurrent_retries_after_proven_nonpayment_have_one_new_owner(database, monkeypatch):
+    first, _ = operations.begin('same-request')
+    reserve(operation_id=first['id'])
+    monkeypatch.setattr(worker, 'configured_urls', lambda: {NETWORK: 'synthetic'})
+    run = worker.run_once
+    monkeypatch.setattr(worker, 'run_once', lambda **kwargs: run(rpc_factory=lambda _: RPC(), **kwargs))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        claims = list(pool.map(lambda _: operations.begin('same-request'), range(4)))
+    assert sum(created for _, created in claims) == 1
+    new = [row['id'] for row, created in claims if created]
+    assert new[0] != first['id']
+    assert len(spend_service.list_payments()) == 1
+
+
+def test_fresh_identity_does_not_inherit_identical_pending_request(database, monkeypatch):
+    import uuid
+    first, _ = operations.begin('identical', str(uuid.uuid4()))
+    original = reserve(operation_id=first['id'])
+    monkeypatch.setattr(worker, 'configured_urls', lambda: {NETWORK: 'synthetic'})
+    monkeypatch.setattr(worker, 'run_once', lambda **kwargs: pytest.fail('Fresh request waited for old recovery'))
+    second, created = operations.begin('identical', str(uuid.uuid4()))
+    assert created and second['id'] != first['id']
+    reserve(operation_id=second['id'])
+    status = spend_service.get_status()
+    assert status['reserved_usd'] == .002
+    assert status['settled_usd'] == 0
+    assert sqlite.get_connection().execute('SELECT state FROM x402_payments WHERE id=?', (original,)).fetchone()[0] == 'authorized'
+
+
+def test_same_explicit_identity_still_has_one_owner_under_concurrency(database):
+    import uuid
+    oid = str(uuid.uuid4())
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        claims = list(pool.map(lambda _: operations.begin('same-request', oid), range(8)))
+    assert sum(created for _, created in claims) == 1
+    assert {row['id'] for row, _ in claims} == {oid}
+
+
+def test_recovery_selects_original_when_identical_new_request_exists(database, monkeypatch):
+    import uuid
+    first, _ = operations.begin('identical', str(uuid.uuid4()))
+    original = reserve(operation_id=first['id'])
+    second, _ = operations.begin('identical', str(uuid.uuid4()))
+    reserve(operation_id=second['id'])
+    monkeypatch.setattr(worker, 'configured_urls', lambda: {})
+    recovered, created = operations.begin('identical', first['id'])
+    assert not created and recovered['id'] == first['id']
+    assert operations.reservation_ids(first['id']) == [original]
+
+
+def test_expired_unused_release_does_not_remove_history_or_other_reservation(database):
+    import uuid
+    first, _ = operations.begin('identical', str(uuid.uuid4()))
+    rid = reserve(operation_id=first['id'])
+    second, _ = operations.begin('identical', str(uuid.uuid4()))
+    reserve(operation_id=second['id'])
+    assert worker.run_once(urls={NETWORK: 'synthetic'}, rpc_factory=lambda _: RPC(), operation_id=first['id']) == 1
+    status = spend_service.get_status()
+    assert status['reserved_usd'] == .001
+    assert status['settled_usd'] == 0
+    assert len(spend_service.list_payments()) == 2
+    assert sqlite.get_connection().execute('SELECT state FROM x402_payments WHERE id=?', (rid,)).fetchone()[0] == 'released'
+
+
+def test_operation_index_upgrade_preserves_existing_reservation(database):
+    import uuid
+    from pathlib import Path
+    first, _ = operations.begin('identical', str(uuid.uuid4()))
+    rid = reserve(operation_id=first['id'])
+    conn = sqlite.get_connection()
+    conn.executescript("DROP INDEX idx_x402_active_operation; CREATE UNIQUE INDEX idx_x402_active_operation "
+                       "ON x402_operations(fingerprint) WHERE state = 'pending';")
+    migration = Path(operations.__file__).parents[1] / 'shared/db/migrations/015_independent_payment_operations.sql'
+    conn.executescript(migration.read_text())
+    second, created = operations.begin('identical', str(uuid.uuid4()))
+    assert created and second['id'] != first['id']
+    row = conn.execute('SELECT state,operation_id FROM x402_payments WHERE id=?', (rid,)).fetchone()
+    assert row['state'] == 'authorized' and row['operation_id'] == first['id']

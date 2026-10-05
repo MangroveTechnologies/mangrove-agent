@@ -16,6 +16,16 @@ from src.services.marketplace_authorization import PREFIX, canonical, normalize
 from src.shared.errors import SigningError
 
 
+@pytest.fixture(autouse=True)
+def discovered_contracts(monkeypatch):
+    from pathlib import Path
+    from mcp.types import Tool
+    from src.services import marketplace_catalog
+    contracts = json.loads(Path(__file__).with_name("marketplace_contract_fixture.json").read_text())
+    monkeypatch.setattr(marketplace_catalog, "get_tool_sync", lambda name: Tool.model_validate(contracts[name]))
+    return contracts
+
+
 def arguments():
     return dict(title='Dataset', description='Test', category='data', price_xrp=1)
 
@@ -26,7 +36,7 @@ def challenge(args, wallet, identity, proof=None):
     message = dict(version=1, audience='test-market', user_id=identity['user_id'], org_id=identity['org_id'],
                    credential_type='api_key', operation='marketplace_create_listing',
                    arguments_sha256=hashlib.sha256(canonical(args).encode()).hexdigest(),
-                   chain='base', address=wallet, **fields)
+                   chain='base', network='eip155:84532', address=wallet, **fields)
     return dict(code='OWNERSHIP_REQUIRED', chain='base', address=wallet, ownership_proof=fields,
                 authorization=PREFIX + canonical(message))
 
@@ -89,6 +99,67 @@ def test_prepare_then_real_signature_and_cached_result(env):
     assert len(env.decrypted) == 1
 
 
+@pytest.mark.parametrize('operation', ['marketplace_list_offers', 'marketplace_get_offer'])
+def test_server_owned_private_reads_use_generic_signer_with_read_scope(env, monkeypatch, operation):
+    from src.services.marketplace_authorization import normalize
+
+    env.identity['permissions'] = ['execution:read']
+    inputs = {} if operation == 'marketplace_list_offers' else {'offer_id': 'server-offer'}
+    normalized = normalize(operation, inputs, env.wallet.address)
+    assert normalized['participant_address'] == env.wallet.address
+    assert normalized['chain'] == 'base'
+
+    def remote(settings, name, body):
+        assert name == operation
+        proof = body.get('ownership_proof')
+        args = {k: v for k, v in body.items() if k != 'ownership_proof'}
+        data = challenge(args, env.wallet.address, env.identity, proof)
+        message = json.loads(data['authorization'][len(PREFIX):])
+        message['operation'] = operation
+        data['authorization'] = PREFIX + canonical(message)
+        if proof is None:
+            return data
+        assert Account.recover_message(encode_defunct(text=data['authorization']),
+                                       signature=proof['signature']) == env.wallet.address
+        return {'offers': [{'offer_id': 'server-offer', 'stage': 'awaiting_payment'}]}
+
+    monkeypatch.setattr(svc, '_markets_call', remote)
+    approval = svc.prepare(operation, inputs, env.wallet.address)
+    assert not env.decrypted
+    result = svc.submit(approval['approval_id'], True)
+    assert result['offers'][0]['offer_id'] == 'server-offer'
+    assert len(env.decrypted) == 1
+
+
+def test_discovered_listing_update_uses_generic_approval_and_signer(env, monkeypatch):
+    operation = 'marketplace_update_listing'
+    request = {'listing_id': 'listing', 'expected_revision': 'a' * 64, 'price_amount': 4}
+    calls = []
+    def markets(settings, name, arguments):
+        calls.append(arguments)
+        unsigned = {key: value for key, value in arguments.items() if key != 'ownership_proof'}
+        data = challenge(unsigned, env.wallet.address, env.identity, arguments.get('ownership_proof'))
+        message = json.loads(data['authorization'].removeprefix(PREFIX))
+        message['operation'] = name
+        data['authorization'] = PREFIX + canonical(message)
+        if 'ownership_proof' not in arguments:
+            return data
+        signer = Account.recover_message(encode_defunct(text=data['authorization']),
+                                         signature=arguments['ownership_proof']['signature'])
+        assert signer == env.wallet.address
+        return {'listing_id': 'listing', 'revision': 'b' * 64, 'message': 'Listing updated.'}
+    monkeypatch.setattr(svc, '_markets_call', markets)
+    preview = svc.prepare(operation, request, env.wallet.address)
+    assert preview['arguments']['price_amount'] == 4.0
+    assert preview['arguments']['expected_revision'] == 'a' * 64
+    assert not env.decrypted
+    result = svc.submit(preview['approval_id'], True)
+    assert result['revision'] == 'b' * 64
+    assert svc.submit(preview['approval_id'], True) == result
+    assert len(calls) == 2
+    assert len(env.decrypted) == 1
+
+
 def test_confirmation_required(env):
     approval = prepare(env)
     with pytest.raises(svc.MarketplaceError):
@@ -96,9 +167,40 @@ def test_confirmation_required(env):
     assert not env.decrypted
 
 
+@pytest.mark.parametrize('code', ['OWNERSHIP_DENIED', 'RESOURCE_UNAVAILABLE'])
+def test_prepare_preserves_remote_rejection_without_approval_or_signing(env, monkeypatch, code):
+    denial = {'error': True, 'code': code, 'message': 'Remote action refused.',
+              'suggestion': '', 'details': {'decision_id': 'remote-decision'}}
+    monkeypatch.setattr(svc, '_markets_call', lambda *args: denial.copy())
+    assert prepare(env) == denial
+    with svc._db() as connection:
+        assert connection.execute('SELECT COUNT(*) FROM marketplace_approvals').fetchone()[0] == 0
+    assert not env.decrypted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name', ['marketplace_prepare', 'marketplace_submit'])
+async def test_local_mcp_preserves_remote_denial_as_error(monkeypatch, name):
+    from mcp.server.fastmcp import FastMCP
+    from src.mcp import tools
+    from src.mcp.marketplace_tools import register_marketplace
+    denial = {'error': True, 'code': 'OWNERSHIP_DENIED', 'message': 'Action not authorized.'}
+    monkeypatch.setattr(tools, '_require', lambda key: True)
+    monkeypatch.setattr(svc, 'prepare', lambda *args: denial.copy())
+    monkeypatch.setattr(svc, 'submit', lambda *args: denial.copy())
+    server = FastMCP('denial-test')
+    register_marketplace(server)
+    args = ({'operation': 'remote_action', 'arguments': {}, 'wallet_address': 'wallet'}
+            if name == 'marketplace_prepare' else {'approval_id': 'approval', 'confirm': True})
+    result = await server.call_tool(name, args)
+    assert result.isError
+    assert result.structuredContent == denial
+    assert json.loads(result.content[0].text) == denial
+
+
 @pytest.mark.parametrize('field,value', [
     ('audience', 'evil'), ('user_id', 'bob'), ('org_id', 'other'), ('operation', 'wallet_send'),
-    ('arguments_sha256', '0' * 64), ('chain', 'xrpl'), ('address', '0x' + '11' * 20),
+    ('arguments_sha256', '0' * 64), ('network', 'eip155:8453'), ('chain', 'xrpl'), ('address', '0x' + '11' * 20),
     ('credential_type', 'jwt'), ('version', 2), ('expires_at', 9999999999),
 ])
 def test_tampered_challenge_never_decrypts(env, field, value):
@@ -263,11 +365,14 @@ def test_approval_survives_connection_restart(env):
 
 @pytest.mark.parametrize('legacy', [False, True])
 @pytest.mark.parametrize('upstream_error', [False, True])
-def test_native_mcp_discovery_before_call(monkeypatch, legacy, upstream_error):
+def test_native_mcp_discovery_before_call(monkeypatch, legacy, upstream_error, discovered_contracts):
     from mcp.client.streamable_http import streamablehttp_client as real_transport
 
     from src.config import app_config
-    from src.services.marketplace_authorization import Listing
+    from mcp.types import Tool
+    from src.services.marketplace_authorization import contract_digest
+    contract = discovered_contracts["marketplace_create_listing"]
+    settings = {"markets": "http://localhost:8081", "contract_digest": contract_digest(Tool.model_validate(contract))}
     monkeypatch.setattr(app_config, 'MANGROVE_API_KEY', 'test_key')
     methods = []
     def handle(request):
@@ -283,12 +388,14 @@ def test_native_mcp_discovery_before_call(monkeypatch, legacy, upstream_error):
             result = {'protocolVersion': '2025-03-26', 'capabilities': {'tools': {}},
                       'serverInfo': {'name': 'test-markets', 'version': '1'}}
         elif body['method'] == 'tools/list':
-            schema = Listing.model_json_schema()
-            if not legacy:
-                schema['properties']['ownership_proof'] = {'type': 'object'}
-            result = {'tools': [{'name': 'marketplace_create_listing', 'inputSchema': schema}]}
+            advertised = json.loads(json.dumps(contract))
+            if legacy:
+                advertised.pop('_meta')
+            result = {'tools': [advertised]}
         else:
-            result = {'isError': upstream_error, 'content': [{'type': 'text', 'text': json.dumps({'code': 'OWNERSHIP_REQUIRED'})}]}
+            payload = json.dumps({'code': 'OWNERSHIP_REQUIRED'})
+            result = {'isError': upstream_error, 'content': [{'type': 'text', 'text': payload}],
+                      'structuredContent': {'result': payload}}
         return httpx.Response(200, json={'jsonrpc': '2.0', 'id': body['id'], 'result': result})
     def transport(url, **kwargs):
         def factory(headers=None, timeout=None, auth=None):
@@ -299,10 +406,10 @@ def test_native_mcp_discovery_before_call(monkeypatch, legacy, upstream_error):
     monkeypatch.setattr(svc, 'streamablehttp_client', transport)
     if legacy:
         with pytest.raises(svc.MarketplaceError):
-            svc._markets_call({'markets': 'http://localhost:8081'}, 'marketplace_create_listing', {})
+            svc._markets_call(settings, 'marketplace_create_listing', {})
         assert 'tools/call' not in methods
     else:
-        result = svc._markets_call({'markets': 'http://localhost:8081'}, 'marketplace_create_listing', {})
+        result = svc._markets_call(settings, 'marketplace_create_listing', {})
         assert result['code'] == 'OWNERSHIP_REQUIRED'
         assert bool(result.get('error')) is upstream_error
         assert methods.index('tools/list') < methods.index('tools/call')
@@ -321,9 +428,13 @@ async def test_local_mcp_auth_and_service_wiring(monkeypatch):
     monkeypatch.setattr(svc, 'prepare', lambda *args: calls.append(args) or {'approval_id': 'a'})
     tool = server._tool_manager._tools['marketplace_prepare']
     args = {'operation': 'marketplace_create_listing', 'arguments': {}, 'wallet_address': 'wallet'}
-    assert json.loads(await tool.run(args))['code'] == 'AUTH_INVALID_API_KEY'
+    denied = await tool.run(args)
+    assert denied.isError
+    assert denied.structuredContent['code'] == 'AUTH_INVALID_API_KEY'
     assert not calls
-    assert json.loads(await tool.run({**args, 'api_key': 'local-key'}))['approval_id'] == 'a'
+    approved = await tool.run({**args, 'api_key': 'local-key'})
+    assert not approved.isError
+    assert approved.structuredContent['approval_id'] == 'a'
     assert len(calls) == 1
 
 
@@ -436,6 +547,7 @@ def test_xrpl_prepare_sign_submit_and_replay(env, monkeypatch, algorithm, operat
                          args.get('ownership_proof'))
         message = json.loads(data['authorization'].split('\n', 1)[1])
         message['chain'] = data['chain'] = 'xrpl'
+        message['network'] = 'xrpl:testnet'
         message['operation'] = operation
         data['authorization'] = PREFIX + canonical(message)
         if 'ownership_proof' not in args:
@@ -464,7 +576,7 @@ def test_xrpl_wallet_network_mismatch_fails_before_remote_call(env, monkeypatch)
     assert not env.calls and not env.decrypted
 
 
-@pytest.mark.parametrize('args', [{'chain': 'base'}, {'currency': 'USDC'}, {'seller_address': 'rOTHER'}])
+@pytest.mark.parametrize('args', [{'seller_address': 'rOTHER'}])
 def test_xrpl_wrong_chain_or_actor_rejected(args):
     from xrpl.wallet import Wallet
     wallet = Wallet.create()
@@ -472,16 +584,15 @@ def test_xrpl_wrong_chain_or_actor_rejected(args):
         normalize('marketplace_create_listing', {**arguments(), **args}, wallet.classic_address, 'xrpl')
 
 
-def test_xrpl_escrow_sequence_and_base_guard():
-    from xrpl.wallet import Wallet
-    address = Wallet.create().classic_address
+def test_server_schema_controls_argument_constraints(discovered_contracts):
+    contract = discovered_contracts['marketplace_accept_offer']
+    contract['inputSchema']['properties']['escrow_sequence'] = {'type': 'integer', 'minimum': 1, 'maximum': 2**32 - 1}
     args = {'offer_id': 'offer', 'escrow_sequence': 123}
-    assert normalize('marketplace_accept_offer', args, address, 'xrpl')['escrow_sequence'] == 123
+    address = Account.create().address
+    assert normalize('marketplace_accept_offer', args, address)['escrow_sequence'] == 123
     for bad in (True, 0, -1, 2**32):
         with pytest.raises(SigningError):
-            normalize('marketplace_accept_offer', {**args, 'escrow_sequence': bad}, address, 'xrpl')
-    with pytest.raises(SigningError):
-        normalize('marketplace_accept_offer', args, Account.create().address)
+            normalize('marketplace_accept_offer', {**args, 'escrow_sequence': bad}, address)
 
 
 @pytest.mark.parametrize('field', ['chain', 'address', 'authorization'])
@@ -493,6 +604,7 @@ def test_xrpl_tampering_never_decrypts(env, monkeypatch, field):
     data = challenge(args, wallet.classic_address, env.identity)
     payload = json.loads(data['authorization'].split('\n', 1)[1])
     payload['chain'] = data['chain'] = 'xrpl'
+    payload['network'] = 'xrpl:testnet'
     data['authorization'] = PREFIX + canonical(payload)
     data[field] = {'chain': 'base', 'address': wallet.classic_address.lower(), 'authorization': 'other'}[field]
     with pytest.raises(SigningError):
@@ -514,3 +626,56 @@ def test_hook_blocks_xrpl_seeds(mode, algorithm):
     result = subprocess.run(['bash', str(hook), '--mode', mode], input=json.dumps({'seed': seed}), text=True, capture_output=True)
     assert result.returncode == 2
     assert seed not in result.stdout + result.stderr
+
+
+def test_changed_contract_never_signs(env, discovered_contracts):
+    approval = prepare(env)
+    discovered_contracts['marketplace_create_listing']['description'] = 'Changed definition'
+    with pytest.raises(svc.MarketplaceError, match='contract changed'):
+        svc.submit(approval['approval_id'], True)
+    assert not env.decrypted
+
+
+def test_legacy_approval_never_signs(env):
+    approval = prepare(env)
+    with svc._db() as connection:
+        payload = json.loads(connection.execute('SELECT payload FROM marketplace_approvals WHERE id=?', (approval['approval_id'],)).fetchone()[0])
+        payload.pop('contract_digest')
+        connection.execute('UPDATE marketplace_approvals SET payload=? WHERE id=?', (json.dumps(payload), approval['approval_id']))
+    with pytest.raises(svc.MarketplaceError, match='contract changed'):
+        svc.submit(approval['approval_id'], True)
+    assert not env.decrypted
+
+
+@pytest.mark.parametrize('reference', ['https://example.com/schema', 'file:///tmp/schema'])
+def test_remote_schema_reference_rejected(env, discovered_contracts, reference):
+    discovered_contracts['marketplace_create_listing']['inputSchema']['properties']['title'] = {'$ref': reference}
+    with pytest.raises(SigningError):
+        prepare(env)
+    assert not env.decrypted and not env.calls
+
+
+def test_schema_numbers_match_server_float_canonicalization(env):
+    normalized = normalize('marketplace_create_listing', arguments(), env.wallet.address)
+    assert type(normalized['price_xrp']) is float
+    assert '"price_xrp":1.0' in canonical(normalized)
+
+
+@pytest.mark.parametrize('operation, arguments, field', [
+    ('marketplace_rate', {'offer_id': 'offer', 'score': 3.0}, 'score'),
+    ('marketplace_accept_offer', {'offer_id': 'offer', 'escrow_sequence': 123.0}, 'escrow_sequence'),
+])
+def test_schema_integral_floats_match_server_integer_canonicalization(env, operation, arguments, field):
+    normalized = normalize(operation, arguments, env.wallet.address)
+    assert type(normalized[field]) is int
+    expected = {**normalized, field: int(arguments[field])}
+    assert hashlib.sha256(canonical(normalized).encode()).digest() == hashlib.sha256(canonical(expected).encode()).digest()
+
+
+@pytest.mark.parametrize('operation, arguments', [
+    ('marketplace_rate', {'offer_id': 'offer', 'score': 3.5}),
+    ('marketplace_accept_offer', {'offer_id': 'offer', 'escrow_sequence': 123.5}),
+])
+def test_schema_fractional_values_rejected_for_integer_fields(env, operation, arguments):
+    with pytest.raises(SigningError):
+        normalize(operation, arguments, env.wallet.address)

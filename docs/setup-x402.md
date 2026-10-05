@@ -9,6 +9,12 @@ The script always creates or preserves a separate local credential for Claude's
 access to the agent. Omitting an upstream key never disables local authentication.
 Select either mode from this menu, or use `--auth api-key` / `--auth x402` to
 choose explicitly without the menu. Invalid API keys never fall back to payment.
+The choice is saved as `MANGROVE_ACCESS_MODE` (`api-key` or `x402`). Switching to
+x402 preserves a previously saved upstream key but does not send it to MangroveAI
+or Markets for these calls. Switching back can reuse it. Existing configurations
+without this setting continue to select API-key mode when a key is present.
+Local wallets, approvals, payment history and Claude's local credential are not
+reset by changing access mode.
 
 `--yes` preserves existing settings; on a fresh install it selects x402 and defers
 wallet onboarding. It never creates/imports a wallet, confirms a backup or makes
@@ -151,3 +157,76 @@ capabilities work without other credentials.
   remove that lock directory only after confirming setup is no longer running.
 - `--foreground` completes registration and checks before waiting in the terminal;
   Ctrl+C stops that agent. Background mode is not a reboot/crash supervisor.
+
+## Automatic payment recovery
+
+Normal `scripts/setup.sh` x402 setup now configures a read-only reconciliation
+RPC for the selected Base network, using the reviewed endpoints shipped in
+`mangrove-endpoints.json`. Existing custom RPCs are preserved. Operators can use
+a dedicated provider through `X402_RECONCILIATION_RPC_URLS`; its endpoint must
+support finalized blocks and block-hash-pinned `eth_call`. Setup configures the
+endpoint but does not claim it is reachable or make payments. Rerun setup and
+restart existing installations to enable this configuration.
+
+The shared agent worker checks pending authorizations in bounded batches every
+15 seconds, with per-operation backoff. Retrying the same pending request also
+checks that operation when its inspection is due, with an eight-second RPC
+inspection deadline and bounded network timeouts. An in-flight network phase
+can finish after that deadline. Different requests do not wait for that inspection. This
+applies to MangroveAI HTTP calls and Markets MCP calls. Spend status reports
+configured reconciliation networks without exposing RPC credentials.
+
+Only finalized evidence of an expired unused or cancelled authorization releases
+its reservation. Wall-clock expiry, an HTTP error, an empty result, or a request
+for a different tool cannot do so. A normal fresh request after proven nonpayment
+can create a new operation within the existing budget. Explicit recovery of a
+closed operation never silently creates a replacement payment. Confirmed paid
+operations retain their identity for response recovery; repeated recovery uses
+the original proof and never signs again. A successful empty response is cached
+like any other successful result.
+
+The worker never purchases, signs, resets a spending cap, or deletes payment
+evidence. Unavailable RPCs and ambiguous settlement remain pending; unrelated
+requests can proceed within the remaining budget. Authorization expiry bounds
+an unused signature's lifetime, not retention of financial evidence or paid
+results. Refund processing still requires a receiver-supported policy and
+confirmed repayment; discarding a record is not a refund.
+
+Rejected requests do not justify erasing a signed payment. The agent distinguishes
+unsigned failures, provably unspendable authorizations, and unsettled outcomes.
+For supported Base USDC v2 payments, it can close an authorization addressed to
+zero or one with an empty validity interval without waiting for finality. It must
+first recover the signer from the original saved EIP-712 proof and match its
+network, token, payer, recipient, amount, nonce, and validity bounds to the ledger.
+An HTTP status, facilitator rejection string, changed recipient configuration,
+or an altered ledger field alone is insufficient evidence.
+
+This check runs on an ordinary retry and in background reconciliation, for both
+MangroveAI HTTP and Markets MCP payments. Closing the attempt releases its budget
+and retains the audit record; the next ordinary request receives a new operation
+identity. Explicitly replaying the closed old ID never authorizes a new charge.
+Concurrent retries still have one owner. A usable authorization with an unknown
+settlement stays reserved for chain-based reconciliation; different requests can
+continue within the remaining budget. A paid-but-lost response still recovers the
+original operation instead of creating a replacement payment.
+
+
+### New requests versus payment recovery
+
+An explicit new operation ID represents an independent request even when its
+arguments match an older pending request. Markets reads and remote MCP calls
+allocate a fresh ID when the caller omits the recovery ID. MangroveAI SDK calls
+also allocate one ID per HTTP request, preserved through its payment challenge;
+SDK automatic retries remain disabled. Explicit recovery
+reuses the original ID, proof and saved result. Automatic recovery never creates
+a fresh payment. Legacy callers without an operation identity retain conservative
+fingerprint-based recovery; callers must assign one identity per logical request
+to opt into independent identical requests.
+
+Uncertain reservations still consume the remaining budget until proven unpaid.
+The status response exposes `settled_usd` (net of confirmed refunds) and
+`reserved_usd` separately; legacy `spent_usd` includes both for compatibility.
+Proven unpaid attempts are marked released, excluded from budget consumption,
+and retained as audit/replay evidence. Elapsed local time alone never proves a
+signed authorization was not used. Fresh requests can therefore proceed while
+older attempts reconcile, provided there is enough unreserved budget.

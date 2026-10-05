@@ -85,13 +85,13 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 API_KEY=$(python3 -c "
-import json
+import json, sys
 try:
-    raw = json.load(open('$CONFIG_FILE')).get('API_KEYS', '')
+    raw = json.load(open(sys.argv[1])).get('API_KEYS', '')
 except Exception:
     raw = ''
 print(next((k.strip() for k in raw.split(',') if k.strip()), ''))
-")
+" "$CONFIG_FILE")
 
 if [ -z "$API_KEY" ]; then
     exit 0

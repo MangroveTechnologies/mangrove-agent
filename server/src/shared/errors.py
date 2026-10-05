@@ -273,7 +273,7 @@ class X402PaymentUncertain(X402PaymentError):
                  operation_id=None, pause_until=None):
         super().__init__(
             "This operation's payment outcome is unresolved; its amount remains reserved.",
-            suggestion="Other requests can proceed within the remaining budget. Recover this operation using its existing identity; do not create a replacement payment or paid fallback. Background reconciliation can resolve its payment separately.",
+            suggestion="A new user request can proceed within the remaining budget, including a fresh call to the same tool. For a fresh request omit the old operation ID; for recovery reuse it. Never turn an automatic recovery into a new payment. The original payment remains tracked by background reconciliation.",
             correlation_id=correlation_id,
         )
         self.reservation_ids = list(reservation_ids)

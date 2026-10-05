@@ -17,7 +17,8 @@ from mcp.client.streamable_http import streamablehttp_client
 
 from mcp import ClientSession
 from src.config import app_config
-from src.services.marketplace_authorization import MODELS, normalize, validate_challenge
+from src.shared.clients.mangrove import _api_key
+from src.services.marketplace_authorization import contract_digest, normalize_arguments, validate_challenge
 from src.services.wallet_manager import _get_wallet_row, sign_marketplace_proof
 from src.shared.errors import AgentError, SigningError, UpstreamAccessError, upstream_access_error
 from src.shared.x402.mcp_diagnostics import protect_mcp_diagnostics
@@ -43,27 +44,88 @@ def _url(value: str) -> str:
 
 
 def _settings() -> dict:
-    key = getattr(app_config, "MANGROVE_API_KEY", None)
-    audience = getattr(app_config, "MARKETPLACE_OWNERSHIP_AUDIENCE", None)
+    key = _api_key(app_config)
+    pinned_audience = getattr(app_config, "MARKETPLACE_OWNERSHIP_AUDIENCE", None)
     chain_id = getattr(app_config, "MARKETPLACE_CHAIN_ID", None)
     xrpl_network = getattr(app_config, "MARKETPLACE_XRPL_NETWORK", None)
-    if (not isinstance(key, str) or not key.strip() or key.lower() in {"null", "none"}
-            or not isinstance(audience, str) or not audience.strip()
-            or (chain_id is not None and (type(chain_id) is not int or chain_id not in {8453, 84532}))
-            or (xrpl_network is not None and xrpl_network not in {"mainnet", "testnet", "devnet"})
-            or (chain_id is None and xrpl_network is None)):
-        raise MarketplaceError("Configure the Mangrove API key, marketplace audience and supported wallet network first.")
+    if ((chain_id is not None and (type(chain_id) is not int or chain_id not in {8453, 84532}))
+            or (xrpl_network is not None and xrpl_network not in {"mainnet", "testnet", "devnet"})):
+        raise MarketplaceError("Configure a supported marketplace wallet network.")
+    markets = _url(app_config.MANGROVEMARKETS_BASE_URL)
+    authority = _url(getattr(app_config, "MANGROVEAI_BASE_URL", None)) if key else None
+    ownership = _discover_ownership(markets)
+    audience = ownership["audience"]
+    if pinned_audience is not None and pinned_audience != audience:
+        raise MarketplaceError("Markets ownership identity does not match the configured deployment.")
+    discovered_chain_id = ownership["chain_id"]
+    if chain_id is not None and chain_id != discovered_chain_id:
+        raise MarketplaceError("Markets EVM network does not match the configured deployment.")
+    discovered_xrpl = ownership.get("xrpl_network")
+    if xrpl_network is not None and xrpl_network != discovered_xrpl:
+        raise MarketplaceError("Markets XRPL network does not match the configured deployment.")
     return {
-        "markets": _url(app_config.MANGROVEMARKETS_BASE_URL),
-        "authority": _url(getattr(app_config, "MANGROVEAI_BASE_URL", None)),
-        "audience": audience, "chain_id": chain_id,
-        **({"xrpl_network": xrpl_network} if xrpl_network is not None else {}),
+        "markets": markets, "authority": authority,
+        "audience": audience, "chain_id": discovered_chain_id,
+        **({"xrpl_network": discovered_xrpl} if discovered_xrpl is not None else {}),
     }
+
+
+def _discover_ownership(markets: str) -> dict:
+    try:
+        with httpx.Client(timeout=10, follow_redirects=False, trust_env=False) as client:
+            with client.stream("GET", markets + "/.well-known/mangrove-marketplace",
+                               headers={"Accept-Encoding": "identity"}) as response:
+                if (response.status_code != 200
+                        or response.headers.get("content-encoding", "identity") != "identity"):
+                    raise ValueError
+                raw = bytearray()
+                for chunk in response.iter_bytes():
+                    raw.extend(chunk)
+                    if len(raw) > 8192:
+                        raise ValueError
+                document = json.loads(raw)
+        if (not isinstance(document, dict) or type(document.get("version")) is not int
+                or document["version"] != 1):
+            raise ValueError
+        ownership = document.get("ownership")
+        if (not isinstance(ownership, dict) or type(ownership.get("version")) is not int
+                or ownership["version"] != 1):
+            raise ValueError
+        audience = ownership.get("audience")
+        if (not isinstance(audience, str) or not audience.strip() or len(audience) > 200
+                or any(ord(c) < 32 or ord(c) == 127 for c in audience)):
+            raise ValueError
+        if ("xrpl_network" in ownership
+                and ownership["xrpl_network"] not in {"mainnet", "testnet", "devnet"}):
+            raise ValueError
+        chain_id = ownership.get("chain_id")
+        if (type(chain_id) is not int or chain_id not in {8453, 84532}
+                or ownership.get("evm_network") != f"eip155:{chain_id}"):
+            raise ValueError
+        return ownership
+    except (httpx.HTTPError, ValueError, TypeError):
+        raise MarketplaceError("Markets ownership discovery is unavailable or incompatible.") from None
+
+
+def readiness() -> dict:
+    """Check ownership configuration without signing, paying or creating approvals."""
+    _settings()
+    return {"ownership_discovery": "ready", "wallet_check": "on_selection"}
+
+
+def _identity(settings: dict, wallet: dict) -> dict:
+    if _api_key(app_config):
+        return _request("GET", settings["authority"] + "/auth/markets-context")
+    network = (f"xrpl:{settings['xrpl_network']}" if wallet["chain"] == "xrpl"
+               else f"eip155:{settings['chain_id']}")
+    address = wallet["address"] if wallet["chain"] == "xrpl" else wallet["address"].lower()
+    return {"version": 1, "audience": "mangrovemarkets", "auth_method": "wallet",
+            "user_id": f"wallet:{network}:{address}", "org_id": None, "permissions": []}
 
 
 def _credential_binding(salt: bytes) -> str:
     digest = hashlib.pbkdf2_hmac(
-        "sha256", app_config.MANGROVE_API_KEY.encode(), salt, 600_000, dklen=32,
+        "sha256", (_api_key(app_config) or "wallet-only").encode(), salt, 600_000, dklen=32,
     )
     return f"pbkdf2-sha256-600000${salt.hex()}${digest.hex()}"
 
@@ -117,6 +179,11 @@ def _wallet(address: str, settings: dict) -> dict:
     return wallet
 
 
+def _wallet_settings(address: str, settings: dict) -> dict:
+    _wallet(address, settings)
+    return settings.copy()
+
+
 def _markets_call(settings: dict, operation: str, arguments: dict) -> dict:
     """Discover ownership support and invoke only a pinned tool over native MCP."""
     async def invoke() -> dict:
@@ -128,7 +195,7 @@ def _markets_call(settings: dict, operation: str, arguments: dict) -> dict:
         with anyio.fail_after(20):
             async with streamablehttp_client(
                 settings["markets"] + "/mcp/",
-                headers={"Authorization": f"Bearer {app_config.MANGROVE_API_KEY}"},
+                headers=({"Authorization": f"Bearer {_api_key(app_config)}"} if _api_key(app_config) else {}),
                 timeout=15, sse_read_timeout=15, httpx_client_factory=factory,
             ) as (read, write, _):
                 async with ClientSession(read, write) as session:
@@ -141,8 +208,11 @@ def _markets_call(settings: dict, operation: str, arguments: dict) -> dict:
                         cursor = page.nextCursor
                         if found or not cursor:
                             break
-                    expected = set(MODELS[operation][0].model_fields) | {"ownership_proof"}
-                    if found is None or set(found.inputSchema.get("properties", {})) != expected:
+                    metadata = (found.meta or {}).get("mangrove/marketplace", {}) if found else {}
+                    if (found is None or metadata.get("version") != 1
+                            or metadata.get("mode") != "ownership"
+                            or metadata.get("protocol") != "ownership-v1"
+                            or settings.get("contract_digest") != contract_digest(found)):
                         raise MarketplaceError("Markets does not advertise the supported ownership tool contract.")
                     result = await session.call_tool(operation, arguments=arguments)
                     if len(result.content) != 1 or result.content[0].type != "text":
@@ -184,30 +254,45 @@ def _db() -> sqlite3.Connection:
 def prepare(operation: str, arguments: dict, wallet_address: str) -> dict:
     """Fetch and validate a challenge without signing or executing a mutation."""
     settings = _settings()
+    settings = _wallet_settings(wallet_address, settings)
     wallet = _wallet(wallet_address, settings)
-    arguments = normalize(operation, arguments, wallet["address"], "xrpl" if wallet["chain"] == "xrpl" else "base")
-    identity = _request("GET", settings["authority"] + "/auth/markets-context")
-    challenge = _markets_call(settings, operation, arguments)
+    from src.services.marketplace_catalog import get_tool_sync
+    tool = get_tool_sync(operation)
+    arguments = normalize_arguments(tool, arguments, wallet["address"], "xrpl" if wallet["chain"] == "xrpl" else "base")
+    identity = _identity(settings, wallet)
+    challenge = _markets_call({**settings, "contract_digest": contract_digest(tool)}, operation, arguments)
     if challenge.get("code") != "OWNERSHIP_REQUIRED":
+        if challenge.get("error") is True:
+            return challenge
         raise MarketplaceError("Markets did not return an ownership challenge; no signing was attempted.")
     validate_challenge(challenge, operation=operation, arguments=arguments, wallet=wallet["address"],
                        audience=settings["audience"], identity=identity,
-                       chain="xrpl" if wallet["chain"] == "xrpl" else "base")
+                       chain="xrpl" if wallet["chain"] == "xrpl" else "base",
+                       network=(f"xrpl:{settings['xrpl_network']}" if wallet["chain"] == "xrpl"
+                                else f"eip155:{settings['chain_id']}"))
+    payment_intent = None
+    if challenge.get("payment_intent") is not None:
+        from src.services.marketplace_payments import validate_intent
+        payment_intent = validate_intent(challenge["payment_intent"], settings)
     approval_id = str(uuid.uuid4())
     expires_at = challenge["ownership_proof"]["expires_at"]
     payload = {"settings": settings, "operation": operation, "arguments": arguments,
                "wallet": wallet["address"], "identity": identity, "challenge": challenge,
-               "credential_binding": _credential_binding(secrets.token_bytes(16))}
+               "credential_binding": _credential_binding(secrets.token_bytes(16)),
+               "contract_digest": contract_digest(tool), "payment_intent": payment_intent}
     with closing(_db()) as connection:
         connection.execute("DELETE FROM marketplace_approvals WHERE id IN "
                            "(SELECT id FROM marketplace_approvals WHERE state = 'prepared' AND expires_at <= ? LIMIT 1000)",
                            (time.time(),))
         connection.execute("INSERT INTO marketplace_approvals VALUES (?, ?, ?, 'prepared', NULL)",
                            (approval_id, json.dumps(payload), expires_at))
-    return {"approval_id": approval_id, "operation": operation, "arguments": arguments,
+    return {**({"payment": payment_intent} if payment_intent else {}), "approval_id": approval_id, "operation": operation, "arguments": arguments,
             "wallet_address": wallet["address"], "chain_id": settings["chain_id"],
             "chain": "xrpl" if wallet["chain"] == "xrpl" else "base",
-            "network": wallet.get("network"),
+            "network": (settings.get("xrpl_network") if wallet["chain"] == "xrpl"
+                        else "mainnet" if settings["chain_id"] == 8453 else "testnet"),
+            "settlement_network": (f"xrpl:{settings['xrpl_network']}" if wallet["chain"] == "xrpl"
+                                   else f"eip155:{settings['chain_id']}"),
             "markets_url": settings["markets"], "expires_at": expires_at,
             "status": "approval_required",
             "message": "Review this exact action with the user before calling marketplace_submit with confirm=true."}
@@ -223,19 +308,31 @@ def submit(approval_id: str, confirm: bool = False) -> dict:
         if row is None:
             raise MarketplaceError("Marketplace approval was not found.")
         payload = json.loads(row["payload"])
+        settings = _wallet_settings(payload["wallet"], settings)
         if payload["settings"] != settings or not _credential_matches(payload.get("credential_binding")):
             raise MarketplaceError("Marketplace configuration or API key changed; approval is invalid.")
         if row["state"] == "completed":
-            return json.loads(row["result"])
+            from src.services.marketplace_payments import continue_payment
+            return continue_payment(payload, json.loads(row["result"]), approval_id)
         if row["state"] != "prepared":
             raise MarketplaceError("This action was already submitted; inspect its outcome before creating another approval.")
-        identity = _request("GET", settings["authority"] + "/auth/markets-context")
+        from src.services.marketplace_catalog import get_tool_sync
+        current_tool = get_tool_sync(payload["operation"])
+        if payload.get("contract_digest") != contract_digest(current_tool):
+            raise MarketplaceError("Markets tool contract changed; prepare the action again before signing.")
+        wallet = _wallet(payload["wallet"], settings)
+        identity = _identity(settings, wallet)
         if identity != payload["identity"]:
             raise MarketplaceError("Account authorization changed; approval is invalid.")
         wallet = _wallet(payload["wallet"], settings)
         validate_challenge(payload["challenge"], operation=payload["operation"], arguments=payload["arguments"],
                            wallet=payload["wallet"], audience=settings["audience"], identity=identity,
-                           chain="xrpl" if wallet["chain"] == "xrpl" else "base")
+                           chain="xrpl" if wallet["chain"] == "xrpl" else "base",
+                           network=(f"xrpl:{settings['xrpl_network']}" if wallet["chain"] == "xrpl"
+                                    else f"eip155:{settings['chain_id']}"))
+        if payload.get("payment_intent"):
+            from src.services.purchase_balance import require_purchase_balance
+            require_purchase_balance(payload["wallet"], payload["payment_intent"]["requirements"])
         claimed = connection.execute(
             "UPDATE marketplace_approvals SET state = 'submitted' WHERE id = ? AND state = 'prepared' AND expires_at > ?",
             (approval_id, time.time()),
@@ -251,12 +348,13 @@ def submit(approval_id: str, confirm: bool = False) -> dict:
             arguments = {**payload["arguments"], "ownership_proof": {
                 **payload["challenge"]["ownership_proof"], **proof,
             }}
-            result = _markets_call(settings, payload["operation"], arguments)
+            result = _markets_call({**settings, "contract_digest": payload["contract_digest"]}, payload["operation"], arguments)
             connection.execute("UPDATE marketplace_approvals SET state = 'completed', result = ? WHERE id = ?",
                                (json.dumps(result), approval_id))
-            return result
         except Exception:
             raise MarketplaceError(
                 "Action outcome is uncertain. Do not submit a replacement; inspect Markets records first.",
                 suggestion=f"Retain approval ID {approval_id} for reconciliation.",
             ) from None
+        from src.services.marketplace_payments import continue_payment
+        return continue_payment(payload, result, approval_id)

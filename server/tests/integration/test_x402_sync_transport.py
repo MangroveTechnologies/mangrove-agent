@@ -1043,3 +1043,55 @@ async def test_signal_workflow_stops_on_second_page_payment_failure(wallet, auto
         assert signed_offsets == [0, 30]
     assert len(spend_service.list_payments()) == len(signed_offsets)
     assert spend_service.check_before_payment()["spent_usd"] == len(signed_offsets) * 0.001
+
+
+def test_normal_http_retry_releases_proven_unused_authorization_and_accepts_empty_result(wallet, monkeypatch):
+    from src.services import payment_reconciliation_worker as worker
+    from tests.unit.test_x402_uncertainty import RPC
+
+    signed = []
+    def handle(request):
+        if 'PAYMENT-SIGNATURE' not in request.headers:
+            result = challenge()
+            result.headers['X-Payment-Idempotency'] = 'v1'
+            return result
+        signed.append(request.headers['PAYMENT-SIGNATURE'])
+        if len(signed) == 1:
+            raise httpx.ReadError('lost before settlement')
+        return httpx.Response(200, json={'items': []}, headers={'payment-response': receipt(wallet)})
+
+    with client(handle, wallet) as http:
+        with pytest.raises(X402PaymentUncertain):
+            http.get(URL)
+        row = sqlite.get_connection().execute('SELECT * FROM x402_payments').fetchone()
+        monkeypatch.setattr(worker, 'configured_urls', lambda: {'eip155:84532': 'synthetic'})
+        run = worker.run_once
+        monkeypatch.setattr(worker, 'run_once', lambda **kwargs: run(
+            rpc_factory=lambda _: RPC(timestamp=row['valid_before'] + 1), **kwargs))
+        response = http.get(URL)
+        assert response.json() == {'items': []}
+        latest = sqlite.get_connection().execute("SELECT operation_id FROM x402_payments WHERE state='settled'").fetchone()
+        assert http.get(URL, headers={'X-Payment-Operation-Id': latest['operation_id']}).json() == {'items': []}
+    assert len(signed) == 2 and signed[0] != signed[1]
+    assert sorted(p['state'] for p in spend_service.list_payments()) == ['released', 'settled']
+    assert spend_service.get_status()['spent_usd'] == .001
+
+
+def test_sdk_new_call_is_independent_of_identical_uncertain_call(wallet):
+    paid = []
+    def handle(request):
+        if 'PAYMENT-SIGNATURE' not in request.headers:
+            return challenge()
+        paid.append(request.headers['X-Payment-Operation-Id'])
+        if len(paid) == 1:
+            raise httpx.ReadError('lost response')
+        return httpx.Response(200, json={'signals': [], 'total_count': 0}, headers={'payment-response': receipt(wallet)})
+    with create_x402_mangrove_client(
+        environment='local', base_url=ORIGIN + '/api/v1', kb_base_url=ORIGIN + '/kb',
+        wallet_address=wallet, transport=httpx.MockTransport(handle),
+    ) as sdk:
+        with pytest.raises(Exception):
+            sdk.signals.list()
+        sdk.signals.list()
+    assert len(paid) == 2 and paid[0] != paid[1]
+    assert sorted(row['state'] for row in spend_service.list_payments()) == ['authorized', 'settled']

@@ -397,6 +397,12 @@ def _validate_x402_authorization(
                 suggestion="The payment envelope is malformed. Both the payer and the payee must be well-formed addresses before anything is signed.",
             )
 
+    if int(payee[2:], 16) == 0:
+        raise SigningError(
+            "Refused to sign x402 authorization: recipient is the zero address.",
+            suggestion="The payment server must configure a valid receiving wallet.",
+        )
+
     # The signer IS the payer under EIP-3009 — USDC recovers the signature and
     # requires it to match `from`. A mismatch is never a working payment, so
     # refusing it here turns a silent on-chain rejection into a clear local
@@ -410,8 +416,13 @@ def _validate_x402_authorization(
         )
 
     value = _as_uint256(message["value"], "value")
-    _as_uint256(message["validAfter"], "validAfter")
-    _as_uint256(message["validBefore"], "validBefore")
+    valid_after = _as_uint256(message["validAfter"], "validAfter")
+    valid_before = _as_uint256(message["validBefore"], "validBefore")
+    if valid_before <= valid_after:
+        raise SigningError(
+            "Refused to sign x402 authorization: validity window is empty.",
+            suggestion="The payment server must provide a usable authorization lifetime.",
+        )
 
     nonce = message["nonce"]
     if isinstance(nonce, str):
@@ -1149,7 +1160,8 @@ def sign_marketplace_proof(challenge: dict, *, operation: str, arguments: dict,
         raise SigningError("Marketplace authorization requires the selected local Base wallet.")
     require_backup_confirmed(wallet_address)
     message = validate_challenge(challenge, operation=operation, arguments=arguments,
-                                 wallet=wallet_address, audience=audience, identity=identity, chain=chain)
+                                 wallet=wallet_address, audience=audience, identity=identity, chain=chain,
+                                 network=f"xrpl:{xrpl_network}" if chain == "xrpl" else f"eip155:{chain_id}")
     secret = _load_secret(wallet_address)
     try:
         if chain == "xrpl":

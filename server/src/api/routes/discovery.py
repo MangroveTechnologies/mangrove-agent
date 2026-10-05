@@ -171,6 +171,17 @@ def _x402_spend_status() -> dict:
     tags=["discovery"],
 )
 async def tools() -> dict:
+    from src.mcp import marketplace_proxy
     from src.services.tool_pricing import enrich_tools
+    from src.shared.errors import AgentError
 
-    return {"tools": await enrich_tools(list_registered_tools())}
+    local = await enrich_tools(list_registered_tools())
+    try:
+        remote = await marketplace_proxy.list_tools()
+    except AgentError:
+        return {"tools": local, "marketplace_status": "unavailable"}
+    local_names = {entry["name"] for entry in local}
+    return {"tools": local + [
+        {**tool.model_dump(by_alias=True, exclude_none=True), "access": "auth"}
+        for tool in remote if tool.name not in local_names
+    ], "marketplace_status": "available"}

@@ -202,3 +202,27 @@ async def test_cached_mixed_content_preserves_public_body(wallet, sepolia_networ
     assert cached.paid == original.paid and cached.status_code == original.status_code
     assert not session.calls
     assert len(spend_service.list_payments()) == 1
+
+
+@pytest.mark.parametrize('pending', [False, True])
+async def test_unsigned_receiver_refusal_does_not_invent_reconciliation(wallet, sepolia_network, pending):
+    class Refusal(_RecoverableMcpSession):
+        async def call_tool(self, **kwargs):
+            result = await super().call_tool(**kwargs)
+            result.structuredContent = {
+                'code': 'PAYMENT_PENDING' if pending else 'PAYMENT_UNAVAILABLE',
+                'retry_payment': False,
+            }
+            result.meta = {'mangrove/payment': {'state': 'pending'}} if pending else {}
+            return result
+
+    session = Refusal()
+    with pytest.raises(X402PaymentError) as caught:
+        await x402_payer.pay_mcp(session, wallet_address=wallet, resource='https://receiver.test/mcp')
+    if pending:
+        assert 'pending payment' in str(caught.value)
+    else:
+        assert 'before payment authorization' in str(caught.value)
+        assert 'reconcil' not in str(caught.value)
+    assert len(session.calls) == 1
+    assert spend_service.list_payments() == []
