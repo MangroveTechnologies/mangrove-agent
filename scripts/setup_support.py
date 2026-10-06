@@ -9,6 +9,7 @@ import json
 import os
 import re
 import secrets
+import select
 import shlex
 import shutil
 import stat
@@ -21,6 +22,12 @@ import urllib.request
 import warnings
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+
+try:
+    import termios
+    import tty
+except ImportError:  # Windows: menus fall back to numbered choices.
+    termios = tty = None
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / 'server/src/config/local-config.json'
@@ -174,9 +181,275 @@ def hidden(prompt):
         return getpass.getpass(prompt).strip()
 
 
+# -- terminal presentation -----------------------------------------------------
+# Stdlib only: this module runs on the system interpreter before .venv exists.
+
+# Brand mark sampled from assets/logo.png at 34x18 px; two px per terminal cell
+# using half blocks. Letters are the ribbon colours from assets/logo.svg.
+_LOGO = (
+    '          BBBLL     RRROO         ',
+    '         BBBBLL    RRRROO         ',
+    '         BBBBLL    RRRROO         ',
+    '         BBBBLL    RRRROO         ',
+    '        BBBBLLLL  RRRROOOO        ',
+    '       BBBBBLLLLLRRRRROOOOO       ',
+    '       BBBB  LLLLRRRR  OOOOO      ',
+    '      BBBBB   LLLLRRR   OOOO      ',
+    '     BBBBB    LLLLLR    OOOOO     ',
+    '    BBBBB     RLLLLL     OOOOO    ',
+    '   BBBBB     RRRLLLLL     OOOOO   ',
+    '  BBBBB     RRRRRLLLLL     OOOOO  ',
+    '  BBBB      RRRR  LLLLL     OOOOO ',
+    ' BBBB      RRRR    LLLL      OOOO ',
+    ' BBBB      RRRR    LLLL      OOOO ',
+    'BBBB      RRRR      LLLL      OOOO',
+    'BBBB      RRRR      LLLL      OOOO',
+    'BBBB      RRRR      LLLL      OOOO',
+)
+_LOGO_COLORS = {'B': (0x42, 0xa7, 0xc6), 'L': (0x74, 0xc3, 0xd5),
+                'R': (0xff, 0x47, 0x13), 'O': (0xff, 0x9e, 0x18)}
+
+# "ANSI Shadow" block letters, limited to the glyphs the wordmark needs.
+_GLYPHS = {
+    'A': (' █████╗ ', '██╔══██╗', '███████║', '██╔══██║', '██║  ██║', '╚═╝  ╚═╝'),
+    'E': ('███████╗', '██╔════╝', '█████╗  ', '██╔══╝  ', '███████╗', '╚══════╝'),
+    'G': (' ██████╗ ', '██╔════╝ ', '██║  ███╗', '██║   ██║', '╚██████╔╝', ' ╚═════╝ '),
+    'M': ('███╗   ███╗', '████╗ ████║', '██╔████╔██║', '██║╚██╔╝██║', '██║ ╚═╝ ██║', '╚═╝     ╚═╝'),
+    'N': ('███╗   ██╗', '████╗  ██║', '██╔██╗ ██║', '██║╚██╗██║', '██║ ╚████║', '╚═╝  ╚═══╝'),
+    'O': (' ██████╗ ', '██╔═══██╗', '██║   ██║', '██║   ██║', '╚██████╔╝', ' ╚═════╝ '),
+    'R': ('██████╗ ', '██╔══██╗', '██████╔╝', '██╔══██╗', '██║  ██║', '╚═╝  ╚═╝'),
+    'T': ('████████╗', '╚══██╔══╝', '   ██║   ', '   ██║   ', '   ██║   ', '   ╚═╝   '),
+    'V': ('██╗   ██╗', '██║   ██║', '██║   ██║', '╚██╗ ██╔╝', ' ╚████╔╝ ', '  ╚═══╝  '),
+}
+# Top-to-bottom shading for solid blocks, then the outline/shadow colour.
+_WORD_SHADES = ((0xee,) * 3, (0xd4,) * 3, (0xba,) * 3, (0xa0,) * 3, (0x86,) * 3, (0x6c,) * 3)
+_WORD_SHADOW = (0x58,) * 3
+_RESET = '\x1b[0m'
+
+
+def _terminal_columns():
+    return shutil.get_terminal_size((80, 24)).columns
+
+
+def _supports_color(stream):
+    return stream.isatty() and not os.environ.get('NO_COLOR') and os.environ.get('TERM') != 'dumb'
+
+
+def _supports_unicode(stream, sample):
+    try:
+        sample.encode(getattr(stream, 'encoding', None) or 'ascii')
+    except (LookupError, UnicodeEncodeError):
+        return False
+    return True
+
+
+def _xterm256(rgb):
+    levels = (0, 95, 135, 175, 215, 255)
+    cube = [min(range(6), key=lambda i: abs(levels[i] - c)) for c in rgb]
+    grey = min(range(24), key=lambda i: abs(8 + 10 * i - sum(rgb) / 3))
+    candidates = [(16 + 36 * cube[0] + 6 * cube[1] + cube[2], tuple(levels[i] for i in cube)),
+                  (232 + grey, (8 + 10 * grey,) * 3)]
+    return min(candidates, key=lambda c: sum((a - b) ** 2 for a, b in zip(c[1], rgb)))[0]
+
+
+def _sgr(rgb, *, background=False):
+    base = 48 if background else 38
+    if os.environ.get('COLORTERM', '').lower() in {'truecolor', '24bit'}:
+        return f'\x1b[{base};2;{rgb[0]};{rgb[1]};{rgb[2]}m'
+    return f'\x1b[{base};5;{_xterm256(rgb)}m'
+
+
+def _logo_lines(color):
+    lines = []
+    for top_row, bottom_row in zip(_LOGO[::2], _LOGO[1::2]):
+        cells, current = [], ''
+        for top, bottom in zip(top_row, bottom_row):
+            if top == ' ' and bottom == ' ':
+                style, char = _RESET, ' '
+            elif bottom == ' ':
+                style, char = _RESET + _sgr(_LOGO_COLORS[top]), '▀'
+            elif top == ' ':
+                style, char = _RESET + _sgr(_LOGO_COLORS[bottom]), '▄'
+            elif top == bottom or not color:
+                style, char = _RESET + _sgr(_LOGO_COLORS[top]), '█'
+            else:  # Two ribbons share the cell: top colour in front, bottom behind.
+                style, char = _RESET + _sgr(_LOGO_COLORS[top]) + _sgr(_LOGO_COLORS[bottom], background=True), '▀'
+            if color and style != current:
+                cells.append(style)
+                current = style
+            cells.append(char)
+        line = ''.join(cells).rstrip()
+        lines.append(line + _RESET if color else line)
+    return lines
+
+
+def _wordmark(*words):
+    rows = [''] * 6
+    for number, word in enumerate(words):
+        if number:
+            rows = [row + '   ' for row in rows]
+        for letter in word:
+            glyph = _GLYPHS[letter]
+            width = max(map(len, glyph))
+            rows = [row + part.ljust(width) for row, part in zip(rows, glyph)]
+    return [row.rstrip() for row in rows]
+
+
+def _shade(rows, color):
+    if not color:
+        return rows
+    shaded = []
+    for shade, row in zip(_WORD_SHADES, rows):
+        out, current = [], None
+        for ch in row:
+            wanted = None if ch == ' ' else shade if ch == '█' else _WORD_SHADOW
+            if wanted != current:
+                out.append(_RESET if wanted is None else _sgr(wanted))
+                current = wanted
+            out.append(ch)
+        shaded.append(''.join(out) + _RESET)
+    return shaded
+
+
+def banner(stream=None):
+    """Print the setup banner. Decorative only: silent unless writing to a terminal."""
+    stream = stream or sys.stdout
+    if not stream.isatty():
+        return
+    width = _terminal_columns()
+    color = _supports_color(stream)
+    title, subtitle = 'MANGROVE AGENT', 'Local Mangrove-powered trading agent'
+    plain_title = [f'\x1b[1m{title}{_RESET}' if color else title]
+    if not _supports_unicode(stream, '█▀▄╔╗╚╝║═') or width < len(_LOGO[0]) + 4:
+        logo, text, text_width = [], plain_title, len(title)
+    else:
+        logo = _logo_lines(color) + ['']
+        full, top = _wordmark('MANGROVE', 'AGENT'), _wordmark('MANGROVE')
+        if width >= len(full[0]) + 4:
+            text, text_width = _shade(full, color), len(full[0])
+        elif width >= len(top[0]) + 4:
+            agent = _wordmark('AGENT')
+            indent = ' ' * ((len(top[0]) - len(agent[0])) // 2)
+            text, text_width = _shade(top + [indent + row for row in agent], color), len(top[0])
+        else:
+            text, text_width = plain_title, len(title)
+    # Centre every part within the widest one; widths are measured before styling.
+    block = max(text_width, len(_LOGO[0]) if logo else 0, len(subtitle))
+
+    def centred(lines, part_width):
+        return [' ' * (2 + (block - part_width) // 2) + line if line else '' for line in lines]
+
+    lines = ([''] + centred(logo, len(_LOGO[0])) + centred(text, text_width)
+             + centred([f'\x1b[2m{subtitle}{_RESET}' if color else subtitle], len(subtitle)) + [''])
+    stream.write('\n'.join(lines) + '\n')
+    stream.flush()
+
+
+def _read_key(fd):
+    ch = os.read(fd, 1)
+    if not ch or ch == b'\x04':
+        raise EOFError
+    if ch == b'\x03':
+        raise KeyboardInterrupt
+    if ch in {b'\r', b'\n'}:
+        return 'enter'
+    if ch == b'\x1b':
+        # Arrow keys arrive as ESC [ A or ESC O A; drain the whole sequence so
+        # unrecognised keys (F-keys, modified arrows) are ignored cleanly.
+        seq = b''
+        while select.select([fd], [], [], 0.05)[0]:
+            seq += os.read(fd, 1)
+            if seq[:1] not in {b'[', b'O'} or (len(seq) >= 2 and (seq[:1] == b'O' or 0x40 <= seq[-1] <= 0x7e)):
+                break
+        return {b'[A': 'up', b'OA': 'up', b'[B': 'down', b'OB': 'down'}.get(seq, '')
+    return ch.decode('ascii', 'ignore')
+
+
+def _menu_supported():
+    return (termios is not None and sys.stdout.isatty()
+            and os.environ.get('TERM', 'dumb') != 'dumb')
+
+
+def _select(prompt, options, default):
+    keys = list(options)
+    index = keys.index(default) if default in options else 0
+    fd, out = sys.stdin.fileno(), sys.stdout
+    color = _supports_color(out)
+    if _supports_unicode(out, '◆◇●○│└↑↓•…'):
+        active, done, on, off, bar, end, more = '◆', '◇', '●', '○', '│', '└', '…'
+        hint = '↑/↓ to navigate • Enter: confirm'
+    else:
+        active, done, on, off, bar, end, more = '?', '+', '>', '-', '|', '`', '.'
+        hint = 'Up/Down to navigate, Enter to confirm'
+    room = max(20, _terminal_columns() - 1)
+
+    def paint(code, text):
+        return f'\x1b[{code}m{text}{_RESET}' if color else text
+
+    def fit(text, limit):
+        # Truncate before styling so no line wraps; wrapping breaks the redraw.
+        return text if len(text) <= limit else text[:max(0, limit - 1)] + more
+
+    drawn = 0
+
+    def draw(lines):
+        nonlocal drawn
+        if drawn:
+            out.write(f'\x1b[{drawn}F\x1b[J')
+        out.write(''.join(line + '\n' for line in lines))
+        out.flush()
+        drawn = len(lines)
+
+    def menu():
+        lines = [f'{paint("36", active)}  {paint("1", fit(prompt, room - 3))}']
+        for position, key in enumerate(keys):
+            label = fit(options[key], room - 5)
+            if position == index:
+                lines.append(f'{paint("2", bar)}  {paint("36", on)} {label}')
+            else:
+                lines.append(f'{paint("2", bar)}  {paint("2", off)} {paint("2", label)}')
+        lines.append(f'{paint("2", end)}  {paint("2", fit(hint, room - 3))}')
+        return lines
+
+    saved = termios.tcgetattr(fd)
+    typed = ''
+    out.write('\x1b[?25l')
+    try:
+        # TCSADRAIN keeps typeahead (e.g. "2<Enter>" typed early, as with the old prompt).
+        tty.setcbreak(fd, termios.TCSADRAIN)
+        draw(menu())
+        while True:
+            key = _read_key(fd)
+            if key == 'enter':
+                break
+            if key in {'up', 'k'}:
+                index, typed = (index - 1) % len(keys), ''
+            elif key in {'down', 'j'}:
+                index, typed = (index + 1) % len(keys), ''
+            elif key.isdigit():
+                # Number keys still work: they move the highlight, Enter confirms.
+                typed = typed + key if any(k.startswith(typed + key) for k in keys) else key
+                if typed in options:
+                    index = keys.index(typed)
+                elif not any(k.startswith(typed) for k in keys):
+                    typed = ''
+            else:
+                continue
+            draw(menu())
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+        out.write('\x1b[?25h')
+        out.flush()
+    draw([f'{paint("32", done)}  {fit(prompt, room - 3)}',
+          f'{paint("2", bar)}  {paint("2", fit(options[keys[index]], room - 3))}'])
+    return keys[index]
+
+
 def choose(prompt, options, default):
     if not sys.stdin.isatty():
         raise SetupError('Use --yes and explicit options when running without an interactive terminal.')
+    if _menu_supported():
+        return _select(prompt, options, default)
     print(prompt)
     for key, label in options.items():
         print(f'  {key}. {label}')
@@ -225,13 +498,13 @@ def configure(args):
         if not supplied or upstream_key({'MANGROVE_API_KEY': supplied}) != supplied:
             raise SetupError('Provide a nonempty API key, not a placeholder.')
         key, mode = supplied, 'api-key'
-    # Interactive runs always offer both modes; Enter preserves the current mode.
+    # Interactive runs always offer both modes, highlighting the API key first.
     if mode is None:
         if not args.yes:
             mode = {'1': 'api-key', '2': 'x402'}[choose(
                 'How would you like to access MangroveAI?',
                 {'1': 'Use an API key', '2': 'Pay with a wallet (x402; no signup)'},
-                '2' if cfg.get('MANGROVE_ACCESS_MODE') == 'x402' else '1' if key else '2')]
+                '1')]
         else:
             mode = cfg.get('MANGROVE_ACCESS_MODE') or ('api-key' if key else 'x402')
     if mode == 'api-key' and key and not args.yes and not args.api_key_stdin:
@@ -304,7 +577,7 @@ def guide(cfg, *, yes=False, docker=False):
     cmd = './scripts/setup.sh'
     selected = '4' if yes else choose('Payment wallet instructions (nothing is executed):', {
         '1': 'Create a new wallet', '2': 'Import an existing wallet',
-        '3': 'Use a wallet already saved in this agent', '4': 'Finish wallet setup later'}, '4')
+        '3': 'Use a wallet already saved in this agent', '4': 'Finish wallet setup later'}, '1')
     print(f'Configured payment network: {label} (chain {chain}).')
     print('Payment readiness is not verified. No funding or paid request was checked.')
     if selected == '4':
@@ -509,7 +782,7 @@ def launch_chat(cfg: dict) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['configure', 'check', 'markets-check', 'verify', 'guide', 'wallet', 'fingerprint', 'headers', 'register', 'chat'])
+    parser.add_argument('command', choices=['banner', 'configure', 'check', 'markets-check', 'verify', 'guide', 'wallet', 'fingerprint', 'headers', 'register', 'chat'])
     parser.add_argument('--auth', choices=['api-key', 'x402'])
     parser.add_argument('--api-key-stdin', action='store_true')
     parser.add_argument('--yes', action='store_true')
@@ -519,7 +792,9 @@ def main():
     parser.add_argument('--action', choices=['create', 'import', 'list', 'select'])
     args = parser.parse_args()
     try:
-        if args.command == 'configure':
+        if args.command == 'banner':
+            banner()
+        elif args.command == 'configure':
             configure(args)
         elif args.command == 'fingerprint':
             digest = hashlib.sha256()
