@@ -180,6 +180,9 @@ PYCHECK
   fi
 fi
 
+# Decorative only: printed for terminals, and never allowed to fail setup.
+if [ -t 1 ]; then "$PY" "$SUPPORT" banner || true; fi
+
 # Serialize all setup/configuration actions. Never steal a potentially live lock.
 mkdir -p agent-data
 chmod 700 agent-data

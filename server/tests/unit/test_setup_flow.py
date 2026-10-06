@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -638,13 +639,13 @@ def test_existing_install_always_offers_access_menu(config, monkeypatch, existin
     expects_key_menu = bool(existing_key) and selection in {'1', 'default'}
     assert menu.call_count == (2 if expects_key_menu else 1)
     assert set(menu.call_args_list[0].args[1]) == {'1', '2'}
-    assert menu.call_args_list[0].args[2] == ('1' if existing_key else '2')
+    assert menu.call_args_list[0].args[2] == '1'
     if expects_key_menu:
         assert menu.call_args_list[1].args[1] == {
             '1': 'Use the existing API key', '2': 'Enter a new API key'}
         assert menu.call_args_list[1].args[2] == '1'
     after = json.loads(config.read_text())
-    expected_key = existing_key if selection == 'default' else (existing_key or 'prod_new') if selection == '1' else existing_key
+    expected_key = (existing_key or 'prod_new') if selection in {'1', 'default'} else existing_key
     assert after['MANGROVE_API_KEY'] == expected_key
     for field in ['API_KEYS', 'X402_PAYER_WALLET', 'X402_SPEND_CAP_USD']:
         assert after[field] == cfg[field]
@@ -930,3 +931,149 @@ def test_invalid_recovery_config_does_not_replace_saved_config(config, value):
     with pytest.raises(setup.SetupError):
         setup.configure(args)
     assert config.read_bytes() == before
+
+
+class _Terminal(io.StringIO):
+    def __init__(self, encoding='utf-8'):
+        super().__init__()
+        self._encoding = encoding
+
+    @property
+    def encoding(self):
+        return self._encoding
+
+    def isatty(self):
+        return True
+
+
+def _banner(monkeypatch, columns, *, encoding='utf-8', no_color=True):
+    monkeypatch.setattr(setup.shutil, 'get_terminal_size', lambda *a: os.terminal_size((columns, 24)))
+    monkeypatch.setenv('TERM', 'xterm-256color')
+    if no_color:
+        monkeypatch.setenv('NO_COLOR', '1')
+    else:
+        monkeypatch.delenv('NO_COLOR', raising=False)
+    stream = _Terminal(encoding)
+    setup.banner(stream)
+    return stream.getvalue()
+
+
+def test_banner_is_silent_when_not_a_terminal():
+    stream = io.StringIO()
+    setup.banner(stream)
+    assert stream.getvalue() == ''
+
+
+def test_logo_grid_is_well_formed():
+    assert len(setup._LOGO) % 2 == 0
+    assert len({len(row) for row in setup._LOGO}) == 1
+    assert set(''.join(setup._LOGO)) <= set(setup._LOGO_COLORS) | {' '}
+    assert all(len(glyph) == 6 for glyph in setup._GLYPHS.values())
+
+
+@pytest.mark.parametrize('columns,wordmark_rows', [(140, 6), (90, 12), (50, 0)])
+def test_banner_fits_terminal_width(monkeypatch, columns, wordmark_rows):
+    lines = _banner(monkeypatch, columns).splitlines()
+    assert all(len(line) <= columns for line in lines)
+    assert sum('▀' in line or '▄' in line for line in lines) > 0  # logo drawn
+    assert sum('╗' in line or '╝' in line for line in lines) == wordmark_rows
+    if not wordmark_rows:
+        assert 'MANGROVE AGENT' in [line.strip() for line in lines]
+
+
+def test_banner_colour_follows_no_color(monkeypatch):
+    assert '\x1b[' not in _banner(monkeypatch, 140)
+    coloured = _banner(monkeypatch, 140, no_color=False)
+    assert '\x1b[38;' in coloured and coloured.count('\x1b[0m') > 0
+
+
+def test_banner_ascii_terminal_gets_plain_title(monkeypatch):
+    output = _banner(monkeypatch, 140, encoding='ascii')
+    output.encode('ascii')
+    assert 'MANGROVE AGENT' in output
+
+
+def test_choose_uses_numbered_menu_without_terminal_output(monkeypatch, capsys):
+    monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
+    monkeypatch.setattr(sys.stdout, 'isatty', lambda: False)
+    monkeypatch.setattr('builtins.input', lambda _: '2')
+    assert setup.choose('Pick one', {'1': 'First', '2': 'Second'}, '1') == '2'
+    assert '  2. Second' in capsys.readouterr().out
+
+
+_SELECT_CHILD = '''
+import importlib.util, sys, termios
+spec = importlib.util.spec_from_file_location('setup_support', sys.argv[1])
+setup = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(setup)
+result = setup.choose('Pick one', {'1': 'First', '2': 'Second', '3': 'Third'}, '1')
+echo = bool(termios.tcgetattr(0)[3] & termios.ECHO)
+print(f'RESULT={result} ECHO={echo}')
+'''
+
+
+def _drive_menu(keys, *, typeahead=False):
+    import fcntl
+    import pty
+    import termios
+    import time
+
+    master, terminal = pty.openpty()
+
+    def controlling_terminal():
+        os.setsid()
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+    if typeahead:
+        os.write(master, keys)
+    proc = subprocess.Popen([sys.executable, '-c', _SELECT_CHILD, str(ROOT / 'scripts/setup_support.py')],
+                            stdin=terminal, stdout=terminal, stderr=terminal, preexec_fn=controlling_terminal,
+                            env=dict(os.environ, TERM='xterm-256color'))
+    os.close(terminal)
+    output = bytearray()
+    try:
+        if not typeahead:
+            time.sleep(0.5)  # Let the menu enter cbreak mode before keys arrive.
+            for key in keys.split(b'|'):
+                os.write(master, key)
+                time.sleep(0.1)
+        while True:
+            try:
+                chunk = os.read(master, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            output.extend(chunk)
+        proc.wait(timeout=10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        os.close(master)
+    return output.decode(errors='replace')
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX terminal menu')
+@pytest.mark.parametrize('keys,expected', [
+    (b'\r', '1'),                          # Enter keeps the default
+    (b'\x1b[B|\r', '2'),                   # arrow down
+    (b'\x1b[A|\r', '3'),                   # arrow up wraps to the last option
+    (b'\x1bOB|\x1bOB|\x1b[A|\n', '2'),     # application-mode arrows
+    (b'x|\x1b[1;5C|3|\r', '3'),            # unknown keys ignored, digit jumps
+])
+def test_arrow_menu_selects_and_restores_terminal(keys, expected):
+    output = _drive_menu(keys)
+    assert f'RESULT={expected} ECHO=True' in output
+    assert '\x1b[?25h' in output  # cursor shown again
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX terminal menu')
+def test_arrow_menu_keeps_numbered_typeahead():
+    assert 'RESULT=2 ECHO=True' in _drive_menu(b'2\n', typeahead=True)
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX terminal menu')
+def test_arrow_menu_interrupt_restores_terminal():
+    output = _drive_menu(b'\x03')
+    assert 'RESULT=' not in output
+    assert '\x1b[?25h' in output
