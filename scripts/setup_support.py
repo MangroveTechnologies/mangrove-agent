@@ -227,6 +227,10 @@ _WORD_SHADOW = (0x58,) * 3
 _RESET = '\x1b[0m'
 
 
+def _terminal_columns():
+    return shutil.get_terminal_size((80, 24)).columns
+
+
 def _supports_color(stream):
     return stream.isatty() and not os.environ.get('NO_COLOR') and os.environ.get('TERM') != 'dumb'
 
@@ -312,7 +316,7 @@ def banner(stream=None):
     stream = stream or sys.stdout
     if not stream.isatty():
         return
-    width = shutil.get_terminal_size((80, 24)).columns
+    width = _terminal_columns()
     color = _supports_color(stream)
     title, subtitle = 'MANGROVE AGENT', 'Local Mangrove-powered trading agent'
     plain_title = [f'\x1b[1m{title}{_RESET}' if color else title]
@@ -377,7 +381,7 @@ def _select(prompt, options, default):
     else:
         active, done, on, off, bar, end, more = '?', '+', '>', '-', '|', '`', '.'
         hint = 'Up/Down to navigate, Enter to confirm'
-    room = max(20, shutil.get_terminal_size((80, 24)).columns - 1)
+    room = max(20, _terminal_columns() - 1)
 
     def paint(code, text):
         return f'\x1b[{code}m{text}{_RESET}' if color else text

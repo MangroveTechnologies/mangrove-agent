@@ -947,7 +947,8 @@ class _Terminal(io.StringIO):
 
 
 def _banner(monkeypatch, columns, *, encoding='utf-8', no_color=True):
-    monkeypatch.setattr(setup.shutil, 'get_terminal_size', lambda *a: os.terminal_size((columns, 24)))
+    # Patch the module helper, never shutil itself: pytest's reporter shares it.
+    monkeypatch.setattr(setup, '_terminal_columns', lambda: columns)
     monkeypatch.setenv('TERM', 'xterm-256color')
     if no_color:
         monkeypatch.setenv('NO_COLOR', '1')
