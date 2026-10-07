@@ -283,6 +283,7 @@ async def test_optional_confirmation_still_refuses_execution(name, confirm):
 
 async def test_all_three_discovery_surfaces_preserve_registry_and_pricing(monkeypatch):
     from unittest.mock import AsyncMock
+
     from mcp.types import Tool
     monkeypatch.setattr("src.mcp.mangrove_proxy.catalog", AsyncMock(return_value=[Tool(name="server_only", inputSchema={"type":"object"})]))
     monkeypatch.setattr("src.mcp.marketplace_proxy.list_tools", AsyncMock(return_value=[]))

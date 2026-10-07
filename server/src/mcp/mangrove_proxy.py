@@ -9,10 +9,10 @@ from contextlib import asynccontextmanager
 import anyio
 import httpx
 from jsonschema import Draft202012Validator
-from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult, TextContent, Tool
 
+from mcp import ClientSession
 from src.config import app_config
 from src.shared.clients.mangrove import _api_key, _api_key_base_url, _payment_destination
 from src.shared.errors import AgentError, SdkError, upstream_access_error
