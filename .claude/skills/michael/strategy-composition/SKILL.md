@@ -7,7 +7,7 @@ description: >-
   when nothing on the marketplace fits. Reach for it when you encounter things like : "build me
   a strategy", "make me something for ETH", "set up a mean-reversion strategy", ... (etc). Use
   strategy-management to draft, archive, or deploy.
-uses-tools: [query_signal_behavior, save_strategy, update_strategy, verify_strategy, list_strategies, get_strategy, get_market_regime]
+uses-tools: [evaluate_signal, evaluate_multiple_signals_series, validate_signal_params, list_signal_labels, list_playground_datasets, get_playground_data, query_signal_behavior, save_strategy, update_strategy, verify_strategy, list_strategies, get_strategy, get_market_regime]
 ---
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/strategy-composition/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
@@ -253,3 +253,23 @@ To change a value, `update_strategy` on the draft -- pass the complete entry and
 since signals replace rather than merge. It works only while the strategy is a draft nobody
 has backtested; after a backtest the rules are frozen so the results stay attached to the
 rules they measured, and a change means saving a NEW strategy.
+
+## Check individual signals before composing
+
+Use `list_signal_labels` to resolve display labels to registered names. Use
+`validate_signal_params` to check a signal's parameter object before evaluating it;
+validation alone does not run market data.
+
+For supplied bars, use `evaluate_signal` with the signal name, parameters and market
+bar objects. For a combined check, use `evaluate_multiple_signals_series` with a
+`signals` array of objects containing `name`, `params` and optional `timeframe`.
+Choose either a bundled `dataset_key` or a live symbol with start and end dates.
+Discover bundled keys with `list_playground_datasets`; fetch their bars with
+`get_playground_data` only when the user needs the data itself. A combined evaluation
+can use the key directly without a separate dataset fetch.
+
+Report each series' success or error, bars checked and matching-bar count from the
+returned result. Do not treat an HTTP success as proof that every series succeeded.
+Leave out chart data unless requested. Signal matches are not trades or strategy
+returns; use a backtest for those questions. Use `query_signal_behavior` for existing
+historical coverage measurements rather than inferring coverage from descriptions.
