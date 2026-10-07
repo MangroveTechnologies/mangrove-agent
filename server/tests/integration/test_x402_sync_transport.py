@@ -104,12 +104,39 @@ def automatic_client(monkeypatch):
     reset_mcp_server()
 
 
+async def call_sdk_workflow(name, arguments):
+    """Exercise retained SDK consumers; MCP transport is tested in test_remote_mcp."""
+    from src.services.signals import list_signals
+    from src.shared.clients.mangrove import mangrove_ai_client
+    from src.mcp.tools import _handle_upstream_error
+    from mangrove_ai.models import SearchSignalsRequest
+
+    args = {key: value for key, value in arguments.items() if key != 'api_key'}
+    try:
+        if name == 'list_signals':
+            result = list_signals(collect=True, **args)
+        else:
+            sdk = mangrove_ai_client()
+            calls = {
+                'get_signal': lambda: sdk.signals.get(**args),
+                'search_signals': lambda: sdk.signals.search(SearchSignalsRequest(**args)),
+                'match_signals': lambda: sdk.signals.match(**args),
+                'get_trending': lambda: sdk.crypto_assets.get_trending(),
+                'list_docs': lambda: sdk.docs.list(),
+                'kb_list_tags': lambda: sdk.kb.tags.list(),
+                'get_whale_activity': lambda: sdk.on_chain.get_whale_activity(**args),
+            }
+            result = calls[name]()
+        return json.dumps(result, default=lambda item: item.model_dump())
+    except Exception as error:
+        return _handle_upstream_error('WORKFLOW_FAILED', error)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("limit,search,expected_payments", [(1, None, 1), (100, None, 4), (101, None, 4), (250, None, 9), (1, "trend", 1)])
-async def test_normal_mcp_tool_automatically_pays_only_needed_pages(
+async def test_sdk_workflow_automatically_pays_only_needed_pages(
     wallet, automatic_client, monkeypatch, limit, search, expected_payments,
 ):
-    from src.mcp.server import create_mcp_server
     from src.shared.auth.middleware import reset_request_api_key, set_request_api_key
 
     monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
@@ -146,10 +173,9 @@ async def test_normal_mcp_tool_automatically_pays_only_needed_pages(
         }, headers={"payment-response": receipt(wallet)})
 
     automatic_client(handle)
-    server = create_mcp_server()
     token = set_request_api_key("test-key-1")
     try:
-        result = json.loads(await server._tool_manager._tools["list_signals"].run({"limit": limit, "search": search}))
+        result = json.loads(await call_sdk_workflow("list_signals", {"limit": limit, "search": search}))
     finally:
         reset_request_api_key(token)
     assert len(result["items"]) == limit
@@ -166,7 +192,6 @@ async def test_normal_mcp_tool_automatically_pays_only_needed_pages(
 async def test_normal_tool_payment_failures_are_structured_without_signed_retry(
     wallet, automatic_client, monkeypatch, failure, code,
 ):
-    from src.mcp.server import create_mcp_server
 
     if failure == "cap":
         monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
@@ -179,8 +204,7 @@ async def test_normal_tool_payment_failures_are_structured_without_signed_retry(
         return challenge()
 
     automatic_client(handle)
-    tool = create_mcp_server()._tool_manager._tools["list_signals"]
-    result = json.loads(await tool.run({"api_key": "test-key-1", "limit": 1}))
+    result = json.loads(await call_sdk_workflow("list_signals", {"api_key": "test-key-1", "limit": 1}))
     assert result["error"] is True
     assert result["code"] == code
     assert len(seen) == 1
@@ -189,13 +213,17 @@ async def test_normal_tool_payment_failures_are_structured_without_signed_retry(
 
 @pytest.mark.asyncio
 async def test_normal_tool_still_requires_local_auth(database, automatic_client):
-    from src.mcp.server import create_mcp_server
+    from src.mcp.mangrove_proxy import call_tool
+    from src.shared.auth.middleware import reset_request_api_key, set_request_api_key
 
     automatic_client(lambda request: pytest.fail("unauthorized caller reached upstream"))
-    tool = create_mcp_server()._tool_manager._tools["list_signals"]
     for key in ("", "wrong-key"):
-        result = json.loads(await tool.run({"api_key": key}))
-        assert result["code"] == "AUTH_INVALID_API_KEY"
+        token = set_request_api_key(key)
+        try:
+            result = await call_tool('list_signals', {})
+        finally:
+            reset_request_api_key(token)
+        assert result.structuredContent["code"] == "AUTH_REQUIRED"
     assert spend_service.list_payments() == []
 
 
@@ -240,40 +268,6 @@ def test_real_sdk_uses_desktop_defaults_without_changing_payment_network(
     assert spend_service.list_payments() == []
 
 
-def test_normal_mcp_http_request_pays_with_local_header_auth(wallet, automatic_client, monkeypatch):
-    from fastapi.testclient import TestClient
-    from src.app import create_app
-
-    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
-    monkeypatch.setattr("src.services.scheduler_service.start", lambda: None)
-    monkeypatch.setattr("src.services.scheduler_service.shutdown", lambda: None)
-    seen = []
-
-    def handle(request):
-        seen.append(request)
-        assert "Authorization" not in request.headers
-        assert "X-API-Key" not in request.headers
-        if "PAYMENT-SIGNATURE" not in request.headers:
-            return challenge()
-        return httpx.Response(200, json={"signals": [{"name": "trend", "category": "trend"}], "total": 1},
-                              headers={"payment-response": receipt(wallet)})
-
-    automatic_client(handle)
-    with TestClient(create_app(), base_url="http://localhost:9080") as local:
-        response = local.post("/mcp/", headers={
-            "X-API-Key": "test-key-1", "Accept": "application/json, text/event-stream",
-            "MCP-Protocol-Version": "2025-03-26",
-        }, json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                 "params": {"name": "list_signals", "arguments": {"limit": 1}}})
-    assert response.status_code == 200
-    result = response.json()["result"]
-    assert not result.get("isError")
-    content = json.loads(result["content"][0]["text"])
-    assert content["items"][0]["name"] == "trend"
-    assert len(seen) == 2
-    assert spend_service.list_payments()[0]["state"] == "settled"
-
-
 def test_automatic_mode_refuses_ambient_key_without_mutating_environment(database, automatic_client, monkeypatch):
     import os
 
@@ -299,11 +293,9 @@ async def test_normal_rest_route_keeps_payment_error_code(wallet, automatic_clie
 @pytest.mark.asyncio
 @pytest.mark.parametrize("limit", [0, -1, 1001])
 async def test_invalid_signal_limit_does_not_call_upstream(database, automatic_client, limit):
-    from src.mcp.server import create_mcp_server
 
     automatic_client(lambda request: pytest.fail("invalid limit reached upstream"))
-    tool = create_mcp_server()._tool_manager._tools["list_signals"]
-    result = json.loads(await tool.run({"api_key": "test-key-1", "limit": limit}))
+    result = json.loads(await call_sdk_workflow("list_signals", {"api_key": "test-key-1", "limit": limit}))
     assert result["code"] == "VALIDATION_ERROR"
     assert spend_service.list_payments() == []
 
@@ -696,13 +688,11 @@ def test_signer_persists_public_authorization_identity(wallet):
     ("search_signals", {"query": "trend"}),
     ("match_signals", {"description": "trend"}),
 ])
-async def test_signal_tools_never_echo_remote_error_bodies(database, automatic_client, name, args):
-    from src.mcp.server import create_mcp_server
+async def test_sdk_signal_calls_never_echo_remote_error_bodies(database, automatic_client, name, args):
 
     sentinel = "synthetic-private-token user@example.test"
     automatic_client(lambda request: httpx.Response(403, json={"message": sentinel, "error": sentinel}))
-    tool = create_mcp_server()._tool_manager._tools[name]
-    result = await tool.run({"api_key": "test-key-1", **args})
+    result = await call_sdk_workflow(name, {"api_key": "test-key-1", **args})
     assert sentinel not in result
     assert json.loads(result)["error"] is True
     assert spend_service.list_payments() == []
@@ -714,8 +704,7 @@ async def test_signal_tools_never_echo_remote_error_bodies(database, automatic_c
     ("search_signals", {"query": "trend"}),
     ("match_signals", {"description": "trend"}),
 ])
-async def test_signal_tools_preserve_cap_error(wallet, automatic_client, monkeypatch, name, args):
-    from src.mcp.server import create_mcp_server
+async def test_sdk_signal_calls_preserve_cap_error(wallet, automatic_client, monkeypatch, name, args):
 
     monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
     monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 0.0001)
@@ -727,8 +716,7 @@ async def test_signal_tools_preserve_cap_error(wallet, automatic_client, monkeyp
         return challenge()
 
     automatic_client(handle)
-    tool = create_mcp_server()._tool_manager._tools[name]
-    result = json.loads(await tool.run({"api_key": "test-key-1", **args}))
+    result = json.loads(await call_sdk_workflow(name, {"api_key": "test-key-1", **args}))
     assert result["code"] == "X402_SPEND_CAP_EXCEEDED"
     assert len(seen) == 1
     assert spend_service.list_payments() == []
@@ -736,7 +724,6 @@ async def test_signal_tools_preserve_cap_error(wallet, automatic_client, monkeyp
 
 @pytest.mark.asyncio
 async def test_category_is_filtered_upstream_before_paid_limit(wallet, automatic_client, monkeypatch):
-    from src.mcp.server import create_mcp_server
 
     monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
     seen = []
@@ -751,8 +738,7 @@ async def test_category_is_filtered_upstream_before_paid_limit(wallet, automatic
                               headers={"payment-response": receipt(wallet)})
 
     automatic_client(handle)
-    tool = create_mcp_server()._tool_manager._tools["list_signals"]
-    result = json.loads(await tool.run({"api_key": "test-key-1", "limit": 1, "category": "trend"}))
+    result = json.loads(await call_sdk_workflow("list_signals", {"api_key": "test-key-1", "limit": 1, "category": "trend"}))
     assert result["items"][0]["name"] == "trend"
     assert len(seen) == 2
     assert len(spend_service.list_payments()) == 1
@@ -778,10 +764,9 @@ async def test_signal_rest_errors_do_not_echo_remote_data(database, automatic_cl
     ("kb_list_tags", {}), ("get_whale_activity", {"symbol": "ETH"}),
 ])
 @pytest.mark.parametrize("refused_payment", [False, True])
-async def test_other_upstream_tools_sanitize_errors_and_preserve_cap(
+async def test_other_sdk_calls_sanitize_errors_and_preserve_cap(
     wallet, automatic_client, monkeypatch, name, args, refused_payment,
 ):
-    from src.mcp.server import create_mcp_server
 
     monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
     monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 0.0001)
@@ -794,8 +779,7 @@ async def test_other_upstream_tools_sanitize_errors_and_preserve_cap(
         return challenge() if refused_payment else httpx.Response(403, json={"message": sentinel})
 
     automatic_client(handle)
-    tool = create_mcp_server()._tool_manager._tools[name]
-    result = await tool.run({"api_key": "test-key-1", **args})
+    result = await call_sdk_workflow(name, {"api_key": "test-key-1", **args})
     assert sentinel not in result
     assert json.loads(result)["error"] is True
     if refused_payment:
@@ -827,8 +811,7 @@ async def test_other_rest_routes_sanitize_errors_and_preserve_cap(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('status,reason', [(404, None), (503, 'payment_settlement_unconfirmed')])
-async def test_mcp_preserves_uncertainty_without_blocking_other_operations(wallet, automatic_client, monkeypatch, status, reason):
-    from src.mcp.server import create_mcp_server
+async def test_sdk_preserves_uncertainty_without_blocking_other_operations(wallet, automatic_client, monkeypatch, status, reason):
 
     correlation = '11111111-2222-4333-8444-555555555555'
     monkeypatch.setattr(app_config, 'X402_PAYER_WALLET', wallet)
@@ -840,15 +823,14 @@ async def test_mcp_preserves_uncertainty_without_blocking_other_operations(walle
         return httpx.Response(status, json={'error': reason or {'secret': 'SYNTHETIC_SECRET'},
             'message': 'SYNTHETIC_SECRET', 'retry_payment': False, 'correlation_id': correlation})
     automatic_client(handle)
-    tools = create_mcp_server()._tool_manager._tools
-    first = json.loads(await tools['get_whale_activity'].run({'api_key': 'test-key-1', 'symbol': 'BTC'}))
+    first = json.loads(await call_sdk_workflow('get_whale_activity', {'api_key': 'test-key-1', 'symbol': 'BTC'}))
     assert first['code'] == 'X402_PAYMENT_UNCERTAIN'
     assert first['retry_payment'] is False
     assert first['upstream_status'] == status
     assert first['upstream_error'] == reason
     assert first['correlation_id'] == correlation
     assert 'SYNTHETIC_SECRET' not in json.dumps(first)
-    second = json.loads(await tools['list_signals'].run({'api_key': 'test-key-1', 'limit': 1}))
+    second = json.loads(await call_sdk_workflow('list_signals', {'api_key': 'test-key-1', 'limit': 1}))
     assert second['code'] == 'X402_PAYMENT_UNCERTAIN'
     assert second['retry_payment'] is False
     assert len(signed) == 2
@@ -1013,7 +995,6 @@ def test_reentrant_duplicate_during_signing_cannot_abandon_original_owner(wallet
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["price_increase", "uncertain"])
 async def test_signal_workflow_stops_on_second_page_payment_failure(wallet, automatic_client, monkeypatch, failure):
-    from src.mcp.server import create_mcp_server
 
     monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
     signed_offsets = []
@@ -1031,8 +1012,7 @@ async def test_signal_workflow_stops_on_second_page_payment_failure(wallet, auto
         }, headers={"payment-response": receipt(wallet)})
 
     automatic_client(handler)
-    tool = create_mcp_server()._tool_manager._tools["list_signals"]
-    result = json.loads(await tool.run({"api_key": "test-key-1", "limit": 100}))
+    result = json.loads(await call_sdk_workflow("list_signals", {"api_key": "test-key-1", "limit": 100}))
     if failure == "price_increase":
         assert result["code"] == "X402_SPEND_CAP_EXCEEDED"
         assert signed_offsets == [0]

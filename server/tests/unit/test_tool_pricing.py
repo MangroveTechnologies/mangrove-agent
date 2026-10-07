@@ -48,6 +48,14 @@ def mock_http(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def isolated_cache(monkeypatch):
+    from src.mcp.pricing_bindings import PriceBinding
+    monkeypatch.setattr(pricing, "TOOL_PRICING", {
+        "fixture_read": PriceBinding(("rest:signals_get",)),
+        "fixture_alternatives": PriceBinding(("rest:signals_list", "rest:signals_search"), variable=True, alternatives=("browse", "search")),
+        "fixture_composite": PriceBinding(("rest:backtest_get", "skill:crypto_ohlcv"), variable=True),
+        "fixture_unknown": PriceBinding(()),
+        "fixture_zero": PriceBinding(("proxy:api_calls",)),
+    })
     monkeypatch.setattr(pricing, "_cache", pricing.PriceCache())
     monkeypatch.setattr(pricing, "_catalog_endpoint", lambda: "https://upstream.example/mcp/")
 
@@ -70,7 +78,7 @@ def test_anonymous_discovery_does_not_use_sdk_or_wallet(mock_http, monkeypatch):
         return httpx.Response(200, json=envelope())
 
     mock_http(handler)
-    rows = [{"name": "list_signals"}, {"name": "get_signal"}, {"name": "list_wallets"}]
+    rows = [{"name": "fixture_alternatives"}, {"name": "fixture_read"}, {"name": "list_wallets"}]
     result = pricing._enrich(rows)
     assert "price" not in result[0]
     assert result[0]["pricing"]["combination"] == "alternatives"
@@ -90,7 +98,7 @@ def test_untrusted_prices_never_become_zero_or_descriptions(mock_http, price):
     mock_http(lambda r: httpx.Response(200, json=envelope([
         {"id": "rest:signals_get", "mangrove/x402_price_usd": price},
     ])))
-    result = pricing._enrich([{"name": "get_signal", "price": "old"}])[0]
+    result = pricing._enrich([{"name": "fixture_read", "price": "old"}])[0]
     assert "price" not in result
     assert result["pricing"]["status"] == "unavailable"
     assert "do not assume" in pricing.price_hint(result["pricing"])
@@ -100,7 +108,7 @@ def test_explicit_zero_is_preserved_but_missing_price_is_unknown(mock_http):
     mock_http(lambda r: httpx.Response(200, json=envelope([
         {"id": "proxy:api_calls", "mangrove/x402_price_usd": "0.00"},
     ])))
-    result = pricing._enrich([{"name": "oracle_get_experiment"}, {"name": "kb_search"}])
+    result = pricing._enrich([{"name": "fixture_zero"}, {"name": "fixture_unknown"}])
     assert result[0]["pricing"]["components"][0]["price_usd"] == "0"
     assert result[1]["pricing"]["status"] == "unavailable"
     assert "price" not in result[1]
@@ -114,7 +122,7 @@ def test_failures_never_retry_pay_or_forward_errors(mock_http, status):
         return httpx.Response(status, headers={"Location": "https://evil.example/"}, text="secret-upstream-error")
     mock_http(handler)
     for _ in range(3):
-        result = pricing._enrich([{"name": "get_signal"}])
+        result = pricing._enrich([{"name": "fixture_read"}])
         assert result[0]["pricing"]["status"] == "unavailable"
         assert "secret" not in json.dumps(result)
     assert len(calls) == 1
@@ -122,7 +130,7 @@ def test_failures_never_retry_pay_or_forward_errors(mock_http, status):
 
 def test_old_server_catalog_degrades_without_guessing(mock_http):
     mock_http(lambda r: httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"tools": []}}))
-    assert pricing._enrich([{"name": "get_signal"}])[0]["pricing"]["status"] == "unavailable"
+    assert pricing._enrich([{"name": "fixture_read"}])[0]["pricing"]["status"] == "unavailable"
 
 
 def test_cache_refresh_price_change_stale_expiry_and_recovery(monkeypatch):
@@ -214,13 +222,13 @@ def test_malformed_or_unbounded_response_is_unavailable(mock_http, monkeypatch, 
     elif case == "deadline":
         monkeypatch.setattr(pricing, "_DEADLINE", -1)
     mock_http(lambda r: httpx.Response(200, content=b"{" if case == "invalid_json" else json.dumps(body).encode(), headers=headers))
-    assert pricing._enrich([{"name": "get_signal"}])[0]["pricing"]["status"] == "unavailable"
+    assert pricing._enrich([{"name": "fixture_read"}])[0]["pricing"]["status"] == "unavailable"
 
 
 def test_network_and_disabled_payment_are_reported_without_config_changes(mock_http):
     configured = app_config.X402_NETWORK
     mock_http(lambda r: httpx.Response(200, json=envelope(network="eip155:1", enabled=False)))
-    item = pricing._enrich([{"name": "get_signal"}])[0]
+    item = pricing._enrich([{"name": "fixture_read"}])[0]
     assert item["network"] == "eip155:1"
     assert not item["pricing"]["network_matches_configuration"]
     assert "disabled" in pricing.price_hint(item["pricing"])
@@ -231,13 +239,13 @@ def test_composite_does_not_advertise_a_total_and_stale_hint_is_explicit(monkeyp
     snap = pricing.Snapshot("x", {"rest:backtest_get": "0.001", "skill:crypto_ohlcv": "0.02"},
                             "eip155:84532", True, "2026-09-17T00:00:00Z", 0)
     monkeypatch.setattr(pricing._cache, "read", lambda _: (snap, "stale"))
-    item = pricing._enrich([{"name": "get_backtest"}])[0]
+    item = pricing._enrich([{"name": "fixture_composite"}])[0]
     assert "price" not in item
     assert item["pricing"]["variable_total"]
     assert "not a total quote" in pricing.price_hint(item["pricing"])
     assert "stale" in pricing.price_hint(item["pricing"])
     monkeypatch.setattr(pricing._cache, "read", lambda _: (replace(snap, prices={}), "fresh"))
-    assert pricing._enrich([{"name": "get_backtest"}])[0]["pricing"]["status"] == "unavailable"
+    assert pricing._enrich([{"name": "fixture_composite"}])[0]["pricing"]["status"] == "unavailable"
 
 
 async def test_fetch_does_not_block_event_loop(monkeypatch):
@@ -247,7 +255,7 @@ async def test_fetch_does_not_block_event_loop(monkeypatch):
         assert release.wait(5)
         return {"rest:signals_get": "0.001"}, "eip155:84532", True
     monkeypatch.setattr(pricing, "_fetch_prices", fetch)
-    task = asyncio.create_task(pricing.enrich_tools([{"name": "get_signal"}]))
+    task = asyncio.create_task(pricing.enrich_tools([{"name": "fixture_read"}]))
     try:
         for _ in range(100):
             if entered.is_set():
@@ -258,7 +266,7 @@ async def test_fetch_does_not_block_event_loop(monkeypatch):
     finally:
         release.set()
         result = await task
-    assert result[0]["name"] == "get_signal"
+    assert result[0]["name"] == "fixture_read"
     assert result[0]["pricing"]["status"] == "fresh"
     assert result[0]["pricing"]["components"] == [
         {"meter": "rest:signals_get", "price_usd": "0.001"},
@@ -321,7 +329,7 @@ def test_signal_browse_and_search_prices_are_alternatives(mock_http):
         {"id": "rest:signals_list", "mangrove/x402_price_usd": "0.001"},
         {"id": "rest:signals_search", "mangrove/x402_price_usd": "0.002"},
     ])))
-    result = pricing._enrich([{"name": "list_signals"}])[0]
+    result = pricing._enrich([{"name": "fixture_alternatives"}])[0]
     assert "price" not in result
     quoted = result["pricing"]
     assert quoted["status"] == "fresh"

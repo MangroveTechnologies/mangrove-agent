@@ -15,7 +15,7 @@ third-party behavior. Live SDK calls live in Task 5.3 (Sepolia) and 5.4
 from __future__ import annotations
 
 import os
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
@@ -138,6 +138,8 @@ def _stub_sdk() -> MagicMock:
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     """TestClient for the full app with all SDK paths stubbed."""
+    monkeypatch.setattr("src.mcp.mangrove_proxy.catalog", AsyncMock(return_value=[]))
+    monkeypatch.setattr("src.mcp.marketplace_proxy.list_tools", AsyncMock(return_value=[]))
     db_file = tmp_path / "smoke.db"
     from src.config import app_config
     from src.services import scheduler_service as ss
@@ -179,7 +181,7 @@ def client(tmp_path, monkeypatch):
 
     from src.app import create_app
     app = create_app()
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://127.0.0.1:9082") as c:
         yield c
     ss.reset_scheduler_cache()
     db_mod.reset_connection()
@@ -299,24 +301,59 @@ def test_mcp_http_endpoint_is_reachable(client):
     )
 
 
-def test_mcp_tool_count_matches_rest_catalog(client):
-    """REST /api/v1/agent/tools must return the same tool names that were
-    registered on the MCP server. Proves the shared catalog works."""
-    r = client.get("/api/v1/agent/tools")
-    assert r.status_code == 200
-    catalog_names = {t["name"] for t in r.json()["tools"]}
+@pytest.mark.parametrize("upstream_available", [True, False])
+def test_mcp_tool_count_matches_rest_catalog(client, monkeypatch, upstream_available):
+    """Both discovery doors expose live server tools and distinct local tools."""
+    from mcp.types import Tool
+    from src.mcp.server import create_mcp_server
+    from src.shared.errors import SdkError
 
-    # Core 22 + hello_mangrove demo.
-    required = {
-        "status", "list_tools",
-        "create_wallet", "list_wallets", "get_balances",
-        "list_dex_venues", "get_swap_quote", "execute_swap",
-        "get_ohlcv", "get_market_data", "list_signals",
-        "create_strategy_autonomous", "create_strategy_manual",
-        "list_strategies", "get_strategy", "update_strategy_status",
-        "backtest_strategy", "evaluate_strategy",
-        "list_evaluations", "list_trades", "list_all_trades",
-        "kb_search", "hello_mangrove",
+    remote_tools = [
+        Tool(name=name, description="Remote catalogue fixture", inputSchema={
+            "type": "object", "properties": {"limit": {"type": "integer", "maximum": 30}},
+        })
+        for name in ("get_ohlcv", "get_market_data", "list_signals", "kb_search")
+    ]
+    discovery = AsyncMock(return_value=remote_tools)
+    if not upstream_available:
+        discovery.side_effect = SdkError("Upstream discovery unavailable")
+    monkeypatch.setattr("src.mcp.mangrove_proxy.catalog", discovery)
+
+    rest = client.get("/api/v1/agent/tools")
+    assert rest.status_code == 200
+    body = rest.json()
+    assert body["mangroveai_status"] == ("available" if upstream_available else "unavailable")
+    catalog = {tool["name"]: tool for tool in body["tools"]}
+    assert len(catalog) == len(body["tools"])
+
+    mcp = client.post("/mcp/", json={
+        "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {},
+    }, headers={"Accept": "application/json, text/event-stream", **_auth()})
+    assert mcp.status_code == 200
+    payload = mcp.json()
+    assert "error" not in payload
+    mcp_tools = payload["result"]["tools"]
+    assert {tool["name"]: tool for tool in mcp_tools} == catalog
+    assert len(mcp_tools) == len(catalog)
+    assert discovery.await_count == 2
+
+    required_local = {
+        "status", "list_tools", "create_wallet", "list_wallets", "get_balances",
+        "list_dex_venues", "get_swap_quote", "execute_swap", "hello_mangrove",
+        "agent_create_strategy_autonomous", "agent_create_strategy_manual",
+        "agent_list_strategies", "agent_get_strategy", "agent_update_strategy_status",
+        "agent_backtest_strategy", "agent_evaluate_strategy",
+        "agent_list_evaluations", "agent_list_trades", "agent_list_all_trades",
     }
-    missing = required - catalog_names
-    assert not missing, f"missing from tool catalog: {missing}"
+    assert required_local <= catalog.keys()
+    assert not {name.removeprefix("agent_") for name in required_local
+                if name.startswith("agent_")} & catalog.keys()
+
+    local_registry = create_mcp_server()._tool_manager._tools
+    for tool in remote_tools:
+        assert tool.name not in local_registry
+        if upstream_available:
+            assert catalog[tool.name]["inputSchema"] == tool.inputSchema
+            assert catalog[tool.name]["description"] == tool.description
+        else:
+            assert tool.name not in catalog

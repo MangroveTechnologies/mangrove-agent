@@ -49,7 +49,8 @@ Claude Code skills that help while extending the scaffold:
 ## Synced MangroveAI copilot skills
 
 The judgement skills under `.claude/skills/michael/` (backtesting, strategy-composition,
-strategy-management, sweeps, sweep-results, market-intelligence, knowledge-graph, portfolio)
+strategy-management, sweeps, sweep-results, market-intelligence, knowledge-graph, portfolio,
+condition-studies, product-facts)
 are generated from MangroveAI's copilot, which is their source of truth. Do not edit them
 here — CI (`--verify-manifest`) fails on a hand-edited copy. To pick up upstream changes:
 
@@ -58,12 +59,13 @@ python scripts/sync-michael-skills.py --source ~/mangrove-workspace/MangroveAI -
 python scripts/sync-michael-skills.py --source ~/mangrove-workspace/MangroveAI --ref origin/main --check
 ```
 
-The script maps Michael's tool names to this agent's MCP tools (`TOOL_MAP`), annotates
-passages that need a tool this agent does not have yet (`UNAVAILABLE`), and rewrites
-Michael-runtime-only passages (`PATCHES`, anchored on upstream wording — a changed anchor
-fails the sync loudly). When a new agent tool fills a gap, move its entry from
-`UNAVAILABLE` to `TOOL_MAP` and re-sync. The script's docstring shows how to sync from a
-`gh api` tarball when there is no local checkout.
+The script preserves server tool names and adapts bundled file-resource references.
+It filters declared `uses-tools` against the reviewed upstream contract snapshot for
+generation only. Runtime discovery and calls always use the live MangroveAI MCP
+catalogue; the snapshot is never a fallback. Local execution uses separate `agent_`
+tools and local IDs. Refresh the reviewed snapshot and regenerate guidance when the
+server contract changes. The script's docstring also covers syncing from a `gh api`
+tarball when there is no local checkout.
 
 ## Git workflow
 

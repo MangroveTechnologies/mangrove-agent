@@ -7,7 +7,7 @@ description: >-
   window from a target bar count (not a fixed month table), caps against
   data availability, reports a verdict against `threshold_spec.json`
   plus benchmark deltas, and recommends the next action (promote,
-  iterate, reject). Wraps `backtest_strategy` + `get_market_data` +
+  iterate, reject). Wraps `agent_backtest_strategy` + `get_market_data` +
   optionally `list_ohlcv_coverage` (when available) for the SDK
   consumer — no manual date math.
 ---
@@ -45,14 +45,14 @@ Do NOT activate for:
 
 Required inputs:
 
-1. **strategy_id** — UUID from `list_strategies` or a `create_strategy_manual` response. If the user says "the one I just made" and there's only one unpromoted strategy, infer it. Otherwise call `list_strategies(status="inactive")` and present choices — new strategies are saved as `inactive` (saved, not scheduled), not `draft`.
+1. **strategy_id** — UUID from `agent_list_strategies` or a `agent_create_strategy_manual` response. If the user says "the one I just made" and there's only one unpromoted strategy, infer it. Otherwise call `agent_list_strategies(status="inactive")` and present choices — new strategies are saved as `inactive` (saved, not scheduled), not `draft`.
 
 Optional overrides (skill proposes defaults in Phase B — don't ask the user for these cold):
 
 - **lookback window** — days, hours, or explicit start/end dates. If user volunteers one, respect it.
 - **slippage_pct** / **fee_pct** — override `trading_defaults.json`. Only touch if the user mentions they want realistic frictions tuned.
 
-Pull the strategy's asset + timeframe via `get_strategy(strategy_id)` so the window sizing can reason about bar counts.
+Pull the strategy's asset + timeframe via `agent_get_strategy(strategy_id)` so the window sizing can reason about bar counts.
 
 ## Phase B — Size the window
 
@@ -70,7 +70,7 @@ timeframe:
 | 4h | 6 | **12–30 months** (default: 18mo) |
 | 1d | 1 | **5–14 years** (default: 5y, capped by provider history) |
 
-> **Long windows are fine (SDK ≥1.14).** `backtest_strategy` is async-backed:
+> **Long windows are fine (SDK ≥1.14).** `agent_backtest_strategy` is async-backed:
 > the SDK submits to the async surface (`POST /api/v2/backtests/`) and polls
 > status internally, so there is **no gateway timeout ceiling** — a 12-month
 > 1h run (~8,760 bars) completes normally (verified: `num_days=370`). Warm
@@ -103,7 +103,7 @@ Tell the user the resolved window before running: "Backtesting on
 
 ## Phase C — Run
 
-Call `backtest_strategy(strategy_id, mode="full", start_date=..., end_date=...)`. Mode is always `"full"` for this skill (quick mode is for the bulk-candidate flow in `/create-strategy` Phase B-bulk).
+Call `agent_backtest_strategy(strategy_id, mode="full", start_date=..., end_date=...)`. Mode is always `"full"` for this skill (quick mode is for the bulk-candidate flow in `/create-strategy` Phase B-bulk).
 
 > **Quick-mode caveat.** `mode="quick"` is a signal-frequency screen with **no
 > risk management** — no stop-loss, no take-profit, no time-based exits. An
@@ -128,7 +128,7 @@ If the SDK returns an error, surface the exact message. Don't retry silently —
 
 ### Threshold gate — use the server verdict, don't recompute
 
-`backtest_strategy(mode="full")` returns a `verdict` block computed
+`agent_backtest_strategy(mode="full")` returns a `verdict` block computed
 server-side (`server/src/services/backtest_verdict.py`) against the 6
 thresholds in `server/src/services/data/threshold_spec.json`. **Present it
 as-is.** Do not re-grade the raw metrics yourself — the SDK reports
@@ -222,8 +222,8 @@ The user reviews the verdict and picks one of:
   same Phase A search in `/create-strategy`. Reinvoke `/create-strategy`
   at Phase B-bulk with the shortlist.
 - **Reject** → archive the strategy via
-  `update_strategy_status(strategy_id, status="archived")` so it stops
-  showing up in `list_strategies(status="inactive")`. Don't delete — the
+  `agent_update_strategy_status(strategy_id, status="archived")` so it stops
+  showing up in `agent_list_strategies(status="inactive")`. Don't delete — the
   record is useful for the user to remember what they tried.
 
 ## Prohibited
@@ -253,7 +253,7 @@ User wants to backtest
 │     → warn if <500 bars or regime-homogeneous
 │     → disclose resolved window to user
 │
-├─ Phase C: backtest_strategy(mode="full", resolved window)
+├─ Phase C: agent_backtest_strategy(mode="full", resolved window)
 │     → disclose latency up front
 │     → surface SDK errors verbatim
 │

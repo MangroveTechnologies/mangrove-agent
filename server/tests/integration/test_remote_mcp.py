@@ -198,3 +198,90 @@ async def test_completed_remote_result_retains_content_types(receiver, wallet):
     assert cached.mcp_result == first.mcp_result
     assert len(receiver['calls']) == before
     assert len(spend_service.list_payments()) == 1
+
+
+async def test_mangrove_proxy_discovers_then_pays_through_official_mcp(receiver, wallet, monkeypatch):
+    from src.config import app_config
+    from src.mcp import mangrove_proxy, tools
+    monkeypatch.setattr(mangrove_proxy, 'endpoint', lambda: ORIGIN)
+    monkeypatch.setattr(mangrove_proxy, '_api_key', lambda _: None)
+    monkeypatch.setattr(tools, '_require', lambda _: True)
+    monkeypatch.setattr(app_config, 'X402_PAYER_WALLET', wallet)
+    result = await mangrove_proxy.call_tool('list_signals', {'limit': 10})
+    assert not result.isError
+    assert result.structuredContent == {'signals': [{'name': 'example'}]}
+    assert result.meta['x402/payment-response']['transaction'] == '0x' + 'ab' * 32
+    assert len(receiver['calls']) == 2
+    assert receiver['closed']
+
+
+@pytest.mark.parametrize('outcome', ['success', 'cap', 'lost'])
+async def test_dynamic_proxy_preserves_real_wallet_boundaries(receiver, wallet, monkeypatch, outcome):
+    from src.config import app_config
+    from src.mcp import mangrove_proxy, tools
+
+    monkeypatch.setattr(tools, '_require', lambda _: True)
+    monkeypatch.setattr(mangrove_proxy, 'endpoint', lambda: ORIGIN)
+    monkeypatch.setattr(mangrove_proxy, '_api_key', lambda _: None)
+    monkeypatch.setattr(app_config, 'X402_PAYER_WALLET', wallet)
+    if outcome == 'cap':
+        monkeypatch.setattr(app_config, 'X402_SPEND_CAP_USD', 0.0001)
+    if outcome == 'lost':
+        receiver['failure'] = 'lost'
+    result = await mangrove_proxy.call_tool('list_signals', {'limit': 10})
+    if outcome == 'success':
+        assert not result.isError
+        assert result.structuredContent['signals'][0]['name'] == 'example'
+        assert len(receiver['calls']) == 2
+        assert spend_service.list_payments()[0]['state'] == 'settled'
+    elif outcome == 'cap':
+        assert result.isError
+        assert result.structuredContent['code'] == 'X402_SPEND_CAP_EXCEEDED'
+        assert len(receiver['calls']) == 1
+        assert spend_service.list_payments() == []
+    else:
+        assert result.isError
+        assert result.structuredContent['code'] == 'X402_PAYMENT_UNCERTAIN'
+        assert result.structuredContent['retry_payment'] is False
+        assert result.structuredContent['reservation_ids']
+        assert len(receiver['calls']) == 2
+        assert len(spend_service.list_payments()) == 1
+        assert 'SYNTHETIC_PRIVATE' not in result.model_dump_json()
+    assert receiver['closed']
+
+
+def test_local_mcp_http_auth_reaches_remote_wallet_path(receiver, wallet, monkeypatch):
+    from unittest.mock import Mock
+    from fastapi.testclient import TestClient
+    from src.app import create_app
+    from src.config import app_config
+    from src.mcp import mangrove_proxy, server
+
+    server.reset_mcp_server()
+    monkeypatch.setattr('src.services.scheduler_service.start', lambda: None)
+    monkeypatch.setattr('src.services.scheduler_service.shutdown', lambda: None)
+    monkeypatch.setattr('src.shared.x402.server._ensure_initialized', Mock(side_effect=ConnectionError('offline')))
+    monkeypatch.setattr(mangrove_proxy, 'endpoint', lambda: ORIGIN)
+    monkeypatch.setattr(mangrove_proxy, '_api_key', lambda _: None)
+    monkeypatch.setattr(app_config, 'X402_PAYER_WALLET', wallet)
+    try:
+        with TestClient(create_app(), base_url='http://localhost:9080') as client:
+            for key in ['wrong-key', 'test-key-1']:
+                response = client.post('/mcp/', headers={
+                    'X-API-Key': key, 'Accept': 'application/json, text/event-stream',
+                    'MCP-Protocol-Version': '2025-03-26',
+                }, json={'jsonrpc':'2.0', 'id':1, 'method':'tools/call',
+                         'params':{'name':'list_signals','arguments':{'limit':10}}})
+                if key == 'wrong-key':
+                    assert response.status_code == 401 or response.json()['result']['isError']
+                    assert receiver['calls'] == []
+                    assert spend_service.list_payments() == []
+                else:
+                    assert response.status_code == 200
+                    result = response.json()['result']
+                    assert not result.get('isError')
+                    assert result['structuredContent']['signals'][0]['name'] == 'example'
+        assert len(receiver['calls']) == 2
+        assert spend_service.list_payments()[0]['state'] == 'settled'
+    finally:
+        server.reset_mcp_server()

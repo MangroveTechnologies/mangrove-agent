@@ -7,6 +7,7 @@ from math import ceil
 import httpx
 import pytest
 from mangrove_ai import MangroveAI
+
 from src.services.signals import list_signals
 from src.shared.errors import SdkError, ValidationError
 
@@ -83,7 +84,7 @@ def test_local_rest_page_preserves_server_metadata(sdk_factory):
     assert result["has_more"] is True
 
 
-def test_search_remains_one_distinct_request_with_category_refinement(sdk_factory):
+def test_search_forwards_filters_in_one_distinct_request(sdk_factory):
     calls = []
 
     def handler(request):
@@ -91,17 +92,18 @@ def test_search_remains_one_distinct_request_with_category_refinement(sdk_factor
         assert request.method == "POST"
         assert request.url.path == "/api/v1/signals/search"
         assert json.loads(request.content)["query"] == "momentum"
-        body = page(0, 2, 2)
-        body["signals"][1]["category"] = "volume"
+        assert json.loads(request.content)["category"] == "trend"
+        assert json.loads(request.content)["role"] == "FILTER"
+        body = page(0, 1, 1)
         return httpx.Response(200, json=body)
 
-    result = list_signals(client=sdk_factory(handler), search="momentum", category="trend", collect=True)
+    result = list_signals(client=sdk_factory(handler), search="momentum", category="trend", role="FILTER", collect=True)
     assert result["total"] == 1
     assert len(calls) == 1
 
 
 @pytest.mark.parametrize("kwargs", [{"limit": 0}, {"limit": 1001}, {"limit": True},
-                                    {"offset": -1}, {"search": "trend", "role": "FILTER"}])
+                                    {"offset": -1}])
 def test_invalid_workflow_inputs_never_reach_upstream(sdk_factory, kwargs):
     with pytest.raises(ValidationError):
         list_signals(client=sdk_factory(lambda r: pytest.fail("request sent")), **kwargs)
@@ -187,14 +189,11 @@ def test_access_denial_preserves_safe_status_and_stops_collection(sdk_factory, s
     assert len(calls) == 1
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [401, 403])
-async def test_mcp_and_rest_preserve_sdk_access_denial(sdk_factory, monkeypatch, status):
+def test_rest_preserves_sdk_access_denial(sdk_factory, monkeypatch, status):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from mcp.server.fastmcp import FastMCP
     from src.api.routes.signals import router
-    from src.mcp import tools
     from src.services import signals
     from src.shared.auth.dependency import require_api_key
     from src.shared.errors import AgentError, agent_error_handler
@@ -207,18 +206,6 @@ async def test_mcp_and_rest_preserve_sdk_access_denial(sdk_factory, monkeypatch,
 
     sdk = sdk_factory(handler)
     monkeypatch.setattr(signals, "mangrove_ai_client", lambda: sdk)
-    monkeypatch.setattr(tools, "_require", lambda _: True)
-    server = FastMCP("signal-access-regression")
-    tools._register_signals(server)
-    tool = server._tool_manager._tools["list_signals"]
-    result = json.loads(await tool.run({"limit": 10}))
-    assert result["error"] is True
-    assert result["upstream_status"] == status
-    assert result["retryable"] is False
-    assert result["retry_payment"] is False
-    assert "secret-upstream-body" not in json.dumps(result)
-    assert len(calls) == 1
-
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[require_api_key] = lambda: "local-test-identity"
@@ -226,10 +213,14 @@ async def test_mcp_and_rest_preserve_sdk_access_denial(sdk_factory, monkeypatch,
     with TestClient(app) as client:
         response = client.get("/signals?limit=10")
     assert response.status_code == status
-    assert response.json()["code"] == result["code"]
-    assert response.json()["upstream_status"] == status
+    result = response.json()
+    assert result["error"] is True
+    assert result["code"] == ("UPSTREAM_AUTHENTICATION_FAILED" if status == 401 else "UPSTREAM_ACCESS_DENIED")
+    assert result["upstream_status"] == status
+    assert result["retryable"] is False
+    assert result["retry_payment"] is False
     assert "secret-upstream-body" not in response.text
-    assert len(calls) == 2
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("status", [401, 403])

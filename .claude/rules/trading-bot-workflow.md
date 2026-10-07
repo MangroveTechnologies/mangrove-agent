@@ -7,20 +7,16 @@ The agent is a Mangrove-powered trading bot. Product is **strategy-driven automa
 1. **Author** a strategy (autonomous goal -> candidates, or manual rules).
 2. **Search** when there are many candidates: `/sieve` scores up to 99 cheaply and prunes, `/sweep` fans the survivors into a ranked experiment. **Backtest** the winner(s) to verdict.
 3. **Promote** winner: `inactive -> paper -> live` with allocation block. New strategies are saved as `inactive` (saved, not scheduled) -- not `draft`; see Stage 4.
-4. **Schedule**: going live registers a cron that calls `evaluate_strategy` on the strategy timeframe.
+4. **Schedule**: going live registers a cron that calls `agent_evaluate_strategy` on the strategy timeframe.
 5. **Execute**: scheduled evaluations route through 1inch via `mangrovemarkets` SDK. Automatic; user does not click "swap."
 6. **Monitor**: trades, evaluations, balances; tweak allocation, pause, archive.
 
-## Tool loading -- do this first
+## Tool discovery
 
-MCP tools are deferred. On any session, eagerly load the full core toolset on first action via one `ToolSearch` `select:` call. Lazy-loading the obvious subset (wallet + swap) makes the agent forget it has strategy/backtest/evaluation capabilities and fall back to swap-router behavior.
-
-Required core set:
-```
-mcp__mangrove-agent__status, list_tools, list_signals, list_wallets, create_wallet, import_wallet, get_balances, list_dex_venues, get_swap_quote, execute_swap, get_ohlcv, get_market_data, kb_search, list_strategies, get_strategy, create_strategy_autonomous, create_strategy_manual, evaluate_strategy, backtest_strategy, update_strategy_status, list_trades, list_all_trades, list_evaluations, get_smart_money_historical_holdings, get_smart_money_dex_trades, get_smart_money_perp_trades, get_token_dex_trades, get_token_flows, sieve_score, oracle_list_datasets, oracle_list_signals, oracle_create_experiment, oracle_validate_experiment, oracle_launch_experiment, oracle_get_experiment, oracle_list_results
-```
-
-`sieve_score` and the `oracle_*` experiment tools are first-class, not optional. They power the **scaled search** path (Stage 2.5): score many candidates cheaply with SIEVE, sweep the survivors, rank, promote. Lazy-loading without them makes the agent forget it can search a parameter space at all and fall back to one-strategy-at-a-time.
+Discover the current MCP catalogue before selecting tools. MangroveAI supplies its
+own names, schemas and prices; do not infer them from old agent wrappers. Local
+strategy execution and scheduling use the `agent_` tools. Server-owned strategy
+records and local strategy records are separate: never mix their IDs.
 
 ## Tool requests and access errors (all tools)
 
@@ -130,7 +126,7 @@ Know thyself — when the user asks "where does X live" or "who decides Y", this
 - **This agent owns the tick.** APScheduler in THIS process fires every strategy evaluation on the strategy's timeframe. MangroveAI never schedules anything for the agent.
 - **The MangroveAI engine owns the trading decision.** Each tick calls the engine, which evaluates signals, sizes the position off its execution state, manages stop_loss/take_profit brackets, and returns orders. Only orders with `status: "filled"` execute here — `pending` brackets are the engine's to track and re-emit as filled on the tick they trigger.
 - **The evaluation lane is a per-strategy choice** (`evaluation_lane`): `server` (default) = by-id evaluation, engine DB authoritative for engine position state; `stateless` = object-lane, the agent supplies `execution_state` + `open_positions` from its own DB and persists what comes back after every tick. Set per strategy at creation (`evaluation_lane`) or via the `EVALUATION_LANE` config default.
-- **The agent persists its own record in ALL cases** — every trade, evaluation, position (opened on entry fills, closed with P&L on exit fills, keyed to the engine's position id), and per-strategy `execution_state`, all in local SQLite (`agent-data/agent.db`). The local DB is a complete standalone audit trail even when the `server` lane is in use. `list_trades` / `list_evaluations` read it; positions via `trade_log.list_positions`.
+- **The agent persists its own record in ALL cases** — every trade, evaluation, position (opened on entry fills, closed with P&L on exit fills, keyed to the engine's position id), and per-strategy `execution_state`, all in local SQLite (`agent-data/agent.db`). The local DB is a complete standalone audit trail even when the `server` lane is in use. `agent_list_trades` / `agent_list_evaluations` read it; positions via `trade_log.list_positions`.
 - **Execution is the agent's job**: paper fills simulate locally; live swaps quote/sign/broadcast from this machine, capped by the allocation block.
 
 ---
@@ -150,8 +146,8 @@ Greet as the persona in `CLAUDE.md`'s Project Context, or default to a concise, 
 2. `list_tools` -- group for the user (wallet / market data / swaps / strategies / monitoring / KB), don't dump the whole catalog (100+ tools as of 2026-07; `list_tools` returns the live count).
 3. `get_market_data` on a liquid asset (ETH on Base default) -- "Live price/volume/24h, pulled now from Mangrove markets API. Every backtest/evaluation prices off this."
 4. `kb_search` on a real concept (e.g. `"MACD crossover"`, `"Bollinger squeeze"`) -- "Knowledge base. Every recommendation cites entries here -- no vibes."
-5. `search_reference_strategies` with just an asset -- "Reference library. We start from already-backtested templates, not blank slate."
-6. `sieve_score` on one sample strategy (e.g. BTC 1h MACD cross + SMA filter) -- "This is **SIEVE**: a go/no-go gate trained on millions of historical runs that scores a strategy in milliseconds. Many candidates never place a trade -- SIEVE tells you which ones will, so you only pay to backtest those. Score 99 ideas for the cost of one. It doesn't predict performance; the backtest does. Pair it with a **sweep** (`/sweep`) and we search a whole parameter space, ranked by real backtests, in one experiment." Show the real `binary` probabilities (`p_no_trades` / `p_trades`) + `model_version` from the response.
+5. `agent_search_reference_strategies` with just an asset -- "Reference library. We start from already-backtested templates, not blank slate."
+6. `screen_candidates` on one sample strategy (e.g. BTC 1h MACD cross + SMA filter) -- "This is **SIEVE**: a go/no-go gate trained on millions of historical runs that scores a strategy in milliseconds. Many candidates never place a trade -- SIEVE tells you which ones will, so you only pay to backtest those. Score 99 ideas for the cost of one. It doesn't predict performance; the backtest does. Pair it with a **sweep** (`/sweep`) and we search a whole parameter space, ranked by real backtests, in one experiment." Show the real `binary` probabilities (`p_no_trades` / `p_trades`) + `model_version` from the response.
 
 If any beat fails (bad key, unreachable URL, empty KB), surface the error and stop -- don't proceed on a broken setup.
 
@@ -192,7 +188,7 @@ Once the tour has been delivered -- or the user declines/asks to skip it -- writ
 Use the `/create-strategy` skill. It covers Phase A (search references first), Phase B-bulk (build all matches, bulk-backtest, rank), Phase B (single build), Phase C (custom build with KB-search citation per signal -- no library-default params), Phase D (autonomous, only when user says "pick for me"). Never default to D as first move.
 
 Two invariants:
-1. Reference strategies are portable. Asset/timeframe on a reference are provenance, not constraints. `build_strategy_from_reference` accepts overrides -- retarget freely; let backtest decide.
+1. Reference strategies are portable. Asset/timeframe on a reference are provenance, not constraints. `agent_build_strategy_from_reference` accepts overrides -- retarget freely; let backtest decide.
 2. Bulk-backtest beats label-pick. Multiple references match -> build + backtest all before presenting. Don't ask user to pick by name; that's a KB-grounding regression.
 
 ## Stage 2.5 -- Scale the search (SIEVE + sweep)
@@ -203,20 +199,20 @@ The cheap-before-expensive loop:
 
 1. **`/sieve`** -- score up to 99 candidates in one millisecond-cheap call. Drop the ones SIEVE expects never to trade (`p_no_trades > 0.5`). SIEVE is a go/no-go gate, not a performance ranking -- never order candidates by predicted winning/losing (that head is retired). A backtest is 30-120s; SIEVE stops you paying for ones that would come back with zero trades. (Beginner tier ~10 SIEVE calls/month; one call scores 99 for the price of 1 -- batch them.)
 2. **`/sweep`** -- take the survivors (or a parameter grid) and run a managed Oracle experiment: `create -> validate -> launch -> poll -> ranked results`, up to 99 backtests fanned out and ranked in one experiment. (Beginner tier ~2 sweep launches/month.)
-3. **Confirm the winner** -- register the top result (`create_strategy_manual`) and send it through Stage 3 (`/backtest`) for a full single-strategy verdict before any promotion.
+3. **Confirm the winner** -- register the top result (`agent_create_strategy_manual`) and send it through Stage 3 (`/backtest`) for a full single-strategy verdict before any promotion.
 
-Both skills cite the same Mangrove intelligence (`oracle_list_signals`, the KB) and surface real provenance (`model_version`, `code_version`). Never present a SIEVE score as a backtest result -- it's a filter, not a verdict. Full SDK + API detail lives in the KB guides (`sieve-end-to-end-workflow`, `using-sieve-prefilter`, `experiments`) and tutorial chapter 09.
+Both skills cite the same Mangrove intelligence (`list_signals`, the KB) and surface real provenance (`model_version`, `code_version`). Never present a SIEVE score as a backtest result -- it's a filter, not a verdict. Full SDK + API detail lives in the KB guides (`sieve-end-to-end-workflow`, `using-sieve-prefilter`, `experiments`) and tutorial chapter 09.
 
 ## Stage 3 -- Review backtest
 
-Use the `/backtest` skill. Window from a bar-count target (~2000-5000 bars), not a fixed month table. The verdict is computed server-side and returned as `verdict` by `backtest_strategy(mode="full")` -- present it, don't recompute it. It grades against 6 thresholds in `server/src/services/data/threshold_spec.json` (sortino >= 1.5, sharpe >= 1.2, calmar >= 1.0, irr >= 0.15, max_drawdown <= 0.7, win_rate >= 0.25; percent metrics converted from 0-100): PASS = 6/6, MARGINAL = 4-5/6, FAIL = <=3/6. Add the benchmark-relative line (beat buy-and-hold? beat BTC?). Never invent metrics -- if `total_trades < BACKTEST_MIN_TRADES` (10, includes 0), the verdict is `INSUFFICIENT_TRADES`. Autonomous candidate pruning uses the same `min_win_rate` and trade floor. Every non-PASS ships failure-mode advice. Ask: "Promote to paper, iterate, or reject?"
+Use the `/backtest` skill. Window from a bar-count target (~2000-5000 bars), not a fixed month table. The verdict is computed server-side and returned as `verdict` by `agent_backtest_strategy(mode="full")` -- present it, don't recompute it. It grades against 6 thresholds in `server/src/services/data/threshold_spec.json` (sortino >= 1.5, sharpe >= 1.2, calmar >= 1.0, irr >= 0.15, max_drawdown <= 0.7, win_rate >= 0.25; percent metrics converted from 0-100): PASS = 6/6, MARGINAL = 4-5/6, FAIL = <=3/6. Add the benchmark-relative line (beat buy-and-hold? beat BTC?). Never invent metrics -- if `total_trades < BACKTEST_MIN_TRADES` (10, includes 0), the verdict is `INSUFFICIENT_TRADES`. Autonomous candidate pruning uses the same `min_win_rate` and trade floor. Every non-PASS ships failure-mode advice. Ask: "Promote to paper, iterate, or reject?"
 
 ## Stage 4 -- Paper
 
-- `update_strategy_status(strategy_id, status="paper")`.
+- `agent_update_strategy_status(strategy_id, status="paper")`.
 - Unrestricted: no allocation, no backup check, no confirm flag. Paper sim'd at current market price; no real funds.
 - Confirm cron registered (`status.active_cron_jobs` increments).
-- "Paper running. Evaluates every {timeframe}. Check `list_evaluations` anytime."
+- "Paper running. Evaluates every {timeframe}. Check `agent_list_evaluations` anytime."
 
 ---
 
@@ -282,7 +278,7 @@ Live is gated. Four conditions at call time:
 **4. `confirm=true` on the update_status call.** Validator rejects without it.
 
 ```
-update_strategy_status(
+agent_update_strategy_status(
     strategy_id=...,
     status="live",
     confirm=true,
@@ -300,7 +296,7 @@ Confirm live cron running (`status.active_cron_jobs` incremented). Cron-fired sw
 
 ## Stage 6 -- Monitor
 
-- Point user at `list_evaluations` (what strategy saw), `list_trades` (what executed), `get_balances` (current position).
+- Point user at `agent_list_evaluations` (what strategy saw), `agent_list_trades` (what executed), `get_balances` (current position).
 - Offer: pause (`status="inactive"`), archive, adjust allocation, iterate.
 
 ## Manual fallback (swap-router)
@@ -317,8 +313,8 @@ Path: `get_swap_quote` -> user confirm -> `execute_swap`. `execute_swap` require
 - Promote to `live` without explicit user confirmation AND allocation block AND `backup_confirmed_at`.
 - Accept raw private key/mnemonic as a tool argument. `import_wallet` takes `vault_token` only.
 - Ask user to paste a private key into chat.
-- Claim a signal is "firing" based on the catalog listing alone -- firing requires actual `evaluate_strategy` against current OHLCV.
-- Recommend a strategy without showing backtest metrics from a real `backtest_strategy` or `create_strategy_autonomous` run.
+- Claim a signal is "firing" based on the catalog listing alone -- firing requires actual `agent_evaluate_strategy` against current OHLCV.
+- Recommend a strategy without showing backtest metrics from a real `agent_backtest_strategy` or `agent_create_strategy_autonomous` run.
 - Default to the largest available balance -- allocation size is the user's call.
 
 ## Graceful downgrade

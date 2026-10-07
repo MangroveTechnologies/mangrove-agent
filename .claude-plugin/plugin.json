@@ -22,6 +22,8 @@
   "skills": [
     "./.claude/skills/trading-bot",
     "./.claude/skills/michael/knowledge-graph",
+    "./.claude/skills/michael/condition-studies",
+    "./.claude/skills/michael/product-facts",
     "./.claude/skills/michael/strategy-composition",
     "./.claude/skills/michael/strategy-management",
     "./.claude/skills/michael/backtesting",

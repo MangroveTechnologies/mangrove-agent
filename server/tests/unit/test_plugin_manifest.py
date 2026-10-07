@@ -122,9 +122,8 @@ def test_every_synced_skill_is_shipped_and_conversation_memory_is_not():
         assert f"./.claude/skills/michael/{skill}" in shipped, skill
 
 
-def test_synced_skills_only_declare_tools_the_agent_registers():
-    tools = set(re.findall(r"^\s+async def ([a-z0-9_]+)\(",
-                           (ROOT / "server" / "src" / "mcp" / "tools.py").read_text(), re.M))
+def test_synced_server_skills_declare_reviewed_remote_tools():
+    tools = set(json.loads((ROOT / 'scripts/contracts/upstream.json').read_text())['tools'])
     for skill in _michael_skills():
         frontmatter = (MICHAEL_DIR / skill / "SKILL.md").read_text().split("---")[1]
         declared = re.search(r"^uses-tools:\s*\[(.*?)\]\s*$", frontmatter, re.M)

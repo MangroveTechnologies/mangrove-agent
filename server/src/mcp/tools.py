@@ -28,6 +28,8 @@ from src.shared.logging import get_logger
 
 _log = get_logger(__name__)
 
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -104,16 +106,8 @@ def register(server: FastMCP):
     from src.mcp.marketplace_tools import register_marketplace
     register_marketplace(server)
     _register_dex(server)
-    _register_market(server)
-    _register_signals(server)
-    _register_on_chain(server)
-    _register_defi(server)
-    _register_social(server)
-    _register_docs(server)
     _register_strategy(server)
     _register_logs(server)
-    _register_kb(server)
-    _register_oracle(server)
     _register_x402_spend(server)
     _register_hello_mangrove(server)
 
@@ -421,7 +415,7 @@ def _register_wallet(server: FastMCP) -> None:
     ) -> str:
         """On-chain transaction history for a SINGLE wallet (not comma-separated).
 
-        Different from our local `list_trades` (which covers strategy-
+        Different from our local `agent_list_trades` (which covers strategy-
         executed swaps only). This tool covers EVERY on-chain tx for
         the wallet — deposits, withdrawals, external swaps, etc.
         """
@@ -961,220 +955,6 @@ def _register_dex(server: FastMCP) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _register_market(server: FastMCP) -> None:
-    @server.tool()
-    async def get_ohlcv(symbol: str, lookback_days: int = 30,
-                        provider: str | None = None,
-                        api_key: str = "") -> str:
-        """OHLCV bars for an asset.
-
-        Thin wrapper over `mangroveai.crypto_assets.get_ohlcv(symbol, days,
-        provider)`. The SDK does NOT accept a timeframe — the upstream
-        endpoint returns the provider's native bar granularity (1h for
-        most). A previous version of this tool advertised a `timeframe`
-        parameter; it was silently dropped by the SDK. Removed to stop
-        misleading callers. To backtest at a *specific* timeframe, use the
-        Oracle datasets / backtest tools (`oracle_list_datasets`,
-        `oracle_backtest`, `backtest_strategy`), which are timeframe-aware.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        from src.api.routes.market import ohlcv as route
-        try:
-            return json.dumps(await route(symbol, lookback_days, provider))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="get_ohlcv",
-        description=(
-            "OHLCV bars for an asset. Bar granularity is set by the "
-            "data provider (typically 1h). No `timeframe` parameter — "
-            "the SDK / upstream endpoint don't support overriding bar "
-            "size at this call site."
-        ),
-        access="auth",
-        parameters=[
-            ToolParam(name="symbol", type="string", required=True, description="Asset symbol (e.g. BTC, ETH)"),
-            ToolParam(name="lookback_days", type="integer", required=False, description="History window in days (default 30)"),
-            ToolParam(name="provider", type="string", required=False, description="Optional CEX provider override"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_market_data(
-        symbol: str, provider: str | None = None, api_key: str = "",
-    ) -> str:
-        """Current market data for an asset.
-
-        Thin wrapper over `mangroveai.crypto_assets.get_market_data(symbol,
-        *, provider)`. `provider` selects a specific data source; omit to
-        use the SDK default.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        from src.api.routes.market import market_data as route
-        try:
-            return json.dumps(await route(symbol, provider))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="get_market_data",
-        description="Current price, market cap, volume, 24h/7d change. Optionally pin a provider.",
-        access="auth",
-        parameters=[
-            ToolParam(name="symbol", type="string", required=True, description="Asset symbol"),
-            ToolParam(name="provider", type="string", required=False, description="Optional data provider override"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_trending(api_key: str = "") -> str:
-        """Current trending crypto assets.
-
-        Pass-through to `mangroveai.crypto_assets.get_trending()`.
-        Useful for "what's hot right now" quick-glance. No filters.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.shared.clients.mangrove import mangrove_ai_client
-            return json.dumps(_dump(mangrove_ai_client().crypto_assets.get_trending()))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("CRYPTO_TRENDING_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_trending",
-        description="Trending crypto assets right now.",
-        access="auth",
-        parameters=[_APIKEY],
-    ))
-
-    @server.tool()
-    async def get_benchmark(
-        asset: str,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        lookback_days: int | None = None,
-        api_key: str = "",
-    ) -> str:
-        """Buy-and-hold return for an asset over a window, as a percentage (0-100 scale).
-
-        Pass start_date + end_date (ISO), or lookback_days ending now. The
-        response carries `buy_and_hold_return_pct` plus `covered_window` — the
-        span the bars actually covered, which can be shorter than requested when
-        history is thin (quote that one). `backtest_strategy` already attaches
-        this as `benchmark` for its own window; call this for a different asset
-        or period.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.benchmark_service import get_benchmark as svc
-            return json.dumps(svc(
-                asset, start_date=start_date, end_date=end_date, lookback_days=lookback_days,
-            ))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="get_benchmark",
-        description=(
-            "Buy-and-hold return (percent, 0-100 scale) for an asset over "
-            "start_date+end_date or lookback_days, with the window actually covered."
-        ),
-        access="auth",
-        parameters=[
-            ToolParam(name="asset", type="string", required=True, description="Asset symbol (e.g. BTC, ETH)"),
-            ToolParam(name="start_date", type="string", required=False, description="ISO start (pair with end_date)"),
-            ToolParam(name="end_date", type="string", required=False, description="ISO end (pair with start_date)"),
-            ToolParam(name="lookback_days", type="integer", required=False, description="Trailing window ending now (instead of dates)"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def list_approved_assets(
-        min_score: float | None = None, limit: int = 100,
-        api_key: str = "",
-    ) -> str:
-        """List approved-universe crypto assets (with optional min_score filter).
-
-        Defaults to approved_only=True (the safe curated subset).
-        Use this to see what's tradeable.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.shared.clients.mangrove import mangrove_ai_client
-            kwargs: dict[str, Any] = {"approved_only": True, "limit": limit}
-            if min_score is not None:
-                kwargs["min_score"] = min_score
-            items = mangrove_ai_client().crypto_assets.list(**kwargs)
-            return json.dumps([_dump(i) for i in items])
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("CRYPTO_LIST_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="list_approved_assets",
-        description="Approved crypto asset universe (agent-safe set).",
-        access="auth",
-        parameters=[
-            ToolParam(name="min_score", type="number", required=False, description="Optional quality threshold"),
-            ToolParam(name="limit", type="integer", required=False, description="Max results (default 100)"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_asset(symbol: str, api_key: str = "") -> str:
-        """Single-asset detail (score, approval state, metadata).
-
-        More focused than get_market_data — returns the MangroveAI
-        approval/score/categorization rather than price/volume.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.shared.clients.mangrove import mangrove_ai_client
-            return json.dumps(_dump(mangrove_ai_client().crypto_assets.get(symbol)))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("CRYPTO_GET_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_asset",
-        description="Single-asset metadata + score + approval state.",
-        access="auth",
-        parameters=[
-            ToolParam(name="symbol", type="string", required=True, description="Asset symbol (e.g. BTC, ETH)"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_global_market(api_key: str = "") -> str:
-        """Global market overview (total market cap, BTC dominance, 24h change).
-
-        Context tool — useful when the agent wants to ground a
-        "market regime" observation before recommending strategies.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.shared.clients.mangrove import mangrove_ai_client
-            return json.dumps(_dump(mangrove_ai_client().crypto_assets.get_global_market()))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("CRYPTO_GLOBAL_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_global_market",
-        description="Global market overview (total cap, BTC dominance, 24h change).",
-        access="auth",
-        parameters=[_APIKEY],
-    ))
 
 
 # ---------------------------------------------------------------------------
@@ -1182,567 +962,8 @@ def _register_market(server: FastMCP) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _register_signals(server: FastMCP) -> None:
-    @server.tool()
-    async def list_signals(category: str | None = None, search: str | None = None,
-                           limit: int = 50, api_key: str = "",
-                           regime_direction: str | None = None, role: str | None = None) -> str:
-        """Collect up to limit signals; each upstream page is a separate request.
-
-        Search uses keyword search and its own price. Regime and role apply only
-        to browsing. Total is the number returned, not the catalogue size.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        from starlette.concurrency import run_in_threadpool
-
-        from src.services.signals import list_signals as list_signals_service
-        try:
-            result = await run_in_threadpool(
-                list_signals_service, category=category, search=search, limit=limit,
-                regime_direction=regime_direction, role=role, collect=True,
-            )
-            return json.dumps(result)
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="list_signals",
-        description="List / search available signals; browsing may require multiple paid pages.",
-        access="auth",
-        parameters=[
-            ToolParam(name="category", type="string", required=False, description="Filter by category"),
-            ToolParam(name="search", type="string", required=False, description="Search query"),
-            ToolParam(name="limit", type="integer", required=False, description="Max results"),
-            _APIKEY,
-            ToolParam(name="regime_direction", type="string", required=False, description="Browse by regime"),
-            ToolParam(name="role", type="string", required=False, description="Browse by signal role"),
-        ],
-    ))
-
-    @server.tool()
-    async def get_signal(signal_name: str, api_key: str = "") -> str:
-        """Fetch a single signal's full metadata (params, description, category).
-
-        More detail than list_signals for a single name. Useful when the
-        agent knows which signal it wants but needs the parameter schema
-        before writing a strategy rule.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.shared.clients.mangrove import mangrove_ai_client
-            return json.dumps(_dump(mangrove_ai_client().signals.get(signal_name)))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-        except Exception as e:  # Never expose raw upstream errors to the conversation.
-            return _handle_upstream_error("SIGNAL_GET_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_signal",
-        description="Fetch a single signal's full metadata + param schema.",
-        access="auth",
-        parameters=[
-            ToolParam(name="signal_name", type="string", required=True, description="Exact signal name (e.g. 'rsi_cross_up')"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def match_signals(
-        description: str, top_k: int = 5,
-        similarity_threshold: float = 0.5,
-        api_key: str = "",
-    ) -> str:
-        """Semantic match: find signals matching a natural-language description.
-
-        Backs /create-strategy Phase C: the agent has a user idea
-        ('bullish momentum on liquid crypto'), calls this to find
-        candidate signals, then falls through to kb_search for
-        parameter guidance. Higher-quality than text search over
-        signal names.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.shared.clients.mangrove import mangrove_ai_client
-            r = mangrove_ai_client().signals.match(
-                description=description, top_k=top_k,
-                similarity_threshold=similarity_threshold,
-            )
-            return json.dumps(_dump(r))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-        except Exception as e:  # Never expose raw upstream errors to the conversation.
-            return _handle_upstream_error("SIGNAL_MATCH_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="match_signals",
-        description="Semantic match of signals against a natural-language description.",
-        access="auth",
-        parameters=[
-            ToolParam(name="description", type="string", required=True, description="Natural-language description of what you want"),
-            ToolParam(name="top_k", type="integer", required=False, description="Max results (default 5)"),
-            ToolParam(name="similarity_threshold", type="number", required=False, description="Min similarity (default 0.5)"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def search_signals(query: str, limit: int = 50, offset: int = 0,
-                             api_key: str = "") -> str:
-        """Text search over signals (complements list_signals's exhaustive iteration).
-
-        list_signals paginates the full catalog; search_signals filters
-        by a text query server-side. Prefer match_signals for
-        description-level intent; use this for name / keyword search.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from mangrove_ai.models import SearchSignalsRequest
-
-            from src.shared.clients.mangrove import mangrove_ai_client
-            req = SearchSignalsRequest(query=query, limit=limit, offset=offset)
-            page = mangrove_ai_client().signals.search(req)
-            items = [_dump(s) for s in getattr(page, "items", [])]
-            return json.dumps({
-                "items": items,
-                "total": getattr(page, "total", len(items)),
-                "limit": limit, "offset": offset,
-            })
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-        except Exception as e:  # Never expose raw upstream errors to the conversation.
-            return _handle_upstream_error("SIGNAL_SEARCH_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="search_signals",
-        description="Text search signals (keyword/name). For intent-based matching, prefer match_signals.",
-        access="auth",
-        parameters=[
-            ToolParam(name="query", type="string", required=True, description="Text query"),
-            ToolParam(name="limit", type="integer", required=False, description="Page size (default 50)"),
-            ToolParam(name="offset", type="integer", required=False, description="Page offset"),
-            _APIKEY,
-        ],
-    ))
 
 
-# ---------------------------------------------------------------------------
-# On-chain intelligence (auth)
-# ---------------------------------------------------------------------------
-
-
-def _register_on_chain(server: FastMCP) -> None:
-    """Whale activity, smart-money sentiment, token holders, exchange flows.
-
-    These tools back the /create-strategy skill's "cite Mangrove
-    intelligence" rule — they provide the 'why now' evidence for a
-    candidate strategy.
-    """
-    from src.shared.clients.mangrove import mangrove_ai_client
-
-    @server.tool()
-    async def get_whale_activity(
-        symbol: str, hours_back: int = 24, api_key: str = "",
-    ) -> str:
-        """Whale buying/selling activity for an asset over the last N hours."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            r = mangrove_ai_client().on_chain.get_whale_activity(
-                symbol=symbol, hours_back=hours_back,
-            )
-            return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("ONCHAIN_WHALE_ACTIVITY_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_whale_activity",
-        description="Whale buying/selling activity for an asset.",
-        access="auth",
-        parameters=[
-            ToolParam(name="symbol", type="string", required=True, description="Asset symbol (e.g. ETH)"),
-            ToolParam(name="hours_back", type="integer", required=False, description="Window (default 24)"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_whale_transactions(
-        symbol: str | None = None, min_value: float = 500_000,
-        hours_back: int = 24, api_key: str = "",
-    ) -> str:
-        """Individual whale transactions above min_value USD."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            kwargs: dict[str, Any] = {
-                "min_value": min_value, "hours_back": hours_back,
-            }
-            if symbol is not None:
-                kwargs["symbol"] = symbol
-            r = mangrove_ai_client().on_chain.get_whale_transactions(**kwargs)
-            return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("ONCHAIN_WHALE_TXS_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_whale_transactions",
-        description="Whale transactions above a USD threshold.",
-        access="auth",
-        parameters=[
-            ToolParam(name="symbol", type="string", required=False, description="Optional filter by asset"),
-            ToolParam(name="min_value", type="number", required=False, description="Min USD value (default 500000)"),
-            ToolParam(name="hours_back", type="integer", required=False, description="Window (default 24)"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_smart_money_sentiment(
-        symbol: str, chain: str | None = None, api_key: str = "",
-    ) -> str:
-        """Smart-money wallet sentiment for an asset (bullish/bearish signal).
-
-        ⚠️ Upstream netflow data is currently unavailable for most
-        assets on ethereum — real calls return 404 RESOURCE_NOT_FOUND
-        with a clear 'No Smart Money netflow data found' message.
-        Tool wiring is correct; upstream data pipeline issue.
-        Pair this with get_whale_activity / get_exchange_flows while
-        the data source is being populated.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            kwargs: dict[str, Any] = {"symbol": symbol}
-            if chain is not None:
-                kwargs["chain"] = chain
-            r = mangrove_ai_client().on_chain.get_smart_money_sentiment(**kwargs)
-            return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("ONCHAIN_SMART_MONEY_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_smart_money_sentiment",
-        description="Smart-money sentiment for an asset (aggregate of tracked wallets).",
-        access="auth",
-        parameters=[
-            ToolParam(name="symbol", type="string", required=True, description="Asset symbol"),
-            ToolParam(name="chain", type="string", required=False, description="Optional chain filter"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def screen_smart_money(
-        chains: list[str] | None = None, timeframe: str = "24h",
-        limit: int = 20, api_key: str = "",
-    ) -> str:
-        """Discover which assets smart money is currently accumulating."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            kwargs: dict[str, Any] = {"timeframe": timeframe, "limit": limit}
-            if chains is not None:
-                kwargs["chains"] = chains
-            r = mangrove_ai_client().on_chain.screen_smart_money(**kwargs)
-            return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("ONCHAIN_SMART_MONEY_SCREEN_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="screen_smart_money",
-        description="Screen assets smart money is currently accumulating.",
-        access="auth",
-        parameters=[
-            ToolParam(name="chains", type="array", required=False, description="Optional list of chain names"),
-            ToolParam(name="timeframe", type="string", required=False, description="Lookback (default '24h')"),
-            ToolParam(name="limit", type="integer", required=False, description="Max results (default 20)"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_token_holders(symbol: str, api_key: str = "") -> str:
-        """Top holders + distribution metrics for a token."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            r = mangrove_ai_client().on_chain.get_token_holders(symbol=symbol)
-            return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("ONCHAIN_HOLDERS_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_token_holders",
-        description="Top holders + distribution for a token.",
-        access="auth",
-        parameters=[
-            ToolParam(name="symbol", type="string", required=True, description="Asset symbol"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_exchange_flows(
-        symbol: str | None = None, hours_back: int = 24, api_key: str = "",
-    ) -> str:
-        """Net exchange inflows / outflows (risk-off vs risk-on proxy).
-
-        Inflows to exchanges ≈ selling pressure; outflows ≈ accumulation.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            kwargs: dict[str, Any] = {"hours_back": hours_back}
-            if symbol is not None:
-                kwargs["symbol"] = symbol
-            r = mangrove_ai_client().on_chain.get_exchange_flows(**kwargs)
-            return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("ONCHAIN_EXCHANGE_FLOWS_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_exchange_flows",
-        description="Net exchange inflows/outflows (selling pressure vs accumulation).",
-        access="auth",
-        parameters=[
-            ToolParam(name="symbol", type="string", required=False, description="Optional filter by asset"),
-            ToolParam(name="hours_back", type="integer", required=False, description="Window (default 24)"),
-            _APIKEY,
-        ],
-    ))
-
-    # ----------------------------------------------------------------- #
-    # Nansen Pro coverage (5 endpoints added in mangroveai 1.1.0)
-    # All take optional `filters` / `order_by` dicts passed straight
-    # through to Nansen — give agents the full Pro plan reach (Fund-
-    # labelled wallets, side-filtered DEX trades, etc.).
-    # ----------------------------------------------------------------- #
-
-    @server.tool()
-    async def get_smart_money_historical_holdings(
-        chains: list[str] | None = None,
-        date_from: str | None = None,
-        date_to: str | None = None,
-        filters: dict[str, Any] | None = None,
-        order_by: list[dict[str, str]] | None = None,
-        page: int = 1,
-        per_page: int = 100,
-        api_key: str = "",
-    ) -> str:
-        """Date-stamped Smart Money holdings snapshots across chains (Nansen).
-
-        Show how Fund/VC/CEX-labelled wallets shifted positions over a
-        window. Use with `filters={"include_smart_money_labels": ["Fund"]}`
-        to restrict to a single label class.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            kwargs: dict[str, Any] = {"page": page, "per_page": per_page}
-            for k, v in (("chains", chains), ("date_from", date_from), ("date_to", date_to),
-                         ("filters", filters), ("order_by", order_by)):
-                if v is not None:
-                    kwargs[k] = v
-            r = mangrove_ai_client().on_chain.get_smart_money_historical_holdings(**kwargs)
-            return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("ONCHAIN_SM_HISTORICAL_HOLDINGS_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_smart_money_historical_holdings",
-        description="Smart Money historical holdings snapshots across chains (Nansen).",
-        access="auth",
-        parameters=[
-            ToolParam(name="chains", type="array", required=False, description="Chain filter, e.g. ['ethereum', 'solana']. Default ['ethereum']."),
-            ToolParam(name="date_from", type="string", required=False, description="ISO date 'YYYY-MM-DD'."),
-            ToolParam(name="date_to", type="string", required=False, description="ISO date 'YYYY-MM-DD'."),
-            ToolParam(name="filters", type="object", required=False, description="Nansen filter dict (include_smart_money_labels, etc.)"),
-            ToolParam(name="order_by", type="array", required=False, description="Sort spec, e.g. [{'field': 'block_timestamp', 'direction': 'DESC'}]"),
-            ToolParam(name="page", type="integer", required=False, description="Page (default 1)"),
-            ToolParam(name="per_page", type="integer", required=False, description="Items per page (default 100)"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_smart_money_dex_trades(
-        chains: list[str] | None = None,
-        filters: dict[str, Any] | None = None,
-        order_by: list[dict[str, str]] | None = None,
-        page: int = 1,
-        per_page: int = 100,
-        api_key: str = "",
-    ) -> str:
-        """Recent DEX trades from Smart Money wallets (Nansen).
-
-        Filters accept: ``include_smart_money_labels``, ``token_address``,
-        ``side`` ('buy' | 'sell'), ``min_amount_usd``.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            kwargs: dict[str, Any] = {"page": page, "per_page": per_page}
-            for k, v in (("chains", chains), ("filters", filters), ("order_by", order_by)):
-                if v is not None:
-                    kwargs[k] = v
-            r = mangrove_ai_client().on_chain.get_smart_money_dex_trades(**kwargs)
-            return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("ONCHAIN_SM_DEX_TRADES_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_smart_money_dex_trades",
-        description="Recent DEX trades from Smart Money wallets (Nansen).",
-        access="auth",
-        parameters=[
-            ToolParam(name="chains", type="array", required=False, description="Chain filter."),
-            ToolParam(name="filters", type="object", required=False, description="Nansen filter dict."),
-            ToolParam(name="order_by", type="array", required=False, description="Sort spec."),
-            ToolParam(name="page", type="integer", required=False, description="Page (default 1)."),
-            ToolParam(name="per_page", type="integer", required=False, description="Items per page (default 100)."),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_smart_money_perp_trades(
-        filters: dict[str, Any] | None = None,
-        order_by: list[dict[str, str]] | None = None,
-        page: int = 1,
-        per_page: int = 100,
-        api_key: str = "",
-    ) -> str:
-        """Perpetual-futures trades from Smart Money on Hyperliquid (Nansen).
-
-        Hyperliquid-only; upstream doesn't accept a chain filter.
-
-        Filters accept: ``action``, ``side`` ('Long' | 'Short'),
-        ``token_symbol``, ``type`` ('Market' | 'Limit'),
-        ``value_usd`` ({min, max}), ``only_new_positions``.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            kwargs: dict[str, Any] = {"page": page, "per_page": per_page}
-            for k, v in (("filters", filters), ("order_by", order_by)):
-                if v is not None:
-                    kwargs[k] = v
-            r = mangrove_ai_client().on_chain.get_smart_money_perp_trades(**kwargs)
-            return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("ONCHAIN_SM_PERP_TRADES_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_smart_money_perp_trades",
-        description="Smart Money perp trades on Hyperliquid (Nansen).",
-        access="auth",
-        parameters=[
-            ToolParam(name="filters", type="object", required=False, description="Nansen filter dict."),
-            ToolParam(name="order_by", type="array", required=False, description="Sort spec."),
-            ToolParam(name="page", type="integer", required=False, description="Page (default 1)."),
-            ToolParam(name="per_page", type="integer", required=False, description="Items per page (default 100)."),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_token_dex_trades(
-        symbol: str,
-        chain: str | None = None,
-        date_from: str | None = None,
-        date_to: str | None = None,
-        filters: dict[str, Any] | None = None,
-        order_by: list[dict[str, str]] | None = None,
-        page: int = 1,
-        per_page: int = 100,
-        api_key: str = "",
-    ) -> str:
-        """All DEX trades on a single token in a date window (Nansen).
-
-        Token-scoped (not wallet-scoped) — sees every counterparty, not
-        just Smart Money. Useful for liquidity / activity diagnostics.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            kwargs: dict[str, Any] = {"page": page, "per_page": per_page}
-            for k, v in (("chain", chain), ("date_from", date_from), ("date_to", date_to),
-                         ("filters", filters), ("order_by", order_by)):
-                if v is not None:
-                    kwargs[k] = v
-            r = mangrove_ai_client().on_chain.get_token_dex_trades(symbol, **kwargs)
-            return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("ONCHAIN_TOKEN_DEX_TRADES_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_token_dex_trades",
-        description="All DEX trades for a single token in a date window (Nansen).",
-        access="auth",
-        parameters=[
-            ToolParam(name="symbol", type="string", required=True, description="Token symbol (e.g. 'uniswap')."),
-            ToolParam(name="chain", type="string", required=False, description="Chain (default 'ethereum')."),
-            ToolParam(name="date_from", type="string", required=False, description="ISO 'YYYY-MM-DD'."),
-            ToolParam(name="date_to", type="string", required=False, description="ISO 'YYYY-MM-DD'."),
-            ToolParam(name="filters", type="object", required=False, description="Nansen filter dict."),
-            ToolParam(name="order_by", type="array", required=False, description="Sort spec."),
-            ToolParam(name="page", type="integer", required=False, description="Page (default 1)."),
-            ToolParam(name="per_page", type="integer", required=False, description="Items per page (default 100)."),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_token_flows(
-        symbol: str,
-        chain: str | None = None,
-        date_from: str | None = None,
-        date_to: str | None = None,
-        filters: dict[str, Any] | None = None,
-        order_by: list[dict[str, str]] | None = None,
-        page: int = 1,
-        per_page: int = 100,
-        api_key: str = "",
-    ) -> str:
-        """Per-wallet-category flow data for a token in a date window (Nansen).
-
-        Aggregates trades by trader category (Fund, CEX, Smart Trader,
-        etc.) over each date. **Stablecoins are not supported** — Nansen
-        returns 404.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            kwargs: dict[str, Any] = {"page": page, "per_page": per_page}
-            for k, v in (("chain", chain), ("date_from", date_from), ("date_to", date_to),
-                         ("filters", filters), ("order_by", order_by)):
-                if v is not None:
-                    kwargs[k] = v
-            r = mangrove_ai_client().on_chain.get_token_flows(symbol, **kwargs)
-            return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("ONCHAIN_TOKEN_FLOWS_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_token_flows",
-        description="Per-wallet-category flow data for a token across a date window (Nansen).",
-        access="auth",
-        parameters=[
-            ToolParam(name="symbol", type="string", required=True, description="Token symbol (non-stablecoin)."),
-            ToolParam(name="chain", type="string", required=False, description="Chain (default 'ethereum')."),
-            ToolParam(name="date_from", type="string", required=False, description="ISO 'YYYY-MM-DD'."),
-            ToolParam(name="date_to", type="string", required=False, description="ISO 'YYYY-MM-DD'."),
-            ToolParam(name="filters", type="object", required=False, description="Nansen filter dict."),
-            ToolParam(name="order_by", type="array", required=False, description="Sort spec."),
-            ToolParam(name="page", type="integer", required=False, description="Page (default 1)."),
-            ToolParam(name="per_page", type="integer", required=False, description="Items per page (default 100)."),
-            _APIKEY,
-        ],
-    ))
 
 
 # ---------------------------------------------------------------------------
@@ -1750,159 +971,6 @@ def _register_on_chain(server: FastMCP) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _register_defi(server: FastMCP) -> None:
-    """Macro DeFi metrics (TVL, stablecoin supply) + DeFiLlama Pro signals.
-
-    The Pro tools (token unlocks, perp funding, treasuries, ETF flows, lending
-    rates) require the caller's plan to include DeFi Pro (Pro / Startup /
-    Enterprise). On an unentitled plan the underlying call returns 403 and the
-    tool surfaces a structured error advising an upgrade.
-    """
-    from src.shared.clients.mangrove import mangrove_ai_client
-
-    @server.tool()
-    async def get_chain_tvl(chain: str, api_key: str = "") -> str:
-        """Total value locked in DeFi on a given chain."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            return json.dumps(_dump(mangrove_ai_client().defi.get_chain_tvl(chain=chain)))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("DEFI_CHAIN_TVL_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_chain_tvl",
-        description="Total value locked (TVL) in DeFi on a given chain.",
-        access="auth",
-        parameters=[
-            ToolParam(name="chain", type="string", required=True, description="Chain (e.g. 'base', 'ethereum')"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_protocol_tvl(protocol: str, api_key: str = "") -> str:
-        """Total value locked in a specific DeFi protocol."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            return json.dumps(_dump(mangrove_ai_client().defi.get_protocol_tvl(protocol=protocol)))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("DEFI_PROTOCOL_TVL_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_protocol_tvl",
-        description="TVL for a specific DeFi protocol (e.g. 'aave', 'uniswap').",
-        access="auth",
-        parameters=[
-            ToolParam(name="protocol", type="string", required=True, description="Protocol slug"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_stablecoin_metrics(api_key: str = "") -> str:
-        """Stablecoin supply + flow metrics (macro liquidity proxy)."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            return json.dumps(_dump(mangrove_ai_client().defi.get_stablecoin_metrics()))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("DEFI_STABLECOIN_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_stablecoin_metrics",
-        description="Stablecoin supply + flow metrics (macro liquidity proxy).",
-        access="auth",
-        parameters=[_APIKEY],
-    ))
-
-    # --- DeFiLlama Pro (require a Pro / Startup / Enterprise plan) -----------
-
-    @server.tool()
-    async def get_token_unlocks(api_key: str = "") -> str:
-        """Token unlock schedules + supply metrics (supply-shock signal). Pro plan."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            return json.dumps(_dump(mangrove_ai_client().defi.get_token_unlocks()))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("DEFI_TOKEN_UNLOCKS_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_token_unlocks",
-        description="Token unlock schedules + supply metrics across tokens (tradeable supply-shock signal). Requires a Pro/Startup/Enterprise plan.",
-        access="auth",
-        parameters=[_APIKEY],
-    ))
-
-    @server.tool()
-    async def get_perp_funding(api_key: str = "") -> str:
-        """Aggregated DeFi perpetual funding rates across venues. Pro plan."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            return json.dumps(_dump(mangrove_ai_client().defi.get_perp_funding()))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("DEFI_PERP_FUNDING_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_perp_funding",
-        description="Aggregated DeFi perpetual funding rates across venues. Requires a Pro/Startup/Enterprise plan.",
-        access="auth",
-        parameters=[_APIKEY],
-    ))
-
-    @server.tool()
-    async def get_treasuries(api_key: str = "") -> str:
-        """Protocol treasury holdings (crowd-positioning signal). Pro plan."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            return json.dumps(_dump(mangrove_ai_client().defi.get_treasuries()))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("DEFI_TREASURIES_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_treasuries",
-        description="Protocol treasury holdings (crowd-positioning signal). Requires a Pro/Startup/Enterprise plan.",
-        access="auth",
-        parameters=[_APIKEY],
-    ))
-
-    @server.tool()
-    async def get_etf_flows(api_key: str = "") -> str:
-        """Crypto ETF net flows (institutional flow signal). Pro plan."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            return json.dumps(_dump(mangrove_ai_client().defi.get_etf_flows()))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("DEFI_ETF_FLOWS_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_etf_flows",
-        description="Crypto ETF net flows (institutional flow signal; daily BTC ETF flows correlate with spot). Requires a Pro/Startup/Enterprise plan.",
-        access="auth",
-        parameters=[_APIKEY],
-    ))
-
-    @server.tool()
-    async def get_lending_borrow_rates(api_key: str = "") -> str:
-        """Lending-pool borrow rates (rate-spread features). Pro plan."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            return json.dumps(_dump(mangrove_ai_client().defi.get_lending_borrow_rates()))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("DEFI_LENDING_RATES_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_lending_borrow_rates",
-        description="DeFi lending-pool borrow rates (rate-spread features). Requires a Pro/Startup/Enterprise plan.",
-        access="auth",
-        parameters=[_APIKEY],
-    ))
 
 
 # ---------------------------------------------------------------------------
@@ -1910,81 +978,6 @@ def _register_defi(server: FastMCP) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _register_social(server: FastMCP) -> None:
-    """Twitter/X sentiment + influence + mentions. Experimental context."""
-    from src.shared.clients.mangrove import mangrove_ai_client
-
-    @server.tool()
-    async def get_sentiment(
-        topic: str, hours_back: int = 24, api_key: str = "",
-    ) -> str:
-        """Aggregate social sentiment for a topic (asset symbol or keyword)."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            r = mangrove_ai_client().social.get_sentiment(topic=topic, hours_back=hours_back)
-            return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("SOCIAL_SENTIMENT_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_sentiment",
-        description="Aggregate social (X/Twitter) sentiment for a topic or asset.",
-        access="auth",
-        parameters=[
-            ToolParam(name="topic", type="string", required=True, description="Asset symbol or keyword"),
-            ToolParam(name="hours_back", type="integer", required=False, description="Window (default 24)"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_mentions(
-        topic: str, hours_back: int = 24, limit: int = 20, api_key: str = "",
-    ) -> str:
-        """Recent social mentions of a topic (raw posts)."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            r = mangrove_ai_client().social.get_mentions(
-                topic=topic, hours_back=hours_back, limit=limit,
-            )
-            return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("SOCIAL_MENTIONS_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_mentions",
-        description="Recent social mentions of a topic (raw posts).",
-        access="auth",
-        parameters=[
-            ToolParam(name="topic", type="string", required=True, description="Asset symbol or keyword"),
-            ToolParam(name="hours_back", type="integer", required=False, description="Window (default 24)"),
-            ToolParam(name="limit", type="integer", required=False, description="Max posts (default 20)"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def get_influence_score(username: str, api_key: str = "") -> str:
-        """Influence score for a social username."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            r = mangrove_ai_client().social.get_influence_score(username=username)
-            return json.dumps(_dump(r))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("SOCIAL_INFLUENCE_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_influence_score",
-        description="Influence score for a social username.",
-        access="auth",
-        parameters=[
-            ToolParam(name="username", type="string", required=True, description="Social username (no @)"),
-            _APIKEY,
-        ],
-    ))
 
 
 # ---------------------------------------------------------------------------
@@ -1992,58 +985,6 @@ def _register_social(server: FastMCP) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _register_docs(server: FastMCP) -> None:
-    """MangroveAI developer docs (API reference + guides)."""
-    from src.shared.clients.mangrove import mangrove_ai_client
-
-    @server.tool()
-    async def list_docs(api_key: str = "") -> str:
-        """List MangroveAI developer docs.
-
-        ⚠️ Upstream returns 404 'Documentation directory not found'
-        as of 2026-04-23. Tool wiring is correct; upstream docs
-        directory is either missing or mis-configured server-side.
-        Falls through cleanly if the docs come back online.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            items = mangrove_ai_client().docs.list()
-            return json.dumps([_dump(i) for i in items])
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("DOCS_LIST_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="list_docs",
-        description="List MangroveAI developer docs (API reference + guides).",
-        access="auth",
-        parameters=[_APIKEY],
-    ))
-
-    @server.tool()
-    async def get_doc_content(path: str, api_key: str = "") -> str:
-        """Fetch a MangroveAI doc by path.
-
-        Different from kb_get_document (KB content DB). This hits the
-        MangroveAI developer documentation — API reference, SDK migration
-        guides, etc.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            return json.dumps(_dump(mangrove_ai_client().docs.get_content(path=path)))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("DOCS_GET_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="get_doc_content",
-        description="Fetch a MangroveAI developer doc by path (API reference, guides).",
-        access="auth",
-        parameters=[
-            ToolParam(name="path", type="string", required=True, description="Doc path (from list_docs)"),
-            _APIKEY,
-        ],
-    ))
 
 
 # ---------------------------------------------------------------------------
@@ -2052,7 +993,7 @@ def _register_docs(server: FastMCP) -> None:
 
 
 def _register_strategy(server: FastMCP) -> None:
-    @server.tool()
+    @server.tool(name="agent_create_strategy_autonomous")
     async def create_strategy_autonomous(
         goal: str, asset: str, timeframe: str,
         candidate_count: int = 7, backtest_lookback_months: int = 3,
@@ -2078,7 +1019,7 @@ def _register_strategy(server: FastMCP) -> None:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
-        name="create_strategy_autonomous",
+        name="agent_create_strategy_autonomous",
         description="Create a strategy from a natural-language goal.",
         access="auth",
         parameters=[
@@ -2092,7 +1033,7 @@ def _register_strategy(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(name="agent_create_strategy_manual")
     async def create_strategy_manual(
         name: str, asset: str, timeframe: str,
         entry: list[dict], exit: list[dict] | None = None,
@@ -2116,13 +1057,13 @@ def _register_strategy(server: FastMCP) -> None:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
-        name="create_strategy_manual",
+        name="agent_create_strategy_manual",
         description=(
             "Create (persist) a strategy with explicit entry/exit rules — also the "
-            "step that saves a build_strategy_from_reference payload. Saved with "
+            "step that saves an agent_build_strategy_from_reference payload. Saved with "
             "status `inactive` (saved, not scheduled; MangroveAI `draft` means "
             "unproven and cannot be promoted, so it is not used). Next: "
-            "backtest_strategy, then update_strategy_status(status='paper')."
+            "agent_backtest_strategy, then agent_update_strategy_status(status='paper')."
         ),
         access="auth",
         parameters=[
@@ -2136,7 +1077,7 @@ def _register_strategy(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(name="agent_search_reference_strategies")
     async def search_reference_strategies(
         asset: str,
         timeframe: str | None = None,
@@ -2151,7 +1092,7 @@ def _register_strategy(server: FastMCP) -> None:
         The agent calls this BEFORE picking signals/params manually. Each
         returned reference has known-good entry/exit signals + parameter
         choices. The agent picks one that matches user intent, then calls
-        build_strategy_from_reference to materialize it.
+        agent_build_strategy_from_reference to materialize it.
 
         asset/timeframe/category RANK, they do not filter: exact matches
         come first (asset+timeframe+category > asset+timeframe > asset >
@@ -2173,7 +1114,7 @@ def _register_strategy(server: FastMCP) -> None:
         ))
 
     register_tool(ToolEntry(
-        name="search_reference_strategies",
+        name="agent_search_reference_strategies",
         description=(
             "Find curated reference strategies that match the user's goal "
             "and asset. Returns ranked candidates with signals + parameter "
@@ -2183,7 +1124,7 @@ def _register_strategy(server: FastMCP) -> None:
             "do not filter them: check each result's `match` "
             "(exact|partial|none) and `unmatched`, or pass strict=true for "
             "exact matches only. References are portable — a partial match "
-            "can still be retargeted with build_strategy_from_reference."
+            "can still be retargeted with agent_build_strategy_from_reference."
         ),
         access="auth",
         parameters=[
@@ -2197,7 +1138,7 @@ def _register_strategy(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(name="agent_build_strategy_from_reference")
     async def build_strategy_from_reference(
         reference_id: str,
         timeframe: str | None = None,
@@ -2205,10 +1146,10 @@ def _register_strategy(server: FastMCP) -> None:
         name: str | None = None,
         api_key: str = "",
     ) -> str:
-        """Materialize a reference into a create_strategy_manual payload.
+        """Materialize a reference into an agent_create_strategy_manual payload.
 
         Does NOT save anything: the response has `persisted: false` and a
-        `next_step` pointing at create_strategy_manual (REST: POST
+        `next_step` pointing at agent_create_strategy_manual (REST: POST
         /api/v1/agent/strategies/manual). Only that call returns a
         strategy_id you can backtest or promote.
 
@@ -2233,12 +1174,12 @@ def _register_strategy(server: FastMCP) -> None:
         return json.dumps(payload)
 
     register_tool(ToolEntry(
-        name="build_strategy_from_reference",
+        name="agent_build_strategy_from_reference",
         description=(
-            "After search_reference_strategies returns candidates, call this "
-            "to produce a create_strategy_manual payload. It does NOT save "
+            "After agent_search_reference_strategies returns candidates, call this "
+            "to produce an agent_create_strategy_manual payload. It does NOT save "
             "anything (`persisted: false`): pass the payload to "
-            "create_strategy_manual to get a strategy_id. Signals and params "
+            "agent_create_strategy_manual to get a strategy_id. Signals and params "
             "are copied exactly — the agent must NOT modify them. `timeframe` "
             "and `asset` are free overrides: a reference is a portable combo, "
             "so retarget onto the user's asset/TF and bulk-backtest the top "
@@ -2246,7 +1187,7 @@ def _register_strategy(server: FastMCP) -> None:
         ),
         access="auth",
         parameters=[
-            ToolParam(name="reference_id", type="string", required=True, description="e.g. ref-001 — from search_reference_strategies"),
+            ToolParam(name="reference_id", type="string", required=True, description="e.g. ref-001 — from agent_search_reference_strategies"),
             ToolParam(name="timeframe", type="string", required=False, description="Override the reference's timeframe (canonicalized)"),
             ToolParam(name="asset", type="string", required=False, description="Retarget onto a different asset — reference strategies are portable"),
             ToolParam(name="name", type="string", required=False, description="Optional strategy name override"),
@@ -2254,7 +1195,7 @@ def _register_strategy(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(name="agent_list_strategies")
     async def list_strategies(status: str | None = None, limit: int = 50,
                               offset: int = 0, api_key: str = "") -> str:
         """List strategies, optionally filtered by status."""
@@ -2265,7 +1206,7 @@ def _register_strategy(server: FastMCP) -> None:
         return json.dumps([s.model_dump(mode="json") for s in items])
 
     register_tool(ToolEntry(
-        name="list_strategies",
+        name="agent_list_strategies",
         description="List strategies.",
         access="auth",
         parameters=[
@@ -2276,7 +1217,7 @@ def _register_strategy(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(name="agent_get_strategy")
     async def get_strategy(strategy_id: str, api_key: str = "") -> str:
         """Get a strategy by ID."""
         if not _require(api_key):
@@ -2288,7 +1229,7 @@ def _register_strategy(server: FastMCP) -> None:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
-        name="get_strategy",
+        name="agent_get_strategy",
         description="Get a strategy by ID.",
         access="auth",
         parameters=[
@@ -2297,7 +1238,7 @@ def _register_strategy(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(name="agent_update_strategy_status")
     async def update_strategy_status(
         strategy_id: str, status: str, confirm: bool = False,
         allocation: dict | None = None, api_key: str = "",
@@ -2321,7 +1262,7 @@ def _register_strategy(server: FastMCP) -> None:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
-        name="update_strategy_status",
+        name="agent_update_strategy_status",
         description="Transition strategy lifecycle status.",
         access="auth",
         parameters=[
@@ -2333,7 +1274,7 @@ def _register_strategy(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(name="agent_backtest_strategy")
     async def backtest_strategy(
         strategy_id: str, mode: str = "full",
         lookback_months: int | None = None,
@@ -2398,7 +1339,7 @@ def _register_strategy(server: FastMCP) -> None:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
-        name="backtest_strategy",
+        name="agent_backtest_strategy",
         description=(
             "Backtest a strategy (quick or full). Async-backed (SDK >=1.14: "
             "submit + poll under the hood), so long windows work — no "
@@ -2429,91 +1370,11 @@ def _register_strategy(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
-    async def list_backtests(
-        asset: str | None = None,
-        status: str | None = None,
-        date_from: str | None = None,
-        date_to: str | None = None,
-        limit: int = 20,
-        offset: int = 0,
-        include_archived: bool = False,
-        api_key: str = "",
-    ) -> str:
-        """The caller's stored backtest runs, newest first, with headline metrics.
 
-        Call it whenever the user refers to a result rather than asking for a
-        new one ("how did it do", "compare those two"), then get_backtest for
-        the run you need: a stored run is the record of what happened, and
-        re-running bills a new one. Runs are keyed to the API key's user, not
-        to local strategy ids (MangroveAI records no strategy id for
-        agent-submitted runs) — filter by asset/dates and match on the
-        strategy_name get_backtest returns. Percent metrics are 0-100.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.backtest_service import list_backtests as svc
-            return json.dumps(svc(
-                asset=asset, status=status, date_from=date_from, date_to=date_to,
-                limit=limit, offset=offset, include_archived=include_archived,
-            ))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
 
-    register_tool(ToolEntry(
-        name="list_backtests",
-        description="List stored backtest runs (newest first) with headline metrics; read one with get_backtest.",
-        access="auth",
-        parameters=[
-            ToolParam(name="asset", type="string", required=False, description="Filter by asset symbol"),
-            ToolParam(name="status", type="string", required=False, description="Filter: completed | running | failed"),
-            ToolParam(name="date_from", type="string", required=False, description="ISO lower bound on creation date"),
-            ToolParam(name="date_to", type="string", required=False, description="ISO upper bound on creation date"),
-            ToolParam(name="limit", type="integer", required=False, description="Page size (default 20, max 100)"),
-            ToolParam(name="offset", type="integer", required=False, description="Page offset"),
-            ToolParam(name="include_archived", type="boolean", required=False, description="Include archived runs"),
-            _APIKEY,
-        ],
-    ))
 
-    @server.tool()
-    async def get_backtest(
-        backtest_id: str,
-        include_trades: bool = False,
-        include_benchmark: bool = True,
-        api_key: str = "",
-    ) -> str:
-        """One stored backtest run in full: status, window, the rules and
-        execution config it ran, metrics (percent-typed on a 0-100 scale), trade
-        count, and buy-and-hold over the same window as `benchmark`.
 
-        Use it instead of backtest_strategy whenever the run already exists.
-        Pass include_trades=true for the trade list.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.backtest_service import get_backtest as svc
-            return json.dumps(svc(
-                backtest_id, include_trades=include_trades, include_benchmark=include_benchmark,
-            ))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="get_backtest",
-        description="Get one stored backtest run (rules, window, metrics, benchmark) by backtest_id.",
-        access="auth",
-        parameters=[
-            ToolParam(name="backtest_id", type="string", required=True, description="Run id from backtest_strategy or list_backtests"),
-            ToolParam(name="include_trades", type="boolean", required=False, description="Include trade_history (default false)"),
-            ToolParam(name="include_benchmark", type="boolean", required=False, description="Attach buy-and-hold over the run's window (default true)"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
+    @server.tool(name="agent_evaluate_strategy")
     async def evaluate_strategy(strategy_id: str, api_key: str = "") -> str:
         """Manually trigger a single evaluation tick."""
         if not _require(api_key):
@@ -2525,7 +1386,7 @@ def _register_strategy(server: FastMCP) -> None:
             return _handle_agent_error(e)
 
     register_tool(ToolEntry(
-        name="evaluate_strategy",
+        name="agent_evaluate_strategy",
         description="Manually trigger one evaluation tick.",
         access="auth",
         parameters=[
@@ -2534,150 +1395,13 @@ def _register_strategy(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
-    async def list_account_positions(
-        account_id: str | None = None,
-        status: str | None = None,
-        skip: int = 0, limit: int = 100,
-        api_key: str = "",
-    ) -> str:
-        """List positions on MangroveAI's execution side.
 
-        Hits `mangroveai.execution.list_positions`. Note: our
-        architecture executes trades locally via order_executor and
-        writes to our own SQLite trades/evaluations — so our user's
-        strategies don't populate MangroveAI execution accounts
-        unless a strategy was authored through the MangroveAI copilot
-        path. This tool is exposed for completeness + cases where a
-        user has both mangrove-agent AND copilot-authored strategies.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.shared.clients.mangrove import mangrove_ai_client
-            kwargs: dict[str, Any] = {"skip": skip, "limit": limit}
-            if account_id is not None:
-                kwargs["account_id"] = account_id
-            if status is not None:
-                kwargs["status"] = status
-            items = mangrove_ai_client().execution.list_positions(**kwargs)
-            return json.dumps([_dump(i) for i in items])
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("EXECUTION_POSITIONS_FAILED", e)
 
-    register_tool(ToolEntry(
-        name="list_account_positions",
-        description="List positions on MangroveAI's execution side (copilot-authored strategies).",
-        access="auth",
-        parameters=[
-            ToolParam(name="account_id", type="string", required=False, description="Optional filter"),
-            ToolParam(name="status", type="string", required=False, description="Optional: open | closed | etc"),
-            ToolParam(name="skip", type="integer", required=False, description="Page offset"),
-            ToolParam(name="limit", type="integer", required=False, description="Page size"),
-            _APIKEY,
-        ],
-    ))
 
-    @server.tool()
-    async def get_account_position(position_id: str, api_key: str = "") -> str:
-        """Fetch a single MangroveAI execution-side position by id."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.shared.clients.mangrove import mangrove_ai_client
-            return json.dumps(_dump(mangrove_ai_client().execution.get_position(position_id)))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("EXECUTION_POSITION_GET_FAILED", e)
 
-    register_tool(ToolEntry(
-        name="get_account_position",
-        description="Fetch a single MangroveAI execution position.",
-        access="auth",
-        parameters=[
-            ToolParam(name="position_id", type="string", required=True, description="Position id"),
-            _APIKEY,
-        ],
-    ))
 
-    @server.tool()
-    async def list_account_trades(
-        account_id: str | None = None,
-        asset: str | None = None,
-        outcome: str | None = None,
-        skip: int = 0, limit: int = 100,
-        api_key: str = "",
-    ) -> str:
-        """List trades on MangroveAI's execution side.
 
-        Distinct from our local `list_trades` (which covers every
-        DEX swap the agent executed, stored in our SQLite). This
-        hits MangroveAI's copilot-execution trade log — different
-        data source, different use case.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.shared.clients.mangrove import mangrove_ai_client
-            kwargs: dict[str, Any] = {"skip": skip, "limit": limit}
-            if account_id is not None:
-                kwargs["account_id"] = account_id
-            if asset is not None:
-                kwargs["asset"] = asset
-            if outcome is not None:
-                kwargs["outcome"] = outcome
-            items = mangrove_ai_client().execution.list_trades(**kwargs)
-            return json.dumps([_dump(i) for i in items])
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("EXECUTION_TRADES_FAILED", e)
 
-    register_tool(ToolEntry(
-        name="list_account_trades",
-        description="List trades on MangroveAI's execution side (copilot-authored strategies).",
-        access="auth",
-        parameters=[
-            ToolParam(name="account_id", type="string", required=False, description="Optional filter"),
-            ToolParam(name="asset", type="string", required=False, description="Optional asset filter"),
-            ToolParam(name="outcome", type="string", required=False, description="Optional outcome filter"),
-            ToolParam(name="skip", type="integer", required=False, description="Page offset"),
-            ToolParam(name="limit", type="integer", required=False, description="Page size"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def delete_strategy(strategy_id: str, api_key: str = "") -> str:
-        """Delete a strategy upstream on MangroveAI.
-
-        New users create throwaway strategies and will want
-        to clean up. This hits mangroveai.strategies.delete — the
-        upstream strategy row is removed. Our LOCAL SQLite cache of
-        the strategy stays; the local row is harmless once the
-        upstream is gone, and we'd prefer to preserve the audit
-        trail for any trades/evaluations that referenced it.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.strategy_service import get_strategy
-            from src.shared.clients.mangrove import mangrove_ai_client
-            # Look up the mangrove_id from our local cache.
-            detail = get_strategy(strategy_id)
-            r = mangrove_ai_client().strategies.delete(detail.mangrove_id)
-            return json.dumps(_dump(r))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("STRATEGY_DELETE_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="delete_strategy",
-        description="Delete a strategy upstream (local audit trail preserved).",
-        access="auth",
-        parameters=[
-            ToolParam(name="strategy_id", type="string", required=True, description="Agent (local) strategy UUID"),
-            _APIKEY,
-        ],
-    ))
 
 
 # ---------------------------------------------------------------------------
@@ -2686,7 +1410,7 @@ def _register_strategy(server: FastMCP) -> None:
 
 
 def _register_logs(server: FastMCP) -> None:
-    @server.tool()
+    @server.tool(name="agent_list_evaluations")
     async def list_evaluations(strategy_id: str, limit: int = 50,
                                 offset: int = 0, api_key: str = "") -> str:
         """Evaluation log for a strategy."""
@@ -2697,7 +1421,7 @@ def _register_logs(server: FastMCP) -> None:
                            svc(strategy_id, limit=limit, offset=offset)])
 
     register_tool(ToolEntry(
-        name="list_evaluations",
+        name="agent_list_evaluations",
         description="Evaluation log for a strategy.",
         access="auth",
         parameters=[
@@ -2708,7 +1432,7 @@ def _register_logs(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(name="agent_list_trades")
     async def list_trades(strategy_id: str, limit: int = 50,
                           offset: int = 0, api_key: str = "") -> str:
         """Trades for a strategy."""
@@ -2719,7 +1443,7 @@ def _register_logs(server: FastMCP) -> None:
                            svc(strategy_id, limit=limit, offset=offset)])
 
     register_tool(ToolEntry(
-        name="list_trades",
+        name="agent_list_trades",
         description="Trades for a strategy.",
         access="auth",
         parameters=[
@@ -2730,7 +1454,7 @@ def _register_logs(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(name="agent_list_all_trades")
     async def list_all_trades(limit: int = 50,
                                strategy_id: str | None = None,
                                mode: str | None = None,
@@ -2743,7 +1467,7 @@ def _register_logs(server: FastMCP) -> None:
                            svc(limit=limit, strategy_id=strategy_id, mode=mode)])  # type: ignore[arg-type]
 
     register_tool(ToolEntry(
-        name="list_all_trades",
+        name="agent_list_all_trades",
         description="All trades across strategies (optional filters).",
         access="auth",
         parameters=[
@@ -2760,221 +1484,6 @@ def _register_logs(server: FastMCP) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _register_kb(server: FastMCP) -> None:
-    @server.tool()
-    async def kb_search(q: str, limit: int = 20, api_key: str = "") -> str:
-        """Full-text search the knowledge base."""
-        if not _require(api_key):
-            return _auth_error()
-        from src.shared.clients.mangrove import mangrove_ai_client
-        return json.dumps(_dump(mangrove_ai_client().kb.search.query(q=q, limit=limit)))
-
-    register_tool(ToolEntry(
-        name="kb_search",
-        description="Full-text KB search.",
-        access="auth",
-        parameters=[
-            ToolParam(name="q", type="string", required=True, description="Search query"),
-            ToolParam(name="limit", type="integer", required=False, description="Max results"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def kb_glossary_get(term: str, api_key: str = "") -> str:
-        """Look up a single glossary term (definition + backlinks).
-
-        Cheaper + more focused than kb_search when the agent already
-        knows the exact term it wants. Backlinks field shows related
-        indicators and documents.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        from src.shared.clients.mangrove import mangrove_ai_client
-        try:
-            return json.dumps(_dump(mangrove_ai_client().kb.glossary.get(term)))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("KB_GLOSSARY_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="kb_glossary_get",
-        description="Look up a KB glossary term (definition + backlinks).",
-        access="auth",
-        parameters=[
-            ToolParam(name="term", type="string", required=True, description="Glossary term (exact match)"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def kb_get_document(slug: str, api_key: str = "") -> str:
-        """Fetch a full KB document by slug.
-
-        Use when kb_search surfaces a document and the agent needs the
-        full body (not just the search snippet). Real documents run
-        up to ~25k chars — use sparingly and cite specific sections.
-
-        Response field: body lives under `content` (not `body`).
-        """
-        if not _require(api_key):
-            return _auth_error()
-        from src.shared.clients.mangrove import mangrove_ai_client
-        try:
-            return json.dumps(_dump(mangrove_ai_client().kb.documents.get(slug)))
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("KB_DOCUMENT_NOT_FOUND", e)
-
-    register_tool(ToolEntry(
-        name="kb_get_document",
-        description="Fetch a KB document by slug (full body, not search snippet).",
-        access="auth",
-        parameters=[
-            ToolParam(name="slug", type="string", required=True, description="Document slug (e.g. 'momentum-strategies')"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def kb_list_indicators(
-        category: str | None = None, api_key: str = "",
-    ) -> str:
-        """List KB indicator docs. Optionally filter by category.
-
-        Useful for the /create-strategy skill's Phase C: agent picks
-        a signal from list_signals, then calls this to find the KB
-        docs explaining that indicator family.
-
-        Category values are TITLE-CASE. Known values (as of 2026-04-23,
-        70 indicators total):
-            "Patterns"   (27)   "Trend"       (15)
-            "Momentum"   (11)   "Volume"       (9)
-            "Volatility"  (5)   "Returns"      (3)
-        Lowercase (e.g. "momentum") returns empty.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        from src.shared.clients.mangrove import mangrove_ai_client
-        kwargs: dict[str, Any] = {}
-        if category is not None:
-            kwargs["category"] = category
-        try:
-            return json.dumps([_dump(i) for i in mangrove_ai_client().kb.indicators.list(**kwargs)])
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("KB_INDICATORS_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="kb_list_indicators",
-        description="List KB indicator docs (optionally by category).",
-        access="auth",
-        parameters=[
-            ToolParam(name="category", type="string", required=False, description="Filter: momentum | trend | mean_reversion | volatility | volume | pattern"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def query_knowledge(
-        op: str,
-        q: str = "",
-        to: str = "",
-        kind: str | None = None,
-        role: str | None = None,
-        status: str | None = None,
-        requires: str | None = None,
-        param: str | None = None,
-        relation: str | None = None,
-        direction: str = "both",
-        units: str | None = None,
-        bounded: bool | None = None,
-        hops: int = 1,
-        limit: int = 25,
-        api_key: str = "",
-    ) -> str:
-        """Query Mangrove's knowledge graph — every indicator and signal in the
-        library (what each computes, consumes and produces, which signals read
-        which output, what part each plays) joined to the trading knowledge
-        base. Offline (bundled with mangrove-kb). Use it before naming a signal
-        or answering a trading question from memory.
-
-        Ops: stats (counts + the complete vocabulary every filter accepts —
-        call first), find (search BY WORDS; filters kind/role/status/requires/
-        param intersect), ask (search BY MEANING for a question in ordinary
-        words; `note` says when the full meaning index is not installed),
-        get (one node: formula, inputs, params, outputs, warmup), neighbors
-        (relation/direction: in = what reads this, out = what this depends on),
-        outputs (search output values: units, bounded, kind), path (q -> to).
-        Class (kind=) is what a computation measures; role= (trigger|filter)
-        is the part it plays. Capped results carry truncated + note — raise
-        limit before concluding "there are only N".
-        """
-        if not _require(api_key):
-            return _auth_error()
-        from pydantic import ValidationError as PydanticValidationError
-
-        from src.services.knowledge_service import KnowledgeQuery
-        from src.services.knowledge_service import query_knowledge as svc
-        try:
-            req = KnowledgeQuery(
-                op=op, q=q, to=to, kind=kind, role=role, status=status,
-                requires=requires, param=param, relation=relation,
-                direction=direction, units=units, bounded=bounded,
-                hops=hops, limit=limit,
-            )
-        except PydanticValidationError as e:
-            return _err(
-                "KNOWLEDGE_QUERY_INVALID",
-                "; ".join(f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in e.errors()),
-                "op is one of stats, find, ask, get, neighbors, outputs, path; "
-                "direction is in|out|both; limit 1-200; hops 0-3.",
-            )
-        try:
-            return json.dumps(svc(req))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="query_knowledge",
-        description=(
-            "Query the offline Mangrove knowledge graph (indicators, signals, KB): "
-            "op = stats | find | ask | get | neighbors | outputs | path."
-        ),
-        access="auth",
-        parameters=[
-            ToolParam(name="op", type="string", required=True, description="stats | find | ask | get | neighbors | outputs | path"),
-            ToolParam(name="q", type="string", required=False, description="Search text, or node id/name for get/neighbors/path"),
-            ToolParam(name="to", type="string", required=False, description="path: destination node"),
-            ToolParam(name="kind", type="string", required=False, description="Class filter (find/outputs)"),
-            ToolParam(name="role", type="string", required=False, description="trigger | filter (find)"),
-            ToolParam(name="status", type="string", required=False, description="find: status filter"),
-            ToolParam(name="requires", type="string", required=False, description="find: required input column"),
-            ToolParam(name="param", type="string", required=False, description="find: parameter name"),
-            ToolParam(name="relation", type="string", required=False, description="neighbors: relation filter"),
-            ToolParam(name="direction", type="string", required=False, description="neighbors: in | out | both"),
-            ToolParam(name="units", type="string", required=False, description="outputs: unit filter"),
-            ToolParam(name="bounded", type="boolean", required=False, description="outputs: bounded values only"),
-            ToolParam(name="hops", type="integer", required=False, description="ask: hops from each match (0-3)"),
-            ToolParam(name="limit", type="integer", required=False, description="Max results (1-200, default 25)"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def kb_list_tags(api_key: str = "") -> str:
-        """List all KB tags — useful for navigation or kb_search filtering."""
-        if not _require(api_key):
-            return _auth_error()
-        from src.shared.clients.mangrove import mangrove_ai_client
-        try:
-            return json.dumps([_dump(t) for t in mangrove_ai_client().kb.tags.list()])
-        except Exception as e:  # noqa: BLE001
-            return _handle_upstream_error("KB_TAGS_FAILED", e)
-
-    register_tool(ToolEntry(
-        name="kb_list_tags",
-        description="List KB tags (navigation + kb_search filtering).",
-        access="auth",
-        parameters=[_APIKEY],
-    ))
 
 
 # ---------------------------------------------------------------------------
@@ -2982,558 +1491,6 @@ def _register_kb(server: FastMCP) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _register_oracle(server: FastMCP) -> None:
-    """SIEVE scoring + curated corpus query + Oracle backtest tools.
-
-    All three are auth-gated. The agent forwards to the mangrove-ai SDK's
-    `client.oracle.*` surface, which proxies through MangroveAI's
-    `/api/v1/oracle/*` to MangroveOracle.
-    """
-
-    @server.tool()
-    async def sieve_score(
-        strategies: list[dict[str, Any]],
-        api_key: str = "",
-    ) -> str:
-        """Score up to 99 candidate strategies through the Mangrove SIEVE
-        go/no-go gate. Returns binary probabilities per strategy
-        (`p_no_trades`, `p_trades`: will it place trades), with
-        `model_version` + `code_version` for provenance.
-
-        Use BEFORE paying for backtests: SIEVE cheaply rules out
-        strategies the model predicts will never trade. It does NOT predict
-        performance (the old 4-class winning/losing head is retired), so
-        backtest the survivors to find out which are any good.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import SieveScoreInput
-            from src.services.oracle import sieve_score as svc
-            result = svc(SieveScoreInput(strategies=strategies))
-            return json.dumps(result)
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="sieve_score",
-        description=(
-            "Score 1-99 strategies through the Mangrove SIEVE go/no-go gate "
-            "before paying for backtests. Returns p_no_trades / p_trades per "
-            "item (will it trade, not how well), with model + code provenance."
-        ),
-        access="auth",
-        parameters=[
-            ToolParam(
-                name="strategies",
-                type="array",
-                required=True,
-                description="MangroveAI-shaped Strategy objects (1-99 items).",
-            ),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def oracle_data_query(
-        table: str,
-        select: list[str],
-        filters: list[dict[str, Any]] | None = None,
-        order_by: list[str] | None = None,
-        limit: int = 100,
-        offset: int = 0,
-        api_key: str = "",
-    ) -> str:
-        """Query the curated Oracle corpus (results / ohlcv) through the
-        BigQuery proxy. Columns and filter operators are whitelisted
-        server-side. Tenancy is enforced: `WHERE org_id = <caller's org>`
-        is injected by Oracle — you can never read another tenant's rows.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import DataQueryInput
-            from src.services.oracle import data_query as svc
-            result = svc(DataQueryInput(
-                table=table,
-                select=select,
-                filters=filters or [],
-                order_by=order_by,
-                limit=limit,
-                offset=offset,
-            ))
-            return json.dumps(result)
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_data_query",
-        description=(
-            "Query the curated Oracle corpus (results / ohlcv). Whitelist-"
-            "enforced columns + filter ops; tenancy injected server-side."
-        ),
-        access="auth",
-        parameters=[
-            ToolParam(name="table", type="string", required=True, description="'results' | 'ohlcv'"),
-            ToolParam(name="select", type="array", required=True, description="Column names to return (strings)."),
-            ToolParam(name="filters", type="array", required=False, description="Filter objects with col, op and value."),
-            ToolParam(name="order_by", type="array", required=False, description="Optional ORDER BY column names (strings)."),
-            ToolParam(name="limit", type="integer", required=False, description="Default 100, max 1000."),
-            ToolParam(name="offset", type="integer", required=False, description="Default 0."),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def oracle_backtest(
-        asset: str,
-        interval: str,
-        strategy_json: str,
-        lookback_months: int | None = 12,
-        api_key: str = "",
-    ) -> str:
-        """Backtest a single strategy synchronously through Oracle's engine.
-        Blocks until the engine finishes (30-120s on multi-month windows).
-        Returns metrics + trade history. For batch work, prefer the SDK's
-        backtest_async / backtest_bulk directly.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import OracleBacktestInput
-            from src.services.oracle import backtest as svc
-            result = svc(OracleBacktestInput(
-                asset=asset,
-                interval=interval,
-                strategy_json=strategy_json,
-                lookback_months=lookback_months,
-            ))
-            return json.dumps(result)
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_backtest",
-        description=(
-            "Backtest one strategy through Oracle's engine (synchronous)."
-        ),
-        access="auth",
-        parameters=[
-            ToolParam(name="asset", type="string", required=True, description="e.g. BTC, ETH"),
-            ToolParam(name="interval", type="string", required=True, description="e.g. 1h, 4h, 1d"),
-            ToolParam(name="strategy_json", type="string", required=True, description="Strategy JSON (MangroveAI shape)."),
-            ToolParam(name="lookback_months", type="integer", required=False, description="Default 12."),
-            _APIKEY,
-        ],
-    ))
-
-    # ----------------------------------------------------------------- #
-    # Async + bulk backtests (3 tools)
-    # ----------------------------------------------------------------- #
-
-    @server.tool()
-    async def oracle_backtest_async(
-        asset: str,
-        interval: str,
-        strategy_json: str,
-        lookback_months: int | None = 12,
-        api_key: str = "",
-    ) -> str:
-        """Submit a backtest for async execution. Returns
-        ``{backtest_id, status}`` immediately; poll
-        ``oracle_backtest_poll(backtest_id)`` for the full result.
-        Use when the window is too long for the sync variant's 30-120s block.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import OracleBacktestInput
-            from src.services.oracle import backtest_async as svc
-            result = svc(OracleBacktestInput(
-                asset=asset,
-                interval=interval,
-                strategy_json=strategy_json,
-                lookback_months=lookback_months,
-            ))
-            return json.dumps(result)
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_backtest_async",
-        description="Submit an Oracle backtest for async execution. Returns backtest_id to poll.",
-        access="auth",
-        parameters=[
-            ToolParam(name="asset", type="string", required=True, description="e.g. BTC, ETH"),
-            ToolParam(name="interval", type="string", required=True, description="e.g. 1h, 4h, 1d"),
-            ToolParam(name="strategy_json", type="string", required=True, description="Strategy JSON (MangroveAI shape)."),
-            ToolParam(name="lookback_months", type="integer", required=False, description="Default 12."),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def oracle_backtest_poll(backtest_id: str, api_key: str = "") -> str:
-        """Poll the status / result of an async backtest by ID."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import backtest_poll as svc
-            result = svc(backtest_id)
-            return json.dumps(result)
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_backtest_poll",
-        description="Poll the status / full result of an async Oracle backtest.",
-        access="auth",
-        parameters=[
-            ToolParam(name="backtest_id", type="string", required=True, description="ID returned by oracle_backtest_async."),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def oracle_backtest_bulk(
-        request: dict[str, Any], api_key: str = "",
-    ) -> str:
-        """Bulk-evaluate many strategies against a shared date range.
-
-        ``request`` mirrors ``OracleBulkBacktestRequest`` — supply
-        ``strategy_ids``, ``strategy_configs``, or both, plus the shared
-        risk + date fields. OHLCV is fetched once per unique
-        ``(asset, timeframe)`` and shared across strategies.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import backtest_bulk as svc
-            result = svc(request)
-            return json.dumps(result)
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_backtest_bulk",
-        description="Bulk-evaluate N strategies via Oracle with shared market-data fetches.",
-        access="auth",
-        parameters=[
-            ToolParam(
-                name="request",
-                type="object",
-                required=True,
-                description="OracleBulkBacktestRequest dict (strategy_ids, strategy_configs, shared risk + date fields).",
-            ),
-            _APIKEY,
-        ],
-    ))
-
-    # ----------------------------------------------------------------- #
-    # Experiment lifecycle (8 tools)
-    # ----------------------------------------------------------------- #
-
-    @server.tool()
-    async def oracle_create_experiment(
-        config: dict[str, Any], api_key: str = "",
-    ) -> str:
-        """Create a draft experiment from a config dict.
-
-        ``config`` is passed through to Oracle's ``ExperimentConfig``.
-        At minimum ``name`` is required. Returns
-        ``{experiment_id, status: 'draft', created_at, org_id}``.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import create_experiment as svc
-            return json.dumps(svc(config))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_create_experiment",
-        description="Create an Oracle sweep experiment in draft status.",
-        access="auth",
-        parameters=[
-            ToolParam(name="config", type="object", required=True, description="ExperimentConfig dict (name required)."),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def oracle_list_experiments(api_key: str = "") -> str:
-        """List experiments for the calling org (compact summary view).
-
-        Returns one row per experiment with experiment_id, name, status,
-        total_runs, completed, search_mode, created_at. Note: this
-        endpoint can 504 under load — fall back to per-id
-        ``oracle_get_experiment`` if needed.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import list_experiments as svc
-            return json.dumps(svc())
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_list_experiments",
-        description="List Oracle experiments (summary view) for the calling org.",
-        access="auth",
-        parameters=[_APIKEY],
-    ))
-
-    @server.tool()
-    async def oracle_get_experiment(experiment_id: str, api_key: str = "") -> str:
-        """Fetch full experiment config + current progress (completed_runs)."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import get_experiment as svc
-            return json.dumps(svc(experiment_id))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_get_experiment",
-        description="Get full Oracle experiment config + live progress.",
-        access="auth",
-        parameters=[
-            ToolParam(name="experiment_id", type="string", required=True, description="ID returned by oracle_create_experiment."),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def oracle_update_experiment(
-        experiment_id: str, config: dict[str, Any], api_key: str = "",
-    ) -> str:
-        """Replace a draft experiment's config (PUT semantics).
-
-        Only ``draft``-status experiments can be updated; validated /
-        launched / paused reject mutation with HTTP 400.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import update_experiment as svc
-            return json.dumps(svc(experiment_id, config))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_update_experiment",
-        description="Replace a draft Oracle experiment's config (PUT semantics).",
-        access="auth",
-        parameters=[
-            ToolParam(name="experiment_id", type="string", required=True, description="Experiment to update."),
-            ToolParam(name="config", type="object", required=True, description="Full replacement ExperimentConfig."),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def oracle_delete_experiment(experiment_id: str, api_key: str = "") -> str:
-        """Delete an experiment + cancel any in-flight child backtests."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import delete_experiment as svc
-            return json.dumps(svc(experiment_id))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_delete_experiment",
-        description="Delete an Oracle experiment and cancel in-flight children.",
-        access="auth",
-        parameters=[
-            ToolParam(name="experiment_id", type="string", required=True, description="Experiment to delete."),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def oracle_validate_experiment(experiment_id: str, api_key: str = "") -> str:
-        """Validate a draft (required before launch).
-
-        Server returns 400 with structured ``errors`` if the config is
-        incomplete (no datasets, no entry signals, etc.). The
-        agent surfaces those messages verbatim.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import validate_experiment as svc
-            return json.dumps(svc(experiment_id))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_validate_experiment",
-        description="Validate a draft Oracle experiment (transition draft -> validated).",
-        access="auth",
-        parameters=[
-            ToolParam(name="experiment_id", type="string", required=True, description="Draft experiment to validate."),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def oracle_launch_experiment(experiment_id: str, api_key: str = "") -> str:
-        """Fan out a validated experiment into child backtests.
-
-        Up to 99 children per launch. The fan-out is asynchronous — poll
-        ``oracle_get_experiment(id)`` for progress or
-        ``oracle_list_results(experiment_id=id)`` for materializing rows.
-        Launch is non-idempotent; a success here means the sweep is running
-        (confirmed even if the upstream gateway timed out) — do NOT re-launch,
-        just poll.
-
-        Bills: 1 unit per HTTP call (children not billed individually).
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import launch_experiment as svc
-            return json.dumps(svc(experiment_id))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_launch_experiment",
-        description="Launch a validated Oracle experiment into up to 99 child backtests.",
-        access="auth",
-        parameters=[
-            ToolParam(name="experiment_id", type="string", required=True, description="Validated experiment to launch."),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool()
-    async def oracle_pause_experiment(experiment_id: str, api_key: str = "") -> str:
-        """Pause a running experiment. Resume by relaunching."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import pause_experiment as svc
-            return json.dumps(svc(experiment_id))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_pause_experiment",
-        description="Pause a running Oracle experiment without losing completed results.",
-        access="auth",
-        parameters=[
-            ToolParam(name="experiment_id", type="string", required=True, description="Running experiment to pause."),
-            _APIKEY,
-        ],
-    ))
-
-    # ----------------------------------------------------------------- #
-    # Results pagination (1 tool)
-    # ----------------------------------------------------------------- #
-
-    @server.tool()
-    async def oracle_list_results(
-        experiment_id: str, limit: int = 100, offset: int = 0, api_key: str = "",
-    ) -> str:
-        """Read backtest results materializing under an experiment.
-
-        ``experiment_id`` is required — Oracle rejects unfiltered reads.
-        Returns ``{total, offset, limit, results}``; results are
-        wide-format Oracle backtest result rows.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import list_results as svc
-            return json.dumps(svc(experiment_id, limit=limit, offset=offset))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_list_results",
-        description="Paginated read of Oracle backtest results under an experiment.",
-        access="auth",
-        parameters=[
-            ToolParam(name="experiment_id", type="string", required=True, description="Experiment whose results to read."),
-            ToolParam(name="limit", type="integer", required=False, description="Default 100; max 1000."),
-            ToolParam(name="offset", type="integer", required=False, description="Default 0."),
-            _APIKEY,
-        ],
-    ))
-
-    # ----------------------------------------------------------------- #
-    # Metadata catalogs (3 tools — free / non-billable)
-    # ----------------------------------------------------------------- #
-
-    @server.tool()
-    async def oracle_list_datasets(api_key: str = "") -> str:
-        """List the OHLCV datasets experiments can run against.
-
-        Each dataset entry carries asset, timeframe, file, hash,
-        start_date, end_date. Curated immutable snapshots.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import list_datasets as svc
-            return json.dumps(svc())
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_list_datasets",
-        description="List curated OHLCV datasets available to Oracle experiments.",
-        access="auth",
-        parameters=[_APIKEY],
-    ))
-
-    @server.tool()
-    async def oracle_list_signals(api_key: str = "") -> str:
-        """List signals with typed param specs available to experiments.
-
-        Each entry carries name, type (TRIGGER/FILTER), params (typed),
-        constraints, description, requires (OHLCV cols), category.
-        Use this to construct ExperimentConfig.entry_signals /
-        exit_signals programmatically with valid signal names + params.
-        """
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import list_signals as svc
-            return json.dumps(svc())
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_list_signals",
-        description="List signals with typed param specs available to Oracle experiments.",
-        access="auth",
-        parameters=[_APIKEY],
-    ))
-
-    @server.tool()
-    async def oracle_list_templates(api_key: str = "") -> str:
-        """List predefined strategy templates to seed experiments from."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.oracle import list_templates as svc
-            return json.dumps(svc())
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="oracle_list_templates",
-        description="List predefined strategy templates to seed Oracle experiments.",
-        access="auth",
-        parameters=[_APIKEY],
-    ))
 
 
 # ---------------------------------------------------------------------------

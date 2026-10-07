@@ -111,7 +111,7 @@ class TestBuildNotPersistedHint:
         payload = svc.build_from_reference("ref-001", asset_override="ETH")
         assert payload["persisted"] is False
         assert payload["next_step"]["rest"] == "POST /api/v1/agent/strategies/manual"
-        assert payload["next_step"]["mcp_tool"] == "create_strategy_manual"
+        assert payload["next_step"]["mcp_tool"] == "agent_create_strategy_manual"
 
     def test_build_payload_validates_as_manual_request(self):
         """The hints are extra keys; StrategyManualRequest must still accept the dict as-is."""

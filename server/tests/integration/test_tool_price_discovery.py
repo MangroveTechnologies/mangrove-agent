@@ -17,6 +17,13 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(app_config, "DB_PATH", str(tmp_path / "pricing.db"))
     monkeypatch.setattr(app_config, "MANGROVE_API_KEY", None)
     monkeypatch.setattr(tool_pricing, "_cache", tool_pricing.PriceCache())
+    from unittest.mock import AsyncMock
+    from mcp.types import Tool
+    from src.mcp import mangrove_proxy, marketplace_proxy
+    remote = Tool(name="get_signal", description="Server price: 0.007 USDC", inputSchema={"type": "object"},
+                  _meta={"mangrove/pricing": {"price_usd": "0.007"}})
+    monkeypatch.setattr(mangrove_proxy, "catalog", AsyncMock(return_value=[remote]))
+    monkeypatch.setattr(marketplace_proxy, "list_tools", AsyncMock(return_value=[]))
     calls = []
 
     def fetch(endpoint):
@@ -55,13 +62,13 @@ def test_rest_tool_and_mcp_protocol_share_prices_and_cache(client):
     protocol = rpc(session, "tools/list")["tools"]
     get_signal = next(t for t in protocol if t["name"] == "get_signal")
     rest_signal = next(t for t in rest if t["name"] == "get_signal")
-    assert get_signal["_meta"]["mangrove/pricing"] == rest_signal["pricing"]
+    assert get_signal["_meta"]["mangrove/pricing"] == rest_signal["_meta"]["mangrove/pricing"]
     assert "0.007 USDC" in get_signal["description"]
-    assert rest_signal["price"] == "$0.007 USDC per upstream request"
+    assert rest_signal["description"] == "Server price: 0.007 USDC"
     assert len(calls) == 1
     again = rpc(session, "tools/list")["tools"]
     assert protocol == again  # hints do not accumulate on cached tool objects
-    local = next(t for t in protocol if t["name"] == "build_strategy_from_reference")
+    local = next(t for t in protocol if t["name"] == "agent_build_strategy_from_reference")
     assert "mangrove/pricing" not in (local.get("_meta") or {})
 
 
@@ -86,5 +93,21 @@ def test_price_failure_keeps_both_catalogs_available(client, monkeypatch):
     assert response.status_code == 200
     assert "secret upstream" not in response.text
     get_signal = next(t for t in rpc(session, "tools/list")["tools"] if t["name"] == "get_signal")
-    assert get_signal["_meta"]["mangrove/pricing"]["status"] == "unavailable"
-    assert "do not assume" in get_signal["description"]
+    assert get_signal["_meta"]["mangrove/pricing"]["price_usd"] == "0.007"
+    assert get_signal["description"] == "Server price: 0.007 USDC"
+
+
+def test_remote_call_result_survives_agent_mcp_wire(client, monkeypatch):
+    from unittest.mock import AsyncMock
+    from mcp.types import CallToolResult, TextContent
+    from src.mcp import mangrove_proxy
+    expected = CallToolResult(isError=True,
+        content=[TextContent(type='text', text='{"code":"NOT_FOUND"}')],
+        structuredContent={'code': 'NOT_FOUND', 'upstream_status': 404, 'correlation_id': 'remote-id'})
+    forward = AsyncMock(return_value=expected)
+    monkeypatch.setattr(mangrove_proxy, 'call_tool', forward)
+    session, _ = client
+    result = rpc(session, 'tools/call', {'name': 'get_signal', 'arguments': {'signal_name': 'missing'}})
+    assert result['isError'] is True
+    assert result['structuredContent'] == expected.structuredContent
+    forward.assert_awaited_once_with('get_signal', {'signal_name': 'missing'})

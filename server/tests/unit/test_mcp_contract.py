@@ -250,38 +250,6 @@ def test_collection_guard_rejects_io(event, args):
         checks.deny_runtime_io(event, args)
 
 
-@pytest.mark.parametrize("tool_name,route_name,method,extra", [
-    ("get_market_data", "market_data", "get_market_data", {}),
-    ("get_ohlcv", "ohlcv", "get_ohlcv", {"lookback_days": 12}),
-])
-async def test_market_tools_share_safe_errors_auth_and_arguments(monkeypatch, tool_name, route_name, method, extra):
-    from mcp.server.fastmcp import FastMCP
-    from src.api.routes import market
-    from src.mcp import tools
-    from src.shared.errors import SdkError, X402PaymentError
-    server = FastMCP("market-contract")
-    tools._register_market(server)
-    fn = server._tool_manager._tools[tool_name]
-    sdk_method = Mock(return_value={"symbol": "BTC"})
-    client = SimpleNamespace(crypto_assets=SimpleNamespace(**{method: sdk_method}))
-    monkeypatch.setattr(market, "mangrove_ai_client", lambda: client)
-    denied = json.loads(await fn.run({"symbol": "BTC"}))
-    assert denied["code"] == "AUTH_INVALID_API_KEY"
-    sdk_method.assert_not_called()
-    args = {"symbol": "BTC", "provider": "example", "api_key": "test-key-1", **extra}
-    assert json.loads(await fn.run(args)) == {"symbol": "BTC"}
-    expected = {"symbol": "BTC", "provider": "example"}
-    if extra:
-        expected["days"] = 12
-    sdk_method.assert_called_once_with(**expected)
-    sdk_method.side_effect = RuntimeError("SYNTHETIC_PRIVATE_DETAIL")
-    result = json.loads(await fn.run(args))
-    assert result["code"] == SdkError.code
-    assert "SYNTHETIC_PRIVATE_DETAIL" not in json.dumps(result)
-    sdk_method.side_effect = X402PaymentError("Safe payment error", correlation_id="correlation-test")
-    result = json.loads(await fn.run(args))
-    assert result["code"] == X402PaymentError.code
-    assert result["correlation_id"] == "correlation-test"
 
 
 def test_demo_catalog_follows_configured_network_in_both_registration_paths(monkeypatch):
@@ -314,6 +282,11 @@ async def test_optional_confirmation_still_refuses_execution(name, confirm):
 
 
 async def test_all_three_discovery_surfaces_preserve_registry_and_pricing(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from mcp.types import Tool
+    monkeypatch.setattr("src.mcp.mangrove_proxy.catalog", AsyncMock(return_value=[Tool(name="server_only", inputSchema={"type":"object"})]))
+    monkeypatch.setattr("src.mcp.marketplace_proxy.list_tools", AsyncMock(return_value=[]))
     import time
 
     from src.api.routes.discovery import tools as rest_tools
@@ -325,6 +298,7 @@ async def test_all_three_discovery_surfaces_preserve_registry_and_pricing(monkey
     monkeypatch.setattr("src.shared.x402.server._ensure_initialized", Mock(side_effect=ConnectionError("offline")))
     server = PricedFastMCP("discovery-contract")
     tools.register(server)
+    monkeypatch.setattr("src.mcp.server.create_mcp_server", lambda: server)
     before = copy.deepcopy(registry.list_tools())
     snapshot = tool_pricing.Snapshot("https://example.invalid/mcp/",
         {meter: "0.001" for b in TOOL_PRICING.values() for meter in b.meters},
@@ -340,9 +314,10 @@ async def test_all_three_discovery_surfaces_preserve_registry_and_pricing(monkey
     assert {t.name for t in protocol} == {t["name"] for t in rest}
     rest_by_name = {row["name"]: row for row in rest}
     for tool in protocol:
-        assert (tool.meta or {}).get("mangrove/pricing") == rest_by_name[tool.name].get("pricing")
+        assert (tool.meta or {}).get("mangrove/pricing") == rest_by_name[tool.name].get("_meta", {}).get("mangrove/pricing")
     assert registry.list_tools() == before
-    assert rest_by_name["kb_search"]["pricing"]["status"] == "unavailable"
+    assert "server_only" in rest_by_name
+    assert "kb_search" not in registry.list_tools()
     assert "pricing" not in rest_by_name["create_wallet"]
 
 
@@ -378,3 +353,28 @@ runpy.run_path(sys.argv[0], run_name='__main__')
     assert "ValueError" in result.stderr
     assert "secret" not in result.stderr + result.stdout
     assert "Traceback" not in result.stderr
+
+
+def test_synced_guidance_preserves_server_tool_names():
+    import importlib.util
+    from pathlib import Path
+    script = Path(__file__).resolve().parents[3] / 'scripts' / 'sync-michael-skills.py'
+    import sys
+    spec = importlib.util.spec_from_file_location('skill_sync_contract', script)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+        source = '---\nname: fixture\nuses-tools: [query_signal_behavior, save_strategy]\n---\nUse `query_signal_behavior` and `save_strategy`.\n'
+        available = {'query_signal_behavior', 'save_strategy'}
+        result = module.render_skill('fixture', source, available)
+        assert 'uses-tools: [query_signal_behavior, save_strategy]' in result
+        assert 'Use `query_signal_behavior` and `save_strategy`.' in result
+        assert 'create_strategy_manual' not in result
+        assert 'Not in mangrove-agent yet' not in result
+        assert 'Discover current tools' in result
+        assert module.render_skill('fixture', source, available) == result
+        unavailable = module.render_skill('fixture', source, {'query_signal_behavior'})
+        assert 'uses-tools: [query_signal_behavior]' in unavailable
+    finally:
+        sys.modules.pop(spec.name, None)

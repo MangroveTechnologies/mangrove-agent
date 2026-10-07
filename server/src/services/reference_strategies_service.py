@@ -379,7 +379,7 @@ BUILD_NOT_PERSISTED_HINT: dict[str, Any] = {
     "next_step": {
         "action": "create the strategy to persist it",
         "rest": "POST /api/v1/agent/strategies/manual",
-        "mcp_tool": "create_strategy_manual",
+        "mcp_tool": "agent_create_strategy_manual",
         "note": (
             "This payload is NOT saved yet — there is no strategy_id. Send it as-is "
             "(extra keys such as persisted/next_step/source_reference_id are ignored); "

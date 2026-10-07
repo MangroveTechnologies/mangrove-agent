@@ -18,6 +18,9 @@ import pytest  # noqa: E402
 
 @pytest.fixture
 def mcp_server(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr("src.mcp.mangrove_proxy.catalog", AsyncMock(return_value=[]))
+    monkeypatch.setattr("src.mcp.marketplace_proxy.list_tools", AsyncMock(return_value=[]))
     db_file = tmp_path / "mcp.db"
     from src.config import app_config
     from src.services import scheduler_service as ss
@@ -44,38 +47,31 @@ async def _call(server, name: str, args: dict | None = None) -> dict | list:
 
 
 CORE_TOOLS = {
-    # discovery
-    "status", "list_tools",
-    # wallet
-    "create_wallet", "list_wallets", "get_balances",
-    # dex
-    "list_dex_venues", "get_swap_quote", "execute_swap",
-    # market
-    "get_ohlcv", "get_market_data",
-    # signals
-    "list_signals",
-    # strategy
-    "create_strategy_autonomous", "create_strategy_manual",
-    "list_strategies", "get_strategy",
-    "update_strategy_status", "backtest_strategy", "evaluate_strategy",
-    "get_backtest", "list_backtests",
-    # market
-    "get_benchmark",
-    # knowledge graph
-    "query_knowledge",
-    # logs
-    "list_evaluations", "list_trades", "list_all_trades",
-    # kb
-    "kb_search",
-    # defi (DeFiLlama; the Pro tools require a Pro/Startup/Enterprise plan)
-    "get_protocol_tvl", "get_chain_tvl", "get_stablecoin_metrics",
-    "get_token_unlocks", "get_perp_funding", "get_treasuries",
-    "get_etf_flows", "get_lending_borrow_rates",
-    # x402 demo
-    "hello_mangrove",
-    # x402 spend budget
-    "x402_spend_status", "x402_spend_reset",
+    "status", "list_tools", "create_wallet", "list_wallets", "get_balances",
+    "list_dex_venues", "get_swap_quote", "execute_swap", "agent_list_strategies",
+    "agent_get_strategy", "agent_update_strategy_status", "agent_backtest_strategy",
+    "agent_evaluate_strategy", "agent_create_strategy_manual", "x402_spend_status",
 }
+
+
+async def test_reference_next_step_resolves_to_local_creation(mcp_server, monkeypatch):
+    from src.mcp import tools
+    from src.services import strategy_service
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(tools, '_require', lambda _: True)
+    payload = await _call(mcp_server, 'agent_build_strategy_from_reference', {'reference_id': 'ref-001'})
+    next_tool = payload['next_step']['mcp_tool']
+    assert next_tool == 'agent_create_strategy_manual'
+    assert next_tool in mcp_server._tool_manager._tools
+    create = Mock(return_value=Mock(model_dump=Mock(return_value={'strategy_id': 'local-fixture'})))
+    monkeypatch.setattr(strategy_service, 'create_manual', create)
+    result = await _call(mcp_server, next_tool, {
+        key: payload[key] for key in ('name', 'asset', 'timeframe', 'entry', 'exit', 'execution_config')
+    })
+    assert result['strategy_id'] == 'local-fixture'
+    create.assert_called_once()
+
 
 
 def test_all_expected_tools_registered(mcp_server):
@@ -100,7 +96,7 @@ async def test_list_tools_free_no_auth(mcp_server):
     assert "tools" in result
     names = {t["name"] for t in result["tools"]}
     # Subset check — mirrors the top-level REST tool catalog
-    for core in ("status", "create_wallet", "execute_swap", "list_strategies"):
+    for core in ("status", "create_wallet", "execute_swap", "agent_list_strategies"):
         assert core in names
 
 
@@ -119,30 +115,15 @@ async def test_list_wallets_accepts_valid_key(mcp_server):
 
 @pytest.mark.asyncio
 async def test_list_strategies_rejects_bad_key(mcp_server):
-    result = await _call(mcp_server, "list_strategies", {"api_key": "wrong-key"})
+    result = await _call(mcp_server, "agent_list_strategies", {"api_key": "wrong-key"})
     assert result["error"] is True
     assert result["code"] == "AUTH_INVALID_API_KEY"
 
 
-@pytest.mark.asyncio
-async def test_query_knowledge_rejects_missing_key(mcp_server):
-    result = await _call(mcp_server, "query_knowledge", {"op": "stats"})
-    assert result["code"] == "AUTH_INVALID_API_KEY"
 
 
-@pytest.mark.asyncio
-async def test_query_knowledge_stats_offline(mcp_server):
-    result = await _call(mcp_server, "query_knowledge", {"op": "stats", "api_key": "test-key-1"})
-    assert result["op"] == "stats"
-    assert result["result"]["nodes"] > 0
-    assert "source" not in result["result"]
 
 
-@pytest.mark.asyncio
-async def test_query_knowledge_invalid_op_is_structured_error(mcp_server):
-    result = await _call(mcp_server, "query_knowledge", {"op": "search", "api_key": "test-key-1"})
-    assert result["error"] is True
-    assert result["code"] == "KNOWLEDGE_QUERY_INVALID"
 
 
 # -- x402 spend budget: the top-up is a conversation, not a terminal trip ----

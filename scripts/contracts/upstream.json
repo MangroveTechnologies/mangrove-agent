@@ -44,8 +44,11 @@
     "rest:signals_evaluate",
     "rest:signals_evaluate_multi",
     "rest:signals_get",
+    "rest:signals_labels",
     "rest:signals_list",
     "rest:signals_match",
+    "rest:signals_playground_get",
+    "rest:signals_playground_list",
     "rest:signals_search",
     "rest:signals_validate_params",
     "rest:strategy_detail",
@@ -357,6 +360,56 @@
       },
       "required": [
         "strategy_id"
+      ],
+      "type": "object"
+    },
+    "evaluate_multiple_signals_series": {
+      "properties": {
+        "chart_timeframe": {
+          "default": "1h",
+          "type": "string"
+        },
+        "dataset_key": {
+          "type": "string"
+        },
+        "end_date": {
+          "type": "string"
+        },
+        "signals": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/EvaluateMultipleSeriesSignal"
+          },
+          "type": "array"
+        },
+        "start_date": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "evaluate_signal": {
+      "properties": {
+        "market_data": {
+          "items": {
+            "$ref": "#/definitions/MarketDataBar"
+          },
+          "type": "array"
+        },
+        "parameters": {
+          "default": {},
+          "type": "object"
+        },
+        "signal_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "market_data",
+        "signal_name"
       ],
       "type": "object"
     },
@@ -679,6 +732,17 @@
     "get_perp_funding_rates": {
       "properties": {},
       "required": [],
+      "type": "object"
+    },
+    "get_playground_data": {
+      "properties": {
+        "dataset_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_key"
+      ],
       "type": "object"
     },
     "get_protocol_tvl": {
@@ -1202,6 +1266,10 @@
       "required": [],
       "type": "object"
     },
+    "list_playground_datasets": {
+      "properties": {},
+      "type": "object"
+    },
     "list_positions": {
       "properties": {
         "asset": {
@@ -1241,8 +1309,15 @@
       ],
       "type": "object"
     },
+    "list_signal_labels": {
+      "properties": {},
+      "type": "object"
+    },
     "list_signals": {
       "properties": {
+        "category": {
+          "type": "string"
+        },
         "limit": {
           "default": 30,
           "type": "integer"
@@ -1258,7 +1333,6 @@
           "type": "string"
         }
       },
-      "required": [],
       "type": "object"
     },
     "list_strategies": {
@@ -1349,11 +1423,23 @@
           "type": "string"
         },
         "role": {
+          "enum": [
+            "TRIGGER",
+            "FILTER"
+          ],
+          "example": "TRIGGER",
           "type": "string"
+        },
+        "similarity_threshold": {
+          "default": 0.3,
+          "type": "number"
         },
         "top_k": {
           "default": 5,
           "type": "integer"
+        },
+        "user_intent": {
+          "type": "object"
         }
       },
       "required": [
@@ -1467,6 +1553,70 @@
       },
       "required": [
         "strategy_id"
+      ],
+      "type": "object"
+    },
+    "query_signal_behavior": {
+      "properties": {
+        "category": {
+          "type": "string"
+        },
+        "limit": {
+          "default": 10,
+          "type": "integer"
+        },
+        "lookup": {
+          "enum": [
+            "describe",
+            "pick",
+            "find",
+            "gap_probability"
+          ],
+          "example": "describe",
+          "type": "string"
+        },
+        "max_gap_bars": {
+          "type": "number"
+        },
+        "max_gap_range_bars": {
+          "type": "number"
+        },
+        "max_rate": {
+          "type": "number"
+        },
+        "max_run_bars": {
+          "type": "number"
+        },
+        "min_gap_bars": {
+          "type": "number"
+        },
+        "min_gap_range_bars": {
+          "type": "number"
+        },
+        "min_rate": {
+          "type": "number"
+        },
+        "min_run_bars": {
+          "type": "number"
+        },
+        "signal": {
+          "type": "string"
+        },
+        "signal_type": {
+          "default": "FILTER",
+          "enum": [
+            "FILTER",
+            "TRIGGER"
+          ],
+          "example": "FILTER",
+          "type": "string"
+        },
+        "target_rate": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "lookup"
       ],
       "type": "object"
     },
@@ -1619,8 +1769,15 @@
     },
     "search_signals": {
       "properties": {
+        "category": {
+          "type": "string"
+        },
         "limit": {
           "default": 20,
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
           "type": "integer"
         },
         "query": {
@@ -1630,10 +1787,21 @@
           "type": "string"
         },
         "role": {
+          "enum": [
+            "TRIGGER",
+            "FILTER"
+          ],
+          "example": "TRIGGER",
           "type": "string"
         },
         "search_type": {
           "default": "keywords",
+          "enum": [
+            "name",
+            "params",
+            "keywords"
+          ],
+          "example": "name",
           "type": "string"
         }
       },
@@ -1872,6 +2040,21 @@
       "required": [
         "new_status",
         "strategy_id"
+      ],
+      "type": "object"
+    },
+    "validate_signal_params": {
+      "properties": {
+        "parameters": {
+          "default": {},
+          "type": "object"
+        },
+        "signal_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "signal_name"
       ],
       "type": "object"
     },

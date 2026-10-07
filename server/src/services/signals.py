@@ -1,7 +1,6 @@
-"""Thin SDK adapters shared by local signal routes and MCP tools.
+"""Thin SDK adapters for local signal routes and execution workflows.
 
-Browse filters belong to the server. Search remains a separate, single-request
-workflow with its historical client-side category refinement.
+Browse filters belong to the server. Search remains a separate, single-request workflow; the backend owns its filters.
 """
 from __future__ import annotations
 
@@ -20,13 +19,11 @@ if TYPE_CHECKING:
     from mangrove_ai.models import Signal
 
 
-def _validate(limit: int, offset: int, search: str | None, regime_direction: str | None, role: str | None) -> None:
+def _validate(limit: int, offset: int) -> None:
     if type(limit) is not int or not 1 <= limit <= 1000:
         raise ValidationError("Signal limit must be between 1 and 1000.")
     if type(offset) is not int or offset < 0:
         raise ValidationError("Signal offset must be a nonnegative integer.")
-    if search and (regime_direction is not None or role is not None):
-        raise ValidationError("Regime and role filters apply to browsing, not keyword search.")
 
 
 def _page(client: MangroveAI, *, limit: int, offset: int, category: str | None,
@@ -34,7 +31,8 @@ def _page(client: MangroveAI, *, limit: int, offset: int, category: str | None,
     if search:
         from mangrove_ai.models import SearchSignalsRequest
 
-        return client.signals.search(SearchSignalsRequest(query=search, limit=limit, offset=offset))
+        return client.signals.search(SearchSignalsRequest(query=search, limit=min(limit, 100), offset=offset,
+                                                        category=category, regime_direction=regime_direction, role=role))
     kwargs = {key: value for key, value in (
         ("category", category), ("regime_direction", regime_direction), ("role", role),
     ) if value is not None}
@@ -51,17 +49,14 @@ def _check_page(page: PaginatedResponse[Signal], offset: int, requested: int) ->
         raise SdkError("The upstream signal page has invalid continuation metadata.")
 
 
-def _items(page: PaginatedResponse[Signal], category: str | None, search: str | None) -> list[dict]:
-    items = [item.model_dump() for item in page.items]
-    if search and category:
-        items = [item for item in items if (item.get("category") or "").lower() == category]
-    return items
+def _items(page: PaginatedResponse[Signal]) -> list[dict]:
+    return [item.model_dump() for item in page.items]
 
 
 def list_signals(*, limit: int = 50, offset: int = 0, category: str | None = None,
                  search: str | None = None, regime_direction: str | None = None,
                  role: str | None = None, collect: bool = False, client: MangroveAI | None = None) -> dict:
-    """Return one REST page or collect at most ``limit`` records for MCP.
+    """Return one REST page or collect at most ``limit`` records for a local workflow.
 
     Until the first response establishes the effective page size, at most one
     request per requested record is allowed. That conservative bound is tightened
@@ -69,7 +64,7 @@ def list_signals(*, limit: int = 50, offset: int = 0, category: str | None = Non
     payer, not by cached discovery prices. An error aborts collection, including
     uncertain payments; no automatic fallback or partial-success response occurs.
     """
-    _validate(limit, offset, search, regime_direction, role)
+    _validate(limit, offset)
     category = (category.strip().lower() or None) if category else None
     try:
         try:
@@ -87,7 +82,7 @@ def list_signals(*, limit: int = 50, offset: int = 0, category: str | None = Non
                 page = _page(client, limit=requested, offset=offset, category=category,
                              search=search, regime_direction=regime_direction, role=role)
                 _check_page(page, offset, requested)
-                items.extend(_items(page, category, search))
+                items.extend(_items(page))
                 if not collect:
                     result = {"items": items, "total": page.total, "limit": page.limit,
                               "offset": page.offset, "has_more": page.has_more,
