@@ -8,8 +8,8 @@ description: >-
   Drives the author → backtest path using reference strategies (Mechanism
   2) and KB-grounded parameter choices (Mechanism 1) so parameters are
   evidence-backed, not library-default guesses. Wraps
-  search_reference_strategies + build_strategy_from_reference +
-  create_strategy_autonomous + create_strategy_manual + kb_search.
+  agent_search_reference_strategies + agent_build_strategy_from_reference +
+  agent_create_strategy_autonomous + agent_create_strategy_manual + kb_search.
 ---
 
 # Create Strategy Skill
@@ -34,7 +34,7 @@ Two mechanisms drive "intuition":
 Every reference in the library is a **portable signal combination**: the
 asset and timeframe on the reference record are where Oracle *found*
 the combo worked, not a constraint on where you can apply it.
-`build_strategy_from_reference` accepts both `asset` and `timeframe`
+`agent_build_strategy_from_reference` accepts both `asset` and `timeframe`
 overrides for exactly this reason. If the user asks for a strategy on
 AVAX 1h and search returns references recorded on BTC 1h + SOL 5m,
 both are valid candidates — retarget them onto (AVAX, 1h) and let the
@@ -82,7 +82,7 @@ Example FAST ADVANCE triggers:
 
 ## Phase A — Search References (ALWAYS DO THIS FIRST)
 
-Call `search_reference_strategies(asset, timeframe, goal_hint)`. You will get back up to 5 ranked candidates, each with:
+Call `agent_search_reference_strategies(asset, timeframe, goal_hint)`. You will get back up to 5 ranked candidates, each with:
 
 - `id` (e.g. `ref-004` or `oracle-exp_…-<run_index>`)
 - `label` (human-readable)
@@ -97,9 +97,9 @@ Note: the library spans assets and timeframes beyond just the user's target — 
 
 ## Phase B — Build from Reference (single match)
 
-Only when Phase A returned exactly one candidate. Call `build_strategy_from_reference(reference_id, asset=<user's>, timeframe=<user's>, name=<optional>)`.
+Only when Phase A returned exactly one candidate. Call `agent_build_strategy_from_reference(reference_id, asset=<user's>, timeframe=<user's>, name=<optional>)`.
 
-You get back a `create_strategy_manual`-compatible payload with `persisted: false` — **building saves nothing**. There is no strategy_id until you pass the payload to `create_strategy_manual(...)` (REST: `POST /api/v1/agent/strategies/manual`; the `persisted` / `next_step` / `source_reference_id` keys are ignored there). DO NOT modify `entry`, `exit`, or `execution_config`. The whole point of Mechanism 2 is that these values came from strategies that already backtested well.
+You get back a `agent_create_strategy_manual`-compatible payload with `persisted: false` — **building saves nothing**. There is no strategy_id until you pass the payload to `agent_create_strategy_manual(...)` (REST: `POST /api/v1/agent/strategies/manual`; the `persisted` / `next_step` / `source_reference_id` keys are ignored there). DO NOT modify `entry`, `exit`, or `execution_config`. The whole point of Mechanism 2 is that these values came from strategies that already backtested well.
 
 Only adjustable fields:
 
@@ -115,13 +115,13 @@ When Phase A returns multiple candidates, bulk-build and bulk-backtest. This is 
 
 ```
 for ref in references[:N]:        # N ~= 3-5
-    payload = build_strategy_from_reference(
+    payload = agent_build_strategy_from_reference(
         reference_id=ref.id,
         asset=<user's asset>,     # retarget every ref onto the user's target
         timeframe=<user's TF>,    # same
     )
-    strategy = create_strategy_manual(**payload)
-    backtest_strategy(strategy.id, mode="full")
+    strategy = agent_create_strategy_manual(**payload)
+    agent_backtest_strategy(strategy.id, mode="full")
 ```
 
 Then rank the results by the Phase F thresholds (sortino, sharpe, calmar, irr, max_drawdown, win_rate). Present the ranked table to the user:
@@ -157,11 +157,11 @@ Composition rules (TRIGGER vs FILTER) — from MangroveAI signal spec:
 - If the user doesn't specify exits explicitly, use `exit: []` — the volatility-based stop-loss + take-profit are AUTOMATIC at entry, not exit rules
 - Each signal does ONE thing (Single Responsibility). Don't stack two momentum triggers; don't mix concepts.
 
-When the config is ready, call `create_strategy_manual(...)` with it.
+When the config is ready, call `agent_create_strategy_manual(...)` with it.
 
 ## Phase D — Autonomous path (FALLBACK when user says "just pick something")
 
-If the user doesn't want to choose a reference or design custom, call `create_strategy_autonomous(goal, asset, timeframe)` with the user's goal text. The server generates N candidates, backtests them in bulk, and returns the winner.
+If the user doesn't want to choose a reference or design custom, call `agent_create_strategy_autonomous(goal, asset, timeframe)` with the user's goal text. The server generates N candidates, backtests them in bulk, and returns the winner.
 
 Autonomous is the "I don't care, you decide" escape hatch. It's NOT the primary path — references are. Use autonomous when:
 - User explicitly says "pick for me" / "surprise me" / "you decide"
@@ -179,7 +179,7 @@ the threshold verdict, the benchmark-relative line, and failure-mode
 advice.
 
 For Phase B-bulk: the bulk-backtest loop inside this skill still runs
-`backtest_strategy` per candidate with a shared window (so the ranked
+`agent_backtest_strategy` per candidate with a shared window (so the ranked
 table is comparable). Size that shared window via the same bar-count
 table `/backtest` uses (2000–5000 bars target). Once the winner is
 picked, the user can invoke `/backtest` on the winner alone for deeper
@@ -193,7 +193,7 @@ iterating in-place.
 
 ## Prohibited
 
-- **Never** claim a signal is "firing" based on catalog listing alone. Only `evaluate_strategy` output can claim that.
+- **Never** claim a signal is "firing" based on catalog listing alone. Only `agent_evaluate_strategy` output can claim that.
 - **Never** fabricate backtest metrics. If `metrics` missing from a tool response, say so.
 - **Never** use library-default params in Phase C without KB citation.
 - **Never** modify a reference's params in Phase B — move to Phase C if the user wants changes.
@@ -203,31 +203,31 @@ iterating in-place.
 
 ## Never Default to Swap Router
 
-Manual swaps (`get_swap_quote` / `execute_swap`) are a fallback. Only route there if the strategy layer is down (`search_reference_strategies` + `create_strategy_autonomous` both fail), and disclose it.
+Manual swaps (`get_swap_quote` / `execute_swap`) are a fallback. Only route there if the strategy layer is down (`agent_search_reference_strategies` + `agent_create_strategy_autonomous` both fail), and disclose it.
 
 ## Summary — Decision Tree
 
 ```
 User wants a strategy
 │
-├─→ Phase A: search_reference_strategies(asset, timeframe, goal_hint)
+├─→ Phase A: agent_search_reference_strategies(asset, timeframe, goal_hint)
 │       │
 │       ├─ ≥2 candidates → Phase B-bulk (build all, backtest all, rank)
 │       ├─ 1 candidate   → Phase B (single build + backtest)
 │       ├─ 0 candidates  → Phase C
 │       └─ user says "just pick" → Phase D (autonomous)
 │
-├─ Phase B-bulk: loop build_strategy_from_reference → create_strategy_manual
-│       → backtest_strategy for each; retarget every ref onto the user's
+├─ Phase B-bulk: loop agent_build_strategy_from_reference → agent_create_strategy_manual
+│       → agent_backtest_strategy for each; retarget every ref onto the user's
 │       (asset, timeframe); rank by threshold_spec; present ranked table
 │
-├─ Phase B: build_strategy_from_reference + create_strategy_manual
+├─ Phase B: agent_build_strategy_from_reference + agent_create_strategy_manual
 │       (single match; signals + params copied exactly, asset/tf applied)
 │
-├─ Phase C: kb_search each signal → cite → create_strategy_manual
+├─ Phase C: kb_search each signal → cite → agent_create_strategy_manual
 │       (custom, evidence-backed)
 │
-└─ Phase D: create_strategy_autonomous(goal, asset, timeframe)
+└─ Phase D: agent_create_strategy_autonomous(goal, asset, timeframe)
         (server generates + backtests N candidates, returns winner)
 
 → /backtest skill (window sizing, verdict, iteration)

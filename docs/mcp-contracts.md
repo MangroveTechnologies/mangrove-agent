@@ -135,3 +135,33 @@ any execution gate. The local demo network is read from configuration.
 local MCP authentication, so safe upstream error handling is shared. Domain/payment
 error codes and correlation IDs are preserved. Business algorithms and upstream
 payment prices remain unchanged.
+
+## MangroveAI-owned tools
+
+The agent discovers MangroveAI tools from the configured server's MCP `tools/list`
+response and invokes them with MCP `tools/call`. It preserves the server's names,
+descriptions, input/output schemas, annotations and result envelopes. There are no
+agent registrations, price bindings, SDK adapters or fallback definitions for
+these remote MCP tools. The local contract snapshot covers only agent-owned and
+MangroveMarkets tools; it is not a copy used to serve the remote catalogue.
+
+The destination is derived from the configured MangroveAI API origin, replacing
+`/api/v1` with `/mcp/`. Discovery is anonymous and never signs or pays. Each call
+validates its arguments against the freshly discovered server schema before
+using either the configured upstream API key or the existing MCP wallet payer.
+API-key failures never switch to wallet mode. Wallet selection, signing, spend
+limits, payment receipts and uncertain-payment recovery remain agent-owned.
+Authenticate to the local agent with its existing `X-API-Key` header; a local
+credential is not added to the server's tool argument schema or forwarded upstream.
+
+If MangroveAI discovery fails, local custody/execution and Markets tools remain
+available and `/api/v1/agent/tools` reports `mangroveai_status: unavailable`.
+Remote calls fail explicitly, without a stale catalogue or SDK fallback. After
+server changes, reconnect the MCP client to refresh its own cached tool list.
+
+Local strategy orchestration and execution-history tools use the `agent_` prefix
+(e.g. `agent_list_strategies`). Their IDs and state belong to the local agent.
+MangroveAI's names remain unchanged, avoiding ambiguity between local and server
+strategy IDs. Existing REST execution routes and the scheduler remain intact.
+Some previously exposed wrappers may not have a counterpart in the configured
+server's current catalogue; the agent no longer invents those capabilities.

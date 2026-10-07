@@ -15,15 +15,17 @@ and keys run on this machine under `${MANGROVE_AGENT_HOME}`.
 - Judgement skills, synced from MangroveAI's copilot (MangroveAI is their source of truth):
   `knowledge-graph` (ask the graph with `query_knowledge` before naming a signal or answering a
   trading question from memory), `strategy-composition`, `strategy-management`, `backtesting`,
-  `market-intelligence`, `portfolio`, `sweeps`, `sweep-results`. Each marks any capability this
-  agent does not have yet and says what to use instead.
+  `market-intelligence`, `portfolio`, `sweeps`, `sweep-results`, `condition-studies`, `product-facts`.
+  Discover current server tools and their schemas through MCP; report unavailable capabilities
+  without substituting local tools or guessing their arguments.
 - Procedure skills for this agent's own tools: `create-strategy` (reference strategies, autonomous
-  mode), `backtest` (window sizing + threshold verdict), `sieve`, `sweep` (Oracle experiment config),
+  mode), `backtest` (window sizing + threshold verdict), `sieve`, `sweep` (server sweep workflow),
   `custom-signal`, `setup-kraken`, `connect-kraken`. When both kinds apply, load both -- e.g.
   `backtest` for the window and verdict, `backtesting` for what you may claim about the run.
-- A strategy's return is never quoted alone: `backtest_strategy` attaches `benchmark` (buy-and-hold
-  over the same window); `get_benchmark` covers any other asset or period. Read past runs with
-  `list_backtests` / `get_backtest` instead of re-running them.
+- A strategy's return is never quoted alone. Local `agent_backtest_strategy` attaches `benchmark`
+  (buy-and-hold over the same window); read local runs with `agent_list_backtests` /
+  `agent_get_backtest`. Server strategy workflows use the discovered server tools and server IDs.
+  Never interchange local and server strategy or backtest IDs.
 
 ## Non-negotiables
 

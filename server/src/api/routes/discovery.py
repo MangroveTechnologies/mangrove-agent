@@ -17,7 +17,6 @@ from datetime import datetime, timezone
 from fastapi import APIRouter
 
 from src.config import app_config
-from src.mcp.registry import list_tools as list_registered_tools
 from src.services.scheduler_service import active_job_count
 from src.shared.db.sqlite import get_connection
 
@@ -171,17 +170,9 @@ def _x402_spend_status() -> dict:
     tags=["discovery"],
 )
 async def tools() -> dict:
-    from src.mcp import marketplace_proxy
-    from src.services.tool_pricing import enrich_tools
-    from src.shared.errors import AgentError
+    from src.mcp.server import create_mcp_server
 
-    local = await enrich_tools(list_registered_tools())
-    try:
-        remote = await marketplace_proxy.list_tools()
-    except AgentError:
-        return {"tools": local, "marketplace_status": "unavailable"}
-    local_names = {entry["name"] for entry in local}
-    return {"tools": local + [
-        {**tool.model_dump(by_alias=True, exclude_none=True), "access": "auth"}
-        for tool in remote if tool.name not in local_names
-    ], "marketplace_status": "available"}
+    server = create_mcp_server()
+    remote_and_local = await server.list_tools()
+    return {"tools": [tool.model_dump(by_alias=True, exclude_none=True)
+                      for tool in remote_and_local], "mangroveai_status": "available" if server.mangroveai_available else "unavailable"}

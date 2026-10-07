@@ -5,21 +5,22 @@ description: >-
   into a recommendation. Reach for it whenever a price, a market condition or a strategy
   style is at stake: "how is ETH doing", "is BTC trending", "should I run mean reversion
   on SOL", "what's the volatility like", "what can I trade". Uses get_market_data for a
-  live price, get_ohlcv for the price history direction and volatility are read from,
-  oracle_list_datasets for how the sweep catalog labelled a stretch of the past, and
-  list_approved_assets for what the platform allows a strategy to be built on.
-uses-tools: [get_market_data, list_approved_assets, get_ohlcv, oracle_list_datasets]
+  live price, get_market_regime for direction over three horizons plus volatility,
+  classify_market_segment for what one named stretch of the past was like in the sweep
+  catalog's own terms, and list_approved_assets for what the platform allows a strategy to
+  be built on.
+uses-tools: [get_market_data, get_market_regime, classify_market_segment, list_approved_assets]
 ---
 
-<!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/market-intelligence/SKILL.md by scripts/sync-michael-skills.py. Do not edit here: change the skill upstream, or the script's adaptation tables, and re-run the sync. -->
+<!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/market-intelligence/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
+
+These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
 
 # Read the market before you recommend anything
 
 Two tools tell you what an asset is doing. `get_market_data` is a spot reading: the price
 right now. `get_market_regime` is the shape of the last year: which way the asset has been
 going over three horizons, and how volatile it has been against its own history.
-
-> **Not in mangrove-agent yet: `get_market_regime`.** Read direction and volatility yourself: `get_ohlcv` daily closes over 90, 180 and 365 days (returns, and realised volatility against the asset's own longer history), plus `get_market_data` for today. Say the reading is yours, not a platform regime label.
 
 They answer different questions and neither substitutes for the other. A price tells you
 nothing about whether a strategy style fits. A regime tells you nothing about what the
@@ -30,7 +31,7 @@ asset costs today.
 A live number is never answered from memory. Prices move; whatever you remember is stale
 and stating it is worse than saying you will look. Call the tool.
 
-Before recommending a strategy STYLE, call `get_market_regime` *(not in this agent yet)*. Mean reversion and trend
+Before recommending a strategy STYLE, call `get_market_regime`. Mean reversion and trend
 following suit opposite conditions, so a recommendation made without the regime is a guess
 dressed as advice.
 
@@ -69,11 +70,9 @@ the bucket and the z-score together, never the raw percentage alone.
 
 ## Classifying one stretch of the past
 
-`get_market_regime` *(not in this agent yet)* answers "what is this asset like now". `classify_market_segment`
+`get_market_regime` answers "what is this asset like now". `classify_market_segment`
 answers "what was this particular stretch like", for a date range someone names or for a
 catalog window by its file name.
-
-> **Not in mangrove-agent yet: `classify_market_segment`.** For a sweep-catalog window, `oracle_list_datasets` rows carry the same classifier's `direction`, `volatility`, `trend`, `regime_composite` and `market_era`. For any other date range there is no classifier here: describe it from `get_ohlcv` and do not present that as a catalog label.
 
 ```
 classify_market_segment  asset=BTC start_date=2026-02-01 end_date=2026-05-01
@@ -91,7 +90,7 @@ or noisy, which is what separates a market a trend strategy could hold through f
 that would have whipsawed it.
 
 **These labels are the catalog's.** A stretch classified here can be set beside the windows
-a sweep runs over, because both were read by the same classifier. `get_market_regime` *(not in this agent yet)*
+a sweep runs over, because both were read by the same classifier. `get_market_regime`
 cannot be compared that way -- it measures volatility against the asset's own baseline, so
 its buckets mean something different.
 
@@ -112,10 +111,8 @@ pick the one that supports the recommendation you were already going to make.
 
 ## What these tools do not give you
 
-- No percentage move over any window shorter than 90 days.
-- No candles. (In this agent `get_ohlcv` does return candles -- provider-native bars, daily by
-  default -- and `get_market_data` carries the 24h change; the limits in this list are the
-  regime reading's own.)
+- No 24h change, and no percentage move over any window shorter than 90 days.
+- No OHLCV series, no candles, no chart data.
 - No order book, no liquidity, no spread.
 - No forecast. The regime is a description of what has happened, and nothing in it
   predicts what happens next. Say what it shows; do not extend it into a prediction.
@@ -127,7 +124,7 @@ prevent.
 ## Rules of use
 
 - Regime before style. Every time.
-- A question about a named period gets `classify_market_segment` *(not in this agent yet)*, not `get_market_regime` *(not in this agent yet)*
+- A question about a named period gets `classify_market_segment`, not `get_market_regime`
   with a lookback that roughly covers it. The two measure volatility differently and only
   one is comparable with the sweep catalog.
 - One `get_market_data` call per asset, then reuse it.
@@ -145,7 +142,7 @@ prevent.
   z-score, and do not call it either from the price alone.
 - Do not turn a regime into a forecast, or a single horizon into "the trend".
 - Do not read `unscored` volatility as missing data, and do not substitute the baseline
-  volatility from `get_market_regime` *(not in this agent yet)* in its place. They are different measurements.
+  volatility from `get_market_regime` in its place. They are different measurements.
 - Do not recommend a strategy style before reading the regime, and do not recommend one
   the regime contradicts without saying plainly that you are doing so and why.
 

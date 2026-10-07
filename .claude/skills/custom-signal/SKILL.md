@@ -1,6 +1,6 @@
 ---
 name: custom-signal
-description: Build a custom signal stack (entry and/or exit) for a trading strategy by composing atomic signals from the Mangrove signal library. Use when the user describes a rule in natural language that doesn't match a curated reference — "buy when RSI is low and volume spikes", "exit when price drops below 20 EMA", "only enter when ADX > 25 filter is true" — OR when `/create-strategy` Phase C territory is hit. Outputs a `create_strategy_manual`-compatible `entry` and/or `exit` payload ready to hand off to `/backtest`.
+description: Build a custom signal stack (entry and/or exit) for a trading strategy by composing atomic signals from the Mangrove signal library. Use when the user describes a rule in natural language that doesn't match a curated reference — "buy when RSI is low and volume spikes", "exit when price drops below 20 EMA", "only enter when ADX > 25 filter is true" — OR when `/create-strategy` Phase C territory is hit. Outputs a `agent_create_strategy_manual`-compatible `entry` and/or `exit` payload ready to hand off to `/backtest`.
 user_invocable: true
 argument-hint: "<natural-language rule>"
 ---
@@ -60,7 +60,7 @@ For each signal, if the user didn't specify parameters explicitly:
 
 ### 5. Output the payload
 
-Produce a `create_strategy_manual`-compatible block. Example output:
+Produce a `agent_create_strategy_manual`-compatible block. Example output:
 
 ```json
 {
@@ -95,7 +95,7 @@ State the `timeframe` once per rule (the skill's caller decides — 1d for daily
 
 Three options for the user after the payload is produced:
 
-1. **Straight to `create_strategy_manual`** — wrap the payload with `name`, `asset`, `timeframe`, `execution_config` and call the MCP tool. Use defaults from `trading_defaults.json` for `execution_config` (initial_balance: 10000, etc.).
+1. **Straight to `agent_create_strategy_manual`** — wrap the payload with `name`, `asset`, `timeframe`, `execution_config` and call the MCP tool. Use defaults from `trading_defaults.json` for `execution_config` (initial_balance: 10000, etc.).
 2. **`/backtest` on an existing strategy id** — if the user is refining signals on a strategy that already exists.
 3. **Explore alternatives** — "want me to try a tighter RSI threshold and see how the backtest changes?"
 

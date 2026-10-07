@@ -99,7 +99,7 @@ class BuildFromReferenceRequest(BaseModel):
         "combo, not a pin to the source asset/timeframe. NOTHING IS PERSISTED: "
         "the response is a payload with `persisted: false` and a `next_step` "
         "block. POST it as-is to /api/v1/agent/strategies/manual (MCP: "
-        "create_strategy_manual) to save it — extra keys are ignored — and use "
+        "agent_create_strategy_manual) to save it — extra keys are ignored — and use "
         "the returned strategy_id for /strategies/{id}/backtest. For bulk "
         "evaluation, build N references, create each, then backtest each."
     ),

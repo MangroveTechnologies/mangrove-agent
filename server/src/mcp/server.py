@@ -24,7 +24,7 @@ class PricedFastMCP(FastMCP):
                     "meta": {**(tool.meta or {}), "mangrove/pricing": pricing},
                 })
             result.append(tool)
-        from src.mcp import marketplace_proxy
+        from src.mcp import marketplace_proxy, mangrove_proxy
         from src.shared.errors import AgentError
 
         try:
@@ -32,15 +32,27 @@ class PricedFastMCP(FastMCP):
         except AgentError:
             remote = []
         local_names = {tool.name for tool in result}
-        return result + [tool for tool in remote if tool.name not in local_names]
+        result += [tool for tool in remote if tool.name not in local_names]
+        try:
+            upstream = await mangrove_proxy.catalog()
+            self.mangroveai_available = True
+        except AgentError:
+            self.mangroveai_available = False
+            upstream = []
+        names = {tool.name for tool in result}
+        if any(tool.name in names for tool in upstream):
+            raise ValueError("MangroveAI MCP name conflicts with a local or Markets tool")
+        return result + upstream
 
     async def call_tool(self, name, arguments):
-        from src.mcp import marketplace_proxy
+        from src.mcp import marketplace_proxy, mangrove_proxy
         from src.services.marketplace_catalog import LOCAL_TOOLS
 
         if name.startswith("marketplace_") and name not in LOCAL_TOOLS:
             return await marketplace_proxy.call_tool(name, arguments)
-        return await super().call_tool(name, arguments)
+        if name in self._tool_manager._tools:
+            return await super().call_tool(name, arguments)
+        return await mangrove_proxy.call_tool(name, arguments or {})
 
 
 def reset_mcp_server() -> None:

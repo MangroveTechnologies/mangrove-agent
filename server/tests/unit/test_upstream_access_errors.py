@@ -84,14 +84,8 @@ def test_no_message_inference_or_cause_cycle():
 @pytest.mark.asyncio
 @pytest.mark.parametrize('status', [401, 403])
 @pytest.mark.parametrize('name,args,path,register,client_name,kind', [
-    ('oracle_list_datasets', {}, ('oracle', 'list_datasets'), tools._register_oracle,
-     'mangrove_ai_client', AIAPIError),
     ('portfolio_value', {'addresses': '0x123'}, ('portfolio', 'value'), tools._register_wallet,
      'mangrove_markets_client', MarketsAPIError),
-    ('get_signal', {'signal_name': 'rsi'}, ('signals', 'get'), tools._register_signals,
-     'mangrove_ai_client', AIAPIError),
-    ('search_signals', {'query': 'rsi'}, ('signals', 'search'), tools._register_signals,
-     'mangrove_ai_client', AIAPIError),
 ])
 async def test_registered_tools_preserve_denial_once(monkeypatch, status, name, args, path,
                                                     register, client_name, kind):
@@ -100,9 +94,6 @@ async def test_registered_tools_preserve_denial_once(monkeypatch, status, name, 
     upstream = Mock(side_effect=failure(kind, status))
     client = SimpleNamespace(**{path[0]: SimpleNamespace(**{path[1]: upstream})})
     monkeypatch.setattr(mangrove, client_name, lambda: client)
-    if name == 'oracle_list_datasets':
-        from src.services import oracle
-        monkeypatch.setattr(oracle, client_name, lambda: client)
     monkeypatch.setattr(tools, '_require', lambda _: True)
     server = FastMCP('access-regression')
     register(server)
@@ -166,27 +157,6 @@ async def test_unexpected_cex_error_remains_sanitized(monkeypatch):
     result = json.loads(await server._tool_manager._tools['cex_balances'].run({}))
     assert result['code'] == 'CEX_ERROR'
     assert 'secret-body' not in json.dumps(result)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('status', [401, 403])
-@pytest.mark.parametrize('name,method', [
-    ('get_ohlcv', 'get_ohlcv'), ('get_market_data', 'get_market_data'),
-])
-async def test_market_tools_preserve_denials_through_real_route(monkeypatch, status, name, method):
-    from src.api.routes import market
-
-    upstream = Mock(side_effect=failure(AIAPIError, status))
-    sdk = SimpleNamespace(crypto_assets=SimpleNamespace(**{method: upstream}))
-    monkeypatch.setattr(market, 'mangrove_ai_client', lambda: sdk)
-    monkeypatch.setattr(tools, '_require', lambda _: True)
-    server = FastMCP('market-access-regression')
-    tools._register_market(server)
-    result = json.loads(await server._tool_manager._tools[name].run({'symbol': 'BTC'}))
-    assert result['upstream_status'] == status
-    assert result['retryable'] is False and result['retry_payment'] is False
-    assert 'secret' not in json.dumps(result)
-    upstream.assert_called_once()
 
 
 @pytest.mark.parametrize('status', [401, 403, 500])

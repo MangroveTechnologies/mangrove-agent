@@ -7,12 +7,19 @@ description: >-
   chart patterns, quantitative method. Reach for it before answering from memory or guessing at
   a name, and before answering a trading question at all: "which indicators produce a bounded
   oscillator", "what reads RSI", "is there already a signal for X", "how far should the stop
-  go", "what are the odds I wipe out the account". Uses the query_knowledge tool
-  (stats, find, ask, get, neighbors, outputs, path).
-uses-tools: [query_knowledge]
+  go", "what are the odds I wipe out the account", "what happens when my margin runs
+  out", "everything connected to RSI", "every way these two are related", "what else
+  is in this chapter". Trading mechanics -- margin, liquidation, stops, slippage,
+  funding -- belongs here, never query_product_facts, which is Mangrove's own policy.
+  Uses the query_knowledge tool (stats, find, ask, get, neighbors, outputs, path,
+  walk, paths, ancestors, descendants, under). For MEASURED signal behaviour use
+  query_signal_behavior instead.
+uses-tools: []
 ---
 
-<!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/knowledge-graph/SKILL.md by scripts/sync-michael-skills.py. Do not edit here: change the skill upstream, or the script's adaptation tables, and re-run the sync. -->
+<!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/knowledge-graph/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
+
+These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
 
 # Ask the graph before you answer
 
@@ -40,11 +47,20 @@ judgment on it, quote that rather than your own recollection.
 
 ## Start here
 
+**Never guess a node id or name.** Ids look like `procedure:signal-rsi-bullish-divergence`,
+never `rsi_divergence`; a name you compose from memory is a miss. Before any `get`, `neighbors`,
+`outputs`, `path`, `walk`, `paths`, `ancestors`, `descendants` or `under`, call `find` (a term
+you can name) or `ask` (a question) and pass an id it returned.
+A `get` that misses comes back with `candidates` -- the closest matches by words -- so the next
+move is to call `get` again with one of those ids, not to try another spelling.
+
 ```
+query_knowledge  op=find  q="rsi divergence"                  # first: learn the real ids
+query_knowledge  op=get   q="procedure:signal-rsi-bullish-divergence"
 query_knowledge  op=stats
 ```
 
-Returns the counts and the **complete vocabulary** every other call accepts as a filter --
+`stats` returns the counts and the **complete vocabulary** every other call accepts as a filter --
 relation names, class names, role names, primitives, statuses, input columns, output units. Call
 it first. The one reliable way to get a wrong answer from this graph is to invent a class or
 relation name. An invented filter comes back as an **error pointing you at the vocabulary**,
@@ -56,11 +72,6 @@ correction, not a dead end. Fix the filter and call again.
 `find` matches the **words** you give it. `ask` matches what you **mean** -- it seeds from two
 indices, one built from this corpus and one from a pretrained sentence model, fuses them, and
 then walks a hop along the edges.
-
-> In this agent `ask` has the corpus index but not the pretrained one -- that needs the
-> `mangrove-kb[semantic]` extra, which is not installed -- and its `note` says so. The figures
-> below were measured with both; expect fewer paraphrased questions to land, and fall back to
-> `op=find` sooner.
 
 ```
 query_knowledge  op=find  q="divergence"                         # a term you can name
@@ -79,7 +90,8 @@ answers 18.
 **Every row `ask` returns carries `reached`**: which match it came from, how many hops, along
 which relation, and that edge's own stated reason. That is the grounds for the answer. A row at
 `hops: 0` was retrieved; a row at `hops: 1` was reasoned to, and the `why` says on what basis --
-quote it rather than asserting the connection yourself.
+quote it rather than asserting the connection yourself. `hops` is capped at 3: a call asking for
+more raises an error naming the cap rather than walking the whole graph from one question.
 
 **It is wrong about one time in four and does not know when.** The misses come back as
 plausible-looking neighbours with nothing marking them wrong. So if what returns looks
@@ -133,7 +145,41 @@ both.
 | what reads this indicator? | `op=neighbors q=... relation="uses" direction="in"` |
 | what does this signal depend on? | `op=neighbors q=... relation="uses" direction="out"` |
 | what breaks if this changes? | `op=neighbors q=... direction="in"` |
-| how are these two related? | `op=path q=... to=...` |
+| only the structural/descriptive/associative/meta edges | `op=neighbors q=... relation_category=...` |
+| everything within two hops, as one fragment | `op=walk q=... radius=2` |
+| how are these two related (the one route)? | `op=path q=... to=...` |
+| every way these two are related, not just the shortest | `op=paths q=... to=...` |
+| what classes does this belong to? | `op=ancestors q=...` |
+| everything in this class | `op=descendants q=...` |
+| everything about this subject, any primitive | `op=under q=...` |
+
+## Beyond one hop: walk, paths, ancestors, descendants, under
+
+`neighbors` is one hop. Five calls go further, and each answers a different shape of
+"further":
+
+- **`walk`** is the closed neighbourhood out to a `radius` -- every node within that
+  many hops, plus every edge between them, so you get a fragment you can reason over
+  without going back for more. Capped at `radius=3`; past that call `neighbors` or
+  `path` for a narrower question instead. `max_nodes` (default 50) stops the expansion
+  and says so in `truncated`/`note` if the neighbourhood is bigger than that.
+- **`path`** is the one shortest route between two nodes. **`paths`** is every simple
+  route, shortest first -- use it when the shortest route is not the explanatory one:
+  a signal connects to its class both directly (`about`) and through the indicator it
+  reads (`uses` then `instance-of`), and `path` only shows you one of those. Capped at
+  `max_depth=4` for the same reason `all_paths` is in the library: past four hops the
+  extra routes are almost all detours through a hub, not explanations.
+- **`ancestors`**/**`descendants`** walk the rigid class backbone only (`instance-of`
+  then `kind-of`) -- what this is a kind of, or everything that is a kind of this.
+- **`under`** is containment, not class membership, and it is primitive-blind: ask it
+  for a whole knowledge-base chapter (`op=under q="market foundations"`) and it reaches
+  every Concept, Fact and formula filed under it, whatever kind of node each one is.
+  This is the one to reach for "what else is in this chapter" or "what else is about
+  this subject" -- `descendants` would answer "what else is a kind of this" instead,
+  which is a narrower and different question.
+
+`path`/`paths` take `relations=[...]` to constrain the route to relations you name; an
+unknown relation name raises with the legal list rather than quietly finding nothing.
 
 The node's `name` is the registered signal name. That is the join between the graph and the
 library, and it is what makes this a map of something runnable rather than an encyclopedia. Use
@@ -217,6 +263,34 @@ query_knowledge  op=find     status="deprecated"  limit=100
 
 Bounded values share an axis. Deprecated ones stay out of anything new.
 
+**"Every way RSI's bullish divergence connects to momentum, not just one"**
+
+```
+query_knowledge  op=paths  q="procedure:signal-rsi-bullish-divergence"  to="momentum"
+```
+
+`path` would show one route; `paths` shows both the direct `about` edge and the longer
+`uses`-then-`instance-of` derivation behind it.
+
+**"Everything around RSI, as one fragment"**
+
+```
+query_knowledge  op=walk  q="rsi"  radius=2
+```
+
+Nodes plus edges for the whole neighbourhood, so you can reason over it without going
+back for more -- useful when you are about to ask several `neighbors` questions about
+the same node in a row.
+
+**"What else is in the risk management chapter?"**
+
+```
+query_knowledge  op=under  q="risk management"
+```
+
+Primitive-blind: Concepts, Facts and formulas filed under the chapter all come back in
+one call, not just the Procedures `descendants` would reach.
+
 ## Do not
 
 - **Do not guess an id.** `op=find` first; lookups resolve names, but `find` shows you the real
@@ -225,4 +299,7 @@ Bounded values share an axis. Deprecated ones stay out of anything new.
   easiest way to tell a user something false.
 - **Do not treat a class as a role, or a role as a class.** They intersect. Asking for one when
   you mean the other returns a plausible, wrong set.
+- **Do not reach for `under` when you mean `descendants`, or the reverse.** `descendants` is the
+  rigid class backbone only; `under` is containment and reaches every primitive about a subject.
+  Asking for one when you mean the other returns a plausible, wrong set, the same as class/role.
 - **Do not answer a "what exists" question from memory.** That is what this is for.

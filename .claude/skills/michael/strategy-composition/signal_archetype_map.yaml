@@ -32,7 +32,16 @@ rules:
     cci_oversold:   {default: mean_reversion, lambert_breakout_usage: trend_following}
     cci_overbought: {default: mean_reversion, lambert_breakout_usage: trend_following}
 
-trend:            # 88 signals
+trend:
+  # KB141 models these canonical trailing-trend signals. Classify the existing
+  # graph identities; this does not add nodes or lift any ontology exclusion.
+  psar_bullish:            {arch: trend_following, type: FILTER,  role: context_filter}
+  psar_bearish:            {arch: trend_following, type: FILTER,  role: context_filter}
+  psar_reversal:           {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  supertrend_long:        {arch: trend_following, type: FILTER,  role: context_filter}
+  supertrend_short:       {arch: trend_following, type: FILTER,  role: context_filter}
+  supertrend_flip_up:     {arch: trend_following, type: TRIGGER, role: entry_trigger}
+  supertrend_flip_down:   {arch: trend_following, type: TRIGGER, role: exit}
   is_above_sma:            {arch: trend_following, type: FILTER,  role: context_filter}
   sma_crossover:           {arch: trend_following, type: TRIGGER, role: entry_trigger}
   sma_cross_up:            {arch: trend_following, type: TRIGGER, role: entry_trigger}

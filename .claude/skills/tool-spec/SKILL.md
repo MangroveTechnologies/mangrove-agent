@@ -14,7 +14,7 @@ Produce a complete MCP tool specification following the conventions already in `
 ## Output sections
 
 ### 1. Tool name
-Lowercase snake_case. No prefix (the MCP server is single-tenant; all tools live under `mcp__mangrove-agent__*`). Match existing patterns: `get_balances`, `create_strategy_autonomous`, `list_trades`, `evaluate_strategy`.
+Lowercase snake_case. No prefix (the MCP server is single-tenant; all tools live under `mcp__mangrove-agent__*`). Match existing patterns: `get_balances`, `agent_create_strategy_autonomous`, `agent_list_trades`, `agent_evaluate_strategy`.
 
 ### 2. Access tier
 Pick one:

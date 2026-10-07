@@ -11,6 +11,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr("src.mcp.mangrove_proxy.catalog", AsyncMock(return_value=[]))
+    monkeypatch.setattr("src.mcp.marketplace_proxy.list_tools", AsyncMock(return_value=[]))
     db_file = tmp_path / "disc.db"
     from src.api.routes import discovery
     from src.config import app_config

@@ -8,12 +8,14 @@ description: >-
   "is this any good", "did it beat just holding", "what were its risk settings". Also covers
   reading a run back rather than paying to repeat it, tidying an old run out of the way, and
   discussing any execution-config parameter. Also covers choosing which of several candidates to
-  spend a backtest on. Uses backtest_strategy, sieve_score, get_backtest, list_backtests
-  and get_benchmark.
-uses-tools: [backtest_strategy, sieve_score, get_backtest, list_backtests, get_benchmark]
+  spend a backtest on. Uses run_backtest, screen_candidates, get_backtest, list_backtests,
+  get_benchmark and get_execution_config_schema.
+uses-tools: [run_backtest, screen_candidates, get_backtest, list_backtests, get_benchmark]
 ---
 
-<!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/backtesting/SKILL.md by scripts/sync-michael-skills.py. Do not edit here: change the skill upstream, or the script's adaptation tables, and re-run the sync. -->
+<!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/backtesting/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
+
+These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
 
 # Say what the run actually did
 
@@ -29,17 +31,13 @@ something the run actually told you.
 need. A stored run is the record of what happened; re-running is a fresh answer to a question that
 already has one, and it bills them again.
 
-`backtest_strategy` when there is genuinely no run for the window they are asking about.
-
-Runs are stored against the API key's user, not against this agent's strategy ids: match a
-stored run to a strategy by `asset`, window and the `strategy_name` `get_backtest` returns.
+`run_backtest` when there is genuinely no run for the window they are asking about.
 
 ## Choosing which candidate to back
 
-With several candidates and one backtest's worth of patience, `sieve_score` scores them, up to
-99 per call: its binary head (`p_trades`) is how likely each is to trade at all, and that is what
-to rank by. Keep one asset per call, because a strategy's signals are measured on that asset's
-candles.
+With several candidates and one backtest's worth of patience, `screen_candidates` ranks them by how
+likely each is to trade at all. One asset per call, because a strategy's signals are measured on
+that asset's candles.
 
 Read it as an ordering, not a verdict. It says nothing about whether a strategy will make money --
 only a backtest answers that -- and a low score is weak evidence: measured against runs that did
@@ -52,11 +50,8 @@ Screening a single strategy answers nothing worth reporting. If there is one can
 ## A return with no benchmark is not an answer
 
 Every time you state what a strategy returned, state what holding the asset returned over the same
-window. `backtest_strategy` already includes it in `benchmark` -- use that, don't re-derive it. For a
-different asset or period, `get_benchmark`. Here the holding return is
-`benchmark.buy_and_hold_return_pct` and the difference is `benchmark.strategy_minus_benchmark_pct`.
-When `benchmark.available` is false, say it could not be fetched and why (`reason`) -- never quote
-the strategy's return alone as though it were the whole answer.
+window. `run_backtest` already includes it in `benchmark` -- use that, don't re-derive it. For a
+different asset or period, `get_benchmark`.
 
 A strategy that returned -14.5% while the asset fell -20.5% did its job. Reporting only the -14.5%
 tells the user they lost money and hides that they lost less than the alternative. Reporting only
@@ -71,14 +66,9 @@ mistake that reported a 0.52%/yr strategy as +52%.
 ## A null metric is not a zero
 
 `null` means the quantity was not measurable, and it needs a reason, not a number. Sharpe, Sortino
-and Calmar are null below roughly 30 daily observations, because a ratio computed from
+and Calmar are null below `ratio_sample_minimum` daily observations, because a ratio computed from
 two weeks of data is noise wearing a decimal point. Say "the window is too short to compute it",
 never "its Sharpe is 0".
-
-In this agent, `backtest_strategy` fills a missing `sharpe_ratio`, `win_rate`, `irr_annualized` or
-`max_drawdown` with `0.0` in its `metrics`. Read `num_days` and `total_trades` before believing a
-zero there, and when it matters read the stored run with `get_backtest`, whose metrics are
-exactly what the engine returned.
 
 Zero trades means there is no win rate. Say that -- and then say why, because the result
 carries it: `metrics.diagnostics.entry_denials` is how many entries the engine refused and
@@ -87,48 +77,52 @@ rolling window every signal was evaluated with. "It fired 150 times and every en
 denied for cooldown" and "it never fired" are different answers, and the person deciding
 what to change next needs to know which one they got.
 
-One (strategy, window) is ONE measurement. Nothing here refuses the same strategy over the same
-dates again -- a repeat is billed and stored as a second run -- so find the existing one with
-`list_backtests` and read it with `get_backtest`. A new measurement
+One (strategy, window) is ONE measurement. Asking for the same strategy over the same dates
+again is refused with the existing run's id -- read that with get_backtest. A new measurement
 needs a different window, or different parameters, and different parameters are a different
 strategy.
 
 ## The check comes before the spend
 
-A full backtest costs a unit of the monthly allowance when it is submitted, and nothing checks the
-strategy again at that point: a run over a bad signal name or a missing timeframe is billed and
-then fails. `create_strategy_manual` checks the composition when the strategy is created, so
-before a backtest read the stored rules with `get_strategy` -- every signal name and parameter key
-as `query_knowledge` has them, a `timeframe` on every signal -- and fix a fault by creating a
-corrected strategy.
+A backtest costs a unit of the monthly allowance at submission, so `run_backtest` verifies the
+strategy first and a refusal costs nothing. Two kinds of refusal, and they ask different things
+of you:
 
-A signal parameter still at its library default is a value nobody chose. Either choose it (and
-create the strategy with that value) or tell the user you considered the default and stand by it,
-and why.
+- **A problem** -- a fault that makes the run fail at setup. Fix it (usually by saving corrected
+  rules) before asking again.
+- **A signal parameter at its library `default`** -- a value nobody chose. `default` and `authored`
+  are about SIGNAL PARAMETERS: `authored` means the value was deliberately set when the strategy
+  was composed, `default` means it was left as the library ships it. The submission waits until
+  you either save the strategy with deliberately chosen values, or pass
+  `acknowledge_defaults=true` -- which is a statement to the user that you considered the defaults
+  and stand by them, so say that, and why, when you do it.
 
-`backtest_strategy` takes a per-run `config` that merges over the canonical trading defaults --
-execution parameters and `slippage_pct` / `fee_pct` alike. A result measured with overrides is a
-measurement of that config, not of the strategy as stored: name the overrides whenever you quote
-it, and prefer storing the execution config on the strategy (`execution_config` at creation) so the
-record and the run agree.
+A backtest always measures a strategy exactly as it is stored -- there is no way to substitute
+values for one run. To try a different execution config, save it: update the draft, or save a new
+strategy if this one has been measured, then backtest that. Fees and slippage are canon and cannot
+be set per strategy. `costs_applied` says what was charged.
+
+`get_execution_config_schema` before you discuss or change any parameter. It carries each one's
+default, effect, bounds and status: `tunable` is strategy character, `guardrail` is account safety,
+`gated` is inert unless another flag is on, `unused` has no runtime effect at all. Do not advise
+tuning a `gated` or `unused` parameter as though it would change anything.
 
 ## The window is not always the one requested
 
-Read `resolved_window`: explicit `start_date` / `end_date` when dates were passed (or derived from
-`lookback_days` / `lookback_hours`), or `lookback_months` when the span was chosen from the
-strategy's timeframe. `metrics.num_days` is what the data actually supported, which can be less than
-the range if history is short. If they asked for a year and got four months, say so before quoting
-an annualised figure off it.
+Read `window`. `kind` is `explicit` when the user named the dates and `trailing` when the span was
+chosen for them from the strategy's timeframe. `days_covered` is what the data actually supported,
+which can be less than the range if history is short. If they asked for a year and got four months,
+say so before quoting an annualised figure off it.
 
-`start_date` and `end_date` go together; a lookback is the alternative to them, not an addition.
+Pass **both** `start_date` and `end_date` or neither.
 
-## Long windows take longer, and a timeout is not a result
+## Long windows fail rather than wait
 
-`backtest_strategy` submits the run and polls it, so a wide window -- a multi-month `1h` run,
-anything on `1d` -- is slow rather than refused. If polling gives up, the error names the run's
-`backtest_id`: it may still finish server-side, so read it later with `get_backtest` instead of
-submitting it again. No metrics exist until it completes. Never present an unfinished run as a
-result, and never guess what it would have said.
+The synchronous surface is deadline-bounded. A wide window -- a multi-month `1h` run, anything on
+`1d` -- can overrun it and come back as an error naming the engine warming up. That is a real
+failure, not a slow success: no metrics exist. Tell the user the window was too wide for a single
+run and offer a narrower one. Never present a timed-out run as a result, and never guess what it
+would have said.
 
 ## When a call fails
 
