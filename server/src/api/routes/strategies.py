@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from src.services import backtest_service, backtest_verdict, strategy_service
 from src.services.strategy_service import (
@@ -227,7 +228,7 @@ async def backtest(strategy_id: str, req: BacktestInput) -> dict:
         # over the same window.
         from src.services.benchmark_service import benchmark_for_window
 
-        benchmark = benchmark_for_window(detail.asset, resolved_window)
+        benchmark = await run_in_threadpool(benchmark_for_window, detail.asset, resolved_window)
         total_return = full_metrics.get("total_return")
         if benchmark.get("available") and isinstance(total_return, (int, float)):
             benchmark["strategy_minus_benchmark_pct"] = round(

@@ -47,10 +47,12 @@ def client(tmp_path, monkeypatch):
     )
     # Daily closes 100 -> 110 over the last 91 days, for the benchmark.
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    sdk.crypto_assets.get_ohlcv.return_value = {"success": True, "symbol": "ETH", "data": [
-        {"timestamp": (today - timedelta(days=90 - i)).isoformat(), "close": 100 + i * (10 / 90)}
-        for i in range(91)
-    ]}
+    sdk.backtesting.get_benchmark.return_value = {
+        "asset": "ETH", "start": (today - timedelta(days=90)).isoformat(),
+        "end": today.isoformat(), "bars": 91, "first_close": 100.,
+        "last_close": 110.0, "buy_and_hold_return_raw": 10.0,
+        "buy_and_hold_return": "10.0%", "unit": "percent_0_100", "interval": "1d",
+    }
 
     counter = {"n": 0}
 

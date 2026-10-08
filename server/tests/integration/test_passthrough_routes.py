@@ -91,7 +91,7 @@ def _auth() -> dict:
 
 def test_ohlcv(client):
     r = client.get("/api/v1/agent/market/ohlcv",
-                   params={"symbol": "BTC", "timeframe": "1h", "lookback_days": 7},
+                   params={"symbol": "BTC", "lookback_days": 7},
                    headers=_auth())
     assert r.status_code == 200
     assert "candles" in r.json()
@@ -199,3 +199,10 @@ def test_auth_required_on_all_passthrough_routes(client):
 def test_signals_invalid_page_never_calls_upstream(client, monkeypatch, query):
     monkeypatch.setattr("src.services.signals.mangrove_ai_client", lambda: pytest.fail("invalid page reached upstream"))
     assert client.get(f"/api/v1/agent/signals?{query}", headers=_auth()).status_code == 422
+
+
+def test_ohlcv_rejects_unsupported_timeframe(client):
+    response = client.get("/api/v1/agent/market/ohlcv", headers=_auth(),
+                          params={"symbol": "BTC", "timeframe": "1h"})
+    assert response.status_code == 400
+    assert "daily" in response.json()["message"]
