@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -986,6 +987,16 @@ def test_banner_colour_follows_no_color(monkeypatch):
     assert '\x1b[' not in _banner(monkeypatch, 140)
     coloured = _banner(monkeypatch, 140, no_color=False)
     assert '\x1b[38;' in coloured and coloured.count('\x1b[0m') > 0
+
+
+@pytest.mark.parametrize('columns', [140, 90, 50])
+def test_coloured_banner_preserves_every_row(monkeypatch, columns):
+    plain = _banner(monkeypatch, columns).splitlines()
+    coloured = re.sub(r'\x1b\[[0-9;]*m', '',
+                      _banner(monkeypatch, columns, no_color=False)).splitlines()
+    text_start = len(setup._LOGO) // 2 + 2
+    assert len(coloured) == len(plain)
+    assert coloured[text_start:] == plain[text_start:]
 
 
 def test_banner_ascii_terminal_gets_plain_title(monkeypatch):

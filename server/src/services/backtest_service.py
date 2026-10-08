@@ -770,7 +770,9 @@ def get_backtest(
         from src.services.benchmark_service import benchmark_for_window
 
         benchmark = benchmark_for_window(
-            raw["asset"], {"start_date": raw["start_date"], "end_date": raw["end_date"]},
+            raw["asset"], {"start_date": raw["start_date"], "end_date": raw["end_date"],
+                           **{key: raw.get(key) or config.get(key) for key in
+                              ("base_token", "quote_token", "market_data_venue")}},
         )
         total_return = (raw.get("metrics") or {}).get("total_return")
         if benchmark.get("available") and isinstance(total_return, (int, float)):

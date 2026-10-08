@@ -299,7 +299,8 @@ def _shade(rows, color):
     if not color:
         return rows
     shaded = []
-    for shade, row in zip(_WORD_SHADES, rows):
+    for index, row in enumerate(rows):
+        shade = _WORD_SHADES[index % len(_WORD_SHADES)]
         out, current = [], None
         for ch in row:
             wanted = None if ch == ' ' else shade if ch == '█' else _WORD_SHADOW

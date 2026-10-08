@@ -22,10 +22,12 @@ TODAY = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microseco
 @pytest.fixture
 def sdk():
     client = MagicMock()
-    client.crypto_assets.get_ohlcv.return_value = {"success": True, "symbol": "ETH", "data": [
-        {"timestamp": (TODAY - timedelta(days=200 - i)).isoformat(), "close": 2000 + i * 2.5}
-        for i in range(201)
-    ]}
+    client.backtesting.get_benchmark.return_value = {
+        "asset": "ETH", "start": (TODAY - timedelta(days=200)).isoformat(),
+        "end": TODAY.isoformat(), "bars": 201, "first_close": 100.,
+        "last_close": 125.0, "buy_and_hold_return_raw": 25.0,
+        "buy_and_hold_return": "25.0%", "unit": "percent_0_100", "interval": "1d",
+    }
     client.users.get_my_backtests.return_value = SimpleNamespace(total=1, items=[SimpleNamespace(
         id="b1", asset="ETH", status="completed", result="FAIL",
         start_date="2026-03-17T00:00:00+00:00", end_date="2026-09-13T00:00:00+00:00",

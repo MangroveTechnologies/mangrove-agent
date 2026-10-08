@@ -1,139 +1,114 @@
-"""Unit tests for benchmark_service — buy-and-hold from daily OHLCV (SDK mocked)."""
-from __future__ import annotations
-
-import os
+"""Benchmark adapters preserve server results without recomputing returns."""
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
-os.environ.setdefault("ENVIRONMENT", "test")
+import pytest
 
-import pytest  # noqa: E402
-
-from src.shared.errors import InsufficientData, SdkError, ValidationError  # noqa: E402
-
-TODAY = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-
-
-def _daily(days: int, first: float = 100.0, last: float = 120.0) -> dict:
-    """`days`+1 daily closes ending today, linear from first to last."""
-    step = (last - first) / days
-    return {"success": True, "symbol": "ETH", "data_points": days + 1, "data": [
-        {"timestamp": (TODAY - timedelta(days=days - i)).strftime("%Y-%m-%d %H:%M:%S+00:00"),
-         "close": first + i * step}
-        for i in range(days + 1)
-    ]}
+from src.services.benchmark_service import benchmark_for_window, get_benchmark
+from src.shared.errors import SdkError, ValidationError
 
 
 @pytest.fixture
 def sdk(monkeypatch):
     client = MagicMock()
+    now = datetime.now(timezone.utc)
+    client.backtesting.get_benchmark.return_value = {
+        "asset": "ETH", "start": (now - timedelta(days=30)).isoformat(),
+        "end": now.isoformat(), "bars": 31, "first_close": 100., "last_close": 110.,
+        "buy_and_hold_return_raw": 10., "buy_and_hold_return": "10.0%",
+        "unit": "percent_0_100", "interval": "1d", "partial": False,
+        "base_token": "ETH", "quote_token": "USD", "market_data_venue": "KRAKEN",
+    }
     monkeypatch.setattr("src.services.benchmark_service.mangrove_ai_client", lambda: client)
     return client
 
 
-def test_trailing_window_return_and_coverage(sdk):
-    from src.services.benchmark_service import get_benchmark
-
-    resp = MagicMock()
-    resp.model_dump.return_value = _daily(180)
-    sdk.crypto_assets.get_ohlcv.return_value = resp
-    out = get_benchmark("eth", lookback_days=180)
-
-    assert out["asset"] == "ETH"
-    assert out["buy_and_hold_return_pct"] == 20.0
-    assert out["unit"] == "percent_0_100"
-    assert out["requested_window"]["kind"] == "trailing"
-    assert out["covered_window"]["bar_interval"] == "1d"
-    assert out["covered_window"]["bars"] >= 180
-    assert "note" not in out
-    assert sdk.crypto_assets.get_ohlcv.call_args.kwargs["days"] >= 180
-
-
-def test_explicit_window_slices_bars(sdk):
-    from src.services.benchmark_service import get_benchmark
-
-    sdk.crypto_assets.get_ohlcv.return_value = _daily(100, first=100.0, last=200.0)
-    start = (TODAY - timedelta(days=50)).date().isoformat()
-    end = (TODAY - timedelta(days=25)).date().isoformat()
-    out = get_benchmark("ETH", start_date=start, end_date=end)
-
-    # Closes on day 50 and day 75 of a 100 -> 200 line: 150 -> 175.
-    assert out["first_close"] == pytest.approx(150.0)
-    assert out["last_close"] == pytest.approx(175.0)
-    assert out["buy_and_hold_return_pct"] == pytest.approx(16.6667, abs=1e-3)
-    assert out["requested_window"]["kind"] == "explicit"
-
-
-def test_short_history_is_reported_not_hidden(sdk):
-    from src.services.benchmark_service import get_benchmark
-
-    sdk.crypto_assets.get_ohlcv.return_value = _daily(30)
-    out = get_benchmark("ETH", lookback_days=365)
-    assert out["covered_window"]["days"] == 30
-    assert "note" in out and "30" in out["note"]
-
-
-def test_fewer_than_two_closes_is_insufficient(sdk):
-    from src.services.benchmark_service import get_benchmark
-
-    sdk.crypto_assets.get_ohlcv.return_value = {"success": True, "data": []}
-    with pytest.raises(InsufficientData):
-        get_benchmark("ETH", lookback_days=30)
-
-
-@pytest.mark.parametrize("kwargs", [
-    {},
-    {"start_date": "2026-01-01"},
-    {"start_date": "2026-02-01", "end_date": "2026-01-01"},
-    {"start_date": "yesterday", "end_date": "today"},
-    {"lookback_days": 0},
-])
-def test_bad_windows_are_validation_errors(sdk, kwargs):
-    from src.services.benchmark_service import get_benchmark
-
-    with pytest.raises(ValidationError):
-        get_benchmark("ETH", **kwargs)
+def test_return_is_server_authoritative_and_keeps_provenance(sdk):
+    sdk.backtesting.get_benchmark.return_value["buy_and_hold_return_raw"] = 9.875
+    result = get_benchmark("eth", lookback_days=30)
+    assert result["buy_and_hold_return_pct"] == 9.875
+    assert result["market_data_venue"] == "KRAKEN"
+    assert result["covered_window"]["bars"] == 31
+    assert result["requested_window"]["kind"] == "trailing"
+    sdk.backtesting.get_benchmark.assert_called_once()
     sdk.crypto_assets.get_ohlcv.assert_not_called()
 
 
-def test_provider_failure_is_sdk_error(sdk):
-    from src.services.benchmark_service import get_benchmark
+def test_explicit_window_is_forwarded_in_utc(sdk):
+    get_benchmark("ETH", "2026-01-01T01:00:00+01:00", "2026-02-01")
+    sdk.backtesting.get_benchmark.assert_called_once_with(
+        "ETH", "2026-01-01T00:00:00+00:00", "2026-02-01T00:00:00+00:00")
 
-    sdk.crypto_assets.get_ohlcv.side_effect = RuntimeError("provider down")
+
+def test_partial_coverage_is_preserved(sdk):
+    sdk.backtesting.get_benchmark.return_value["partial"] = True
+    result = get_benchmark("ETH", lookback_days=365)
+    assert result["partial"] is True
+    assert "30.0" in result["note"]
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"start_date": "2026-01-01"},
+    {"start_date": "2026-02-01", "end_date": "2026-01-01"},
+    {"lookback_days": 0}, {"lookback_days": True}, {"lookback_days": 2.5},
+    {"start_date": "2026-01-01", "end_date": "2026-02-01", "lookback_days": 10}])
+def test_invalid_window_does_not_call_server(sdk, kwargs):
+    with pytest.raises(ValidationError):
+        get_benchmark("ETH", **kwargs)
+    sdk.backtesting.get_benchmark.assert_not_called()
+
+
+def test_provider_failure_is_sanitized(sdk):
+    sdk.backtesting.get_benchmark.side_effect = RuntimeError("secret-token")
+    with pytest.raises(SdkError) as error:
+        get_benchmark("ETH", lookback_days=30)
+    assert "secret-token" not in str(error.value)
+
+
+def test_invalid_units_are_rejected(sdk):
+    sdk.backtesting.get_benchmark.return_value["unit"] = "fraction"
     with pytest.raises(SdkError):
         get_benchmark("ETH", lookback_days=30)
 
 
-def test_benchmark_for_window_never_raises_or_leaks_exception_text(sdk):
-    """The reason is returned to API callers (backtest + get_backtest routes), so an
-    upstream exception's text must not reach it (CodeQL py/stack-trace-exposure)."""
-    from src.services.benchmark_service import benchmark_for_window
+def test_optional_benchmark_failure_keeps_backtest_available(sdk):
+    sdk.backtesting.get_benchmark.side_effect = RuntimeError("private")
+    result = benchmark_for_window("ETH", {"lookback_months": 3})
+    assert result["available"] is False
+    assert "private" not in str(result)
 
-    sdk.crypto_assets.get_ohlcv.side_effect = RuntimeError(
-        "provider down: GET https://internal-host/ohlcv?token=secret-abc"
-    )
-    out = benchmark_for_window("ETH", {"lookback_months": 3})
-    assert out["available"] is False
-    assert "secret-abc" not in out["reason"]
-    assert "internal-host" not in out["reason"]
-    assert "provider down" not in out["reason"]
-    assert "data provider error" in out["reason"]
+
+def test_optional_benchmark_without_window_does_not_fetch(sdk):
     assert benchmark_for_window("ETH", None)["available"] is False
+    sdk.backtesting.get_benchmark.assert_not_called()
 
 
-def test_benchmark_for_window_keeps_its_own_insufficient_data_message(sdk):
-    from src.services.benchmark_service import benchmark_for_window
+@pytest.mark.parametrize("status", [401, 403])
+def test_access_failure_preserves_status_without_fallback(sdk, status):
+    from mangrove_ai.exceptions import APIError
 
-    sdk.crypto_assets.get_ohlcv.return_value = {"success": True, "data": []}
-    out = benchmark_for_window("ETH", {"lookback_months": 1})
-    assert out["available"] is False
-    assert "a buy-and-hold return needs at least two" in out["reason"]
+    from src.shared.errors import UpstreamAccessError
+
+    sdk.backtesting.get_benchmark.side_effect = APIError(status_code=status, error="denied", code="DENIED", message="private")
+    with pytest.raises(UpstreamAccessError) as error:
+        get_benchmark("ETH", lookback_days=30)
+    assert error.value.http_status == status
+    assert error.value.to_dict()["retry_payment"] is False
+    sdk.backtesting.get_benchmark.assert_called_once()
+    sdk.crypto_assets.get_ohlcv.assert_not_called()
 
 
-def test_benchmark_for_window_uses_months_when_no_dates(sdk):
-    from src.services.benchmark_service import benchmark_for_window
+def test_recorded_market_is_forwarded(sdk):
+    benchmark_for_window("ETH", {
+        "start_date": "2026-01-01", "end_date": "2026-02-01",
+        "base_token": "ETH", "quote_token": "USD", "market_data_venue": "KRAKEN",
+    })
+    assert sdk.backtesting.get_benchmark.call_args.kwargs == {
+        "base_token": "ETH", "quote_token": "USD", "market_data_venue": "KRAKEN",
+    }
 
-    sdk.crypto_assets.get_ohlcv.return_value = _daily(90)
-    out = benchmark_for_window("ETH", {"lookback_months": 3, "start_date": None, "end_date": None})
-    assert out["available"] is True
-    assert out["requested_window"]["days"] == 90.0
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), True])
+def test_invalid_numeric_return_is_rejected(sdk, value):
+    sdk.backtesting.get_benchmark.return_value["buy_and_hold_return_raw"] = value
+    with pytest.raises(SdkError):
+        get_benchmark("ETH", lookback_days=30)
