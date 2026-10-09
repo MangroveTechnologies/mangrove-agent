@@ -106,6 +106,9 @@ async def test_mcp_pending_receipt_records_charge_without_completing(wallet, sep
     with pytest.raises(X402PaymentUncertain) as caught:
         await x402_payer.pay_mcp(session, wallet_address=wallet, resource='https://receiver.test/mcp')
     assert caught.value.payment_state == 'settled'
+    assert caught.value.to_dict()['message'] == str(caught.value)
+    assert 'Payment is confirmed' in caught.value.to_dict()['message']
+    assert 'remains reserved' not in caught.value.to_dict()['message']
     assert spend_service.list_payments()[0]['state'] == 'settled'
     assert len(payment_operations.pending_status()) == 1
 
