@@ -54,6 +54,11 @@ charge and keeps the operation recoverable. `X402_PAYMENT_UNCERTAIN` includes
 `operation_id`, reservation IDs and a `payment_state`; `retry_payment: false`
 means no replacement authorization, not a ban on unrelated requests.
 
+The error message distinguishes an unresolved authorization from a confirmed
+payment whose result is pending. A pending MCP receipt settles the local charge
+while preserving the original operation for recovery; it does not release budget
+or authorize a replacement payment.
+
 `x402_spend_status` exposes pending operation IDs and their pending/settled amounts
 in integer micro-USDC, plus unresolved payer/network groups across all periods.
 The compatibility fields `payment_pauses: []` and `payment_pause_seconds: 0`

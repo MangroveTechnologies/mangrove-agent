@@ -4,21 +4,16 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from src.services.on_chain import read
 from src.shared.auth.dependency import require_api_key
-from src.shared.clients.mangrove import mangrove_ai_client
-from src.shared.errors import AgentError, SdkError
 
 router = APIRouter(
     prefix="/on-chain",
     dependencies=[Depends(require_api_key)],
     tags=["on-chain"],
 )
-
-
-def _dump(obj: Any) -> Any:
-    return obj.model_dump() if hasattr(obj, "model_dump") else obj
 
 
 # ---------------------------------------------------------------------------
@@ -28,32 +23,17 @@ def _dump(obj: Any) -> Any:
 
 @router.get("/smart-money", summary="Smart money sentiment for a token")
 async def smart_money(symbol: str, chain: str | None = None) -> Any:
-    try:
-        return _dump(mangrove_ai_client().on_chain.get_smart_money_sentiment(symbol, chain=chain))
-    except AgentError:
-        raise
-    except Exception:
-        raise SdkError("on_chain.get_smart_money_sentiment failed at the upstream service.") from None
+    return await read('get_smart_money_sentiment', symbol, chain=chain)
 
 
 @router.get("/whale-activity", summary="Whale activity summary for a token")
 async def whale_activity(symbol: str, hours_back: int = 24) -> Any:
-    try:
-        return _dump(mangrove_ai_client().on_chain.get_whale_activity(symbol, hours_back=hours_back))
-    except AgentError:
-        raise
-    except Exception:
-        raise SdkError("on_chain.get_whale_activity failed at the upstream service.") from None
+    return await read('get_whale_activity', symbol, hours_back=hours_back)
 
 
 @router.get("/token-holders/{symbol}", summary="Holder distribution + concentration")
 async def token_holders(symbol: str) -> Any:
-    try:
-        return _dump(mangrove_ai_client().on_chain.get_token_holders(symbol))
-    except AgentError:
-        raise
-    except Exception:
-        raise SdkError("on_chain.get_token_holders failed at the upstream service.") from None
+    return await read('get_token_holders', symbol)
 
 
 # ---------------------------------------------------------------------------
@@ -66,107 +46,78 @@ async def token_holders(symbol: str) -> Any:
 
 
 class _SmartMoneyHistoricalHoldingsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     chains: list[str] | None = Field(default=None, description="Chain filter, e.g. ['ethereum', 'solana']. Default ['ethereum'].")
     date_from: str | None = Field(default=None, description="ISO date 'YYYY-MM-DD'.")
     date_to: str | None = Field(default=None, description="ISO date 'YYYY-MM-DD'.")
     filters: dict[str, Any] | None = Field(default=None, description="Nansen filter dict (include_smart_money_labels, etc.)")
     order_by: list[dict[str, str]] | None = Field(default=None, description="Sort spec, e.g. [{'field': 'block_timestamp', 'direction': 'DESC'}]")
-    page: int = 1
-    per_page: int = 100
+    page: int = Field(default=1, ge=1, le=10000, strict=True)
+    per_page: int = Field(default=100, ge=1, le=100, strict=True)
 
 
 @router.post("/smart-money/historical-holdings", summary="Smart Money historical holdings (Nansen)")
 async def smart_money_historical_holdings(body: _SmartMoneyHistoricalHoldingsBody) -> Any:
-    try:
-        return _dump(mangrove_ai_client().on_chain.get_smart_money_historical_holdings(
-            **body.model_dump(exclude_none=True),
-        ))
-    except AgentError:
-        raise
-    except Exception:
-        raise SdkError("on_chain.get_smart_money_historical_holdings failed at the upstream service.") from None
+    return await read('get_smart_money_historical_holdings', **body.model_dump(exclude_none=True))
 
 
 class _SmartMoneyDexTradesBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     chains: list[str] | None = None
     filters: dict[str, Any] | None = None
     order_by: list[dict[str, str]] | None = None
-    page: int = 1
-    per_page: int = 100
+    page: int = Field(default=1, ge=1, le=10000, strict=True)
+    per_page: int = Field(default=100, ge=1, le=100, strict=True)
 
 
 @router.post("/smart-money/dex-trades", summary="Smart Money DEX trades (Nansen)")
 async def smart_money_dex_trades(body: _SmartMoneyDexTradesBody) -> Any:
-    try:
-        return _dump(mangrove_ai_client().on_chain.get_smart_money_dex_trades(
-            **body.model_dump(exclude_none=True),
-        ))
-    except AgentError:
-        raise
-    except Exception:
-        raise SdkError("on_chain.get_smart_money_dex_trades failed at the upstream service.") from None
+    return await read('get_smart_money_dex_trades', **body.model_dump(exclude_none=True))
 
 
 class _SmartMoneyPerpTradesBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     filters: dict[str, Any] | None = None
     order_by: list[dict[str, str]] | None = None
-    page: int = 1
-    per_page: int = 100
+    page: int = Field(default=1, ge=1, le=10000, strict=True)
+    per_page: int = Field(default=100, ge=1, le=100, strict=True)
 
 
 @router.post("/smart-money/perp-trades", summary="Smart Money Hyperliquid perp trades (Nansen)")
 async def smart_money_perp_trades(body: _SmartMoneyPerpTradesBody) -> Any:
     """Hyperliquid-only. No chain filter — upstream doesn't accept one."""
-    try:
-        return _dump(mangrove_ai_client().on_chain.get_smart_money_perp_trades(
-            **body.model_dump(exclude_none=True),
-        ))
-    except AgentError:
-        raise
-    except Exception:
-        raise SdkError("on_chain.get_smart_money_perp_trades failed at the upstream service.") from None
+    return await read('get_smart_money_perp_trades', **body.model_dump(exclude_none=True))
 
 
 class _TokenDexTradesBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     chain: str | None = None
     date_from: str | None = None
     date_to: str | None = None
     filters: dict[str, Any] | None = None
     order_by: list[dict[str, str]] | None = None
-    page: int = 1
-    per_page: int = 100
+    page: int = Field(default=1, ge=1, le=10000, strict=True)
+    per_page: int = Field(default=100, ge=1, le=100, strict=True)
 
 
 @router.post("/token-dex-trades/{symbol}", summary="DEX trades for a token across all participants (Nansen)")
 async def token_dex_trades(symbol: str, body: _TokenDexTradesBody) -> Any:
-    try:
-        return _dump(mangrove_ai_client().on_chain.get_token_dex_trades(
-            symbol, **body.model_dump(exclude_none=True),
-        ))
-    except AgentError:
-        raise
-    except Exception:
-        raise SdkError("on_chain.get_token_dex_trades failed at the upstream service.") from None
+    return await read('get_token_dex_trades', symbol, **body.model_dump(exclude_none=True))
 
 
 class _TokenFlowsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: str | None = None
     chain: str | None = None
     date_from: str | None = None
     date_to: str | None = None
     filters: dict[str, Any] | None = None
     order_by: list[dict[str, str]] | None = None
-    page: int = 1
-    per_page: int = 100
+    page: int = Field(default=1, ge=1, le=10000, strict=True)
+    per_page: int = Field(default=100, ge=1, le=100, strict=True)
 
 
 @router.post("/token-flows/{symbol}", summary="Per-wallet-category flow data for a token (Nansen)")
 async def token_flows(symbol: str, body: _TokenFlowsBody) -> Any:
     """Stablecoins are not supported (Nansen returns 404)."""
-    try:
-        return _dump(mangrove_ai_client().on_chain.get_token_flows(
-            symbol, **body.model_dump(exclude_none=True),
-        ))
-    except AgentError:
-        raise
-    except Exception:
-        raise SdkError("on_chain.get_token_flows failed at the upstream service.") from None
+    return await read('get_token_flows', symbol, **body.model_dump(exclude_none=True))

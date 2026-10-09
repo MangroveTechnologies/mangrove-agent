@@ -67,7 +67,7 @@ def client(tmp_path, monkeypatch):
 
     for path in (
         "src.api.routes.market.mangrove_ai_client",
-        "src.api.routes.on_chain.mangrove_ai_client",
+        "src.services.on_chain.mangrove_ai_client",
         "src.api.routes.signals.mangrove_ai_client",
         "src.services.signals.mangrove_ai_client",
         "src.api.routes.kb.mangrove_ai_client",

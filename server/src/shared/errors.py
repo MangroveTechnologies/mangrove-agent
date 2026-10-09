@@ -283,6 +283,22 @@ class X402PaymentUncertain(X402PaymentError):
         self.payment_state = "unresolved"
         self.pause_until = None
 
+    @property
+    def payment_state(self):
+        return self._payment_state
+
+    @payment_state.setter
+    def payment_state(self, value):
+        if value not in {"settled", "unresolved"}:
+            raise ValueError("Invalid payment state")
+        self._payment_state = value
+        if value == "settled":
+            self.message = "Payment is confirmed, but this operation's result is not yet available."
+            self.suggestion = "Recover the original operation using its operation ID. Do not authorize another payment for this request. Independent requests may proceed within the remaining budget."
+        else:
+            self.message = "This operation's payment outcome is unresolved; its amount remains reserved."
+        self.args = (self.message,)
+
     def to_dict(self) -> dict:
         return {**super().to_dict(), "retry_payment": False,
                 "payment_state": self.payment_state, "reservation_ids": self.reservation_ids,
