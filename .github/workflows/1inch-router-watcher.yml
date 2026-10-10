@@ -26,7 +26,7 @@ jobs:
 
       - name: Open GitHub issue if new router detected
         if: steps.check.outputs.new_found == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
@@ -59,7 +59,7 @@ jobs:
 
       - name: Open GitHub issue if scan data source is broken
         if: steps.check.outputs.scan_failed == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             // Deduplicate — skip if a watcher-broken issue is already open.
