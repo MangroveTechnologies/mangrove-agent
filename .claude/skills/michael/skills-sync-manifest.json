@@ -3,8 +3,8 @@
   "source": {
     "repo": "MangroveTechnologies/MangroveAI",
     "path": "src/MangroveAI/domains/agent/michael/skills",
-    "commit": "9835586f16d856a192e8a2256fff49d042da112e+dirty",
-    "ref": null
+    "commit": "c356d07dbeaf6874c872dac044969fed1f38021d",
+    "ref": "origin/main"
   },
   "dropped_skills": [
     "conversation-memory"
@@ -13,10 +13,10 @@
     "backtesting/SKILL.md": "a8322b3619ea592620916d9321021ab5c4f7419c8d2f1f8979cae543a3f23702",
     "condition-studies/SKILL.md": "8fb3328aaaf3c17e5f8c57b66ec441c771876ea79449299ffe903717dc5a18f7",
     "knowledge-graph/SKILL.md": "06b60de89cc98e62fdb5d9042e9d34c99f7867caff2e5275c078ec8aa9de3af5",
-    "market-intelligence/SKILL.md": "398cc61efcdef33b741bbfd0dc1991dd0183b73cb9377dc89479e30a9378d725",
+    "market-intelligence/SKILL.md": "77d43782ce625be83b9fb97ac5f0e278aa29cf19b7ed11eb743224a111a98fe1",
     "portfolio/SKILL.md": "68b02b141e0aa98b2efc58081f6b769eee079adb6f6c18af4faee922d8ba062c",
     "product-facts/SKILL.md": "2b037c1803424999b1bd35aa5f1ab79b7d7a67afef87e707535fff8dee0f4e3c",
-    "strategy-composition/SKILL.md": "f6091f0636508510e75b288094b1d905e494c386e0a909813282fb36a3722beb",
+    "strategy-composition/SKILL.md": "44180b86578238028f85d7b9b05cd32ddab8df00f38ad3b54ebc5211c6741626",
     "strategy-composition/signal_archetype_map.yaml": "5b8f411abab3a53a6c418ba803ad0440c076f59d21ada2555f4d05214267cec4",
     "strategy-management/SKILL.md": "1d17ddbcf39f75ca015a6f9e6eeec84cd0b74083905f283994f4f0da738c4292",
     "sweep-results/SKILL.md": "9d64b6d8aaf566b3e13cd0c72af715eb1dcee85a624b681f8289ff8b36361f89",
@@ -26,7 +26,7 @@
     "backtesting/SKILL.md": "c327c49d2bbfb20a7c819618cac75d8365730b3381fd8270404b20263220c430",
     "condition-studies/SKILL.md": "0102e3c3c0db64d742a7c0f1c5580eb2051aa8c7deeee97bd89efb11836d9ae5",
     "knowledge-graph/SKILL.md": "906c8adb4b2398d3a9ecbf65b91849ec81232b5a046101d1de4578e7359b368f",
-    "market-intelligence/SKILL.md": "0eb0cd03acbbe7c45eb2bb35e32dd9e3081ce1130e73d05704acda6af1bd9fd2",
+    "market-intelligence/SKILL.md": "cb1e62927a66b7fdd085618ad87dee7ea18cb5d0c963b44cd2fe26c4d86c21f6",
     "portfolio/SKILL.md": "c43ea8c66379daace22d4e77ae801c84fdbf701425b9ea6366a7aa0b2026e567",
     "product-facts/SKILL.md": "d506ed4faa12d8941e34568488f3f18a4d0bb704c85fc9f9b7d7bc924b8f912e",
     "strategy-composition/SKILL.md": "ae91024b7236821ac60a9480fe9c45878875b312873672017278ab472b61cca2",
