@@ -3,12 +3,13 @@ name: market-intelligence
 description: >-
   Read what an asset is doing right now and what regime it has been in, and turn that
   into a recommendation. Reach for it whenever a price, a market condition or a strategy
-  style is at stake: "how is ETH doing", "is BTC trending", "should I run mean reversion
-  on SOL", "what's the volatility like", "what can I trade". Uses get_market_data for a
-  live price, get_market_regime for direction over three horizons plus volatility,
-  classify_market_segment for what one named stretch of the past was like in the sweep
-  catalog's own terms, and list_approved_assets for what the platform allows a strategy to
-  be built on.
+  style is at stake: "how is ETH doing", "is BTC trending", "what regime is SPY in", "is
+  gold choppy", "should I run mean reversion on SOL", "what's the volatility like", "what
+  can I trade". Uses get_market_data for a live crypto price, get_market_regime for
+  direction over three horizons plus volatility -- for crypto and for the stocks, ETFs,
+  commodities and bonds the regime service lists -- classify_market_segment for what one
+  named stretch of the past was like in the sweep catalog's own terms, and
+  list_approved_assets for what the platform allows a strategy to be built on.
 uses-tools: [get_market_data, get_market_regime, classify_market_segment, list_approved_assets]
 ---
 
@@ -38,7 +39,18 @@ dressed as advice.
 ```
 get_market_regime  asset=BTC
 get_market_data    symbol=BTC
+get_market_regime  asset=SPY
 ```
+
+`get_market_regime` and `classify_market_segment` read crypto and the stocks, ETFs,
+commodities and bonds in Oracle's regime catalog: SPY, QQQ, DIA, IWM, AAPL, AMD, AMZN, COST,
+GOOGL, HD, JNJ, JPM, META, MSFT, NFLX, NVDA, PG, TSLA, UNH, WMT, XOM, GLD, SLV, USO, GOLD
+(gold futures), CRUDE (crude oil futures) and TLT. Any other ticker is read as crypto, so a
+stock not on that list cannot be read; say so rather than trying it. A listed ticker is that
+asset even where a crypto token shares it: DIA is the Dow ETF and META the stock here.
+`venue` says which feed was read: `binance` for crypto, `yahoo` for a listed stock, ETF or
+bond, `yahoofut` for a listed future. A listed ticker's lookback is calendar days and needs
+at least 15 sessions with a close, about three weeks. `get_market_data` prices crypto only.
 
 `get_market_data` is rate limited and says so in its own response. One call per asset per
 conversation, and reuse the answer. If you called it two turns ago, the price is still the
@@ -77,7 +89,8 @@ the bucket and the z-score together, never the raw percentage alone.
            "total_return_pct": -26.8, "realized_vol_ann_pct": 45.0, "r_squared": 0.51}
 ```
 
-`window` reads the lookback as one stretch with the same classifier as
+`asset_class` is `crypto`, `equity`, `commodity` or `bond`. `window` reads the lookback as
+one stretch with the same classifier as
 `classify_market_segment`: one direction band, a volatility label read against other
 windows of the same asset class and length, and a trend of clean, mixed or choppy. This
 volatility label is comparable with the sweep catalog; the baseline bucket above is not.
@@ -102,10 +115,10 @@ selected windows and they want to know what is in them, or when a strategy behav
 differently across two stretches and the difference needs a name.
 
 It returns one direction band over the whole stretch, one volatility band, a trend reading
-of clean, mixed or choppy, the era it starts in, and the three numbers behind them. The
-trend reading is the one the other tool does not have: it says whether the move was orderly
-or noisy, which is what separates a market a trend strategy could hold through from one
-that would have whipsawed it.
+of clean, mixed or choppy, and the three numbers behind them. The trend reading is the one
+the other tool does not have: it says whether the move was orderly or noisy, which is what
+separates a market a trend strategy could hold through from one that would have whipsawed
+it.
 
 **These labels are the catalog's.** A stretch classified here can be set beside the windows
 a sweep runs over, because both were read by the same classifier. So can the `window` of

@@ -1,7 +1,7 @@
 ---
 name: product-facts
 description: Answer questions about Mangrove custody, loss alerts, creator payments and product guarantees from maintained facts and the person's current notification preferences.
-uses-tools: []
+uses-tools: [get_notification_settings]
 ---
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/product-facts/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->

@@ -9,7 +9,7 @@ description: >-
   window, and from a sweep, which searches for a strategy. Covers what markets the catalog can
   cover, what a question would run on before it is paid for, and reading the answer back. Uses
   list_market_conditions, preview_condition_study, run_condition_study and get_condition_study.
-uses-tools: []
+uses-tools: [list_market_conditions, preview_condition_study, run_condition_study, get_condition_study]
 ---
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/condition-studies/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
