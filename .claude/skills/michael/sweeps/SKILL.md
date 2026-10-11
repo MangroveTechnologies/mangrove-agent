@@ -38,7 +38,7 @@ The decisions a user makes are:
      required asset list is omitted.
   2. What market conditions to test. Ask only if they have not already said. Pick as
      many as they like, and offer only choices the catalog returns for their selection.
-     Use `list_sweep_markets` to get available regimes and eras for the selected assets.
+     Use `list_sweep_markets` to get available regimes for the selected assets.
      A request for "current" means `regimes=["current"]`; it is already answered and
      needs no follow-up question. A request to use the local catalog without building
      windows means omit `windows` and do not call `build_market_window`.
@@ -48,23 +48,8 @@ The decisions a user makes are:
     c. neutral (sideways)
     d. bull (rising: bull, super_bull, mega_bull)
     e. doesn't matter (every condition)
-     Market eras:
-    f. covid-bull-alt-season
-    g. post-ftx-winter
-    h. post-halving
-    i. crypto-winter-1
-    j. pre-halving-run
-    k. pre-covid-accumulation
-    l. luna-to-ftx
-    m. pre-peak-bull-2025
-    n. bear-market-2
-    o. peak-plus-correction
-    p. election-rally
-    q. covid-crash-recovery
-    r. current
-    s. mania-1
      And/or:
-    t. a specific window and timeframe (build one from market data)
+    f. a specific window and timeframe (build one from market data)
   3. What do you want the strategies built from? Pick as many as you like.
     a. specific indicators (they name them; resolve every name through the graph,
     use fuzzy/semantic matching with `query_knowledge`)

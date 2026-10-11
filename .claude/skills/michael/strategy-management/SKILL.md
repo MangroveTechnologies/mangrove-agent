@@ -6,7 +6,7 @@ description: >-
   it whenever they ask about a strategy they already have rather than about building one:
   "is it live?", "why can't I deploy this?", "delete that one", "get rid of it", "put it
   into paper trading", "what state is it in", "activate it".
-uses-tools: [list_strategies, list_platform_strategies, get_strategy, archive_strategy, propose_deploy]
+uses-tools: [list_strategies, list_platform_strategies, get_strategy, archive_strategy, propose_deploy, search_marketplace, get_marketplace_strategy, propose_adopt]
 ---
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/strategy-management/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
@@ -29,7 +29,8 @@ of record for deployment: what is live, what is paper, what money is behind it.
 So: "my strategies", "my live strategies", "what's running", "how are they doing", or anything
 about deployed money -- `list_platform_strategies`, always. It returns each strategy's status and
 deployed_mode with balances, returns and open positions, plus live/paper counts you can quote
-directly. `list_strategies` is for the drafts and compositions authored in this chat -- rules and
+directly. Each strategy carries `deposited_balance_*` (principal) and `total_balance_*` (current equity). "How much have I put in vs what is it worth now" is answered by those two, per strategy, summed across live strategies when the user asks about their portfolio.
+`list_strategies` is for the drafts and compositions authored in this chat -- rules and
 signals, never deployment. When the platform tool answers `available: false`, relay its reason
 rather than falling back to the local list as if it were the same thing -- it is not.
 

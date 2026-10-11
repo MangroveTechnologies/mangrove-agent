@@ -7,7 +7,7 @@ description: >-
   when nothing on the marketplace fits. Reach for it when you encounter things like : "build me
   a strategy", "make me something for ETH", "set up a mean-reversion strategy", ... (etc). Use
   strategy-management to draft, archive, or deploy.
-uses-tools: [evaluate_signal, evaluate_multiple_signals_series, validate_signal_params, list_signal_labels, list_playground_datasets, get_playground_data, query_signal_behavior, save_strategy, update_strategy, verify_strategy, list_strategies, get_strategy, get_market_regime]
+uses-tools: [evaluate_signal, evaluate_multiple_signals_series, validate_signal_params, list_signal_labels, list_playground_datasets, get_playground_data, search_marketplace, get_marketplace_strategy, propose_adopt, query_signal_behavior, save_strategy, update_strategy, verify_strategy, list_strategies, get_strategy, get_market_regime]
 ---
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/strategy-composition/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
