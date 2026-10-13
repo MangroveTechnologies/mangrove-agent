@@ -15,9 +15,16 @@ def tool(name='server_owned_tool', field='value'):
                 annotations={'readOnlyHint': True}, _meta={'owner': 'MangroveAI'})
 
 
+@pytest.fixture(autouse=True)
+def reset_catalog(monkeypatch):
+    import anyio
+    monkeypatch.setattr(proxy, '_catalog_cache', None)
+    monkeypatch.setattr(proxy, '_catalog_lock', anyio.Lock())
+
+
 @pytest.fixture
 def transport(monkeypatch):
-    client = SimpleNamespace(initialize=AsyncMock(), list_tools=AsyncMock(), call_tool=AsyncMock())
+    client = SimpleNamespace(initialize=AsyncMock(), list_tools=AsyncMock(), call_tool=AsyncMock(), send_request=AsyncMock())
     connections = []
     @asynccontextmanager
     async def session(url, key=None):
@@ -62,10 +69,10 @@ async def test_key_mode_forwards_arguments_and_preserves_upstream_failure(transp
     payer = AsyncMock()
     monkeypatch.setattr(x402_payer, 'pay_remote_mcp', payer)
     response = CallToolResult(isError=True, content=[TextContent(type='text', text='not found')], structuredContent={'upstream_status': 404, 'correlation_id': 'server-correlation'})
-    client.call_tool.return_value = response
+    client.send_request.return_value = response
     actual = await proxy.call_tool('server_owned_tool', {'value': 7})
     assert actual == response
-    client.call_tool.assert_awaited_once_with('server_owned_tool', arguments={'value': 7})
+    assert client.send_request.call_args.args[0].root.params.arguments == {'value': 7}
     assert connections[-1][1] == 'upstream-test-key'
     payer.assert_not_called()
 
@@ -215,3 +222,131 @@ async def test_official_client_access_denial_never_pays(monkeypatch, status, htt
     assert 'SYNTHETIC_PRIVATE_BODY' not in result.model_dump_json()
     assert len(calls) == 1
     payer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_six_calls_share_catalog_and_do_not_rediscover_after_execution(transport):
+    import asyncio
+    client, connections = transport
+    client.send_request.return_value = CallToolResult(content=[])
+    results = await asyncio.gather(*(proxy.call_tool('server_owned_tool', {'value': n}) for n in range(6)))
+    assert all(not r.isError for r in results)
+    assert client.list_tools.await_count == 1
+    assert client.send_request.await_count == 6
+    assert len(connections) == 7
+
+
+@pytest.mark.asyncio
+async def test_expired_catalog_failure_never_uses_stale_contract(transport, monkeypatch):
+    await proxy.catalog()
+    target, _, rows = proxy._catalog_cache
+    monkeypatch.setattr(proxy, '_catalog_cache', (target, 0, rows))
+    transport[0].list_tools.side_effect = RuntimeError('unavailable')
+    result = await proxy.call_tool('server_owned_tool', {'value': 1})
+    assert result.isError
+    transport[0].send_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_catalog_copies_cannot_mutate_cached_schema(transport):
+    rows = await proxy.catalog()
+    rows[0].inputSchema.clear()
+    assert (await proxy.catalog(refresh=False))[0].inputSchema == tool().inputSchema
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('phase', ['discovery', 'call'])
+async def test_rate_limit_is_preserved_without_retry(transport, phase):
+    import httpx
+    client, _ = transport
+    error = httpx.HTTPStatusError('SECRET', request=httpx.Request('POST', 'https://example.test'),
+                                  response=httpx.Response(429, text='SECRET'))
+    failing = client.list_tools if phase == 'discovery' else client.send_request
+    failing.side_effect = ExceptionGroup('transport', [error])
+    result = await proxy.call_tool('server_owned_tool', {'value': 1})
+    assert result.structuredContent['code'] == 'UPSTREAM_RATE_LIMITED'
+    assert result.structuredContent['upstream_status'] == 429
+    assert 'SECRET' not in result.model_dump_json()
+    assert failing.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cached_output_schema_is_still_validated(transport):
+    client, _ = transport
+    contract = tool()
+    contract.outputSchema = {'type': 'object', 'required': ['answer']}
+    client.list_tools.return_value.tools = [contract]
+    client.send_request.return_value = CallToolResult(content=[], structuredContent={'wrong': 1})
+    assert (await proxy.call_tool('server_owned_tool', {'value': 1})).isError
+    assert client.list_tools.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_real_mcp_client_six_reads_fetch_catalog_once(monkeypatch):
+    import json
+    import httpx
+    from collections import Counter
+    from src.mcp import tools
+    monkeypatch.setattr(tools, '_require', lambda _: True)
+    monkeypatch.setattr(proxy, 'endpoint', lambda: 'https://receiver.test/mcp/')
+    monkeypatch.setattr(proxy, '_api_key', lambda _: 'synthetic-key')
+    methods = Counter()
+
+    def receive(request):
+        if request.method != 'POST':
+            return httpx.Response(405)
+        message = json.loads(request.content)
+        if 'id' not in message:
+            return httpx.Response(202)
+        methods[message['method']] += 1
+        if message['method'] == 'initialize':
+            result = {'protocolVersion': message['params']['protocolVersion'], 'capabilities': {'tools': {}},
+                      'serverInfo': {'name': 'fixture', 'version': '1'}}
+        elif message['method'] == 'tools/list':
+            result = {'tools': [tool().model_dump(by_alias=True)]}
+        else:
+            assert message['method'] == 'tools/call'
+            assert request.headers['authorization'] == 'Bearer synthetic-key'
+            result = {'content': [], 'isError': False}
+        return httpx.Response(200, json={'jsonrpc': '2.0', 'id': message['id'], 'result': result})
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: original(transport=httpx.MockTransport(receive), **kw))
+    for n in range(6):
+        assert not (await proxy.call_tool('server_owned_tool', {'value': n})).isError
+    assert methods == {'initialize': 7, 'tools/list': 1, 'tools/call': 6}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('has_key', [True, False])
+@pytest.mark.parametrize('upstream_error', [False, True])
+async def test_public_free_read_never_enters_payment_client(transport, monkeypatch, has_key, upstream_error):
+    from src.services import x402_payer
+    client, connections = transport
+    contract = tool()
+    contract = Tool.model_validate({**contract.model_dump(), 'annotations': {
+        'mangrove/access_level': 'public', 'mangrove/side_effect': 'read'}})
+    client.list_tools.return_value.tools = [contract]
+    monkeypatch.setattr(proxy, '_api_key', lambda _: 'test-key' if has_key else None)
+    payer = AsyncMock(side_effect=AssertionError('Free reads must never authorize payment'))
+    monkeypatch.setattr(x402_payer, 'pay_remote_mcp', payer)
+    response = CallToolResult(content=[], isError=upstream_error,
+                              structuredContent={'upstream_status': 402} if upstream_error else {'ok': True})
+    client.send_request.return_value = response
+    assert await proxy.call_tool('server_owned_tool', {'value': 1}) == response
+    assert connections[-1][1] == ('test-key' if has_key else None)
+    payer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_priced_public_read_keeps_payment_path(transport, monkeypatch):
+    from src.services import x402_payer
+    client, _ = transport
+    client.list_tools.return_value.tools = [Tool(name='server_owned_tool', inputSchema=tool().inputSchema,
+        annotations={'mangrove/access_level': 'public', 'mangrove/side_effect': 'read', 'mangrove/x402_price_usd': '0.01'})]
+    monkeypatch.setattr(proxy, '_api_key', lambda _: None)
+    payer = AsyncMock(return_value=SimpleNamespace(mcp_result={'content': []}))
+    monkeypatch.setattr(x402_payer, 'pay_remote_mcp', payer)
+    assert not (await proxy.call_tool('server_owned_tool', {'value': 1})).isError
+    payer.assert_awaited_once()
+    client.send_request.assert_not_called()

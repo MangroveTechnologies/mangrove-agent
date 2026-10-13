@@ -743,8 +743,6 @@ def _register_dex(server: FastMCP) -> None:
         them under a `token` sub-dict. Every call returns
         DEX_TOKEN_INFO_FAILED with a 4-validation-error message.
         Tracked: https://github.com/MangroveTechnologies/MangroveMarkets-MCP-Server/issues/62
-        Fall back to kb_glossary_get or kb_search for token concept
-        lookups until this is fixed and the SDK version bumped.
         """
         if not _require(api_key):
             return _auth_error()
@@ -759,7 +757,7 @@ def _register_dex(server: FastMCP) -> None:
 
     register_tool(ToolEntry(
         name="get_token_info",
-        description="⚠️ BROKEN upstream (MangroveMarkets-MCP-Server#62). Use kb_glossary_get / kb_search for token concepts until SDK bump.",
+        description="⚠️ BROKEN upstream (MangroveMarkets-MCP-Server#62).",
         access="auth",
         parameters=[
             ToolParam(name="chain_id", type="integer", required=True, description="EVM chain id"),

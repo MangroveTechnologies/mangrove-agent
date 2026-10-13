@@ -51,7 +51,7 @@ PLUGIN_ROOT_REL = ".claude/skills/michael"
 # Skills that do not apply to a Claude Code plugin.
 #   conversation-memory: Claude Code keeps its own transcript; recall_conversation
 #   reads Michael's summarised chat store, which has no equivalent here.
-DROP_SKILLS = {"conversation-memory"}
+DROP_SKILLS = {"conversation-memory", "knowledge-graph"}
 
 
 class SyncError(RuntimeError):

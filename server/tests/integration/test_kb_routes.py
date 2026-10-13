@@ -38,7 +38,7 @@ def client(monkeypatch):
 
     doc_full = MagicMock()
     doc_full.model_dump.return_value = {
-        "slug": "macd", "title": "MACD guide", "body": "MACD is…",
+        "slug": "macd", "title": "MACD guide", "content": "x" * 14000,
     }
     sdk.kb.documents.get.return_value = doc_full
 
@@ -93,7 +93,9 @@ def test_document_get(client):
     assert r.status_code == 200
     body = r.json()
     assert body["title"] == "MACD guide"
-    assert "body" in body
+    assert len(body["content"]) == 14000
+    from src.api.routes.kb import mangrove_ai_client
+    mangrove_ai_client().kb.documents.get.assert_called_once_with("macd", full=True)
 
 
 def test_indicators_list(client):

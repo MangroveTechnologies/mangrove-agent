@@ -22,7 +22,7 @@
     },
     "get_token_info": {
       "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
-      "sha256": "6a7955f4eb22cafa48a005a8140555a475489d37e4f6750e48330bf6a0ae3f3b"
+      "sha256": "9350a82f6489f4fb9eb76369d738e8e280423a454ac0983c898ea88d198ec77b"
     },
     "get_token_search": {
       "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",

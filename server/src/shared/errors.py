@@ -144,11 +144,6 @@ class BacktestNotFound(AgentError):
     http_status = 404
 
 
-class KnowledgeQueryInvalid(AgentError):
-    code = "KNOWLEDGE_QUERY_INVALID"
-    http_status = 400
-
-
 class InsufficientData(AgentError):
     code = "INSUFFICIENT_DATA"
     http_status = 422

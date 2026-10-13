@@ -145,7 +145,7 @@ Greet as the persona in `CLAUDE.md`'s Project Context, or default to a concise, 
 1. `status` -- "Bot is alive. Version X, uptime Y, N active cron jobs, DB at `./agent-data/agent.db`."
 2. `list_tools` -- group for the user (wallet / market data / swaps / strategies / monitoring / KB), don't dump the whole catalog (100+ tools as of 2026-07; `list_tools` returns the live count).
 3. `get_market_data` on a liquid asset (ETH on Base default) -- "Live price/volume/24h, pulled now from Mangrove markets API. Every backtest/evaluation prices off this."
-4. `kb_search` on a real concept (e.g. `"MACD crossover"`, `"Bollinger squeeze"`) -- "Knowledge base. Every recommendation cites entries here -- no vibes."
+4. Offer a user-selected read from the discovered catalogue, following that tool's current server-supplied description.
 5. `agent_search_reference_strategies` with just an asset -- "Reference library. We start from already-backtested templates, not blank slate."
 6. `screen_candidates` on one sample strategy (e.g. BTC 1h MACD cross + SMA filter) -- "This is **SIEVE**: a go/no-go gate trained on millions of historical runs that scores a strategy in milliseconds. Many candidates never place a trade -- SIEVE tells you which ones will, so you only pay to backtest those. Score 99 ideas for the cost of one. It doesn't predict performance; the backtest does. Pair it with a **sweep** (`/sweep`) and we search a whole parameter space, ranked by real backtests, in one experiment." Show the real `binary` probabilities (`p_no_trades` / `p_trades`) + `model_version` from the response.
 
@@ -169,7 +169,7 @@ setup is an onboarding state, not evidence of a broken installation.
 ### 0.4 Transitions
 - Strategy idea -> Stage 1/2.
 - Asks about wallets/funds upfront -> jump to Stage 4.5, return to authoring after.
-- Wants to keep poking -> offer next beats (`list_signals`, `kb_list_indicators`, more `kb_search`, `get_ohlcv`).
+- Wants to keep poking -> offer next beats from the current MCP catalogue.
 
 ### 0.5 Mark it done (so it doesn't re-fire)
 Once the tour has been delivered -- or the user declines/asks to skip it -- write the marker so subsequent sessions go straight to Stage 1: create an empty `.claude/.onboarded` file (`touch .claude/.onboarded`). Do this quietly, don't make it a beat. It's gitignored, so it stays per-user and never lands in a commit. If the user later wants the tour again, they ask or `rm .claude/.onboarded`.

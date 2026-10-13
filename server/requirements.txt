@@ -19,12 +19,6 @@ PyJWT>=2.9.0
 # Upper bounds pinned at the next minor: both SDKs are at 0.1.x (Alpha)
 # and minor bumps may carry breaking changes. Revisit pins when either
 # stabilizes to 1.0.
-# Note: there is no `mangrove-kb` package pinned here — all KB access
-# flows through mangrove_ai.kb.*, which the mangroveai SDK already
-# transitively provides. A previous `mangrove-kb>=1.0.0` pin was
-# impossible to resolve (upstream tops out at 0.5.0) and blocked fresh
-# pip installs.
-#
 # Note: PyPI distribution name is `mangroveai` (no hyphen); the import
 # path is `from mangrove_ai import ...`. Distribution-name-≠-import-name
 # is normal Python packaging (Pillow/PIL, beautifulsoup4/bs4, etc.).
@@ -51,10 +45,6 @@ PyJWT>=2.9.0
 # around the old ~15s gateway ceiling (https://github.com/MangroveTechnologies/mangrove-agent/pull/154).
 # 1.19.0 adds market-qualified benchmarks and complete market-data read contracts.
 mangroveai>=1.19.0,<2.0.0
-# Offline knowledge graph (indicators + signals + KB prose, bundled data) behind
-# the query_knowledge tool. Base package only: the [semantic] extra pulls a
-# sentence-transformer stack; without it `ask` degrades to lexical search.
-mangrove-kb>=3.3.1,<4
 # mangrovemarkets 1.0.0 moved EVM wallet keypair generation client-side.
 # The agent's wallet_manager.create_wallet() is unaffected — the SDK
 # call signature is unchanged, only the implementation shifted from

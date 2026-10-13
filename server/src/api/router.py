@@ -12,7 +12,6 @@ from src.api.routes.dex import router as dex_router
 from src.api.routes.discovery import router as discovery_router
 from src.api.routes.hello_mangrove import router as hello_mangrove_router
 from src.api.routes.kb import router as kb_router
-from src.api.routes.knowledge import router as knowledge_router
 from src.api.routes.logs import router as logs_router
 from src.api.routes.market import router as market_router
 from src.api.routes.marketplace import router as marketplace_router
@@ -45,7 +44,6 @@ agent_router.include_router(oracle_router)
 agent_router.include_router(reference_strategies_router)
 agent_router.include_router(logs_router)
 agent_router.include_router(kb_router)
-agent_router.include_router(knowledge_router)
 agent_router.include_router(backtests_router)
 
 api_router.include_router(agent_router)

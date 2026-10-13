@@ -53,7 +53,7 @@ async def documents_list() -> Any:
 @router.get("/documents/{slug}", summary="Full KB document by slug")
 async def documents_get(slug: str) -> Any:
     try:
-        return _dump(mangrove_ai_client().kb.documents.get(slug))
+        return _dump(mangrove_ai_client().kb.documents.get(slug, full=True))
     except AgentError:
         raise
     except Exception:

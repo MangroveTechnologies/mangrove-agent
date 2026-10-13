@@ -1,8 +1,4 @@
-"""Integration tests for the knowledge, benchmark and backtest-history routes.
-
-The knowledge graph is real (bundled with mangrove-kb, offline); the
-mangroveai SDK is mocked for OHLCV and stored backtests.
-"""
+"""Integration tests for benchmark and backtest-history routes."""
 from __future__ import annotations
 
 import os
@@ -81,42 +77,13 @@ def _auth() -> dict:
     return {"X-API-Key": _API_KEY}
 
 
-# -- knowledge -----------------------------------------------------------------
-
-
-def test_knowledge_stats(client):
-    r = client.get("/api/v1/agent/knowledge/stats", headers=_auth())
-    assert r.status_code == 200
-    body = r.json()
-    assert body["result"]["nodes"] > 0
-    assert "source" not in body["result"]
-
-
-def test_knowledge_find_and_get(client):
-    r = client.post("/api/v1/agent/knowledge/query", headers=_auth(),
-                    json={"op": "find", "q": "divergence", "limit": 3})
-    assert r.status_code == 200
-    assert r.json()["result"]["returned"] >= 1
-    r = client.post("/api/v1/agent/knowledge/query", headers=_auth(), json={"op": "get", "q": "rsi"})
-    assert r.status_code == 200
-    assert r.json()["result"]["name"] == "RSI"
-
-
-def test_knowledge_outputs_with_infinite_ranges_serialize(client):
-    r = client.post("/api/v1/agent/knowledge/query", headers=_auth(),
-                    json={"op": "outputs", "q": "histogram"})
-    assert r.status_code == 200
-
-
-def test_knowledge_errors(client):
-    r = client.post("/api/v1/agent/knowledge/query", headers=_auth(), json={"op": "get"})
-    assert r.status_code == 400
-    assert r.json()["code"] == "KNOWLEDGE_QUERY_INVALID"
-    r = client.post("/api/v1/agent/knowledge/query", headers=_auth(), json={"op": "get", "q": "zzz_no_such_node"})
-    assert r.status_code == 400
-    assert "no node matching" in r.json()["message"]
-    r = client.post("/api/v1/agent/knowledge/query", headers=_auth(), json={"op": "search"})
-    assert r.status_code == 422
+@pytest.mark.parametrize("method,path", [
+    ("get", "/api/v1/agent/knowledge/documents"),
+    ("get", "/api/v1/agent/knowledge/stats"),
+    ("post", "/api/v1/agent/knowledge/query"),
+])
+def test_retired_knowledge_routes_are_absent(client, method, path):
+    assert getattr(client, method)(path, headers=_auth()).status_code == 404
 
 
 # -- benchmark -----------------------------------------------------------------
@@ -175,8 +142,6 @@ def test_get_backtest_with_benchmark(client, sdk):
 
 
 @pytest.mark.parametrize("method,path", [
-    ("get", "/api/v1/agent/knowledge/stats"),
-    ("post", "/api/v1/agent/knowledge/query"),
     ("get", "/api/v1/agent/market/benchmark?asset=ETH&lookback_days=5"),
     ("get", "/api/v1/agent/backtests"),
     ("get", "/api/v1/agent/backtests/b1"),

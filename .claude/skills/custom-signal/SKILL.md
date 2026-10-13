@@ -55,7 +55,7 @@ If the user's rule implies more than one TRIGGER, flag it, pick the primary one,
 For each signal, if the user didn't specify parameters explicitly:
 
 - If you're using the catalog default, say so one-line ("RSI(14, 30/70) — catalog default, standard mean-reversion").
-- If you're proposing tighter/looser parameters, call `kb_search("<signal_name> parameters <asset> <timeframe>")` and cite a KB entry for the choice.
+- If you're proposing tighter/looser parameters, ground the choice in available evidence using the server-supplied tool descriptions and cite that evidence. State when evidence is insufficient.
 - Never silently swap in "better" defaults without saying what you did and why.
 
 ### 5. Output the payload

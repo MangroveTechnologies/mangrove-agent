@@ -4,19 +4,26 @@ from __future__ import annotations
 import json
 import re
 import uuid
+import time
 from contextlib import asynccontextmanager
 
 import anyio
 import httpx
 from jsonschema import Draft202012Validator
 from mcp.client.streamable_http import streamable_http_client
-from mcp.types import CallToolResult, TextContent, Tool
+from mcp.types import CallToolResult, CallToolRequest, CallToolRequestParams, ClientRequest, TextContent, Tool
+from referencing import Registry
 
 from mcp import ClientSession
 from src.config import app_config
 from src.shared.clients.mangrove import _api_key, _api_key_base_url, _payment_destination
 from src.shared.errors import AgentError, SdkError, upstream_access_error
 from src.shared.x402.mcp_diagnostics import protect_mcp_diagnostics
+
+
+_CATALOG_TTL_SECONDS = 60
+_catalog_cache = None
+_catalog_lock = anyio.Lock()
 
 
 def endpoint() -> str:
@@ -49,7 +56,7 @@ def validate_tool(tool: Tool) -> None:
         raise ValueError('Invalid tool name')
     if len(json.dumps(tool.model_dump(by_alias=True), allow_nan=False).encode()) > 256 * 1024:
         raise ValueError('Tool contract too large')
-    pending = [(tool.inputSchema, 0)]
+    pending = [(schema, 0) for schema in (tool.inputSchema, tool.outputSchema) if schema is not None]
     count = 0
     while pending:
         item, depth = pending.pop()
@@ -64,13 +71,14 @@ def validate_tool(tool: Tool) -> None:
         elif isinstance(item, list):
             pending.extend((value, depth + 1) for value in item)
     Draft202012Validator.check_schema(tool.inputSchema)
+    if tool.outputSchema is not None:
+        Draft202012Validator.check_schema(tool.outputSchema)
 
 
-async def catalog() -> list[Tool]:
-    """Read current definitions; no local schemas or stale fallback catalogue."""
+async def _read_catalog(target: str) -> list[Tool]:
     try:
         with anyio.fail_after(15):
-            async with session(endpoint()) as client:
+            async with session(target) as client:
                 cursor = None
                 cursors, names, result = set(), set(), []
                 size = 0
@@ -92,8 +100,64 @@ async def catalog() -> list[Tool]:
                 raise ValueError('Catalogue page limit exceeded')
     except AgentError:
         raise
-    except Exception:
+    except Exception as error:
+        known = transport_error(error)
+        if known is not None:
+            raise known from None
         raise SdkError('MangroveAI MCP tool discovery is unavailable. No local tool fallback was used.') from None
+
+
+
+async def catalog(*, refresh: bool = True) -> list[Tool]:
+    global _catalog_cache
+    target = endpoint()
+    async with _catalog_lock:
+        cached = _catalog_cache
+        if not refresh and cached and cached[0] == target and time.monotonic() < cached[1]:
+            return [tool.model_copy(deep=True) for tool in cached[2]]
+        _catalog_cache = None
+        result = await _read_catalog(target)
+        _catalog_cache = (target, time.monotonic() + _CATALOG_TTL_SECONDS, result)
+        return [tool.model_copy(deep=True) for tool in result]
+
+
+class UpstreamRateLimitError(SdkError):
+    code = 'UPSTREAM_RATE_LIMITED'
+    http_status = 429
+
+    def __init__(self):
+        super().__init__('MangroveAI rejected the request because its rate limit was reached (HTTP 429).',
+                         suggestion='Stop this lookup sequence and wait before trying again. No automatic retry or payment fallback was attempted.')
+
+    def to_dict(self):
+        return {**super().to_dict(), 'upstream_status': 429, 'retry_payment': False}
+
+
+def transport_error(error):
+    pending = [error]
+    while pending:
+        nested = pending.pop()
+        if isinstance(nested, BaseExceptionGroup):
+            pending.extend(nested.exceptions)
+            continue
+        denied = upstream_access_error(nested)
+        if denied is not None:
+            return denied
+        if isinstance(nested, httpx.HTTPStatusError) and nested.response.status_code == 429:
+            return UpstreamRateLimitError()
+    return None
+
+
+async def invoke(client, tool: Tool, arguments: dict) -> CallToolResult:
+    result = await client.send_request(
+        ClientRequest(CallToolRequest(params=CallToolRequestParams(name=tool.name, arguments=arguments))),
+        CallToolResult,
+    )
+    if not result.isError and tool.outputSchema is not None:
+        if result.structuredContent is None:
+            raise ValueError('Missing structured tool output')
+        Draft202012Validator(tool.outputSchema, registry=Registry()).validate(result.structuredContent)
+    return result
 
 
 def failure(code: str, message: str) -> CallToolResult:
@@ -108,17 +172,23 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
     if not _require(''):
         return failure('AUTH_REQUIRED', 'Authenticate to the local agent using its X-API-Key header.')
     try:
-        tools = await catalog()
+        tools = await catalog(refresh=False)
         tool = next((item for item in tools if item.name == name), None)
         if tool is None:
             return failure('UNKNOWN_TOOL', 'Tool is not advertised by MangroveAI MCP.')
         if not isinstance(arguments, dict) or not Draft202012Validator(tool.inputSchema).is_valid(arguments):
             return failure('VALIDATION_ERROR', 'Arguments do not match the current MangroveAI MCP inputSchema. Refresh tools/list.')
         target, key = endpoint(), _api_key(app_config)
-        if key is not None:
+        annotations = tool.annotations.model_dump() if tool.annotations is not None else {}
+        public_free_read = (
+            annotations.get('mangrove/access_level') == 'public'
+            and annotations.get('mangrove/side_effect') == 'read'
+            and annotations.get('mangrove/x402_price_usd') is None
+        )
+        if key is not None or public_free_read:
             with anyio.fail_after(float(app_config.MANGROVE_SDK_TIMEOUT_SECONDS)):
                 async with session(target, key) as client:
-                    return await client.call_tool(name, arguments=arguments)
+                    return await invoke(client, tool, arguments)
         result = await x402_payer.pay_remote_mcp(
             target, name=name, arguments=arguments, operation_id=str(uuid.uuid4()),
             timeout=float(app_config.MANGROVE_SDK_TIMEOUT_SECONDS),
@@ -130,14 +200,8 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
         body = error.to_dict()
         return CallToolResult(isError=True, structuredContent=body, content=[TextContent(type='text', text=json.dumps(body))])
     except Exception as error:
-        pending = [error]
-        while pending:
-            nested = pending.pop()
-            if isinstance(nested, BaseExceptionGroup):
-                pending.extend(nested.exceptions)
-                continue
-            denied = upstream_access_error(nested)
-            if denied is not None:
-                body = denied.to_dict()
-                return CallToolResult(isError=True, structuredContent=body, content=[TextContent(type='text', text=json.dumps(body))])
+        known = transport_error(error)
+        if known is not None:
+            body = known.to_dict()
+            return CallToolResult(isError=True, structuredContent=body, content=[TextContent(type='text', text=json.dumps(body))])
         return failure('UPSTREAM_ERROR', 'MangroveAI MCP call could not be completed. No alternate transport was attempted.')

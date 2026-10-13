@@ -9,7 +9,7 @@ description: >-
   2) and KB-grounded parameter choices (Mechanism 1) so parameters are
   evidence-backed, not library-default guesses. Wraps
   agent_search_reference_strategies + agent_build_strategy_from_reference +
-  agent_create_strategy_autonomous + agent_create_strategy_manual + kb_search.
+  agent_create_strategy_autonomous + agent_create_strategy_manual.
 ---
 
 # Create Strategy Skill
@@ -26,8 +26,9 @@ Two mechanisms drive "intuition":
   performance. Zero parameter guessing for the common case.
 - **Mechanism 1 (KB-grounded parameters) — the fallback.** When
   references don't fit (unusual asset, unusual goal, or user wants to
-  modify), the agent is REQUIRED to call `kb_search` for every signal
-  it picks before finalizing params. No library-default fallback.
+  modify), ground parameter choices in evidence using the server-supplied
+  tool descriptions. Reuse relevant evidence already obtained and disclose
+  unsupported choices rather than inventing justification.
 
 ### Portability — reference strategies are signal combos, not pins
 
@@ -142,12 +143,9 @@ Use this path when:
 
 **For each signal you consider, you MUST:**
 
-1. Call `kb_search(query="<signal_name> parameters <asset> <timeframe>")`. Example: `kb_search("MACD parameters ETH 1h")`.
-2. Read the top 1-3 results. Extract the recommended parameter range or default.
-3. In your response, CITE the KB result verbatim (or paraphrase + attribute): "KB recommends MACD(8, 21, 5) for 1h crypto — tighter than the stock 12/26/9 because 1h bars have less noise than daily."
-4. Only then write the param values into the strategy.
-
-**Do NOT use library-default params without KB citation.** If the KB has nothing, say so: "KB doesn't have guidance on this specific (signal, asset, timeframe) combo. I'll use the signal's declared default [X] but flag it — consider running a wider backtest to validate."
+1. Follow the server-supplied tool descriptions to obtain any missing evidence for the proposed parameters. Reuse evidence already obtained.
+2. Cite the evidence supporting the selected values, distinguishing educational guidance from measured results for the target asset and timeframe.
+3. If evidence is unavailable, state that limitation and identify any declared default used. Never claim an untested choice is validated; retain the backtest and promotion checks below.
 
 Composition rules (TRIGGER vs FILTER) — from MangroveAI signal spec:
 
@@ -224,7 +222,7 @@ User wants a strategy
 ├─ Phase B: agent_build_strategy_from_reference + agent_create_strategy_manual
 │       (single match; signals + params copied exactly, asset/tf applied)
 │
-├─ Phase C: kb_search each signal → cite → agent_create_strategy_manual
+├─ Phase C: ground parameter choices → cite → agent_create_strategy_manual
 │       (custom, evidence-backed)
 │
 └─ Phase D: agent_create_strategy_autonomous(goal, asset, timeframe)
