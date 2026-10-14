@@ -43,7 +43,13 @@ def endpoint() -> str:
 async def session(endpoint_url: str, key: str | None = None):
     protect_mcp_diagnostics()
     timeout = float(app_config.MANGROVE_SDK_TIMEOUT_SECONDS)
-    headers = {'Authorization': f'Bearer {key}'} if key else {}
+    # Send the key BOTH ways. The receiver reads X-API-Key first and accepts it
+    # whatever its shape; its Bearer branch only recognises a key by format, and
+    # until MangroveAI#1362 ships it recognised a prefix nothing issues -- so a
+    # Bearer-only client had every tools/call rejected with upstream 401 while
+    # the same key worked as X-API-Key. Keeping Bearer too means this works
+    # against receivers that read either header.
+    headers = {'X-API-Key': key, 'Authorization': f'Bearer {key}'} if key else {}
     async with httpx.AsyncClient(headers=headers, timeout=timeout, trust_env=False, follow_redirects=False) as http:
         async with streamable_http_client(endpoint_url, http_client=http) as (reader, writer, _):
             async with ClientSession(reader, writer) as client:
