@@ -174,6 +174,7 @@ def _map_engine_order(o: dict) -> dict | None:
         "reason": f"engine {o.get('order_type', 'market')} order {o.get('order_id', '')}".strip(),
         "ref_price": o.get("price"),
         "engine_position_id": o.get("position_id"),
+        "engine_order_id": o.get("order_id"),
         "stop_loss": o.get("stop_loss_price"),
         "take_profit": o.get("take_profit_price"),
     }
@@ -623,6 +624,12 @@ def get_strategy(strategy_id: str) -> StrategyDetailResponse:
 
 def update_status(strategy_id: str, update: StrategyStatusUpdate) -> StrategyDetailResponse:
     """Single source of truth for strategy lifecycle transitions."""
+    from src.services.broker_execution import _lock
+    with _lock:
+        return _update_status(strategy_id, update)
+
+
+def _update_status(strategy_id, update):
     row = _get_row(strategy_id)
     current = row["status"]
     target = update.status
@@ -632,6 +639,9 @@ def update_status(strategy_id: str, update: StrategyStatusUpdate) -> StrategyDet
     if target == current:
         return _row_to_response(row)  # no-op
     _validate_status_transition(current, target)
+    from src.services.broker_store import route as broker_route
+    if target == 'paper' and broker_route(strategy_id):
+        raise StrategyInvalidStatusTransition('Broker-bound strategies use live execution; test with a separate paper strategy before binding.')
 
     # Gate transitions that move real money or stop live execution.
     needs_confirm = (
@@ -646,52 +656,55 @@ def update_status(strategy_id: str, update: StrategyStatusUpdate) -> StrategyDet
         )
 
     if target == "live":
-        if not update.allocation:
-            raise StrategyInvalidStatusTransition(
-                "Transition to live requires an allocation block.",
-                suggestion="Include allocation: {wallet_address, token, token_address, amount} in the request.",
-            )
-        # Backup gate: the wallet that will be funding live trades must
-        # have been confirmed-backed-up by the user. Paper→live is the
-        # last chance to catch "user deposited money but never saved
-        # their recovery secret" before real funds move.
-        from src.services.wallet_manager import require_backup_confirmed
-        require_backup_confirmed(update.allocation.wallet_address)
-        allocation_service.record_allocation(
-            strategy_id=strategy_id,
-            wallet_address=update.allocation.wallet_address,
-            token_address=update.allocation.token_address,
-            token_symbol=update.allocation.token,
-            amount=update.allocation.amount,
-            slippage_pct=update.allocation.slippage_pct,
-        )
+        venue_route = broker_route(strategy_id)
+        if venue_route:
+            if update.allocation:
+                raise StrategyInvalidStatusTransition("Robinhood uses its configured venue allocation, not a wallet allocation.")
+            # Broker routes use caller-owned evaluation and confirmed fills.
+            # Activation does not modify Robinhood's approval preference.
+            from src.services import broker_execution
+            broker_execution.run(broker_execution.preflight, venue_route)
+        else:
+            _record_dex_allocation(strategy_id, update)
 
     # Sync status upstream.
     try:
         mangrove_ai_client().strategies.update_status(row["mangrove_id"], target)
     except Exception as e:  # noqa: BLE001
-        # If we already recorded an allocation, roll it back.
         if target == "live":
             allocation_service.release_allocation(strategy_id)
         raise SdkError(f"strategies.update_status failed: {e}") from e
 
     _apply_scheduler_effects(strategy_id, row, target, current)
     _set_status(strategy_id, target)
-
-    # Portfolio kill switch (#146): the live-book composition just changed
-    # (a strategy entered or left 'live'), so committed capital / realized P&L
-    # in the aggregate shifted for a deliberate reason -- re-baseline the
-    # high-water mark so it is not mistaken for drawdown. No-op while latched.
     if "live" in (target, current):
         from src.services import portfolio_risk_service
         portfolio_risk_service.rebaseline(reason=f"status_{current}_to_{target}")
-
-    new_row = _get_row(strategy_id)
-    _log.info("strategy.status_changed",
-              strategy_id=strategy_id, from_status=current, to_status=target,
+    _log.info("strategy.status_changed", strategy_id=strategy_id, from_status=current, to_status=target,
               allocation=bool(update.allocation))
-    return _row_to_response(new_row)
+    return _row_to_response(_get_row(strategy_id))
 
+
+def _record_dex_allocation(strategy_id, update):
+    if not update.allocation:
+        raise StrategyInvalidStatusTransition(
+            "Transition to live requires an allocation block.",
+            suggestion="Include allocation: {wallet_address, token, token_address, amount} in the request.",
+        )
+    # Backup gate: the wallet that will be funding live trades must
+    # have been confirmed-backed-up by the user. Paper→live is the
+    # last chance to catch "user deposited money but never saved
+    # their recovery secret" before real funds move.
+    from src.services.wallet_manager import require_backup_confirmed
+    require_backup_confirmed(update.allocation.wallet_address)
+    allocation_service.record_allocation(
+        strategy_id=strategy_id,
+        wallet_address=update.allocation.wallet_address,
+        token_address=update.allocation.token_address,
+        token_symbol=update.allocation.token,
+        amount=update.allocation.amount,
+        slippage_pct=update.allocation.slippage_pct,
+    )
 
 # -- Cron tick ---------------------------------------------------------------
 
@@ -710,6 +723,10 @@ def tick(strategy_id: str) -> None:
     5. On any exception: log evaluation status=error with error_msg.
        Never let the exception escape.
     """
+    from src.services import broker_execution, broker_store
+    if broker_store.route(strategy_id):
+        broker_execution.tick(strategy_id)
+        return
     tick_id = str(uuid.uuid4())
     start_ns = time.monotonic()
     with with_correlation_id(tick_id):

@@ -347,3 +347,8 @@ mangrove-agent/
 ## License
 
 MIT
+
+### Robinhood execution venue
+
+Mangrove strategies can use Robinhood as their broker execution venue through its
+official MCP service. See [connection, allocation, and recovery instructions](docs/robinhood-execution.md).

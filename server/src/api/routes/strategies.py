@@ -83,7 +83,7 @@ async def get_strategy(strategy_id: str) -> StrategyDetailResponse:
     ),
 )
 async def update_status(strategy_id: str, req: StrategyStatusUpdate) -> StrategyDetailResponse:
-    return strategy_service.update_status(strategy_id, req)
+    return await run_in_threadpool(strategy_service.update_status, strategy_id, req)
 
 
 class BacktestInput(BaseModel):

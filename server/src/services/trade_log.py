@@ -196,6 +196,9 @@ def _row_to_evaluation(r) -> Evaluation:
 
 def _row_to_trade(r) -> Trade:
     return Trade(
+        venue=r['venue'],
+        venue_order_ref=r['venue_order_ref'],
+        venue_trade_ref=r['venue_trade_ref'],
         id=r["id"],
         strategy_id=r["strategy_id"],
         evaluation_id=r["evaluation_id"],
