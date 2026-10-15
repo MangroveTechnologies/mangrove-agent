@@ -14,11 +14,11 @@ from pathlib import Path
 
 import httpx
 from jsonschema import Draft202012Validator
-from mcp import ClientSession
 from mcp.client.auth import OAuthClientProvider
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
 
+from mcp import ClientSession
 from src.config import app_config
 from src.shared.crypto.fernet import decrypt, encrypt
 from src.shared.errors import SdkError
