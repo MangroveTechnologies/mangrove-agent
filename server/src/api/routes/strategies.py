@@ -247,7 +247,7 @@ async def evaluate(strategy_id: str) -> dict:
     # Make sure the strategy exists; strategy_service.get_strategy raises
     # StrategyNotFound otherwise.
     strategy_service.get_strategy(strategy_id)
-    strategy_service.tick(strategy_id)
+    await run_in_threadpool(strategy_service.tick, strategy_id)
     # Return the latest evaluation row for this strategy.
     from src.services.trade_log import list_evaluations
     evs = list_evaluations(strategy_id, limit=1)

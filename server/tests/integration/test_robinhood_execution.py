@@ -347,3 +347,21 @@ async def test_mcp_activation_runs_on_worker_thread(ledger, monkeypatch):
         await tool.run({"strategy_id": "s1", "status": "live", "confirm": True, "api_key": "test-key-1"})
     )
     assert result == {"status": "live"}
+
+
+async def test_mcp_evaluation_runs_broker_tick_on_worker_thread(ledger, monkeypatch):
+    import asyncio
+
+    from src.mcp.server import create_mcp_server
+
+    def tick(strategy_id):
+        with pytest.raises(RuntimeError):
+            asyncio.get_running_loop()
+        assert strategy_id == "s1"
+
+    monkeypatch.setattr(strategy_service, "get_strategy", lambda _: None)
+    monkeypatch.setattr(strategy_service, "tick", tick)
+    monkeypatch.setattr(trade_log, "list_evaluations", lambda *args, **kwargs: [])
+    tool = create_mcp_server()._tool_manager._tools["agent_evaluate_strategy"]
+    result = json.loads(await tool.run({"strategy_id": "s1", "api_key": "test-key-1"}))
+    assert result["status"] == "no_evaluation_recorded"
