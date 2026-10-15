@@ -176,13 +176,13 @@ State is persisted in the `./agent-data/` directory (bind-mounted into the conta
 
 This section is a fast tour. The full walkthrough is in [`tutorials/trading-app/`](tutorials/trading-app/00-index.md); come back here if you want the shorter reference.
 
-**Stage 0 — platform tour.** Start Claude Code in the repo directory. The agent runs status, list_tools, get_market_data, kb_search, and search_reference_strategies, and offers to help you build a strategy. No wallet needed yet.
+**Stage 0 — platform tour.** Start Claude Code in the repo directory. The agent runs status, list_tools, get_market_data and kb_search, and offers to help you build a strategy. No wallet needed yet.
 
 **Paper trading (payment wallet needed for paid API calls in x402 mode).**
 
-> "Build me a momentum strategy for ETH on 1h. Use a reference."
+> "Build me a strategy for ETH on 1h."
 
-Agent searches curated reference strategies, picks a candidate, builds it, backtests with a timeframe-appropriate lookback, reports PASS/MARGINAL/FAIL against 6 thresholds.
+The agent calls MangroveAI's `build_strategy_for_regime`: the server reads the current market regime, picks the best strategy-engine run that passed fixed quality filters in that regime, saves it as a draft and backtests it on recent data. Ask for a *new* strategy to have one composed from regime-allowed signals instead.
 
 > "Promote it to paper."
 
@@ -224,7 +224,7 @@ Wallet setup and live trading are in Chapters 06 and 07 of the tutorial. The sum
 | DeFi | `get_chain_tvl`, `get_protocol_tvl`, `get_stablecoin_metrics` |
 | DeFi Pro (Pro/Startup/Enterprise) | `get_token_unlocks`, `get_perp_funding`, `get_treasuries`, `get_etf_flows`, `get_lending_borrow_rates` — starter: [docs/defi-pro.md](docs/defi-pro.md) |
 | Social | `get_sentiment`, `get_mentions`, `get_influence_score` |
-| Strategy | `create_strategy_autonomous`, `create_strategy_manual`, `search_reference_strategies`, `build_strategy_from_reference`, `list_strategies`, `get_strategy`, `update_strategy_status`, `delete_strategy`, `backtest_strategy`, `evaluate_strategy` |
+| Strategy | `build_strategy_for_regime`, `save_strategy`, `update_strategy`, `verify_strategy`, `find_sweep_runs`, `search_marketplace`, `get_marketplace_strategy` (MangroveAI, over MCP); `list_strategies`, `get_strategy`, `update_strategy_status`, `delete_strategy`, `backtest_strategy`, `evaluate_strategy` |
 | Execution & logs | `list_account_positions`, `get_account_position`, `list_account_trades`, `list_evaluations`, `list_trades`, `list_all_trades` |
 | Knowledge base & docs | `kb_search`, `kb_glossary_get`, `kb_get_document`, `kb_list_indicators`, `kb_list_tags`, `list_docs`, `get_doc_content` |
 | Oracle research | `sieve_score`, `oracle_data_query`, `oracle_backtest`, `oracle_backtest_async`, `oracle_backtest_poll`, `oracle_backtest_bulk`, `oracle_create_experiment`, `oracle_list_experiments`, `oracle_get_experiment`, `oracle_update_experiment`, `oracle_delete_experiment`, `oracle_validate_experiment`, `oracle_launch_experiment`, `oracle_pause_experiment`, `oracle_list_results`, `oracle_list_datasets`, `oracle_list_signals`, `oracle_list_templates` |
@@ -290,7 +290,7 @@ For live trades the agent decrypts your wallet's secret in-process, signs the un
 
 ## Development
 
-Extending the agent — adding a new endpoint, MCP tool, signal, or strategy — follows the service-layer pattern documented in [`docs/contributing.md`](docs/contributing.md). Trading-bot-specific skills available in this repo: `/create-strategy`, `/backtest`, `/custom-signal`, `/audit-security`, `/check-alignment`, `/tool-spec`. See `.claude/skills/` for what each one does.
+Extending the agent — adding a new endpoint, MCP tool, signal, or strategy — follows the service-layer pattern documented in [`docs/contributing.md`](docs/contributing.md). Strategy creation and backtesting instructions are loaded live from MangroveAI through the MCP `load_skill` tool. The agent ships no copies of server skills or strategy generators. Contributor skills remain in `.claude/skills/`.
 
 ## Tests
 

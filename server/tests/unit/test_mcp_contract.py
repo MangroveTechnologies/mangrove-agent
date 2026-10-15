@@ -355,26 +355,10 @@ runpy.run_path(sys.argv[0], run_name='__main__')
     assert "Traceback" not in result.stderr
 
 
-def test_synced_guidance_preserves_server_tool_names():
-    import importlib.util
+def test_client_guidance_loads_live_server_instructions():
     from pathlib import Path
-    script = Path(__file__).resolve().parents[3] / 'scripts' / 'sync-michael-skills.py'
-    import sys
-    spec = importlib.util.spec_from_file_location('skill_sync_contract', script)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-        source = '---\nname: fixture\nuses-tools: [query_signal_behavior, save_strategy]\n---\nUse `query_signal_behavior` and `save_strategy`.\n'
-        available = {'query_signal_behavior', 'save_strategy'}
-        result = module.render_skill('fixture', source, available)
-        assert 'uses-tools: [query_signal_behavior, save_strategy]' in result
-        assert 'Use `query_signal_behavior` and `save_strategy`.' in result
-        assert 'create_strategy_manual' not in result
-        assert 'Not in mangrove-agent yet' not in result
-        assert 'Discover current tools' in result
-        assert module.render_skill('fixture', source, available) == result
-        unavailable = module.render_skill('fixture', source, {'query_signal_behavior'})
-        assert 'uses-tools: [query_signal_behavior]' in unavailable
-    finally:
-        sys.modules.pop(spec.name, None)
+    root = Path(__file__).resolve().parents[3]
+    guidance = (root / '.claude/rules/trading-bot-workflow.md').read_text()
+    assert '`load_skill`' in guidance
+    assert 'strategy-composition' in guidance
+    assert not (root / 'scripts/sync-michael-skills.py').exists()

@@ -11,6 +11,8 @@ os.environ.setdefault("ENVIRONMENT", "test")
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from tests.existing_strategies import existing_response
+
 _API_KEY = "test-key-1"
 
 
@@ -26,10 +28,8 @@ def client(tmp_path, monkeypatch):
     ss.reset_scheduler_cache()
 
     # Reuse the catalog fixture from candidate_generator tests.
-    from tests.unit.test_candidate_generator import _catalog
 
     sdk = MagicMock()
-    sdk.signals.list_iter.side_effect = lambda **kw: iter(_catalog())
 
     bt = MagicMock()
     bt.success = True
@@ -76,7 +76,6 @@ def client(tmp_path, monkeypatch):
     sdk.execution.evaluate.return_value = eval_resp
 
     for path in (
-        "src.services.candidate_generator.mangrove_ai_client",
         "src.services.backtest_service.mangrove_ai_client",
         "src.services.strategy_service.mangrove_ai_client",
         "src.services.benchmark_service.mangrove_ai_client",
@@ -102,11 +101,8 @@ def test_create_autonomous(client):
         json={"goal": "momentum on ETH", "asset": "ETH", "timeframe": "1h",
               "candidate_count": 5, "seed": 1},
     )
-    assert r.status_code == 201
-    body = r.json()
-    assert body["strategy"]["mangrove_id"].startswith("mg-")
-    assert body["generation_report"]["candidates_tried"] == 5
-    assert body["generation_report"]["candidates_passed_filter"] >= 1
+    assert r.status_code == 410
+    assert "retired" in r.json()["detail"]
 
 
 def test_create_manual(client):
@@ -117,8 +113,8 @@ def test_create_manual(client):
               "entry": [{"name": "rsi_oversold", "signal_type": "TRIGGER",
                          "timeframe": "1h", "params": {}}]},
     )
-    assert r.status_code == 201
-    assert r.json()["asset"] == "ETH"
+    assert r.status_code == 410
+    assert "retired" in r.json()["detail"]
 
 
 def test_create_manual_bad_composition_returns_400(client):
@@ -131,12 +127,12 @@ def test_create_manual_bad_composition_returns_400(client):
                   {"name": "b", "signal_type": "TRIGGER"},
               ]},
     )
-    assert r.status_code == 400
-    assert r.json()["code"] == "STRATEGY_INVALID_COMPOSITION"
+    assert r.status_code == 410
+    assert "retired" in r.json()["detail"]
 
 
 def test_list_and_get(client):
-    created = client.post(
+    created = existing_response(
         "/api/v1/agent/strategies/manual",
         headers=_auth(),
         json={"name": "s", "asset": "ETH", "timeframe": "1h",
@@ -160,7 +156,7 @@ def test_get_missing_returns_404(client):
 
 
 def test_patch_status_requires_confirm_for_live(client):
-    created = client.post(
+    created = existing_response(
         "/api/v1/agent/strategies/manual",
         headers=_auth(),
         json={"name": "s", "asset": "ETH", "timeframe": "1h",
@@ -183,7 +179,7 @@ def test_patch_status_requires_confirm_for_live(client):
 
 
 def test_backtest_full(client):
-    created = client.post(
+    created = existing_response(
         "/api/v1/agent/strategies/manual",
         headers=_auth(),
         json={"name": "s", "asset": "ETH", "timeframe": "1h",
@@ -211,7 +207,7 @@ def test_backtest_full(client):
 
 
 def test_backtest_full_can_skip_benchmark(client):
-    created = client.post(
+    created = existing_response(
         "/api/v1/agent/strategies/manual",
         headers=_auth(),
         json={"name": "s", "asset": "ETH", "timeframe": "1h",
@@ -229,7 +225,7 @@ def test_backtest_full_can_skip_benchmark(client):
 
 def test_evaluate_manual_tick(client):
     """POST /evaluate runs a tick and returns the latest evaluation row."""
-    created = client.post(
+    created = existing_response(
         "/api/v1/agent/strategies/manual",
         headers=_auth(),
         json={"name": "s", "asset": "ETH", "timeframe": "1h",

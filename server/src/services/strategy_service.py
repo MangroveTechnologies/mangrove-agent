@@ -1,8 +1,7 @@
 """strategy_service — CRUD, lifecycle, cron tick.
 
 Responsibilities:
-- Autonomous creation (goal → candidates → backtest → filter → rank → full → persist)
-- Manual creation (validate composition → persist)
+- Strategy authoring is owned by MangroveAI and accessed over MCP.
 - List + get + status transitions (single source of truth for lifecycle)
 - Cron tick: call mangroveai.execution.evaluate(strategy_id), dispatch
   returned OrderIntents to order_executor.
@@ -20,29 +19,22 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from mangrove_ai.models import CreateStrategyRequest
 from pydantic import BaseModel, Field
 
 from src.config import app_config
 from src.models.domain import Evaluation, OrderIntent
 from src.services import (
     allocation_service,
-    backtest_service,
-    backtest_verdict,
-    candidate_generator,
     order_executor,
     scheduler_service,
     trade_log,
 )
-from src.shared import timeframes
 from src.shared.clients.mangrove import mangrove_ai_client
 from src.shared.db.sqlite import get_connection
 from src.shared.errors import (
     SdkError,
-    StrategyInvalidComposition,
     StrategyInvalidStatusTransition,
     StrategyNotFound,
-    StrategyNoViableCandidates,
 )
 from src.shared.logging import get_logger, with_correlation_id
 
@@ -293,25 +285,6 @@ class StrategyDetailResponse(BaseModel):
 # -- Composition validation --------------------------------------------------
 
 
-def _validate_composition(entry: list[dict], exit_rules: list[dict]) -> None:
-    """Entry must be exactly 1 TRIGGER + 0+ FILTERs; exit 0-1 TRIGGERs + 0+ FILTERs."""
-    entry_triggers = [r for r in entry if (r.get("signal_type") or "").upper() == "TRIGGER"]
-    if len(entry_triggers) != 1:
-        raise StrategyInvalidComposition(
-            f"Entry must have exactly 1 TRIGGER; got {len(entry_triggers)}.",
-            suggestion="Compose entry as: [one TRIGGER, zero or more FILTERs].",
-        )
-    exit_triggers = [r for r in exit_rules if (r.get("signal_type") or "").upper() == "TRIGGER"]
-    if len(exit_triggers) > 1:
-        raise StrategyInvalidComposition(
-            f"Exit may have at most 1 TRIGGER; got {len(exit_triggers)}.",
-            suggestion="Compose exit as: [zero or one TRIGGER, zero or more FILTERs].",
-        )
-
-
-# -- Local cache helpers -----------------------------------------------------
-
-
 def _insert_cache(
     mangrove_detail: Any,
     entry: list[dict],
@@ -461,143 +434,6 @@ def _set_status(strategy_id: str, new_status: str) -> None:
 
 
 # -- Public API --------------------------------------------------------------
-
-
-def create_autonomous(req: StrategyAutonomousRequest) -> tuple[StrategyDetailResponse, dict[str, Any]]:
-    """Generate candidates, backtest, filter, rank, create winner.
-
-    Returns (strategy_detail_response, generation_report). The report is
-    also persisted in the local strategies cache for audit.
-    """
-    # Reject unsupported timeframes (e.g. 1m) up front — the server would
-    # otherwise silently fall back to 1h and produce misleading results.
-    timeframe = timeframes.canonicalize_timeframe(req.timeframe)
-
-    candidates = candidate_generator.generate(
-        goal=req.goal, asset=req.asset, timeframe=timeframe,
-        n=req.candidate_count, seed=req.seed,
-    )
-
-    # Use timeframe-aware recommended lookback if caller didn't specify one.
-    lookback_months = (
-        req.backtest_lookback_months
-        if req.backtest_lookback_months is not None
-        else timeframes.recommended_lookback_months(timeframe)
-    )
-
-    results = backtest_service.quick_backtest_all(
-        candidates, lookback_months=lookback_months,
-    )
-    survivors, rejected = backtest_service.filter_and_rank(results)
-
-    if not survivors:
-        raise StrategyNoViableCandidates(
-            f"No candidate passed filters (n_tried={len(candidates)}, n_rejected={len(rejected)}).",
-            suggestion="Try a different goal, longer timeframe, or longer backtest lookback.",
-        )
-
-    winner = survivors[0]
-    full = backtest_service.full_backtest(
-        winner.candidate, lookback_months=lookback_months,
-    )
-
-    # Build the SDK request from the winning candidate.
-    try:
-        detail = mangrove_ai_client().strategies.create(
-            CreateStrategyRequest(
-                name=winner.candidate.name,
-                asset=winner.candidate.asset,
-                entry=winner.candidate.entry,
-                exit=winner.candidate.exit,
-                status="inactive",
-            ),
-        )
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"strategies.create failed: {e}") from e
-
-    generation_report = {
-        "candidates_tried": len(candidates),
-        "candidates_passed_filter": len(survivors),
-        "winner_rank": 1,
-        # Same server-side grading as POST /strategies/{id}/backtest.
-        "verdict": backtest_verdict.compute_verdict(full.raw_metrics),
-        "full_backtest_metrics": {
-            "irr_annualized": full.irr_annualized,
-            "win_rate": full.win_rate,
-            "total_trades": full.total_trades,
-            "sharpe_ratio": full.sharpe_ratio,
-            "max_drawdown": full.max_drawdown,
-            "net_pnl": full.net_pnl,
-        },
-        "rejected_reasons": [
-            {"candidate": r.candidate.name, "reason": r.reject_reason}
-            for r in rejected
-        ],
-    }
-
-    local_id = _insert_cache(
-        detail,
-        entry=winner.candidate.entry,
-        exit_rules=winner.candidate.exit,
-        execution_config=backtest_service.flattened_defaults(),
-        generation_report=generation_report,
-    )
-    row = _get_row(local_id)
-    resp = _row_to_response(row)
-    _log.info("strategy.created",
-              strategy_id=local_id, mangrove_id=resp.mangrove_id, mode="autonomous",
-              asset=req.asset, timeframe=req.timeframe,
-              winner_irr=full.irr_annualized, winner_trades=full.total_trades)
-    return resp, generation_report
-
-
-def create_manual(req: StrategyManualRequest) -> StrategyDetailResponse:
-    """Manual creation — caller supplies explicit entry/exit rules."""
-    # Reject unsupported timeframes up front. For manual strategies the
-    # timeframe is embedded in each entry/exit rule; we also accept a
-    # top-level req.timeframe which takes precedence when set.
-    if getattr(req, "timeframe", None):
-        timeframes.canonicalize_timeframe(req.timeframe)
-    else:
-        # Validate the per-rule timeframe — matches what _extract_timeframe
-        # would pull when there's no top-level field.
-        inferred = req.entry[0].get("timeframe") if req.entry else None
-        if inferred:
-            timeframes.canonicalize_timeframe(inferred)
-
-    _validate_composition(req.entry, req.exit)
-
-    # Created as `inactive`, deliberately NOT `draft`. In MangroveAI a draft
-    # is an UNPROVEN strategy: its update_status refuses draft → paper/live,
-    # and the only exit from draft is promote_proven_draft(), fired when a
-    # backtest *by strategy_id* meets the spec. This agent backtests by
-    # strategy_json and issues its own verdict, so a draft would be stranded
-    # upstream and paper promotion would fail. `inactive` = saved, not
-    # scheduled; promote with update_status(paper).
-    try:
-        detail = mangrove_ai_client().strategies.create(
-            CreateStrategyRequest(
-                name=req.name, asset=req.asset,
-                entry=req.entry, exit=req.exit,
-                status="inactive",
-                execution_config=req.execution_config,
-            ),
-        )
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"strategies.create failed: {e}") from e
-
-    local_id = _insert_cache(
-        detail,
-        entry=req.entry,
-        exit_rules=req.exit,
-        execution_config=req.execution_config or backtest_service.flattened_defaults(),
-        generation_report=None,
-        evaluation_lane=req.evaluation_lane,
-    )
-    row = _get_row(local_id)
-    resp = _row_to_response(row)
-    _log.info("strategy.created", strategy_id=local_id, mangrove_id=resp.mangrove_id, mode="manual")
-    return resp
 
 
 def list_strategies(

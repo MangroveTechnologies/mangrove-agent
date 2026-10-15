@@ -3,15 +3,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from src.services import backtest_service, backtest_verdict, strategy_service
 from src.services.strategy_service import (
-    StrategyAutonomousRequest,
     StrategyDetailResponse,
-    StrategyManualRequest,
     StrategyStatusUpdate,
 )
 from src.shared.auth.dependency import require_api_key
@@ -23,30 +21,14 @@ router = APIRouter(
 )
 
 
-class AutonomousResponse(BaseModel):
-    strategy: StrategyDetailResponse
-    generation_report: dict[str, Any]
+@router.post("/autonomous", include_in_schema=False)
+async def create_autonomous():
+    raise HTTPException(status_code=410, detail="Local strategy creation is retired. Use MangroveAI MCP load_skill(strategy-composition) and save_strategy.")
 
 
-@router.post(
-    "/autonomous",
-    response_model=AutonomousResponse,
-    status_code=201,
-    summary="Autonomous strategy creation from a natural-language goal",
-)
-async def create_autonomous(req: StrategyAutonomousRequest) -> AutonomousResponse:
-    detail, report = strategy_service.create_autonomous(req)
-    return AutonomousResponse(strategy=detail, generation_report=report)
-
-
-@router.post(
-    "/manual",
-    response_model=StrategyDetailResponse,
-    status_code=201,
-    summary="Manual strategy creation with explicit entry/exit rules",
-)
-async def create_manual(req: StrategyManualRequest) -> StrategyDetailResponse:
-    return strategy_service.create_manual(req)
+@router.post("/manual", include_in_schema=False)
+async def create_manual():
+    raise HTTPException(status_code=410, detail="Local strategy creation is retired. Use MangroveAI MCP save_strategy.")
 
 
 @router.get(
@@ -144,7 +126,7 @@ class BacktestInput(BaseModel):
 async def backtest(strategy_id: str, req: BacktestInput) -> dict:
     detail = strategy_service.get_strategy(strategy_id)
     # Build a StrategyCandidate shape from the stored strategy.
-    from src.services.candidate_generator import StrategyCandidate
+    from src.models.strategy_candidate import StrategyCandidate
     candidate = StrategyCandidate(
         name=detail.name,
         asset=detail.asset,

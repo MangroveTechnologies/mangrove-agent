@@ -29,7 +29,7 @@ from pydantic import BaseModel
 
 from src.config import app_config
 from src.services import backtest_verdict
-from src.services.candidate_generator import StrategyCandidate
+from src.models.strategy_candidate import StrategyCandidate
 from src.shared import timeframes
 from src.shared.clients.mangrove import mangrove_ai_client
 from src.shared.errors import BacktestNotFound, SdkError

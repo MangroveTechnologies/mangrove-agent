@@ -1,7 +1,7 @@
 ---
 name: trading-bot
 description: >-
-  The mangrove-agent operating rules: the author -> backtest -> paper -> live workflow, how to
+  The mangrove-agent operating rules: server workflow discovery and local execution, how to
   present and handle wallets without secrets ever entering chat, and which risk controls already
   run in the engine and the agent. Load it before any strategy, backtest, sweep, wallet, balance,
   swap, Kraken or live-trading work, and whenever the user asks what the bot can do or how it
@@ -13,9 +13,7 @@ description: >-
 Read these three documents in full and follow them. They are the contract for every trading
 action this agent takes.
 
-1. `${CLAUDE_PLUGIN_ROOT}/.claude/rules/trading-bot-workflow.md` — the staged workflow (tour, author,
-   search with SIEVE + sweeps, backtest verdict, paper, wallet connection, live promotion, monitoring)
-   and what never to do.
+1. `${CLAUDE_PLUGIN_ROOT}/.claude/rules/trading-bot-workflow.md` — how to load live server workflow instructions over MCP.
 2. `${CLAUDE_PLUGIN_ROOT}/.claude/rules/wallet-presentation.md` — creating, importing and presenting
    wallets; the out-of-band secret flow; testnet-first defaults; the 1inch-only signing guard.
 3. `${CLAUDE_PLUGIN_ROOT}/.claude/rules/risk-management.md` — engine-side per-strategy gates and the

@@ -13,7 +13,7 @@ os.environ.setdefault("ENVIRONMENT", "test")
 
 import pytest  # noqa: E402
 
-from src.services.candidate_generator import StrategyCandidate  # noqa: E402
+from src.models.strategy_candidate import StrategyCandidate  # noqa: E402
 
 
 def _candidate(name: str = "c1") -> StrategyCandidate:
