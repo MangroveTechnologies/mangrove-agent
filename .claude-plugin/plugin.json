@@ -9,7 +9,13 @@
   "homepage": "https://mangrovedeveloper.ai",
   "repository": "https://github.com/MangroveTechnologies/mangrove-agent",
   "license": "MIT",
-  "keywords": ["trading", "backtesting", "defi", "kraken", "mcp"],
+  "keywords": [
+    "trading",
+    "backtesting",
+    "defi",
+    "kraken",
+    "mcp"
+  ],
   "userConfig": {
     "mangrove_api_key": {
       "type": "string",
@@ -21,7 +27,6 @@
   },
   "skills": [
     "./.claude/skills/trading-bot",
-    "./.claude/skills/michael/knowledge-graph",
     "./.claude/skills/michael/condition-studies",
     "./.claude/skills/michael/product-facts",
     "./.claude/skills/michael/strategy-composition",
