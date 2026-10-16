@@ -36,7 +36,7 @@ def decimal(value):
 
 
 def _snapshot_journal(snapshot):
-    """Validate and serialize broker evidence without changing its timestamps.
+    """Serialize JSON broker evidence without changing optional metadata.
 
     ``created_at``/``observed_at`` on broker_events records when this process
     reconciled the snapshot. Any Robinhood executions retain their own original
@@ -44,32 +44,16 @@ def _snapshot_journal(snapshot):
     """
     if not isinstance(snapshot, dict):
         raise SdkError("Robinhood returned an invalid order snapshot.")
-    executions = snapshot.get("executions")
-    if executions is not None:
-        if not isinstance(executions, list):
-            raise SdkError("Robinhood returned invalid execution details.")
-        seen_ids = set()
-        for execution in executions:
-            if not isinstance(execution, dict):
-                raise SdkError("Robinhood returned invalid execution details.")
-            execution_id = execution.get("id")
-            execution_time = execution.get("timestamp")
-            if not isinstance(execution_id, str) or not execution_id.strip() or execution_id in seen_ids:
-                raise SdkError("Robinhood returned invalid execution identity.")
-            if not isinstance(execution_time, str) or not execution_time.strip():
-                raise SdkError("Robinhood returned an execution without its UTC timestamp.")
-            try:
-                parsed = datetime.fromisoformat(execution_time.replace("Z", "+00:00"))
-            except ValueError:
-                raise SdkError("Robinhood returned an invalid execution timestamp.") from None
-            if parsed.tzinfo is None or parsed.utcoffset() is None or parsed.utcoffset().total_seconds() != 0:
-                raise SdkError("Robinhood execution timestamp must be UTC.")
-            seen_ids.add(execution_id)
     try:
         encoded = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        receipt_data = {
+            key: value for key, value in snapshot.items()
+            if key not in {"state", "derived_state", "state_group", "updated_at"}
+        }
+        receipt_encoded = json.dumps(receipt_data, sort_keys=True, separators=(",", ":"), allow_nan=False)
     except (TypeError, ValueError):
         raise SdkError("Robinhood returned a non-JSON order snapshot.") from None
-    key = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    key = hashlib.sha256(receipt_encoded.encode("utf-8")).hexdigest()
     return encoded, key
 
 

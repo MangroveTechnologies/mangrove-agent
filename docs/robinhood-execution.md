@@ -115,10 +115,12 @@ journal, along with retained bracket and cross-bar risk state.
 
 Each distinct reconciled order snapshot is also retained in `broker_events` with
 its local `observed_at` time and a deterministic receipt key. When Robinhood
-provides per-execution details, `snapshot_json` preserves every execution ID and
-its original UTC `timestamp`; reconciliation time is not substituted for fill
-time. Identical snapshots for one order produce one receipt, in the same SQLite
-transaction as the fill, trade, and position updates.
+provides per-execution details, `snapshot_json` preserves the raw optional fields
+and original timestamps; reconciliation time is not substituted for fill time.
+Identical snapshots for one order and lifecycle status produce one receipt, while
+a status transition such as `partial` to `cancel_pending` remains separately
+auditable. Receipt writes share the SQLite transaction with fill, trade, and
+position updates.
 
 Malformed, regressing, or unexpectedly revised cash snapshots stop reconciliation.
 An unresolved submission requires investigation against Robinhood's order history;

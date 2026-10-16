@@ -208,18 +208,48 @@ def test_invalid_snapshot_is_atomic(ledger, change):
     assert row("broker_orders")["status"] == "submitting"
 
 
-def test_invalid_execution_timestamp_is_atomic(ledger):
+@pytest.mark.parametrize("executions", [
+    [None],
+    [{"price": "100"}],
+    [{"id": "execution-1", "price": "100"}],
+])
+def test_optional_execution_metadata_is_preserved_without_rejection(ledger, executions):
     reserve()
-    data = snapshot(executions=[
-        {"id": "execution-1", "timestamp": "2026-10-15T23:58:33", "price": "100"}
-    ])
-    with pytest.raises(SdkError, match="must be UTC"):
+    data = snapshot(executions=executions)
+    store.apply_snapshot("local", data, asset_class="crypto")
+    with store.connection() as conn:
+        receipt = conn.execute("SELECT snapshot_json FROM broker_events").fetchone()
+    assert json.loads(receipt[0])["executions"] == executions
+    assert row("broker_orders")["status"] == "partial"
+
+
+def test_non_json_snapshot_is_rejected_atomically(ledger):
+    reserve()
+    data = snapshot()
+    data["optional"] = float("nan")
+    with pytest.raises(SdkError, match="non-JSON"):
         store.apply_snapshot("local", data, asset_class="crypto")
     with store.connection() as conn:
         assert conn.execute("SELECT count(*) FROM trades").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM positions").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM broker_events").fetchone()[0] == 0
     assert row("broker_orders")["status"] == "submitting"
+
+
+def test_status_transition_receipts_are_distinct_and_same_status_deduplicates(ledger):
+    reserve()
+    data = snapshot(net="101")
+    store.apply_snapshot("local", data, asset_class="crypto")
+    cancel_snapshot = data | {"state": "pending_cancelled"}
+    store.apply_snapshot("local", cancel_snapshot, asset_class="crypto")
+    store.apply_snapshot("local", cancel_snapshot, asset_class="crypto")
+    with store.connection() as conn:
+        receipts = conn.execute(
+            "SELECT status,snapshot_key FROM broker_events ORDER BY id"
+        ).fetchall()
+        assert len(receipts) == 2
+        assert [r["status"] for r in receipts] == ["partial", "cancel_pending"]
+        assert receipts[0]["snapshot_key"] == receipts[1]["snapshot_key"]
 
 
 def test_regression_and_cross_strategy_position_rejected(ledger):

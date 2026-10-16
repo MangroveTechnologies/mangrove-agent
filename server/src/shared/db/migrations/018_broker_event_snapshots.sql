@@ -3,8 +3,9 @@ ALTER TABLE broker_events ADD COLUMN observed_at TEXT;
 ALTER TABLE broker_events ADD COLUMN snapshot_json TEXT;
 ALTER TABLE broker_events ADD COLUMN snapshot_key TEXT;
 
--- Identical broker snapshots are one receipt per order. Null keys preserve any
--- historical broker_events rows written before this migration.
+-- Identical broker snapshots are one receipt per order and lifecycle status.
+-- A cancellation request can change status without changing cumulative fills.
+-- Null keys preserve any historical broker_events rows written before this migration.
 CREATE UNIQUE INDEX broker_event_snapshot_once
-    ON broker_events(order_id, snapshot_key)
+    ON broker_events(order_id, status, snapshot_key)
     WHERE snapshot_key IS NOT NULL;
