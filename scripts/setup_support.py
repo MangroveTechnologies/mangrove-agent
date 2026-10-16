@@ -160,6 +160,43 @@ def check(cfg):
     return wallets
 
 
+def check_upstream(cfg):
+    """Prove the configured MangroveAI key actually reaches the platform.
+
+    One cheap authenticated read through the running agent, over the same
+    SDK -> REST path its own tools use. Setup used to report success without ever
+    presenting the key upstream, so a rejected key surfaced mid-conversation as
+    an opaque "Invalid or expired token" that pointed the user at their key
+    rather than at whatever was actually wrong.
+
+    A rejected credential fails loudly: it is unambiguous and the user can act on
+    it. Anything else -- offline, proxy, upstream maintenance -- is a skip, since
+    setup must not refuse to finish over a condition the user cannot fix and the
+    local agent is already working by this point.
+
+    Returns True when the platform answered (or there is no key to check), False
+    when it could not be reached, so the caller can skip assertions about
+    upstream-derived state instead of failing on a symptom of the same outage.
+    """
+    if cfg.get('MANGROVE_ACCESS_MODE') == 'x402':
+        print('Wallet mode selected: no upstream API key to verify.')
+        return True
+    try:
+        request(cfg, '/api/v1/agent/signals?limit=1')
+    except SetupError as exc:
+        if str(exc).startswith(('Agent returned HTTP 401;', 'Agent returned HTTP 403;')):
+            raise SetupError(
+                'The MangroveAI API key was rejected by the platform (upstream '
+                '401/403). Mint one at https://mangrovedeveloper.ai under '
+                'Settings > API Keys, then rerun: ./scripts/setup.sh --auth api-key'
+            ) from None
+        print('Upstream API key NOT verified: the platform was unreachable. Local '
+              'setup is complete; rerun ./scripts/verify_quickstart.sh when online.')
+        return False
+    print('Upstream API key verified against the platform.')
+    return True
+
+
 def check_markets(cfg):
     try:
         result = request(cfg, '/api/v1/agent/marketplace/readiness')
@@ -550,7 +587,7 @@ def configure(args):
         CONFIG.chmod(0o600)
     print(f'Access mode: {mode}. Local authentication remains enabled.')
     if mode == 'api-key':
-        print('Upstream API-key validity/quota have not been checked. Failed keys never trigger wallet payments.')
+        print('Upstream API-key validity is checked by the verify step below. Failed keys never trigger wallet payments.')
     else:
         print('Automatic payment reconciliation configured for the selected network; RPC availability is checked during recovery.')
         print('Setup will not create/import a wallet, confirm a backup, or make a payment.')
@@ -840,10 +877,25 @@ def main():
                 if args.command == 'verify':
                     if request(cfg, '/health', authenticated=False).get('scheduler_running') is not True:
                         raise SetupError('Scheduler is not ready; inspect agent startup logs.')
+                    # Before the catalog assertion: when the platform is down, the
+                    # upstream-derived half of the catalog is legitimately absent, and
+                    # "onboarding tools are missing" is a symptom of that outage rather
+                    # than a diagnosis. Checking first means the user is told which it is.
+                    upstream_reachable = check_upstream(cfg)
                     catalog = request(cfg, '/api/v1/agent/tools')
                     names = {item['name'] for item in catalog['tools']}
-                    if not {'create_wallet', 'import_wallet', 'list_wallets', 'list_signals'} <= names:
-                        raise SetupError('Required onboarding tools are missing from discovery.')
+                    required = {'create_wallet', 'import_wallet', 'list_wallets'}
+                    if upstream_reachable:
+                        # list_signals is served by the platform, not locally.
+                        required.add('list_signals')
+                    else:
+                        print('Skipping the platform tool checks while it is unreachable; '
+                              'local wallet tools are verified below.')
+                    if not required <= names:
+                        raise SetupError(
+                            'Required onboarding tools are missing from discovery: '
+                            + ', '.join(sorted(required - names))
+                        )
                 print('Local wallet access authenticated; unauthenticated access refused. No payment made.')
             elif args.command == 'guide':
                 guide(cfg, yes=args.yes, docker=args.docker)
