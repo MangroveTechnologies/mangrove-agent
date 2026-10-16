@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from src.config import app_config
 from src.models.domain import Evaluation, OrderIntent
 from src.services import broker_execution as execution
@@ -75,8 +76,8 @@ def reserve(side="buy", qty=2, oid="local", key="entry", sid="s1"):
     )
 
 
-def snapshot(qty="1", price="100", state="partially_filled", side="buy", oid="local", net=None):
-    return dict(
+def snapshot(qty="1", price="100", state="partially_filled", side="buy", oid="local", net=None, executions=None):
+    result = dict(
         id="broker-" + oid,
         ref_id=oid,
         currency_code="BTC",
@@ -88,6 +89,9 @@ def snapshot(qty="1", price="100", state="partially_filled", side="buy", oid="lo
         fees="0",
         net_rounded_executed_notional=net or str(Decimal(qty) * Decimal(price or 0)),
     )
+    if executions is not None:
+        result["executions"] = executions
+    return result
 
 
 def row(table):
@@ -122,6 +126,45 @@ def test_partial_fill_repeat_cancel_and_exit(ledger):
     assert positions == []
     with store.connection() as conn:
         assert conn.execute("SELECT sum(p_and_l) FROM trades").fetchone()[0] == 8
+
+
+def test_snapshot_journal_preserves_fill_times_and_idempotently_records_receipt(ledger):
+    reserve()
+    executions = [
+        {
+            "id": "execution-1",
+            "price": "100",
+            "effective_price": "101",
+            "quantity": "0.4",
+            "notional": "40.40",
+            "timestamp": "2026-10-15T23:58:33.123456Z",
+        },
+        {
+            "id": "execution-2",
+            "price": "100",
+            "effective_price": "101",
+            "quantity": "0.6",
+            "notional": "60.60",
+            "timestamp": "2026-10-16T00:00:11.654321+00:00",
+        },
+    ]
+    data = snapshot(net="101", executions=executions)
+    store.apply_snapshot("local", data, asset_class="crypto")
+    store.apply_snapshot("local", data, asset_class="crypto")
+
+    with store.connection() as conn:
+        events = conn.execute("SELECT * FROM broker_events").fetchall()
+        assert len(events) == 1
+        receipt = dict(events[0])
+        assert conn.execute("SELECT count(*) FROM trades").fetchone()[0] == 1
+    saved = json.loads(receipt["snapshot_json"])
+    assert [item["timestamp"] for item in saved["executions"]] == [
+        "2026-10-15T23:58:33.123456Z",
+        "2026-10-16T00:00:11.654321+00:00",
+    ]
+    assert receipt["observed_at"] == receipt["created_at"]
+    assert receipt["observed_at"] not in {item["timestamp"] for item in saved["executions"]}
+    assert receipt["snapshot_key"]
 
 
 def test_unfilled_crypto_null_fees(ledger):
@@ -162,6 +205,20 @@ def test_invalid_snapshot_is_atomic(ledger, change):
     with store.connection() as conn:
         assert conn.execute("SELECT count(*) FROM trades").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM positions").fetchone()[0] == 0
+    assert row("broker_orders")["status"] == "submitting"
+
+
+def test_invalid_execution_timestamp_is_atomic(ledger):
+    reserve()
+    data = snapshot(executions=[
+        {"id": "execution-1", "timestamp": "2026-10-15T23:58:33", "price": "100"}
+    ])
+    with pytest.raises(SdkError, match="must be UTC"):
+        store.apply_snapshot("local", data, asset_class="crypto")
+    with store.connection() as conn:
+        assert conn.execute("SELECT count(*) FROM trades").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM positions").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM broker_events").fetchone()[0] == 0
     assert row("broker_orders")["status"] == "submitting"
 
 

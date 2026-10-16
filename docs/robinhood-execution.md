@@ -113,6 +113,13 @@ are retained in the evaluation audit, not recorded as broker executions. Each ne
 Mangrove evaluation receives cash and open quantities rebuilt from the broker
 journal, along with retained bracket and cross-bar risk state.
 
+Each distinct reconciled order snapshot is also retained in `broker_events` with
+its local `observed_at` time and a deterministic receipt key. When Robinhood
+provides per-execution details, `snapshot_json` preserves every execution ID and
+its original UTC `timestamp`; reconciliation time is not substituted for fill
+time. Identical snapshots for one order produce one receipt, in the same SQLite
+transaction as the fill, trade, and position updates.
+
 Malformed, regressing, or unexpectedly revised cash snapshots stop reconciliation.
 An unresolved submission requires investigation against Robinhood's order history;
 there is deliberately no "assume failed and retry" tool. Broker data, including
