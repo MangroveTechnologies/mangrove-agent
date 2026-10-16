@@ -66,6 +66,21 @@ multiple independent processes must not concurrently refresh the same OAuth gran
    Activation authorizes scheduled execution within the mandate; it does not
    introduce a per-order human review step.
 
+Before a separate activation decision, an operator can run the maintained
+read-only route check:
+
+```sh
+MANGROVE_AGENT_API_KEY="<local API key>" \
+  python scripts/robinhood_preflight.py "<local strategy UUID>"
+```
+
+The command calls the authenticated Robinhood status route and the exact local
+strategy-detail route. It requires an inactive strategy already configured for
+Robinhood, uses a loopback URL only, and reports the masked account, approval
+setting, buying power, execution mandate, and market context. It does not run an
+evaluation, change strategy state, reconcile orders, or submit orders. A passing
+result is input for human review, not an activation command.
+
 The agent leaves Robinhood's approval preference unchanged. If approvals are off,
 orders can execute directly. If Robinhood requires approval for a particular
 order, a preview that reports that requirement stops submission. If a placement
