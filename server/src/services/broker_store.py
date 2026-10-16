@@ -180,6 +180,10 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
             raise SdkError("Terminal Robinhood order changed; reconcile manually.")
         if state == "filled" and quantity <= 0:
             raise SdkError("Filled order has no filled quantity.")
+        if row["status"] == "cancel_pending" and state in PENDING:
+            # An open/partial snapshot is not a cancellation failure. Keep the
+            # outstanding cancellation visible until a terminal broker outcome.
+            state = "cancel_pending"
         delta, delta_gross, delta_fees = quantity - old_qty, gross - old_gross, fees - old_fees
         timestamp = now()
         if delta:

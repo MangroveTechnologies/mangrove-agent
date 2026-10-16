@@ -249,7 +249,7 @@ async def test_tick_uses_mangrove_stateless_then_broker_not_dex(ledger, monkeypa
     assert store.execution_inputs("s1", 100)[1] == []
     await execution._tick(venue, "s1")
     assert venue.submit.await_count == 1
-    assert sdk.execution.evaluate_by_object.call_count == 1
+    assert sdk.execution.evaluate_by_object.call_count == 2
     dex.assert_not_called()
 
 
@@ -365,3 +365,116 @@ async def test_mcp_evaluation_runs_broker_tick_on_worker_thread(ledger, monkeypa
     tool = create_mcp_server()._tool_manager._tools["agent_evaluate_strategy"]
     result = json.loads(await tool.run({"strategy_id": "s1", "api_key": "test-key-1"}))
     assert result["status"] == "no_evaluation_recorded"
+
+
+async def test_strategy_reads_expose_broker_mandate_without_account_ids(ledger):
+    from src.mcp.server import create_mcp_server
+
+    expected = {
+        "venue": "robinhood", "asset_class": "crypto", "capital": "1000",
+        "max_order_usd": "500", "slippage_pct": "0.0025",
+    }
+    assert strategy_service.get_strategy("s1").execution_venue.model_dump() == expected
+    assert next(s for s in strategy_service.list_strategies() if s.id == "s1").execution_venue.model_dump() == expected
+    server = create_mcp_server()
+    for name, args in [("agent_get_strategy", {"strategy_id": "s1"}), ("agent_list_strategies", {})]:
+        response = json.loads(await server._tool_manager._tools[name].run({**args, "api_key": "test-key-1"}))
+        result = response if name == "agent_get_strategy" else next(s for s in response if s["id"] == "s1")
+        assert result["execution_venue"] == expected
+        assert "eligible" not in json.dumps(result)
+        assert "numeric" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("cancel_state,cancel_qty", [("canceled", "1"), ("filled", "2"), ("partially_filled", "1")])
+async def test_pending_entry_evaluates_exits_cancels_then_rechecks_holdings(ledger, monkeypatch, cancel_state, cancel_qty):
+    from src.services import portfolio_risk_service
+    from src.shared.clients import mangrove
+
+    reserve()
+    initial = snapshot(qty="1", state="partially_filled")
+    store.apply_snapshot("local", initial, asset_class="crypto")
+    sdk = MagicMock()
+
+    def evaluate(payload, *, persist, open_positions):
+        assert persist is False
+        qty = open_positions[0]["position_size"]
+        modeled = {"success": True, "execution_state": {"cash_balance": 99999}, "open_positions": [],
+                   "new_orders": [dict(order_id="exit", asset="BTC-USD", side="exit_long", status="filled",
+                                       position_size=qty, price=100, position_id="p1")]}
+        return SimpleNamespace(new_orders=modeled["new_orders"], model_dump=lambda: modeled)
+
+    sdk.execution.evaluate_by_object.side_effect = evaluate
+    monkeypatch.setattr(mangrove, "mangrove_ai_client", lambda: sdk)
+    monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": True})
+    after_cancel = snapshot(qty=cancel_qty, state=cancel_state)
+    venue = SimpleNamespace(
+        account=AsyncMock(), quote=AsyncMock(return_value={"ask_price": "100", "bid_price": "100"}),
+        find_order=AsyncMock(side_effect=[initial, after_cancel]), cancel=AsyncMock(),
+        prepare=AsyncMock(), submit=AsyncMock(), sellable=AsyncMock(return_value=Decimal(cancel_qty)),
+    )
+    await execution._tick(venue, "s1")
+    venue.cancel.assert_awaited_once_with(store.route("s1"), "broker-local")
+    venue.submit.assert_not_awaited()
+    venue.prepare.assert_not_awaited()
+    assert sdk.execution.evaluate_by_object.call_count == 1
+    # No modeled cash/closed position is committed before actual execution.
+    state, positions = store.execution_inputs("s1", 100)
+    assert state["cash_balance"] == 1000 - 100 * float(cancel_qty)
+    assert positions[0]["position_size"] == float(cancel_qty)
+    latest = trade_log.list_evaluations("s1", limit=1)[0]
+    assert latest.status == "skipped"
+    assert latest.order_intents[0].side == "sell"
+    if cancel_state == "partially_filled":
+        venue.find_order.side_effect = None
+        venue.find_order.return_value = after_cancel
+        await execution._tick(venue, "s1")
+        venue.submit.assert_not_awaited()
+        assert venue.cancel.await_count == 1
+        assert store.orders("s1", pending=True)[0]["status"] == "cancel_pending"
+        return
+    venue.find_order.side_effect = None
+    venue.prepare.return_value = ({"quantity": cancel_qty}, Decimal(cancel_qty) * 100)
+    venue.submit.return_value = {"order": snapshot(qty=cancel_qty, state="filled", side="sell", oid="exit")}
+    # Have the fake broker echo the newly reserved client ID.
+    async def submit(route, args, ref_id):
+        return {"order": snapshot(qty=args["quantity"], state="filled", side="sell", oid=ref_id)}
+    venue.submit.side_effect = submit
+    await execution._tick(venue, "s1")
+    assert sdk.execution.evaluate_by_object.call_count == 2
+    assert sdk.execution.evaluate_by_object.call_args.kwargs["open_positions"][0]["position_size"] == float(cancel_qty)
+    venue.submit.assert_awaited_once()
+    assert store.execution_inputs("s1", 100)[1] == []
+
+
+@pytest.mark.parametrize("pending_side", ["buy", "sell"])
+async def test_exit_evaluation_never_duplicates_uncertain_order_or_pending_sell(ledger, monkeypatch, pending_side):
+    from src.services import portfolio_risk_service
+    from src.shared.clients import mangrove
+
+    reserve(qty=2)
+    store.apply_snapshot("local", snapshot(qty="2", state="filled"), asset_class="crypto")
+    reserve(side=pending_side, qty=1, oid="pending", key="pending")
+    pending_snapshot = None
+    if pending_side == "sell":
+        pending_snapshot = snapshot(qty="0", price=None, side="sell", state="queued", oid="pending")
+        store.apply_snapshot("pending", pending_snapshot, asset_class="crypto")
+    modeled = {"success": True, "execution_state": {"cash_balance": 99999}, "open_positions": [],
+               "new_orders": [dict(order_id="exit", asset="BTC-USD", side="exit_long", status="filled",
+                                   position_size=2, price=100, position_id="p1")]}
+    sdk = MagicMock()
+    sdk.execution.evaluate_by_object.return_value = SimpleNamespace(
+        new_orders=modeled["new_orders"], model_dump=lambda: modeled)
+    monkeypatch.setattr(mangrove, "mangrove_ai_client", lambda: sdk)
+    monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": True})
+    venue = SimpleNamespace(account=AsyncMock(), find_order=AsyncMock(return_value=pending_snapshot),
+                            quote=AsyncMock(return_value={"ask_price": "100", "bid_price": "100"}),
+                            cancel=AsyncMock(), prepare=AsyncMock(), submit=AsyncMock())
+    await execution._tick(venue, "s1")
+    sdk.execution.evaluate_by_object.assert_called_once()
+    venue.cancel.assert_not_awaited()
+    venue.prepare.assert_not_awaited()
+    venue.submit.assert_not_awaited()
+    state, positions = store.execution_inputs("s1", 100)
+    assert state["cash_balance"] == 800
+    assert positions[0]["position_size"] == 2
+    assert store.orders("s1", pending=True)[0]["status"] == ("uncertain" if pending_side == "buy" else "open")

@@ -87,6 +87,8 @@ class RobinhoodVenue:
                     raise ValueError
             except (TypeError, ValueError, AttributeError):
                 raise SdkError("Robinhood quote is stale or unavailable.") from None
+        if decimal(quote["bid_price"]) > decimal(quote["ask_price"]):
+            raise SdkError("Robinhood quote is crossed; execution stopped.")
         return quote
 
     async def prepare(self, route, intent):

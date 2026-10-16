@@ -12,6 +12,7 @@ from src.services.strategy_service import (
     StrategyAutonomousRequest,
     StrategyDetailResponse,
     StrategyManualRequest,
+    StrategyMarketContext,
     StrategyStatusUpdate,
 )
 from src.shared.auth.dependency import require_api_key
@@ -69,6 +70,11 @@ async def list_strategies(
 )
 async def get_strategy(strategy_id: str) -> StrategyDetailResponse:
     return strategy_service.get_strategy(strategy_id)
+
+
+@router.patch("/{strategy_id}/market", response_model=StrategyDetailResponse)
+async def configure_market(strategy_id: str, req: StrategyMarketContext) -> StrategyDetailResponse:
+    return await run_in_threadpool(strategy_service.configure_market, strategy_id, req)
 
 
 @router.patch(
@@ -129,7 +135,7 @@ class BacktestInput(BaseModel):
     start_date: str | None = None
     end_date: str | None = None
 
-    # Single escape hatch for tuning. Merges over trading_defaults.json.
+    # Per-call overrides over the saved strategy config, then trading defaults.
     config: dict | None = None
 
     # Attach buy-and-hold over the same window as `benchmark` (one OHLCV call;
@@ -151,6 +157,8 @@ async def backtest(strategy_id: str, req: BacktestInput) -> dict:
         timeframe=detail.timeframe,
         entry=detail.entry,
         exit=detail.exit,
+        execution_config=detail.execution_config,
+        market_context=detail.market_context.model_dump() if detail.market_context else {},
     )
     if req.mode == "quick":
         # Quick mode is summary-only; it uses the bulk path which only
@@ -162,7 +170,7 @@ async def backtest(strategy_id: str, req: BacktestInput) -> dict:
         if months is None and req.lookback_days:
             months = max(1, req.lookback_days // 30)
         results = backtest_service.quick_backtest_all(
-            [candidate], lookback_months=months,
+            [candidate], lookback_months=months, config=req.config,
         )
         result = results[0]
     else:
@@ -228,7 +236,10 @@ async def backtest(strategy_id: str, req: BacktestInput) -> dict:
         # over the same window.
         from src.services.benchmark_service import benchmark_for_window
 
-        benchmark = await run_in_threadpool(benchmark_for_window, detail.asset, resolved_window)
+        benchmark = await run_in_threadpool(
+            benchmark_for_window, detail.asset,
+            {**(resolved_window or {}), **candidate.market_context},
+        )
         total_return = full_metrics.get("total_return")
         if benchmark.get("available") and isinstance(total_return, (int, float)):
             benchmark["strategy_minus_benchmark_pct"] = round(

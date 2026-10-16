@@ -40,6 +40,22 @@ def register(server):
         return await call(api_key, broker_execution.configure, strategy_id, allocation)
 
     @server.tool()
+    async def agent_configure_strategy_market(strategy_id: str, market_context: dict, api_key: str = "") -> str:
+        """Set explicit market data for a fresh inactive stateless strategy. Does not activate or trade."""
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            from src.services.strategy_service import StrategyMarketContext, configure_market
+            result = await anyio.to_thread.run_sync(
+                lambda: configure_market(strategy_id, StrategyMarketContext.model_validate(market_context))
+            )
+            return json.dumps(result.model_dump(mode="json"))
+        except ValidationError:
+            return _err("VALIDATION_ERROR", "Supply base_token, quote_token and market_data_venue in uppercase.")
+        except Exception as error:
+            return _handle_agent_error(error)
+
+    @server.tool()
     async def agent_list_venue_orders(strategy_id: str, api_key: str = "") -> str:
         """Read local broker order states and confirmed quantities; account IDs are masked."""
         if not _require(api_key):
@@ -62,6 +78,12 @@ def register(server):
 
     strategy = ToolParam(name="strategy_id", type="string", required=True, description="Local Mangrove strategy UUID")
     definitions = [
+        (
+            "agent_configure_strategy_market",
+            "Set market data for a fresh inactive stateless strategy without activating it.",
+            [strategy, ToolParam(name="market_context", type="object", required=True,
+                                description="Explicit base_token, quote_token and market_data_venue")],
+        ),
         ("agent_robinhood_status", "Robinhood execution venue readiness.", []),
         (
             "agent_configure_execution_venue",

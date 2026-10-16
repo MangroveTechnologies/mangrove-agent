@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from mangrove_ai.models import CreateStrategyRequest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.config import app_config
 from src.models.domain import Evaluation, OrderIntent
@@ -236,6 +236,14 @@ class StrategyAutonomousRequest(BaseModel):
     seed: int | None = None  # reproducibility
 
 
+class StrategyMarketContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    base_token: str = Field(min_length=1, pattern=r"^[A-Z0-9._-]+$")
+    quote_token: str = Field(min_length=1, pattern=r"^[A-Z0-9._-]+$")
+    market_data_venue: str = Field(min_length=1, pattern=r"^[A-Z0-9._-]+$")
+
+
 class StrategyManualRequest(BaseModel):
     name: str
     asset: str
@@ -243,6 +251,7 @@ class StrategyManualRequest(BaseModel):
     entry: list[dict[str, Any]]
     exit: list[dict[str, Any]] = Field(default_factory=list)
     execution_config: dict[str, Any] | None = None
+    market_context: StrategyMarketContext | None = None
     # Which MangroveAI evaluation lane this strategy's ticks use (#151):
     #   'server'    — by-id evaluation; the engine's DB is authoritative for
     #                 engine position state (default).
@@ -276,6 +285,16 @@ class StrategyStatusUpdate(BaseModel):
     allocation: StrategyAllocationInput | None = None
 
 
+class ExecutionVenueResponse(BaseModel):
+    """Public broker mandate; never includes raw account IDs or credentials."""
+
+    venue: str
+    asset_class: str
+    capital: str
+    max_order_usd: str
+    slippage_pct: str
+
+
 class StrategyDetailResponse(BaseModel):
     id: str
     mangrove_id: str
@@ -286,6 +305,8 @@ class StrategyDetailResponse(BaseModel):
     entry: list[dict[str, Any]]
     exit: list[dict[str, Any]]
     execution_config: dict[str, Any]
+    market_context: StrategyMarketContext | None = None
+    execution_venue: ExecutionVenueResponse | None = None
     generation_report: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
@@ -320,6 +341,7 @@ def _insert_cache(
     execution_config: dict[str, Any],
     generation_report: dict[str, Any] | None,
     evaluation_lane: str | None = None,
+    market_context: StrategyMarketContext | None = None,
 ) -> str:
     """Insert a row into local strategies cache. Returns our local UUID.
 
@@ -342,8 +364,8 @@ def _insert_cache(
         """INSERT INTO strategies
            (id, mangrove_id, name, asset, timeframe, status,
             entry_json, exit_json, execution_config_json,
-            generation_report_json, evaluation_lane, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            generation_report_json, evaluation_lane, created_at, updated_at, market_context_json)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             local_id, mangrove_id,
             getattr(mangrove_detail, "name", "unnamed"),
@@ -356,6 +378,7 @@ def _insert_cache(
             json.dumps(generation_report) if generation_report else None,
             evaluation_lane,
             now, now,
+            market_context.model_dump_json() if market_context else None,
         ),
     )
     get_connection().commit()
@@ -420,10 +443,42 @@ def _stateless_strategy_dict(row: Any) -> dict[str, Any]:
         "execution_config": execution_config,
         "execution_state": execution_state or dict(_FRESH_EXECUTION_STATE),
         "position_size_calc": execution_config.get("position_size_calc", "v2"),
+        **_market_context(row),
     }
 
 
+def _market_context(row: Any) -> dict[str, str]:
+    raw = row["market_context_json"] if "market_context_json" in row.keys() else None
+    return StrategyMarketContext.model_validate_json(raw).model_dump() if raw else {}
+
+
+def configure_market(strategy_id: str, market: StrategyMarketContext) -> StrategyDetailResponse:
+    """Set the market for a fresh inactive, caller-owned strategy. No evaluation or activation."""
+    from src.services.broker_execution import _lock
+
+    with _lock:
+        row = _get_row(strategy_id)
+        if row["status"] not in {"draft", "inactive"} or _resolve_evaluation_lane(row) != "stateless":
+            raise StrategyInvalidStatusTransition("Market configuration requires an inactive stateless strategy.")
+        if market.base_token != row["asset"]:
+            raise SdkError("Market base token must match the strategy asset.")
+        conn = get_connection()
+        for table in ("trades", "broker_orders", "positions"):
+            if conn.execute(f"SELECT 1 FROM {table} WHERE strategy_id=? LIMIT 1", (strategy_id,)).fetchone():
+                raise SdkError("A strategy with execution history cannot change markets; create a new strategy.")
+        conn.execute(
+            "UPDATE strategies SET market_context_json=?, updated_at=? WHERE id=?",
+            (market.model_dump_json(), datetime.now(timezone.utc).isoformat(), strategy_id),
+        )
+        conn.commit()
+        return get_strategy(strategy_id)
+
+
 def _row_to_response(row: Any) -> StrategyDetailResponse:
+    route = get_connection().execute(
+        "SELECT venue,asset_class,capital,max_order_usd,slippage_pct FROM broker_routes WHERE strategy_id=?",
+        (row["id"],),
+    ).fetchone()
     return StrategyDetailResponse(
         id=row["id"],
         mangrove_id=row["mangrove_id"],
@@ -434,6 +489,8 @@ def _row_to_response(row: Any) -> StrategyDetailResponse:
         entry=json.loads(row["entry_json"] or "[]"),
         exit=json.loads(row["exit_json"] or "[]"),
         execution_config=json.loads(row["execution_config_json"] or "{}"),
+        market_context=_market_context(row) or None,
+        execution_venue=ExecutionVenueResponse(**dict(route)) if route else None,
         generation_report=json.loads(row["generation_report_json"]) if row["generation_report_json"] else None,
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
@@ -569,6 +626,8 @@ def create_manual(req: StrategyManualRequest) -> StrategyDetailResponse:
     ]
 
     _validate_composition(entry, exit_rules)
+    if req.market_context and req.market_context.base_token != req.asset:
+        raise SdkError("Market base token must match the strategy asset.")
 
     # Created as `inactive`, deliberately NOT `draft`. In MangroveAI a draft
     # is an UNPROVEN strategy: its update_status refuses draft → paper/live,
@@ -584,6 +643,7 @@ def create_manual(req: StrategyManualRequest) -> StrategyDetailResponse:
                 entry=entry, exit=exit_rules,
                 status="inactive",
                 execution_config=req.execution_config,
+                **(req.market_context.model_dump() if req.market_context else {}),
             ),
         )
     except Exception as e:  # noqa: BLE001
@@ -596,6 +656,7 @@ def create_manual(req: StrategyManualRequest) -> StrategyDetailResponse:
         execution_config=req.execution_config or backtest_service.flattened_defaults(),
         generation_report=None,
         evaluation_lane=req.evaluation_lane,
+        market_context=req.market_context,
     )
     row = _get_row(local_id)
     resp = _row_to_response(row)

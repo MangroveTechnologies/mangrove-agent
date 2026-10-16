@@ -176,3 +176,18 @@ async def test_output_contract_error_does_not_echo_account_data():
     with pytest.raises(SdkError, match="output contract mismatch") as error:
         await robinhood_client.invoke(client, {"get_accounts": tool}, "get_accounts", {})
     assert "secret-account" not in str(error.value)
+
+
+@pytest.mark.parametrize("asset_class", ["crypto", "equity"])
+async def test_crossed_quote_rejected_before_order_preview(venue, asset_class):
+    adapter, replies, calls = venue
+    quote = dict(replies["get_crypto_quotes"]["results"][0], bid_price="101", ask_price="100")
+    if asset_class == "crypto":
+        replies["get_crypto_quotes"]["results"] = [quote]
+    else:
+        quote.update(symbol="BTC", venue_bid_time=quote["bid_time"], venue_ask_time=quote["ask_time"])
+        replies["get_equity_quotes"] = {"results": [{"quote": quote}]}
+    with pytest.raises(SdkError, match="crossed"):
+        await adapter.quote({**ROUTE, "asset_class": asset_class}, "BTC")
+    assert all(name not in {"preview_crypto_order", "review_equity_order", "place_crypto_order", "place_equity_order"}
+               for name, _ in calls)

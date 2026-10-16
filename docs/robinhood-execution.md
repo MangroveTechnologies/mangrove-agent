@@ -31,7 +31,12 @@ multiple independent processes must not concurrently refresh the same OAuth gran
 
 1. Use Mangrove's existing research, create, and backtest tools to prepare an
    inactive strategy. Its asset must be USD quoted. Start with a fresh strategy;
-   strategies with paper/live trade history cannot change venues.
+   strategies with paper/live trade history cannot change venues. Pass explicit
+   `market_context` (`base_token`, `quote_token`, `market_data_venue`) when creating
+   it, or use `agent_configure_strategy_market` while it is fresh and inactive.
+   The market-data source can differ from the execution venue. Saved-strategy
+   backtests inherit both this context and the stored execution configuration;
+   per-call `config` overrides do not change the saved strategy.
 2. Call `agent_robinhood_status` to verify the eligible account, approval setting,
    and available buying power. Only the account authorized for this agent is used.
 3. Call `agent_configure_execution_venue` with the local strategy ID and the
@@ -69,6 +74,9 @@ until its outcome is known. It never bypasses broker controls.
 
 ## Observe and stop
 
+- `agent_get_strategy` and `agent_list_strategies` report `execution_venue`
+  separately from `market_context`, including the broker capital and order cap.
+  These responses never include raw broker account identifiers.
 - `agent_list_venue_orders(strategy_id)` shows local order identity, broker order
   identity, state, confirmed quantity, notional, and fees.
 - `agent_reconcile_venue_orders(strategy_id)` reads broker history and updates
@@ -115,14 +123,21 @@ liquidated positions are not automatically reconciled into the strategy book.
 
 - Long-only spot crypto and whole-share equities; limit orders only. Crypto
   quantities round down to venue increments. Fractional equity intent is rejected.
+- Crossed quotes (bid greater than ask) are rejected before preview or placement.
 - Equity placement is restricted to regular weekday market hours. Fresh quotes,
   tradability, and broker pre-trade checks must also pass. Crypto pairs must support
   both sides and limit orders.
 - One actionable Mangrove intent per evaluation and one pending order per strategy.
   Multi-order evaluations are rejected before placement.
 - Bracket exits are evaluated by Mangrove on the strategy schedule. They are not
-  native standing Robinhood protective orders. While an order is pending, strategy
-  evaluation waits for a terminal outcome. The local agent must remain running.
+  native standing Robinhood protective orders. Pending orders do not stop
+  evaluation of confirmed holdings. If Mangrove requests an exit while an entry
+  remainder is pending, the adapter requests cancellation of that entry. It waits
+  for a confirmed terminal outcome and re-evaluates the resulting holdings on the
+  next scheduled tick before placing an exit. Pending sells and unknown placements
+  continue blocking new orders; evaluation cannot make an uncertain order safe to
+  duplicate. Exit execution can therefore still be delayed by broker uncertainty
+  and the strategy schedule. The local agent must remain running.
 - Risk state from a modeled trade advances only after an actual fill. Partial fills
   can conservatively retain the modeled trade's cooldown/counter effects. If an
   actual exit loss differs from a modeled non-loss, new entries latch off with

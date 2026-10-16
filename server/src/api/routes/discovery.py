@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter
 
+from src import __version__
 from src.config import app_config
 from src.services.scheduler_service import active_job_count
 from src.shared.db.sqlite import get_connection
@@ -114,7 +115,7 @@ async def status() -> dict:
     ).fetchall()
     counts = Counter(r["status"] for r in strategy_rows)
 
-    server_version = _pkg_version("mangrove-agent") or "0.1.0"
+    server_version = __version__
 
     return {
         "version": server_version,

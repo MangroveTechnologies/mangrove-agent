@@ -192,18 +192,7 @@ async def _tick(venue, strategy_id):
         return
     if not portfolio_risk_service.check_before_live_execution()["allowed"]:
         return
-    if store.orders(strategy_id, pending=True):
-        trade_log.log_evaluation(
-            Evaluation(
-                id=str(uuid.uuid4()),
-                strategy_id=strategy_id,
-                timestamp=trade_log.now_utc(),
-                duration_ms=0,
-                status="skipped",
-                error_msg="Broker order still pending or uncertain.",
-            )
-        )
-        return
+    pending = store.orders(strategy_id, pending=True)
     symbol = row["asset"].removesuffix("-USD")
     quote = await venue.quote(route, symbol)
     mark = float((store.decimal(quote["ask_price"]) + store.decimal(quote["bid_price"])) / 2)
@@ -221,13 +210,15 @@ async def _tick(venue, strategy_id):
         raise SdkError("Mangrove evaluation did not succeed; no broker order submitted.")
     eid = str(uuid.uuid4())
     intents = strategy_service._extract_order_intents(result, strategy_id=strategy_id, tick_id=eid)
+    blocked = bool(pending and intents)
     trade_log.log_evaluation(
         Evaluation(
             id=eid,
             strategy_id=strategy_id,
             timestamp=trade_log.now_utc(),
             duration_ms=0,
-            status="ok",
+            status="skipped" if blocked else "ok",
+            error_msg="Execution deferred until pending broker orders reconcile." if blocked else None,
             sdk_response=dump,
             order_intents=intents,
             market_snapshot=strategy_service._market_snapshot(dump, asset=row["asset"]),
@@ -235,6 +226,21 @@ async def _tick(venue, strategy_id):
     )
     if not intents and any(o.get("status") == "filled" for o in dump.get("new_orders") or []):
         raise SdkError("Mangrove returned an unsupported filled intent; execution stopped.")
+    if blocked:
+        # Keep evaluating confirmed holdings, but never submit against an
+        # uncertain book. An exit takes priority over the unfilled remainder of
+        # an entry. Cancellation can race a fill: reconcile, then evaluate the
+        # resulting holdings afresh on the next scheduled tick.
+        needs_exit = any(
+            i.action == "exit" and i.side == "sell" and i.symbol == symbol
+            and any(p["id"] == i.engine_position_id for p in positions)
+            for i in intents
+        )
+        if needs_exit and strategy_service._get_row(strategy_id)["status"] == "live":
+            for order in pending:
+                if json.loads(order["intent_json"])["side"] == "buy" and order["broker_order_id"] and order["status"] != "cancel_pending":
+                    await cancel(venue, order["id"])
+        return
     if not intents:
         # Advance non-execution risk/cooldown state only when no modeled trade
         # occurred. Broker cash and positions always overwrite it next tick.

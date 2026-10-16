@@ -9,7 +9,14 @@
   "homepage": "https://mangrovedeveloper.ai",
   "repository": "https://github.com/MangroveTechnologies/mangrove-agent",
   "license": "MIT",
-  "keywords": ["trading", "backtesting", "defi", "kraken", "robinhood", "mcp"],
+  "keywords": [
+    "trading",
+    "backtesting",
+    "defi",
+    "kraken",
+    "robinhood",
+    "mcp"
+  ],
   "userConfig": {
     "mangrove_api_key": {
       "type": "string",
@@ -36,7 +43,8 @@
     "./.claude/skills/sweep",
     "./.claude/skills/custom-signal",
     "./.claude/skills/setup-kraken",
-    "./.claude/skills/connect-kraken"
+    "./.claude/skills/connect-kraken",
+    "./.claude/skills/setup-robinhood"
   ],
   "hooks": "./.claude-plugin/hooks.json",
   "mcpServers": {

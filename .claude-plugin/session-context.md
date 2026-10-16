@@ -20,7 +20,7 @@ and keys run on this machine under `${MANGROVE_AGENT_HOME}`.
   without substituting local tools or guessing their arguments.
 - Procedure skills for this agent's own tools: `create-strategy` (reference strategies, autonomous
   mode), `backtest` (window sizing + threshold verdict), `sieve`, `sweep` (server sweep workflow),
-  `custom-signal`, `setup-kraken`, `connect-kraken`. When both kinds apply, load both -- e.g.
+  `custom-signal`, `setup-kraken`, `connect-kraken`, `setup-robinhood`. When both kinds apply, load both -- e.g.
   `backtest` for the window and verdict, `backtesting` for what you may claim about the run.
 - A strategy's return is never quoted alone. Local `agent_backtest_strategy` attaches `benchmark`
   (buy-and-hold over the same window); read local runs with `agent_list_backtests` /

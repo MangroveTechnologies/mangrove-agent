@@ -190,7 +190,11 @@ Schedules the strategy on a cron at the strategy's timeframe. Evaluations fire, 
 
 **Going live (optional, needs funds).**
 
-Wallet setup and live trading are in Chapters 06 and 07 of the tutorial. The summary:
+For Robinhood, use the bundled `setup-robinhood` skill and
+[execution-venue setup](docs/robinhood-execution.md). It uses broker OAuth and
+needs no local trading wallet.
+
+For DEX execution, wallet setup and live trading are in Chapters 06 and 07 of the tutorial:
 
 - Create or import a wallet via `create_wallet` / `stash-secret.sh` + `import_wallet`.
 - Save the secret via `./scripts/reveal-secret.sh <vault_token>` in your terminal (never in the chat).

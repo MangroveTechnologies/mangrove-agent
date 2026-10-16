@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from x402.http.middleware.fastapi import payment_middleware
 
+from src import __version__
 from src.api.router import api_router, x402_router
 from src.config import app_config
 from src.health import health_payload
@@ -136,7 +137,7 @@ def create_app() -> FastAPI:
             "| Auth | `X-API-Key` header |\n"
             "| x402 | Payment via x402 protocol (or API key for free access) |\n"
         ),
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
         openapi_tags=[
             {"name": "discovery", "description": "API and tool discovery endpoints (free, no auth)"},

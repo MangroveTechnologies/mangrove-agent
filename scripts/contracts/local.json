@@ -223,6 +223,29 @@
         "type": "object"
       }
     },
+    "agent_configure_strategy_market": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "market_context": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "market_context",
+          "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
     "agent_create_strategy_autonomous": {
       "access": "auth",
       "inputSchema": {
@@ -306,6 +329,18 @@
                   "type": "object"
                 },
                 "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "market_context": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"

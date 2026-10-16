@@ -1038,6 +1038,7 @@ def _register_strategy(server: FastMCP) -> None:
         name: str, asset: str, timeframe: str,
         entry: list[dict], exit: list[dict] | None = None,
         execution_config: dict | None = None, api_key: str = "",
+        market_context: dict | None = None,
     ) -> str:
         """Manual strategy creation with explicit rules."""
         if not _require(api_key):
@@ -1051,6 +1052,7 @@ def _register_strategy(server: FastMCP) -> None:
                 name=name, asset=asset, timeframe=timeframe,
                 entry=entry, exit=exit or [],
                 execution_config=execution_config,
+                market_context=market_context,
             ))
             return json.dumps(detail.model_dump(mode="json"))
         except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
@@ -1073,6 +1075,7 @@ def _register_strategy(server: FastMCP) -> None:
             ToolParam(name="entry", type="array", required=True, description="Entry rules"),
             ToolParam(name="exit", type="array", required=False, description="Exit rules"),
             ToolParam(name="execution_config", type="object", required=False, description="Override exec params"),
+            ToolParam(name="market_context", type="object", required=False, description="Explicit base_token, quote_token and market_data_venue"),
             _APIKEY,
         ],
     ))
@@ -1316,11 +1319,11 @@ def _register_strategy(server: FastMCP) -> None:
           > lookback_months > timeframes.recommended_lookback_months
           (5m/15m/30m/1h → 3 mo, 4h → 6 mo, 1d → 12 mo).
 
-        `config` is a single dict that merges over the canonical
-        trading_defaults.json. Any SDK BacktestRequest field is valid —
+        `config` merges over the saved strategy execution_config, which
+        itself takes precedence over trading_defaults.json. Any SDK BacktestRequest field is valid —
         slippage_pct, fee_pct, max_hold_time_hours, initial_balance,
         max_risk_per_trade, reward_factor, atr_period, etc. Omit the
-        argument entirely to get a pure trading-defaults backtest.
+        argument to backtest the saved settings and market context unchanged.
         """
         if not _require(api_key):
             return _auth_error()

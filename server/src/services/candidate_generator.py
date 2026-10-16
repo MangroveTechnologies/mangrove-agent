@@ -18,7 +18,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.shared.clients.mangrove import mangrove_ai_client
 from src.shared.errors import StrategyNoViableCandidates
@@ -82,6 +82,8 @@ class StrategyCandidate(BaseModel):
     timeframe: str
     entry: list[dict[str, Any]]
     exit: list[dict[str, Any]]
+    execution_config: dict[str, Any] = Field(default_factory=dict)
+    market_context: dict[str, str] = Field(default_factory=dict)
 
 
 def parse_goal(goal: str) -> dict[str, list[str]]:
