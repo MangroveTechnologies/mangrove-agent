@@ -1,0 +1,559 @@
+{
+  "cancel_crypto_order": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "rhs_account_number": {
+          "type": "string"
+        },
+        "order_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rhs_account_number",
+        "order_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "cancel_equity_order": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "order_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_number",
+        "order_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "get_accounts": {
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  "get_crypto_orders": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "rhs_account_number": {
+          "type": "string"
+        },
+        "order_id": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "state_group": {
+          "type": "string"
+        },
+        "side": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "created_at_gte": {
+          "type": "string"
+        },
+        "updated_at_gte": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rhs_account_number"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "get_crypto_positions": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "rhs_account_number": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rhs_account_number"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "get_crypto_quotes": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "symbols": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "rhs_account_number": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbols"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "get_currency_pairs": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "get_equity_orders": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "order_id": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "created_at_gte": {
+          "type": "string"
+        },
+        "placed_agent": {
+          "type": "string"
+        },
+        "agent_initiated": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_number"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "get_equity_positions": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_number"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "get_equity_quotes": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "symbols": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "symbols"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "get_equity_tradability": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "symbols": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "account_number",
+        "symbols"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "get_portfolio": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_number"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "get_trade_approval_setting": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_number"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "get_trade_approvals": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "asset_class": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "approval_ids": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "account_number"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "place_crypto_order": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "rhs_account_number": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "side": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "quantity": {
+          "type": "string"
+        },
+        "dollar_amount": {
+          "type": "string"
+        },
+        "limit_price": {
+          "type": "string"
+        },
+        "stop_price": {
+          "type": "string"
+        },
+        "time_in_force": {
+          "type": "string"
+        },
+        "tax_lots": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "open_lot_id": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "open_lot_id",
+              "quantity"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "ref_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rhs_account_number",
+        "symbol",
+        "side",
+        "type"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "place_equity_order": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "side": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "quantity": {
+          "type": "string"
+        },
+        "dollar_amount": {
+          "type": "string"
+        },
+        "limit_price": {
+          "type": "string"
+        },
+        "stop_price": {
+          "type": "string"
+        },
+        "time_in_force": {
+          "type": "string"
+        },
+        "market_hours": {
+          "type": "string"
+        },
+        "tax_lots": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "open_lot_id": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "open_lot_id",
+              "quantity"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "ref_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_number",
+        "symbol",
+        "side",
+        "type"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "preview_crypto_order": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "rhs_account_number": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "side": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "quantity": {
+          "type": "string"
+        },
+        "dollar_amount": {
+          "type": "string"
+        },
+        "limit_price": {
+          "type": "string"
+        },
+        "stop_price": {
+          "type": "string"
+        },
+        "time_in_force": {
+          "type": "string"
+        },
+        "tax_lots": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "open_lot_id": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "open_lot_id",
+              "quantity"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "rhs_account_number",
+        "symbol",
+        "side",
+        "type"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "review_equity_order": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "side": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "quantity": {
+          "type": "string"
+        },
+        "dollar_amount": {
+          "type": "string"
+        },
+        "limit_price": {
+          "type": "string"
+        },
+        "stop_price": {
+          "type": "string"
+        },
+        "time_in_force": {
+          "type": "string"
+        },
+        "market_hours": {
+          "type": "string"
+        },
+        "tax_lots": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "open_lot_id": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "open_lot_id",
+              "quantity"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "account_number",
+        "symbol",
+        "side",
+        "type"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -94,7 +94,10 @@ def compute_book_value() -> float:
              JOIN strategies s ON s.id = t.strategy_id
             WHERE s.status = 'live' AND t.p_and_l IS NOT NULL"""
     ).fetchone()["v"]
-    return float(committed) + float(realized)
+    broker_capital = conn.execute(
+        "SELECT COALESCE(SUM(CAST(b.capital AS REAL)),0) FROM broker_routes b JOIN strategies s ON s.id=b.strategy_id WHERE s.status='live'"
+    ).fetchone()[0]
+    return float(committed) + float(broker_capital) + float(realized)
 
 
 def get_status() -> dict:

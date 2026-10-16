@@ -7,6 +7,7 @@
 from fastapi import APIRouter
 
 from src.api.routes.backtests import router as backtests_router
+from src.api.routes.brokers import router as brokers_router
 from src.api.routes.cex import router as cex_router
 from src.api.routes.dex import router as dex_router
 from src.api.routes.discovery import router as discovery_router
@@ -32,6 +33,7 @@ agent_router = APIRouter(prefix="/agent")
 agent_router.include_router(discovery_router, tags=["discovery"])
 agent_router.include_router(wallet_router)
 agent_router.include_router(cex_router)
+agent_router.include_router(brokers_router)
 agent_router.include_router(dex_router)
 agent_router.include_router(market_router)
 agent_router.include_router(marketplace_router)

@@ -149,6 +149,53 @@ def test_create_autonomous_no_viable_candidates(temp_db, mock_ai_sdk):
         ))
 
 
+def test_explicit_market_survives_creation_and_stateless_evaluation(temp_db, mock_ai_sdk):
+    from src.services import strategy_service as service
+
+    market = {"base_token": "XLM", "quote_token": "USD", "market_data_venue": "KRAKEN"}
+    detail = service.create_manual(service.StrategyManualRequest(
+        name="Explicit market", asset="XLM", timeframe="1h",
+        entry=[{"name": "mom_cross_up", "signal_type": "TRIGGER", "timeframe": "1h"}],
+        execution_config={"initial_balance": 200}, evaluation_lane="stateless",
+        market_context=market,
+    ))
+    request = mock_ai_sdk.strategies.create.call_args.args[0].model_dump()
+    assert all(request[k] == v for k, v in market.items())
+    assert service.get_strategy(detail.id).market_context.model_dump() == market
+    payload = service._stateless_strategy_dict(service._get_row(detail.id))
+    assert all(payload[k] == v for k, v in market.items())
+    assert payload["execution_config"] == {"initial_balance": 200}
+
+
+def test_market_configuration_preserves_rules_and_requires_inactive_stateless(temp_db, mock_ai_sdk):
+    from src.services import strategy_service as service
+    from src.shared.db.sqlite import get_connection
+    from src.shared.errors import SdkError, StrategyInvalidStatusTransition
+
+    detail = service.create_manual(service.StrategyManualRequest(
+        name="Staged market", asset="XLM", timeframe="1h",
+        entry=[{"name": "mom_cross_up", "signal_type": "TRIGGER", "timeframe": "1h"}],
+        execution_config={"initial_balance": 200}, evaluation_lane="stateless",
+    ))
+    market = service.StrategyMarketContext(base_token="XLM", quote_token="USD", market_data_venue="KRAKEN")
+    before = service.get_strategy(detail.id)
+    after = service.configure_market(detail.id, market)
+    assert after.status == "inactive"
+    assert after.entry == before.entry and after.execution_config == before.execution_config
+    assert after.market_context == market
+    with pytest.raises(SdkError, match="base token"):
+        service.configure_market(detail.id, market.model_copy(update={"base_token": "ETH"}))
+    conn = get_connection()
+    conn.execute("UPDATE strategies SET status='live' WHERE id=?", (detail.id,))
+    conn.commit()
+    with pytest.raises(StrategyInvalidStatusTransition):
+        service.configure_market(detail.id, market)
+    conn.execute("UPDATE strategies SET status='inactive', evaluation_lane='server' WHERE id=?", (detail.id,))
+    conn.commit()
+    with pytest.raises(StrategyInvalidStatusTransition):
+        service.configure_market(detail.id, market)
+
+
 def test_create_manual_happy_path(temp_db, mock_ai_sdk):
     from src.services.strategy_service import StrategyManualRequest, create_manual
 
@@ -160,6 +207,57 @@ def test_create_manual_happy_path(temp_db, mock_ai_sdk):
         exit=[],
     ))
     assert detail.mangrove_id.startswith("mg-new-")
+
+
+@pytest.mark.parametrize("timeframe", ["5m", "5MIN"])
+def test_manual_sma_test_carries_requested_candles_upstream_and_locally(temp_db, mock_ai_sdk, timeframe):
+    from src.services.strategy_service import StrategyManualRequest, create_manual, get_strategy
+
+    entry = [{"name": "sma_cross_up", "signal_type": "TRIGGER",
+              "params": {"window_fast": 3, "window_slow": 5}}]
+    exits = [{"name": "sma_cross_down", "signal_type": "TRIGGER",
+              "params": {"window_fast": 3, "window_slow": 5}}]
+    detail = create_manual(StrategyManualRequest(
+        name="ETH 5m SMA 3/5 Test", asset="ETH", timeframe=timeframe,
+        entry=entry, exit=exits,
+    ))
+
+    upstream = mock_ai_sdk.strategies.create.call_args.args[0].model_dump()
+    assert upstream["entry"] == [{**entry[0], "timeframe": "5m"}]
+    assert upstream["exit"] == [{**exits[0], "timeframe": "5m"}]
+    saved = get_strategy(detail.id)
+    assert saved.timeframe == "5m"
+    assert saved.entry == upstream["entry"]
+    assert saved.exit == upstream["exit"]
+    assert "timeframe" not in entry[0]
+    assert "timeframe" not in exits[0]
+
+
+def test_manual_preserves_explicit_rule_candle_sizes(temp_db, mock_ai_sdk):
+    from src.services.strategy_service import StrategyManualRequest, create_manual
+
+    detail = create_manual(StrategyManualRequest(
+        name="multi timeframe", asset="ETH", timeframe="5m",
+        entry=[{"name": "sma_cross_up", "signal_type": "TRIGGER", "timeframe": "15MIN"}],
+        exit=[{"name": "sma_cross_down", "signal_type": "TRIGGER", "timeframe": "1h"}],
+    ))
+    upstream = mock_ai_sdk.strategies.create.call_args.args[0]
+    assert upstream.entry[0]["timeframe"] == "15m"
+    assert upstream.exit[0]["timeframe"] == "1h"
+    assert detail.timeframe == "15m"
+
+
+def test_manual_rejects_unsupported_rule_timeframe_before_saving(temp_db, mock_ai_sdk):
+    from src.services.strategy_service import StrategyManualRequest, create_manual
+    from src.shared.errors import ValidationError
+
+    with pytest.raises(ValidationError):
+        create_manual(StrategyManualRequest(
+            name="unsupported", asset="ETH", timeframe="5m",
+            entry=[{"name": "sma_cross_up", "signal_type": "TRIGGER"}],
+            exit=[{"name": "sma_cross_down", "signal_type": "TRIGGER", "timeframe": "1m"}],
+        ))
+    mock_ai_sdk.strategies.create.assert_not_called()
 
 
 def test_create_manual_same_rules_twice_returns_existing_strategy(temp_db, mock_ai_sdk):

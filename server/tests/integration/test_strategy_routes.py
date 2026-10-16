@@ -252,3 +252,39 @@ def test_evaluate_manual_tick(client):
 
 def test_auth_required(client):
     assert client.get("/api/v1/agent/strategies").status_code == 401
+
+
+@pytest.mark.parametrize("mode", ["full", "quick"])
+def test_saved_backtest_preserves_configuration_market_and_overrides(client, mode):
+    import json
+
+    from src.services import backtest_service
+
+    sdk = backtest_service.mangrove_ai_client()
+    market = {"base_token": "ETH", "quote_token": "USD", "market_data_venue": "KRAKEN"}
+    saved_config = {"initial_balance": 200, "max_risk_per_trade": 0.007,
+                    "reward_factor": 2, "cooldown_config": {"1h": {"short_loss_limit": 3}}}
+    created = client.post("/api/v1/agent/strategies/manual", headers=_auth(), json={
+        "name": "saved context", "asset": "ETH", "timeframe": "1h",
+        "entry": [{"name": "mom_cross_up", "signal_type": "TRIGGER", "timeframe": "1h"}],
+        "execution_config": saved_config, "market_context": market,
+    }).json()
+    response = client.post(f"/api/v1/agent/strategies/{created['id']}/backtest", headers=_auth(), json={
+        "mode": mode, "lookback_months": 1, "config": {"reward_factor": 2.5},
+    })
+    assert response.status_code == 200, response.text
+    method = sdk.backtesting.submit_async if mode == "full" else sdk.backtesting.run
+    request = method.call_args.args[0].model_dump()
+    assert request["initial_balance"] == 200
+    assert request["max_risk_per_trade"] == 0.007
+    assert request["reward_factor"] == 2.5
+    assert request["cooldown_config"] == saved_config["cooldown_config"]
+    for key, value in market.items():
+        assert request[key] == value
+        assert json.loads(request["strategy_json"])[key] == value
+    if mode == "full":
+        assert all(sdk.backtesting.get_benchmark.call_args.kwargs[k] == v for k, v in market.items())
+    # Per-call overrides must not mutate the saved strategy.
+    detail = client.get(f"/api/v1/agent/strategies/{created['id']}", headers=_auth()).json()
+    assert detail["execution_config"]["reward_factor"] == 2
+    assert detail["execution_venue"] is None

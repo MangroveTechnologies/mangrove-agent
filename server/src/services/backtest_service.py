@@ -344,7 +344,7 @@ def _build_request(
 ) -> BacktestRequest:
     """Build a BacktestRequest from a candidate + canonical trading defaults.
 
-    `config` is merged over `flattened_defaults()` — the single source of
+    `config` is merged over the candidate execution config and `flattened_defaults()` — the single source of
     truth is `data/trading_defaults.json`. Any key a caller passes in
     `config` wins. Keys the SDK doesn't recognize are forwarded anyway
     (BacktestRequest has `model_config={'extra': 'allow'}`, verified
@@ -357,19 +357,21 @@ def _build_request(
     # src.shared.timeframes.canonicalize_timeframe for the whitelist.
     interval = timeframes.canonicalize_timeframe(candidate.timeframe)
 
-    merged = {**flattened_defaults(), **(config or {})}
+    merged = {**flattened_defaults(), **candidate.execution_config, **(config or {})}
 
     strategy_json = json.dumps({
         "name": candidate.name,
         "asset": candidate.asset,
         "entry": candidate.entry,
         "exit": candidate.exit or [],
+        **candidate.market_context,
     })
     kwargs: dict[str, Any] = {
         "asset": candidate.asset,
         "interval": interval,
         "strategy_json": strategy_json,
         **merged,
+        **candidate.market_context,
         "lookback_months": lookback_months if not start_date else None,
         "start_date": start_date,
         "end_date": end_date,
@@ -406,6 +408,7 @@ def _summarize(
 def quick_backtest_all(
     candidates: list[StrategyCandidate],
     lookback_months: int | None = None,
+    config: dict[str, Any] | None = None,
 ) -> list[CandidateBacktestResult]:
     """Run a backtest for every candidate. Per-candidate failures do not
     abort the batch — the result's .success and .error fields carry the
@@ -427,7 +430,7 @@ def quick_backtest_all(
     for c in candidates:
         try:
             raw = client.backtesting.run(
-                _build_request(c, lookback_months=lookback_months),
+                _build_request(c, lookback_months=lookback_months, config=config),
             )
             results.append(_summarize(c, raw))
         except Exception as e:  # noqa: BLE001 — SDK may raise arbitrary subclasses
@@ -567,6 +570,7 @@ def full_backtest(
             "start_date": resolved_start,
             "end_date": resolved_end,
             "requested_timeframe": candidate.timeframe,
+            **candidate.market_context,
         },
     }
 

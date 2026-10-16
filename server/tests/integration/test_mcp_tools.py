@@ -86,7 +86,7 @@ def test_all_expected_tools_registered(mcp_server):
 @pytest.mark.asyncio
 async def test_status_free_no_auth(mcp_server):
     result = await _call(mcp_server, "status")
-    assert result["version"] == "0.1.0"
+    assert result["version"] == "0.2.0"
     assert "wallets_count" in result
 
 

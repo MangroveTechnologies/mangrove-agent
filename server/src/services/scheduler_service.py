@@ -121,6 +121,8 @@ def _on_job_event(event: Any) -> None:
 def start() -> None:
     """Start the scheduler. Called from the FastAPI lifespan startup."""
     sched = get_scheduler()
+    sched.add_job('src.services.broker_execution:reconcile_pending', trigger='interval', seconds=15,
+                  id='broker-reconciliation', replace_existing=True, coalesce=True, max_instances=1)
     from src.services.payment_reconciliation_worker import configured_urls
     if configured_urls():
         sched.add_job('src.services.payment_reconciliation_worker:run_once', trigger='interval', seconds=15,
@@ -201,13 +203,15 @@ def cancel_job(strategy_id: str) -> bool:
 
 
 def list_active_jobs() -> list[dict]:
-    """Return a summary of all active jobs.
+    """Return a summary of active strategy jobs.
 
     Used by GET /status to show active_cron_jobs and by debugging tools.
     """
     sched = get_scheduler()
     out: list[dict] = []
     for job in sched.get_jobs():
+        if not job.id.startswith("eval-"):
+            continue
         strategy_id = job.id.removeprefix("eval-") if job.id.startswith("eval-") else None
         out.append({
             "job_id": job.id,
@@ -220,7 +224,7 @@ def list_active_jobs() -> list[dict]:
 
 def active_job_count() -> int:
     """Cheap count of active jobs (for GET /status)."""
-    return len(get_scheduler().get_jobs())
+    return sum(job.id.startswith("eval-") for job in get_scheduler().get_jobs())
 
 
 # Exposed for tests that want to wait on a job without sleeping.

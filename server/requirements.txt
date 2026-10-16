@@ -16,9 +16,6 @@ google-cloud-secret-manager>=2.20.0
 PyJWT>=2.9.0
 
 # mangrove-agent SDKs + infra.
-# Upper bounds pinned at the next minor: both SDKs are at 0.1.x (Alpha)
-# and minor bumps may carry breaking changes. Revisit pins when either
-# stabilizes to 1.0.
 # Note: PyPI distribution name is `mangroveai` (no hyphen); the import
 # path is `from mangrove_ai import ...`. Distribution-name-≠-import-name
 # is normal Python packaging (Pillow/PIL, beautifulsoup4/bs4, etc.).
@@ -44,7 +41,8 @@ PyJWT>=2.9.0
 # 1.14, and the backtest skill no longer tells the agent to walk shorter windows
 # around the old ~15s gateway ceiling (https://github.com/MangroveTechnologies/mangrove-agent/pull/154).
 # 1.19.0 adds market-qualified benchmarks and complete market-data read contracts.
-mangroveai>=1.19.0,<2.0.0
+# 2.0.0 adds regime-window/venue metadata and removes obsolete market_era.
+mangroveai>=2.0.0,<3.0.0
 # mangrovemarkets 1.0.0 moved EVM wallet keypair generation client-side.
 # The agent's wallet_manager.create_wallet() is unaffected — the SDK
 # call signature is unchanged, only the implementation shifted from

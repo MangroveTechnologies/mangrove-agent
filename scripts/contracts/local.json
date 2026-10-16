@@ -182,6 +182,70 @@
         "type": "object"
       }
     },
+    "agent_cancel_venue_order": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "order_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_id"
+        ],
+        "type": "object"
+      }
+    },
+    "agent_configure_execution_venue": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "allocation": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "allocation",
+          "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
+    "agent_configure_strategy_market": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "market_context": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "market_context",
+          "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
     "agent_create_strategy_autonomous": {
       "access": "auth",
       "inputSchema": {
@@ -265,6 +329,18 @@
                   "type": "object"
                 },
                 "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "market_context": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
@@ -442,6 +518,54 @@
         "required": [
           "strategy_id"
         ],
+        "type": "object"
+      }
+    },
+    "agent_list_venue_orders": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
+    "agent_reconcile_venue_orders": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
+    "agent_robinhood_status": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
         "type": "object"
       }
     },

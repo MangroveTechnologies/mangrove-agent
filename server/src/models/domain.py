@@ -47,6 +47,7 @@ class OrderIntent(BaseModel):
     # creates the local row under this id, the bracket/signal exit closes
     # the same row (#151 — the agent persists its own positions).
     engine_position_id: str | None = None
+    engine_order_id: str | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
     # Explicit chain-level addresses for live execution. Both or neither.
