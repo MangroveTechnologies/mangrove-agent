@@ -162,6 +162,57 @@ def test_create_manual_happy_path(temp_db, mock_ai_sdk):
     assert detail.mangrove_id.startswith("mg-new-")
 
 
+@pytest.mark.parametrize("timeframe", ["5m", "5MIN"])
+def test_manual_sma_test_carries_requested_candles_upstream_and_locally(temp_db, mock_ai_sdk, timeframe):
+    from src.services.strategy_service import StrategyManualRequest, create_manual, get_strategy
+
+    entry = [{"name": "sma_cross_up", "signal_type": "TRIGGER",
+              "params": {"window_fast": 3, "window_slow": 5}}]
+    exits = [{"name": "sma_cross_down", "signal_type": "TRIGGER",
+              "params": {"window_fast": 3, "window_slow": 5}}]
+    detail = create_manual(StrategyManualRequest(
+        name="ETH 5m SMA 3/5 Test", asset="ETH", timeframe=timeframe,
+        entry=entry, exit=exits,
+    ))
+
+    upstream = mock_ai_sdk.strategies.create.call_args.args[0].model_dump()
+    assert upstream["entry"] == [{**entry[0], "timeframe": "5m"}]
+    assert upstream["exit"] == [{**exits[0], "timeframe": "5m"}]
+    saved = get_strategy(detail.id)
+    assert saved.timeframe == "5m"
+    assert saved.entry == upstream["entry"]
+    assert saved.exit == upstream["exit"]
+    assert "timeframe" not in entry[0]
+    assert "timeframe" not in exits[0]
+
+
+def test_manual_preserves_explicit_rule_candle_sizes(temp_db, mock_ai_sdk):
+    from src.services.strategy_service import StrategyManualRequest, create_manual
+
+    detail = create_manual(StrategyManualRequest(
+        name="multi timeframe", asset="ETH", timeframe="5m",
+        entry=[{"name": "sma_cross_up", "signal_type": "TRIGGER", "timeframe": "15MIN"}],
+        exit=[{"name": "sma_cross_down", "signal_type": "TRIGGER", "timeframe": "1h"}],
+    ))
+    upstream = mock_ai_sdk.strategies.create.call_args.args[0]
+    assert upstream.entry[0]["timeframe"] == "15m"
+    assert upstream.exit[0]["timeframe"] == "1h"
+    assert detail.timeframe == "15m"
+
+
+def test_manual_rejects_unsupported_rule_timeframe_before_saving(temp_db, mock_ai_sdk):
+    from src.services.strategy_service import StrategyManualRequest, create_manual
+    from src.shared.errors import ValidationError
+
+    with pytest.raises(ValidationError):
+        create_manual(StrategyManualRequest(
+            name="unsupported", asset="ETH", timeframe="5m",
+            entry=[{"name": "sma_cross_up", "signal_type": "TRIGGER"}],
+            exit=[{"name": "sma_cross_down", "signal_type": "TRIGGER", "timeframe": "1m"}],
+        ))
+    mock_ai_sdk.strategies.create.assert_not_called()
+
+
 def test_create_manual_same_rules_twice_returns_existing_strategy(temp_db, mock_ai_sdk):
     """Regression: MangroveAI's create returns the EXISTING strategy when the
     rules already exist for the account. The local UNIQUE(mangrove_id) insert

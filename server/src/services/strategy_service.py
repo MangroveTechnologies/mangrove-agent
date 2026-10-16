@@ -554,19 +554,21 @@ def create_autonomous(req: StrategyAutonomousRequest) -> tuple[StrategyDetailRes
 
 def create_manual(req: StrategyManualRequest) -> StrategyDetailResponse:
     """Manual creation — caller supplies explicit entry/exit rules."""
-    # Reject unsupported timeframes up front. For manual strategies the
-    # timeframe is embedded in each entry/exit rule; we also accept a
-    # top-level req.timeframe which takes precedence when set.
-    if getattr(req, "timeframe", None):
-        timeframes.canonicalize_timeframe(req.timeframe)
-    else:
-        # Validate the per-rule timeframe — matches what _extract_timeframe
-        # would pull when there's no top-level field.
-        inferred = req.entry[0].get("timeframe") if req.entry else None
-        if inferred:
-            timeframes.canonicalize_timeframe(inferred)
+    # The SDK/engine carry candle sizes on each rule, not on the create
+    # request. Supply the requested default where absent, while preserving
+    # explicit multi-timeframe rules. Use the same normalized rules upstream
+    # and locally so the scheduler cannot silently fall back to 1h.
+    timeframe = timeframes.canonicalize_timeframe(req.timeframe)
+    entry = [
+        {**rule, "timeframe": timeframes.canonicalize_timeframe(rule.get("timeframe") or timeframe)}
+        for rule in req.entry
+    ]
+    exit_rules = [
+        {**rule, "timeframe": timeframes.canonicalize_timeframe(rule.get("timeframe") or timeframe)}
+        for rule in req.exit
+    ]
 
-    _validate_composition(req.entry, req.exit)
+    _validate_composition(entry, exit_rules)
 
     # Created as `inactive`, deliberately NOT `draft`. In MangroveAI a draft
     # is an UNPROVEN strategy: its update_status refuses draft → paper/live,
@@ -579,7 +581,7 @@ def create_manual(req: StrategyManualRequest) -> StrategyDetailResponse:
         detail = mangrove_ai_client().strategies.create(
             CreateStrategyRequest(
                 name=req.name, asset=req.asset,
-                entry=req.entry, exit=req.exit,
+                entry=entry, exit=exit_rules,
                 status="inactive",
                 execution_config=req.execution_config,
             ),
@@ -589,8 +591,8 @@ def create_manual(req: StrategyManualRequest) -> StrategyDetailResponse:
 
     local_id = _insert_cache(
         detail,
-        entry=req.entry,
-        exit_rules=req.exit,
+        entry=entry,
+        exit_rules=exit_rules,
         execution_config=req.execution_config or backtest_service.flattened_defaults(),
         generation_report=None,
         evaluation_lane=req.evaluation_lane,
