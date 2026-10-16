@@ -288,7 +288,6 @@ def test_demo_catalog_follows_configured_network_in_both_registration_paths(monk
 @pytest.mark.parametrize("confirm", [None, False])
 async def test_optional_confirmation_still_refuses_execution(name, confirm):
     from mcp.server.fastmcp import FastMCP
-
     from src.mcp import tools
     server = FastMCP("confirmation-contract")
     tools._register_dex(server)
