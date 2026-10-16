@@ -42,7 +42,6 @@ def _stub_sdk() -> MagicMock:
 
     # on_chain
     sdk.on_chain.get_smart_money_sentiment.return_value = _resp({"sentiment": "neutral"})
-    sdk.on_chain.get_whale_activity.return_value = _resp({"whales": []})
     sdk.on_chain.get_token_holders.return_value = _resp({"holders": []})
 
     # signals
@@ -206,7 +205,6 @@ _SMOKE_ENDPOINTS = [
     ("GET", "/api/v1/agent/market/trending", None, None, False),
     ("GET", "/api/v1/agent/market/global", None, None, False),
     ("GET", "/api/v1/agent/on-chain/smart-money", None, {"symbol": "ETH"}, False),
-    ("GET", "/api/v1/agent/on-chain/whale-activity", None, {"symbol": "ETH"}, False),
     ("GET", "/api/v1/agent/on-chain/token-holders/ETH", None, None, False),
     ("GET", "/api/v1/agent/signals", None, None, False),
     ("GET", "/api/v1/agent/signals/rsi_oversold", None, None, False),
@@ -305,6 +303,7 @@ def test_mcp_http_endpoint_is_reachable(client):
 def test_mcp_tool_count_matches_rest_catalog(client, monkeypatch, upstream_available):
     """Both discovery doors expose live server tools and distinct local tools."""
     from mcp.types import Tool
+
     from src.mcp.server import create_mcp_server
     from src.shared.errors import SdkError
 

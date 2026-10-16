@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from mangrove_ai.exceptions import APIError as SDKAPIError
 
 from src.services import oracle as oracle_service
@@ -319,14 +319,17 @@ async def post_pause_experiment(experiment_id: str) -> dict[str, Any]:
 
 @router.get(
     "/results",
-    summary="Read backtest results materializing under an experiment",
+    summary="Read paginated backtest results",
     description=(
-        "``experiment_id`` is required — Oracle rejects unfiltered "
-        "reads at the proxy layer to prevent cross-tenant fan-out."
+        "Set ``experiment_id`` to scope one experiment, or omit it to read "
+        "the authenticated caller's visible corpus. Use ``limit`` and "
+        "``offset`` to page through all matching results."
     ),
 )
 async def get_list_results(
-    experiment_id: str, limit: int = 100, offset: int = 0,
+    experiment_id: str | None = None,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
     try:
         return oracle_service.list_results(

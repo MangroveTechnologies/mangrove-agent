@@ -224,7 +224,7 @@ For DEX execution, wallet setup and live trading are in Chapters 06 and 07 of th
 | DEX (1inch) | `list_dex_venues`, `get_swap_quote`, `execute_swap`, `get_tx_status`, `get_spot_price`, `get_gas_price`, `get_token_search`, `get_allowances`, `get_token_info`¹, `get_dex_chart`¹ |
 | Market data | `get_ohlcv`, `get_market_data`, `get_trending`, `list_approved_assets`, `get_asset`, `get_global_market` |
 | Signals | `list_signals`, `get_signal`, `match_signals`, `search_signals` |
-| On-chain & smart money | `get_whale_activity`, `get_whale_transactions`, `get_smart_money_sentiment`, `screen_smart_money`, `get_token_holders`, `get_exchange_flows`, `get_smart_money_historical_holdings`, `get_smart_money_dex_trades`, `get_smart_money_perp_trades`, `get_token_dex_trades`, `get_token_flows` |
+| On-chain & smart money | `get_smart_money_sentiment`, `screen_smart_money`, `get_token_holders`, `get_smart_money_historical_holdings`, `get_smart_money_dex_trades`, `get_smart_money_perp_trades`, `get_token_dex_trades`, `get_token_flows` |
 | DeFi | `get_chain_tvl`, `get_protocol_tvl`, `get_stablecoin_metrics` |
 | DeFi Pro (Pro/Startup/Enterprise) | `get_token_unlocks`, `get_perp_funding`, `get_treasuries`, `get_etf_flows`, `get_lending_borrow_rates` — starter: [docs/defi-pro.md](docs/defi-pro.md) |
 | Social | `get_sentiment`, `get_mentions`, `get_influence_score` |

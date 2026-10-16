@@ -43,7 +43,6 @@ def client(tmp_path, monkeypatch):
 
     # on_chain.*
     sdk.on_chain.get_smart_money_sentiment.return_value = _resp({"sentiment": "bullish"})
-    sdk.on_chain.get_whale_activity.return_value = _resp({"whale": "calm"})
     sdk.on_chain.get_token_holders.return_value = _resp({"holders": []})
 
     # signals.*
@@ -125,10 +124,10 @@ def test_smart_money(client):
     assert r.json()["sentiment"] == "bullish"
 
 
-def test_whale_activity(client):
+def test_retired_whale_activity_route_is_not_exposed(client):
     r = client.get("/api/v1/agent/on-chain/whale-activity",
                    params={"symbol": "BTC"}, headers=_auth())
-    assert r.status_code == 200
+    assert r.status_code == 404
 
 
 def test_token_holders(client):
@@ -184,7 +183,6 @@ def test_auth_required_on_all_passthrough_routes(client):
         "/api/v1/agent/market/trending",
         "/api/v1/agent/market/global",
         "/api/v1/agent/on-chain/smart-money?symbol=ETH",
-        "/api/v1/agent/on-chain/whale-activity?symbol=ETH",
         "/api/v1/agent/on-chain/token-holders/ETH",
         "/api/v1/agent/signals",
         "/api/v1/agent/signals/rsi_oversold",
