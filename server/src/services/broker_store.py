@@ -272,7 +272,8 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
             if not buy:
                 if not pos or pos["status"] != "open" or held_qty < delta:
                     raise SdkError("Exit fill exceeds this strategy's confirmed holding.")
-                pnl = float(delta_gross - delta * held_cost - delta_fees)
+                exact_pnl = delta_gross - delta * held_cost - delta_fees
+                pnl = float(exact_pnl)
                 # Mangrove's risk history is retained conservatively. If a modeled
                 # non-loss becomes a real loss, stop new entries until that risk
                 # history can be reconciled; never silently erase a loss gate.
@@ -330,6 +331,64 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
                 )
             else:
                 remaining = held_qty - delta
+                if remaining == 0:
+                    bought = sold = Decimal(0)
+                    buy_outflow = sell_proceeds = Decimal(0)
+                    all_fees = Decimal(0)
+                    for fee_row in conn.execute(
+                        """SELECT id,intent_json,filled_quantity,filled_notional,fees
+                        FROM broker_orders WHERE strategy_id=?""",
+                        (row["strategy_id"],),
+                    ):
+                        linked_intent = json.loads(fee_row["intent_json"])
+                        linked_position = linked_intent.get("engine_position_id")
+                        if linked_position != position_id and not (
+                            not linked_position and fee_row["id"] == position_id
+                        ):
+                            continue
+                        order_qty = quantity if fee_row["id"] == order_id else decimal(fee_row["filled_quantity"])
+                        order_gross = gross if fee_row["id"] == order_id else decimal(fee_row["filled_notional"])
+                        order_fee = fees if fee_row["id"] == order_id else decimal(fee_row["fees"])
+                        all_fees += order_fee
+                        if linked_intent["side"] == "buy":
+                            bought += order_qty
+                            buy_outflow += order_gross + order_fee
+                        else:
+                            sold += order_qty
+                            sell_proceeds += order_gross - order_fee
+                    if bought <= 0 or bought != sold:
+                        raise SdkError("Cannot confirm a flat close without complete broker fill provenance.")
+                    realized_pnl = sell_proceeds - buy_outflow
+                    strategy_asset = conn.execute(
+                        "SELECT asset FROM strategies WHERE id=?", (row["strategy_id"],)
+                    ).fetchone()["asset"]
+                    next_sequence = conn.execute(
+                        """SELECT COALESCE(MAX(sequence),0)+1 AS next_sequence
+                        FROM broker_close_events WHERE strategy_id=?""",
+                        (row["strategy_id"],),
+                    ).fetchone()["next_sequence"]
+                    # Emit only when this position is fully flat. The raw
+                    # snapshot journal retains execution timestamps; a
+                    # cumulative snapshot cannot always attribute a timestamp
+                    # to a delta, so occurred_at stays null instead of being
+                    # replaced with local observation time.
+                    conn.execute(
+                        """INSERT INTO broker_close_events
+                        (sequence,event_id,final_order_id,strategy_id,position_id,asset,
+                         realized_pnl,fees,occurred_at,observed_at)
+                        VALUES (?,?,?,?,?,?,?, ?,NULL,?)""",
+                        (
+                            next_sequence,
+                            f"close:{position_id}",
+                            order_id,
+                            row["strategy_id"],
+                            position_id,
+                            strategy_asset,
+                            str(realized_pnl),
+                            str(all_fees),
+                            timestamp,
+                        ),
+                    )
                 conn.execute(
                     """UPDATE positions SET entry_amount=?,exit_trade_id=?,exit_price=?,exit_amount=?,
                     exit_time=?,status=? WHERE id=?""",
@@ -367,10 +426,181 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
         )
 
 
-def execution_inputs(strategy_id, mark_price):
+def pending_confirmed_close_events(strategy_id):
+    """Return durable, ordered sell-fill events awaiting state acknowledgement."""
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT sequence,event_id,position_id,asset,realized_pnl,fees,occurred_at,observed_at
+            FROM broker_close_events
+            WHERE strategy_id=? AND acknowledged_at IS NULL ORDER BY sequence""",
+            (strategy_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def _broker_state_revision(conn, strategy_id):
+    """Hash the confirmed broker book for ack compare-and-swap."""
+    snapshot = {
+        "orders": [
+            list(row)
+            for row in conn.execute(
+                """SELECT id,broker_order_id,status,filled_quantity,filled_notional,fees
+                FROM broker_orders WHERE strategy_id=? ORDER BY id""",
+                (strategy_id,),
+            )
+        ],
+        "positions": [
+            list(row)
+            for row in conn.execute(
+                """SELECT id,asset,entry_amount,entry_price,entry_time,status,exit_price,exit_amount,exit_time
+                FROM positions WHERE strategy_id=? ORDER BY id""",
+                (strategy_id,),
+            )
+        ],
+        "holdings": [
+            list(row)
+            for row in conn.execute(
+                """SELECT position_id,quantity,unit_cost FROM broker_holdings
+                WHERE strategy_id=? ORDER BY position_id""",
+                (strategy_id,),
+            )
+        ],
+        "close_events": [
+            list(row)
+            for row in conn.execute(
+                """SELECT sequence,event_id,acknowledged_at FROM broker_close_events
+                WHERE strategy_id=? ORDER BY sequence""",
+                (strategy_id,),
+            )
+        ],
+    }
+    encoded = json.dumps(snapshot, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def acknowledge_confirmed_close_events(
+    strategy_id,
+    event_ids,
+    execution_state,
+    *,
+    open_positions,
+    expected_state,
+    expected_open_positions,
+    expected_applied_through,
+    expected_broker_revision,
+):
+    """Atomically save the risk state produced by close events and acknowledge them.
+
+    This is an internal persistence seam only; no public route currently sends
+    close events to Mangrove or invokes this acknowledgement. The expected
+    state, position payload, event cursor, and broker-book fingerprint form a
+    compare-and-swap guard against a stale evaluation overwriting later fills
+    or another acknowledgement.
+    """
+    if not isinstance(event_ids, (list, tuple)) or not event_ids:
+        raise SdkError("At least one confirmed close event is required for acknowledgement.")
+    if any(not isinstance(item, str) for item in event_ids) or len(set(event_ids)) != len(event_ids):
+        raise SdkError("Invalid confirmed close event identifiers.")
+    if not isinstance(execution_state, dict) or not isinstance(expected_state, dict):
+        raise SdkError("Invalid execution state acknowledgement.")
+    if not isinstance(open_positions, list) or not isinstance(expected_open_positions, list):
+        raise SdkError("Invalid position state acknowledgement.")
+    if (
+        isinstance(expected_applied_through, bool)
+        or not isinstance(expected_applied_through, int)
+        or expected_applied_through < 0
+    ):
+        raise SdkError("Invalid expected confirmed close sequence.")
+    if not isinstance(expected_broker_revision, str) or len(expected_broker_revision) != 64:
+        raise SdkError("Invalid expected broker state revision.")
+    try:
+        json.dumps(execution_state, allow_nan=False)
+        json.dumps(expected_state, allow_nan=False)
+        json.dumps(open_positions, allow_nan=False)
+        json.dumps(expected_open_positions, allow_nan=False)
+    except (TypeError, ValueError):
+        raise SdkError("Invalid state acknowledgement.") from None
+
+    external = execution_state.get("external_execution") or {}
+    response_cursor = external.get("applied_through") if isinstance(external, dict) else None
+    expected_external = expected_state.get("external_execution") or {}
+    expected_cursor_in_state = (
+        expected_external.get("applied_through", 0) if isinstance(expected_external, dict) else 0
+    )
+    if expected_cursor_in_state != expected_applied_through:
+        raise SdkError("Expected state cursor does not match the supplied cursor.")
+    if type(response_cursor) is not int:
+        raise SdkError("Invalid confirmed close response cursor.")
+
+    with connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            """SELECT event_id,acknowledged_at FROM broker_close_events
+            WHERE strategy_id=? AND event_id IN (""" + ",".join("?" for _ in event_ids) + ")",
+            [strategy_id, *event_ids],
+        ).fetchall()
+        if {row["event_id"] for row in rows} != set(event_ids):
+            raise SdkError("Confirmed close acknowledgement contains an unknown event.")
+        current = conn.execute(
+            "SELECT execution_state_json FROM strategies WHERE id=?", (strategy_id,)
+        ).fetchone()
+        if current is None:
+            raise SdkError("Unknown strategy for confirmed close acknowledgement.")
+        strategy_row = conn.execute(
+            "SELECT execution_state_json,open_positions_json FROM strategies WHERE id=?",
+            (strategy_id,),
+        ).fetchone()
+        current_state = json.loads(strategy_row["execution_state_json"] or "{}")
+        current_positions = json.loads(strategy_row["open_positions_json"] or "[]")
+        candidate_state = _preserve_risk_halt(execution_state, current_state)
+        candidate_json = json.dumps(candidate_state, allow_nan=False)
+        candidate_positions_json = json.dumps(open_positions, allow_nan=False)
+        sequences = [
+            row["sequence"]
+            for row in conn.execute(
+                """SELECT sequence FROM broker_close_events
+                WHERE strategy_id=? AND event_id IN (""" + ",".join("?" for _ in event_ids) + ")",
+                [strategy_id, *event_ids],
+            ).fetchall()
+        ]
+        if all(row["acknowledged_at"] is not None for row in rows):
+            # Exact duplicate acknowledgements are no-ops. Conflicting retries
+            # cannot replace a later state or its confirmed positions.
+            if current_state == candidate_state and current_positions == open_positions:
+                return
+            raise SdkError("Conflicting duplicate confirmed close acknowledgement.")
+
+        current_external = current_state.get("external_execution") or {}
+        if (
+            current_state != expected_state
+            or current_positions != expected_open_positions
+            or current_external.get("applied_through", 0) != expected_applied_through
+            or _broker_state_revision(conn, strategy_id) != expected_broker_revision
+        ):
+            raise SdkError("Stale confirmed close acknowledgement; broker or strategy state changed.")
+        if response_cursor != max(sequences) or sorted(sequences) != list(
+            range(expected_applied_through + 1, max(sequences) + 1)
+        ):
+            raise SdkError("Confirmed close acknowledgement has a sequence gap or stale cursor.")
+
+        timestamp = now()
+        conn.execute(
+            "UPDATE strategies SET execution_state_json=?,open_positions_json=? WHERE id=?",
+            (candidate_json, candidate_positions_json, strategy_id),
+        )
+        conn.execute(
+            """UPDATE broker_close_events SET acknowledged_at=?
+            WHERE strategy_id=? AND event_id IN (""" + ",".join("?" for _ in event_ids) + ")",
+            [timestamp, strategy_id, *event_ids],
+        )
+
+
+def execution_inputs(strategy_id, mark_price, *, include_revision=False):
     """Build Mangrove's stateless inputs exclusively from broker-confirmed fills."""
     config = route(strategy_id)
     with connection() as conn:
+        if include_revision:
+            conn.execute("BEGIN")
         strategy = dict(conn.execute("SELECT * FROM strategies WHERE id=?", (strategy_id,)).fetchone())
         positions = conn.execute(
             "SELECT * FROM positions WHERE strategy_id=? AND status='open'", (strategy_id,)
@@ -439,4 +669,6 @@ def execution_inputs(strategy_id, mark_price):
             for fill in fills:
                 counts[fill["day"]] = max(counts.get(fill["day"], 0), fill["count"])
             risk["today"] = now()[:10]
+        if include_revision:
+            return state, payloads, _broker_state_revision(conn, strategy_id)
         return state, payloads

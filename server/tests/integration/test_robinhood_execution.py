@@ -53,25 +53,25 @@ def ledger(tmp_path, monkeypatch):
     db.reset_connection()
 
 
-def intent(side="buy", qty=2, order="entry"):
+def intent(side="buy", qty=2, order="entry", position_id="p1"):
     return OrderIntent(
         action="enter" if side == "buy" else "exit",
         side=side,
         symbol="BTC",
         amount=qty,
         ref_price=100,
-        engine_position_id="p1",
+        engine_position_id=position_id,
         engine_order_id=order,
     )
 
 
-def reserve(side="buy", qty=2, oid="local", key="entry", sid="s1"):
+def reserve(side="buy", qty=2, oid="local", key="entry", sid="s1", position_id="p1"):
     return store.reserve(
         sid,
         "eval" if sid == "s1" else "eval2",
-        intent(side, qty, key),
+        intent(side, qty, key, position_id),
         {"quantity": str(qty)},
-        {"id": "p1", "asset": "BTC-USD", "position_size": 2, "orders": [{"position_size": 2, "price": 90}]},
+        {"id": position_id, "asset": "BTC-USD", "position_size": qty, "orders": [{"position_size": qty, "price": 90}]},
         oid,
     )
 
@@ -126,6 +126,336 @@ def test_partial_fill_repeat_cancel_and_exit(ledger):
     assert positions == []
     with store.connection() as conn:
         assert conn.execute("SELECT sum(p_and_l) FROM trades").fetchone()[0] == 8
+        close_event = dict(conn.execute("SELECT * FROM broker_close_events").fetchone())
+    assert close_event["event_id"] == "close:p1"
+    assert close_event["position_id"] == "p1"
+    assert close_event["asset"] == "BTC-USD"
+    assert Decimal(close_event["realized_pnl"]) == Decimal("8")
+    assert Decimal(close_event["fees"]) == Decimal("2")
+    assert close_event["occurred_at"] is None
+    assert close_event["observed_at"]
+    assert [event["event_id"] for event in store.pending_confirmed_close_events("s1")] == ["close:p1"]
+
+
+def test_confirmed_close_outbox_is_atomic_durable_and_acknowledged_with_state(ledger):
+    assert reserve(side="buy", qty=1, oid="entry", key="entry")
+    store.apply_snapshot("entry", snapshot(qty="1", price="100", state="filled", net="101", oid="entry"), asset_class="crypto")
+    assert reserve(side="sell", qty=1, oid="exit", key="exit")
+
+    partial = snapshot(qty="0.4", price="110", side="sell", oid="exit", net="43.56")
+    store.apply_snapshot("exit", partial, asset_class="crypto")
+    store.apply_snapshot("exit", partial, asset_class="crypto")
+    assert store.pending_confirmed_close_events("s1") == []
+    final = snapshot(qty="1", price="110", state="filled", side="sell", oid="exit", net="109")
+    store.apply_snapshot("exit", final, asset_class="crypto")
+    store.apply_snapshot("exit", final, asset_class="crypto")
+    events = store.pending_confirmed_close_events("s1")
+    assert len(events) == 1
+    first = events[0]
+    assert first["sequence"] == 1
+    assert first["event_id"] == "close:p1"
+    assert first["position_id"] == "p1"
+    assert first["asset"] == "BTC-USD"
+    assert Decimal(first["realized_pnl"]) == Decimal("8.00")
+    assert Decimal(first["fees"]) == Decimal("2")
+    assert first["occurred_at"] is None
+
+    # A process restart reopens the same durable outbox with the fill and risk
+    # acknowledgement still pending; no model or broker call is needed.
+    db.reset_connection()
+    db.init_db()
+    assert store.pending_confirmed_close_events("s1") == events
+
+    prior_positions = [{"id": "p1", "open": True}]
+    with store.connection() as conn:
+        conn.execute(
+            "UPDATE strategies SET open_positions_json=? WHERE id='s1'",
+            (json.dumps(prior_positions),),
+        )
+        prior = conn.execute(
+            "SELECT execution_state_json,open_positions_json FROM strategies WHERE id='s1'"
+        ).fetchone()
+    prior_state = json.loads(prior["execution_state_json"] or "{}")
+    prior_positions = json.loads(prior["open_positions_json"] or "[]")
+    broker_revision = store.execution_inputs("s1", 110, include_revision=True)[2]
+    next_state = {
+        "risk_state": {"daily_trade_counter": {"2026-10-16": 1}},
+        "external_execution": {"applied_through": 1},
+    }
+    store.acknowledge_confirmed_close_events(
+        "s1", [first["event_id"]], next_state,
+        open_positions=[], expected_state=prior_state,
+        expected_open_positions=prior_positions, expected_applied_through=0,
+        expected_broker_revision=broker_revision,
+    )
+    with store.connection() as conn:
+        saved = json.loads(conn.execute(
+            "SELECT execution_state_json FROM strategies WHERE id='s1'"
+        ).fetchone()[0])
+        saved_positions = json.loads(conn.execute(
+            "SELECT open_positions_json FROM strategies WHERE id='s1'"
+        ).fetchone()[0])
+        acked = conn.execute(
+            "SELECT acknowledged_at FROM broker_close_events WHERE event_id=?",
+            (first["event_id"],),
+        ).fetchone()[0]
+    assert saved == next_state
+    assert saved_positions == []
+    assert acked
+    assert store.pending_confirmed_close_events("s1") == []
+    # Retrying the same acknowledgement after restart is idempotent.
+    store.acknowledge_confirmed_close_events(
+        "s1", [first["event_id"]], next_state,
+        open_positions=[], expected_state=prior_state,
+        expected_open_positions=prior_positions, expected_applied_through=0,
+        expected_broker_revision=broker_revision,
+    )
+
+
+def test_partial_sell_fills_emit_one_net_position_close_outcome(ledger):
+    assert reserve(side="buy", qty=1, oid="entry", key="entry")
+    store.apply_snapshot("entry", snapshot(qty="1", price="100", state="filled", net="101", oid="entry"), asset_class="crypto")
+    assert reserve(side="sell", qty=1, oid="exit", key="exit")
+
+    # The first partial sell is profitable, but the remaining amount later
+    # closes at a loss. No risk event is emitted until the whole position is flat.
+    store.apply_snapshot(
+        "exit", snapshot(qty="0.4", price="110", side="sell", oid="exit", net="43.56"),
+        asset_class="crypto",
+    )
+    assert store.pending_confirmed_close_events("s1") == []
+    # A database restart between sell fills does not require a separate
+    # accumulator; earlier deltas remain represented by cumulative order data.
+    db.reset_connection()
+    db.init_db()
+    store.apply_snapshot(
+        "exit", snapshot(qty="1", price="98", state="filled", side="sell", oid="exit", net="97"),
+        asset_class="crypto",
+    )
+    store.apply_snapshot(
+        "exit", snapshot(qty="1", price="98", state="filled", side="sell", oid="exit", net="97"),
+        asset_class="crypto",
+    )
+
+    events = store.pending_confirmed_close_events("s1")
+    assert len(events) == 1
+    assert events[0]["event_id"] == "close:p1"
+    assert events[0]["sequence"] == 1
+    assert Decimal(events[0]["realized_pnl"]) == Decimal("-4.00")
+    assert Decimal(events[0]["fees"]) == Decimal("2.00")
+    with store.connection() as conn:
+        assert conn.execute("SELECT count(*) FROM broker_close_events").fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM trades WHERE status='confirmed'").fetchone()[0] == 3
+
+
+def test_missing_preexisting_fill_provenance_fails_closed_atomically(ledger):
+    assert reserve(side="buy", qty=1, oid="entry", key="entry")
+    store.apply_snapshot("entry", snapshot(qty="1", price="100", state="filled", net="101", oid="entry"), asset_class="crypto")
+    assert reserve(side="sell", qty=1, oid="exit", key="exit")
+    with store.connection() as conn:
+        intent_data = json.loads(conn.execute(
+            "SELECT intent_json FROM broker_orders WHERE id='entry'"
+        ).fetchone()[0])
+        intent_data["engine_position_id"] = "missing-position"
+        conn.execute(
+            "UPDATE broker_orders SET intent_json=? WHERE id='entry'",
+            (json.dumps(intent_data),),
+        )
+
+    with pytest.raises(SdkError, match="complete broker fill provenance"):
+        store.apply_snapshot(
+            "exit",
+            snapshot(qty="1", price="110", state="filled", side="sell", oid="exit", net="109"),
+            asset_class="crypto",
+        )
+    assert row("positions")["status"] == "open"
+    with store.connection() as conn:
+        assert conn.execute("SELECT status FROM broker_orders WHERE id='exit'").fetchone()[0] == "submitting"
+        assert conn.execute("SELECT count(*) FROM broker_events WHERE order_id='exit'").fetchone()[0] == 0
+    assert store.pending_confirmed_close_events("s1") == []
+
+
+def test_close_event_ack_rejects_unknown_ids_without_partial_state_write(ledger):
+    assert reserve(side="buy", qty=1, oid="entry", key="entry")
+    store.apply_snapshot("entry", snapshot(qty="1", price="100", state="filled", net="101", oid="entry"), asset_class="crypto")
+    assert reserve(side="sell", qty=1, oid="exit", key="exit")
+    store.apply_snapshot(
+        "exit", snapshot(qty="1", price="110", state="filled", side="sell", oid="exit", net="109"),
+        asset_class="crypto",
+    )
+    with store.connection() as conn:
+        before = conn.execute(
+            "SELECT execution_state_json,open_positions_json FROM strategies WHERE id='s1'"
+        ).fetchone()
+    before_state = json.loads(before["execution_state_json"] or "{}")
+    before_positions = json.loads(before["open_positions_json"] or "[]")
+    broker_revision = store.execution_inputs("s1", 110, include_revision=True)[2]
+    with pytest.raises(SdkError, match="unknown event"):
+        store.acknowledge_confirmed_close_events(
+            "s1", ["close:p1", "missing"], {"risk_state": {"bad": True}, "external_execution": {"applied_through": 1}},
+            open_positions=[], expected_state=before_state, expected_open_positions=before_positions,
+            expected_applied_through=0,
+            expected_broker_revision=broker_revision,
+        )
+    with store.connection() as conn:
+        state = json.loads(conn.execute(
+            "SELECT execution_state_json FROM strategies WHERE id='s1'"
+        ).fetchone()[0])
+        acked = conn.execute(
+            "SELECT acknowledged_at FROM broker_close_events WHERE event_id='close:p1'"
+        ).fetchone()[0]
+    assert state == before_state
+    assert acked is None
+    assert [event["event_id"] for event in store.pending_confirmed_close_events("s1")] == ["close:p1"]
+
+
+def test_close_ack_requires_contiguous_cursor_and_preserves_latched_halt(ledger):
+    for position_id in ("p1", "p2"):
+        entry_id = f"entry-{position_id}"
+        assert reserve(side="buy", qty=1, oid=entry_id, key=entry_id, position_id=position_id)
+        store.apply_snapshot(
+            entry_id,
+            snapshot(qty="1", price="100", state="filled", net="101", oid=entry_id),
+            asset_class="crypto",
+        )
+    for position_id in ("p1", "p2"):
+        exit_id = f"exit-{position_id}"
+        assert reserve(side="sell", qty=1, oid=exit_id, key=exit_id, position_id=position_id)
+        store.apply_snapshot(
+            exit_id,
+            snapshot(qty="1", price="110", state="filled", side="sell", oid=exit_id, net="109"),
+            asset_class="crypto",
+        )
+    events = store.pending_confirmed_close_events("s1")
+    assert [item["sequence"] for item in events] == [1, 2]
+
+    with store.connection() as conn:
+        conn.execute(
+            "UPDATE strategies SET execution_state_json=? WHERE id='s1'",
+            (json.dumps({"risk_state": {"halt": {"reason": "prior_halt"}, "hard_floor_tripped": True}}),),
+        )
+    prior_state = {"risk_state": {"halt": {"reason": "prior_halt"}, "hard_floor_tripped": True}}
+    broker_revision = store.execution_inputs("s1", 110, include_revision=True)[2]
+    with pytest.raises(SdkError, match="sequence gap"):
+        store.acknowledge_confirmed_close_events(
+            "s1", [events[1]["event_id"]],
+            {"risk_state": {}, "external_execution": {"applied_through": 2}},
+            open_positions=[], expected_state=prior_state, expected_open_positions=[],
+            expected_applied_through=0,
+            expected_broker_revision=broker_revision,
+        )
+
+    stale_state = prior_state | {"bar_index": 9}
+    with store.connection() as conn:
+        conn.execute(
+            "UPDATE strategies SET execution_state_json=? WHERE id='s1'",
+            (json.dumps(stale_state),),
+        )
+    with pytest.raises(SdkError, match="Stale confirmed close acknowledgement"):
+        store.acknowledge_confirmed_close_events(
+            "s1", [events[0]["event_id"], events[1]["event_id"]],
+            {"external_execution": {"applied_through": 2}},
+            open_positions=[], expected_state=prior_state, expected_open_positions=[],
+            expected_applied_through=0,
+            expected_broker_revision=broker_revision,
+        )
+
+    next_state = {
+        "bar_index": 9,
+        "risk_state": {},
+        "external_execution": {"applied_through": 2},
+    }
+    store.acknowledge_confirmed_close_events(
+        "s1", [events[0]["event_id"], events[1]["event_id"]], next_state,
+        open_positions=[], expected_state=stale_state, expected_open_positions=[],
+        expected_applied_through=0,
+        expected_broker_revision=broker_revision,
+    )
+    with store.connection() as conn:
+        saved = json.loads(conn.execute(
+            "SELECT execution_state_json FROM strategies WHERE id='s1'"
+        ).fetchone()[0])
+    assert saved["risk_state"]["halt"] == {"reason": "prior_halt"}
+    assert saved["risk_state"]["hard_floor_tripped"] is True
+    assert saved["external_execution"]["applied_through"] == 2
+
+
+def test_ack_rejects_late_partial_fill_even_when_engine_state_is_unchanged(ledger):
+    assert reserve(side="buy", qty=1, oid="entry-p1", key="entry-p1", position_id="p1")
+    store.apply_snapshot(
+        "entry-p1", snapshot(qty="1", price="100", state="filled", net="101", oid="entry-p1"),
+        asset_class="crypto",
+    )
+    assert reserve(side="sell", qty=1, oid="exit-p1", key="exit-p1", position_id="p1")
+    store.apply_snapshot(
+        "exit-p1", snapshot(qty="1", price="110", state="filled", side="sell", oid="exit-p1", net="109"),
+        asset_class="crypto",
+    )
+    event = store.pending_confirmed_close_events("s1")[0]
+    with store.connection() as conn:
+        row_before = conn.execute(
+            "SELECT execution_state_json,open_positions_json FROM strategies WHERE id='s1'"
+        ).fetchone()
+    expected_state = json.loads(row_before["execution_state_json"] or "{}")
+    expected_positions = json.loads(row_before["open_positions_json"] or "[]")
+    expected_revision = store.execution_inputs("s1", 110, include_revision=True)[2]
+
+    # A second entry fill reuses an evaluation carrying the identical engine
+    # state, but changes confirmed broker holdings after the response was made.
+    assert reserve(side="buy", qty=1, oid="entry-p2", key="entry-p2", position_id="p2")
+    store.apply_snapshot(
+        "entry-p2", snapshot(qty="0.5", price="100", state="partially_filled", net="50", oid="entry-p2"),
+        asset_class="crypto",
+    )
+    with store.connection() as conn:
+        row_after = conn.execute(
+            "SELECT execution_state_json,open_positions_json FROM strategies WHERE id='s1'"
+        ).fetchone()
+    assert json.loads(row_after["execution_state_json"] or "{}") == expected_state
+    assert json.loads(row_after["open_positions_json"] or "[]") == expected_positions
+
+    with pytest.raises(SdkError, match="broker or strategy state changed"):
+        store.acknowledge_confirmed_close_events(
+            "s1", [event["event_id"]],
+            expected_state | {"external_execution": {"applied_through": 1}},
+            open_positions=expected_positions,
+            expected_state=expected_state,
+            expected_open_positions=expected_positions,
+            expected_applied_through=0,
+            expected_broker_revision=expected_revision,
+        )
+    assert [item["event_id"] for item in store.pending_confirmed_close_events("s1")] == [event["event_id"]]
+
+
+def test_close_event_sequences_are_contiguous_per_strategy(ledger):
+    def close_position(position_id, *, sid="s1", equity=False):
+        entry_id = f"entry-{sid}-{position_id}"
+        exit_id = f"exit-{sid}-{position_id}"
+        assert reserve(
+            side="buy", qty=1, oid=entry_id, key=entry_id,
+            sid=sid, position_id=position_id,
+        )
+        store.apply_snapshot(
+            entry_id,
+            snapshot(qty="1", price="100", state="filled", net="100", oid=entry_id),
+            asset_class="equity" if equity else "crypto",
+        )
+        assert reserve(
+            side="sell", qty=1, oid=exit_id, key=exit_id,
+            sid=sid, position_id=position_id,
+        )
+        store.apply_snapshot(
+            exit_id,
+            snapshot(qty="1", price="110", state="filled", side="sell", oid=exit_id, net="110"),
+            asset_class="equity" if equity else "crypto",
+        )
+
+    close_position("p1")
+    close_position("p3", sid="s2", equity=True)
+    close_position("p2")
+
+    assert [event["sequence"] for event in store.pending_confirmed_close_events("s1")] == [1, 2]
+    assert [event["sequence"] for event in store.pending_confirmed_close_events("s2")] == [1]
 
 
 def test_snapshot_journal_preserves_fill_times_and_idempotently_records_receipt(ledger):
