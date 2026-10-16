@@ -162,6 +162,11 @@ liquidated positions are not automatically reconciled into the strategy book.
   continue blocking new orders; evaluation cannot make an uncertain order safe to
   duplicate. Exit execution can therefore still be delayed by broker uncertainty
   and the strategy schedule. The local agent must remain running.
+- Native crypto protective orders are not implemented. The cached broker catalog
+  advertises `stop_loss` and `stop_limit` for crypto, while advanced OCO is
+  equity-only; this integration uses limit orders and does not claim an open
+  crypto position is protected at Robinhood. Track native protective-order
+  lifecycle support and acceptance in [issue #205](https://github.com/MangroveTechnologies/mangrove-agent/issues/205).
 - Risk state from a modeled trade advances only after an actual fill. Partial fills
   can conservatively retain the modeled trade's cooldown/counter effects. If an
   actual exit loss differs from a modeled non-loss, new entries latch off with
