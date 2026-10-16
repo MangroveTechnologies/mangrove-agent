@@ -312,6 +312,99 @@ def test_actual_loss_does_not_silently_preserve_modeled_win(ledger):
     assert state["halt"]["reason"] == "broker_loss_diverged_from_model"
 
 
+@pytest.mark.parametrize("halt_shape", ["nested", "top_level", "flag_only"])
+def test_delayed_first_fill_preserves_newer_risk_halt_across_restart(ledger, halt_shape):
+    reserve()
+    # An unfilled order remains open while a newer evaluation trips the floor.
+    store.apply_snapshot("local", snapshot(qty="0", price=None, state="queued"), asset_class="crypto")
+    halt = {"reason": "capital_floor", "halted_at": "2026-10-16T12:00:00Z", "initial_capital": 1000}
+    current = {"risk_state": {"hard_floor_tripped": True}}
+    if halt_shape == "nested":
+        current["risk_state"]["halt"] = halt
+    elif halt_shape == "top_level":
+        current["halt"] = halt
+    with store.connection() as conn:
+        conn.execute("UPDATE strategies SET execution_state_json=? WHERE id='s1'", (json.dumps(current),))
+    db.reset_connection()
+    # The first fill uses the old order's pre-halt evaluation, then another
+    # partial fill arrives after a second restart. Neither may clear the latch.
+    for qty in ("1", "2"):
+        data = snapshot(qty=qty, state="filled" if qty == "2" else "partially_filled")
+        store.apply_snapshot("local", data, asset_class="crypto")
+        store.apply_snapshot("local", data, asset_class="crypto")
+        db.reset_connection()
+        state, positions = store.execution_inputs("s1", 100)
+        assert state["risk_state"]["hard_floor_tripped"] is True
+        if halt_shape != "flag_only":
+            assert state["halt"] == halt
+            assert state["risk_state"]["halt"] == halt
+        assert positions[0]["position_size"] == float(qty)
+        assert state["cash_balance"] == 1000 - 100 * float(qty)
+    with store.connection() as conn:
+        assert conn.execute("SELECT count(*) FROM trades").fetchone()[0] == 2
+
+
+async def test_no_intent_evaluation_cannot_clear_persisted_halt(ledger, monkeypatch):
+    from src.services import portfolio_risk_service
+    from src.shared.clients import mangrove
+
+    halt = {"reason": "broker_loss_diverged_from_model"}
+    current = {"risk_state": {"hard_floor_tripped": True, "halt": halt}, "halt": halt}
+    with store.connection() as conn:
+        conn.execute("UPDATE strategies SET execution_state_json=? WHERE id='s1'", (json.dumps(current),))
+    modeled = {"success": True, "execution_state": {"bar_index": 2, "risk_state": {
+        "hard_floor_tripped": False, "halt": None}}, "open_positions": [], "new_orders": []}
+    sdk = MagicMock()
+    sdk.execution.evaluate_by_object.return_value = SimpleNamespace(new_orders=[], model_dump=lambda: modeled)
+    monkeypatch.setattr(mangrove, "mangrove_ai_client", lambda: sdk)
+    monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": True})
+    venue = SimpleNamespace(account=AsyncMock(), quote=AsyncMock(return_value={"ask_price": "100", "bid_price": "100"}),
+                            prepare=AsyncMock(), submit=AsyncMock())
+    await execution._tick(venue, "s1")
+    db.reset_connection()
+    state, _ = store.execution_inputs("s1", 100)
+    assert state["bar_index"] == 2
+    assert state["risk_state"]["hard_floor_tripped"] is True
+    assert state["risk_state"]["halt"] == halt
+    assert state["halt"] == halt
+    venue.prepare.assert_not_awaited()
+    venue.submit.assert_not_awaited()
+
+
+def test_later_loss_fill_keeps_original_halt_and_records_exit(ledger):
+    reserve(qty=2)
+    store.apply_snapshot("local", snapshot(qty="2", state="filled"), asset_class="crypto")
+    halt = {"reason": "capital_floor", "initial_capital": 1000, "closed_equity": 800}
+    store.save_evaluation_state("s1", {"risk_state": {"hard_floor_tripped": True, "halt": halt}}, [])
+    assert reserve(side="sell", qty=2, oid="exit", key="exit")
+    store.apply_snapshot("exit", snapshot(qty="1", price="101", side="sell", oid="exit"), asset_class="crypto")
+    db.reset_connection()
+    # The remaining unit fills at 97 (cumulative average 99), creating a loss.
+    store.apply_snapshot(
+        "exit", snapshot(qty="2", price="99", state="filled", side="sell", oid="exit"), asset_class="crypto"
+    )
+    state, positions = store.execution_inputs("s1", 99)
+    assert state["halt"] == halt
+    assert state["risk_state"]["halt"] == halt
+    assert state["risk_state"]["hard_floor_tripped"] is True
+    assert positions == []
+    assert state["cash_balance"] == 998
+
+
+def test_new_halt_is_persisted_without_freezing_unlatched_cooldowns(ledger):
+    store.save_evaluation_state("s1", {"bar_index": 4, "risk_state": {"cooldown_remaining": {"BTC-USD": 3}}}, [])
+    store.save_evaluation_state("s1", {"bar_index": 5, "risk_state": {"cooldown_remaining": {"BTC-USD": 2}}}, [])
+    state, _ = store.execution_inputs("s1", 100)
+    assert state["bar_index"] == 5
+    assert state["risk_state"]["cooldown_remaining"] == {"BTC-USD": 2}
+    assert not state["risk_state"].get("hard_floor_tripped")
+    halt = {"reason": "capital_floor"}
+    store.save_evaluation_state("s1", {"risk_state": {"halt": halt}}, [])
+    state, _ = store.execution_inputs("s1", 100)
+    assert state["halt"] == halt
+    assert state["risk_state"]["hard_floor_tripped"] is True
+
+
 async def test_mcp_status_dispatches_without_nested_event_loop(ledger, monkeypatch):
     from src.mcp.server import create_mcp_server
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -114,6 +115,39 @@ def mark(order_id, status, *, broker_id=None, approval_id=None, error=None):
         )
 
 
+def _preserve_risk_halt(candidate, current):
+    """Automatic state writes cannot clear a latched engine/broker risk halt.
+
+    A delayed first fill carries the evaluation from order submission, which
+    can predate a halt recorded by a later tick. Preserve the original cause
+    and measurements; this is persistence of the existing gate, not a new risk
+    calculation. Legacy top-level halts and flag-only latches also survive.
+    """
+    state = dict(candidate)
+    risk = dict(state.get("risk_state") or {})
+    previous_risk = current.get("risk_state") or {}
+    halt = previous_risk.get("halt") or current.get("halt") or risk.get("halt") or state.get("halt")
+    if halt or previous_risk.get("hard_floor_tripped") or risk.get("hard_floor_tripped"):
+        risk["hard_floor_tripped"] = True
+        if halt:
+            risk["halt"] = halt
+            state["halt"] = halt
+        state["risk_state"] = risk
+    return state
+
+
+def save_evaluation_state(strategy_id, state, positions):
+    """Persist a no-intent evaluation without clearing a committed risk halt."""
+    with connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT execution_state_json FROM strategies WHERE id=?", (strategy_id,)).fetchone()
+        current = json.loads(row[0] or "{}")
+        conn.execute(
+            "UPDATE strategies SET execution_state_json=?,open_positions_json=? WHERE id=?",
+            (json.dumps(_preserve_risk_halt(state, current)), json.dumps(positions), strategy_id),
+        )
+
+
 def apply_snapshot(order_id, snapshot, *, asset_class):
     """Persist a cumulative fill once, including partial-then-cancel outcomes."""
     states = {
@@ -209,7 +243,8 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
             saved = conn.execute(
                 "SELECT execution_state_json FROM strategies WHERE id=?", (row["strategy_id"],)
             ).fetchone()
-            next_state = proposed if old_qty == 0 else json.loads(saved[0] or "{}")
+            current_state = json.loads(saved[0] or "{}")
+            next_state = proposed if old_qty == 0 else deepcopy(current_state)
             if not buy:
                 if not pos or pos["status"] != "open" or held_qty < delta:
                     raise SdkError("Exit fill exceeds this strategy's confirmed holding.")
@@ -290,7 +325,8 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
                 (position_id, row["strategy_id"], str(total if buy else remaining), str(avg if buy else held_cost)),
             )
             conn.execute(
-                "UPDATE strategies SET execution_state_json=? WHERE id=?", (json.dumps(next_state), row["strategy_id"])
+                "UPDATE strategies SET execution_state_json=? WHERE id=?",
+                (json.dumps(_preserve_risk_halt(next_state, current_state)), row["strategy_id"]),
             )
         elif delta_gross or delta_fees:
             raise SdkError("Broker revised fill cash without a new fill; reconciliation required.")

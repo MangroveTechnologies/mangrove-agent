@@ -183,7 +183,6 @@ async def cancel(venue, order_id):
 async def _tick(venue, strategy_id):
     from src.services import portfolio_risk_service, strategy_service
     from src.shared.clients.mangrove import mangrove_ai_client
-    from src.shared.db.sqlite import get_connection
 
     route = store.route(strategy_id)
     await reconcile(venue, strategy_id)
@@ -244,16 +243,11 @@ async def _tick(venue, strategy_id):
     if not intents:
         # Advance non-execution risk/cooldown state only when no modeled trade
         # occurred. Broker cash and positions always overwrite it next tick.
-        conn = get_connection()
-        conn.execute(
-            "UPDATE strategies SET execution_state_json=?,open_positions_json=? WHERE id=?",
-            (
-                json.dumps(dump.get("execution_state") or state),
-                json.dumps(dump.get("open_positions") or positions),
-                strategy_id,
-            ),
+        store.save_evaluation_state(
+            strategy_id,
+            dump.get("execution_state") or state,
+            dump.get("open_positions") or positions,
         )
-        conn.commit()
         return
     if len(intents) != 1:
         raise SdkError("Broker execution currently requires one Mangrove intent per evaluation.")

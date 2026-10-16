@@ -142,6 +142,9 @@ liquidated positions are not automatically reconciled into the strategy book.
   can conservatively retain the modeled trade's cooldown/counter effects. If an
   actual exit loss differs from a modeled non-loss, new entries latch off with
   `broker_loss_diverged_from_model` rather than silently undercounting loss risk.
+  Persisted risk halts survive delayed first fills, later partial fills, restarts,
+  and subsequent evaluations; automatic state updates cannot clear the latch or
+  replace its original recorded cause. Confirmed fills still update the book.
   Full execution-aware risk-event feedback into Mangrove is a follow-up integration.
 - This build's validation uses offline order/fill fixtures plus live read-only
   account, catalog, pair, and quote checks. No live order was placed for validation.
