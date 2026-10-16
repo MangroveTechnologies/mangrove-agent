@@ -35,6 +35,14 @@ def decimal(value):
         raise SdkError("Broker returned an invalid numeric value.") from None
 
 
+def _exact_decimal_text(value):
+    amount = decimal(value)
+    if amount == 0:
+        return "0"
+    text = format(amount, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
 def _snapshot_journal(snapshot):
     """Serialize JSON broker evidence without changing optional metadata.
 
@@ -95,38 +103,42 @@ def orders(strategy_id=None, *, pending=False):
         return [dict(r) for r in conn.execute(sql + " ORDER BY created_at", values).fetchall()]
 
 
-def reserve(strategy_id, evaluation_id, intent, request, template, ref_id):
+def _reserve_in_transaction(conn, strategy_id, evaluation_id, intent, request, template, ref_id):
     key = intent.engine_order_id or f"{evaluation_id}:{intent.engine_position_id}:{intent.action}"
     if intent.side == "sell":
         key += ":" + str(intent.amount)
+    active = conn.execute("SELECT status FROM strategies WHERE id=?", (strategy_id,)).fetchone()
+    if not active or active["status"] != "live":
+        return False
+    existing = conn.execute(
+        "SELECT id FROM broker_orders WHERE strategy_id=? AND intent_key=?", (strategy_id, key)
+    ).fetchone()
+    if existing:
+        return False
+    # The unique pending index serializes submissions across processes too.
+    conn.execute(
+        """INSERT INTO broker_orders
+        (id,strategy_id,evaluation_id,intent_key,intent_json,position_template_json,
+         request_json,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,'submitting',?,?)""",
+        (
+            ref_id,
+            strategy_id,
+            evaluation_id,
+            key,
+            intent.model_dump_json(),
+            json.dumps(template),
+            json.dumps(request),
+            now(),
+            now(),
+        ),
+    )
+    return True
+
+
+def reserve(strategy_id, evaluation_id, intent, request, template, ref_id):
     with connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        active = conn.execute("SELECT status FROM strategies WHERE id=?", (strategy_id,)).fetchone()
-        if not active or active["status"] != "live":
-            return False
-        existing = conn.execute(
-            "SELECT id FROM broker_orders WHERE strategy_id=? AND intent_key=?", (strategy_id, key)
-        ).fetchone()
-        if existing:
-            return False
-        # The unique pending index serializes submissions across processes too.
-        conn.execute(
-            """INSERT INTO broker_orders
-            (id,strategy_id,evaluation_id,intent_key,intent_json,position_template_json,
-             request_json,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,'submitting',?,?)""",
-            (
-                ref_id,
-                strategy_id,
-                evaluation_id,
-                key,
-                intent.model_dump_json(),
-                json.dumps(template),
-                json.dumps(request),
-                now(),
-                now(),
-            ),
-        )
-        return True
+        return _reserve_in_transaction(conn, strategy_id, evaluation_id, intent, request, template, ref_id)
 
 
 def mark(order_id, status, *, broker_id=None, approval_id=None, error=None):
@@ -268,7 +280,15 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
                 "SELECT execution_state_json FROM strategies WHERE id=?", (row["strategy_id"],)
             ).fetchone()
             current_state = json.loads(saved[0] or "{}")
-            next_state = proposed if old_qty == 0 else deepcopy(current_state)
+            execution_mode = conn.execute(
+                "SELECT external_execution_mode FROM broker_routes WHERE strategy_id=?",
+                (row["strategy_id"],),
+            ).fetchone()[0]
+            next_state = (
+                deepcopy(current_state)
+                if execution_mode == "confirmed_v2" or old_qty != 0
+                else proposed
+            )
             if not buy:
                 if not pos or pos["status"] != "open" or held_qty < delta:
                     raise SdkError("Exit fill exceeds this strategy's confirmed holding.")
@@ -277,7 +297,7 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
                 # Mangrove's risk history is retained conservatively. If a modeled
                 # non-loss becomes a real loss, stop new entries until that risk
                 # history can be reconciled; never silently erase a loss gate.
-                if pnl < 0 and decimal(intent.ref_price) >= held_cost:
+                if execution_mode != "confirmed_v2" and pnl < 0 and decimal(intent.ref_price) >= held_cost:
                     risk = next_state.setdefault("risk_state", {})
                     risk.update(hard_floor_tripped=True, halt={"reason": "broker_loss_diverged_from_model"})
                     next_state["halt"] = risk["halt"]
@@ -329,6 +349,26 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
                         intent.take_profit,
                     ),
                 )
+                opened = conn.execute(
+                    "SELECT 1 FROM broker_execution_events WHERE strategy_id=? AND position_id=? AND kind='opened'",
+                    (row["strategy_id"], position_id),
+                ).fetchone()
+                if execution_mode == "confirmed_v2" and not opened:
+                    sequence = conn.execute(
+                        "SELECT COALESCE(MAX(sequence),0)+1 FROM broker_execution_events WHERE strategy_id=?",
+                        (row["strategy_id"],),
+                    ).fetchone()[0]
+                    strategy_asset = conn.execute(
+                        "SELECT asset FROM strategies WHERE id=?", (row["strategy_id"],)
+                    ).fetchone()[0]
+                    conn.execute(
+                        """INSERT INTO broker_execution_events
+                        (sequence,event_id,source_order_id,strategy_id,position_id,asset,kind,
+                         filled_quantity,occurred_at,observed_at)
+                        VALUES (?,?,?,?,?,?,'opened',?,NULL,?)""",
+                        (sequence, f"open:{position_id}", order_id, row["strategy_id"], position_id,
+                         strategy_asset, _exact_decimal_text(delta), timestamp),
+                    )
             else:
                 remaining = held_qty - delta
                 if remaining == 0:
@@ -364,7 +404,7 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
                     ).fetchone()["asset"]
                     next_sequence = conn.execute(
                         """SELECT COALESCE(MAX(sequence),0)+1 AS next_sequence
-                        FROM broker_close_events WHERE strategy_id=?""",
+                        FROM broker_execution_events WHERE strategy_id=?""",
                         (row["strategy_id"],),
                     ).fetchone()["next_sequence"]
                     # Emit only when this position is fully flat. The raw
@@ -373,10 +413,10 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
                     # to a delta, so occurred_at stays null instead of being
                     # replaced with local observation time.
                     conn.execute(
-                        """INSERT INTO broker_close_events
-                        (sequence,event_id,final_order_id,strategy_id,position_id,asset,
+                        """INSERT INTO broker_execution_events
+                        (sequence,event_id,source_order_id,strategy_id,position_id,asset,kind,
                          realized_pnl,fees,occurred_at,observed_at)
-                        VALUES (?,?,?,?,?,?,?, ?,NULL,?)""",
+                        VALUES (?,?,?,?,?,?,'closed',?,?,NULL,?)""",
                         (
                             next_sequence,
                             f"close:{position_id}",
@@ -384,8 +424,8 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
                             row["strategy_id"],
                             position_id,
                             strategy_asset,
-                            str(realized_pnl),
-                            str(all_fees),
+                            _exact_decimal_text(realized_pnl),
+                            _exact_decimal_text(all_fees),
                             timestamp,
                         ),
                     )
@@ -431,16 +471,54 @@ def pending_confirmed_close_events(strategy_id):
     with connection() as conn:
         rows = conn.execute(
             """SELECT sequence,event_id,position_id,asset,realized_pnl,fees,occurred_at,observed_at
-            FROM broker_close_events
-            WHERE strategy_id=? AND acknowledged_at IS NULL ORDER BY sequence""",
+            FROM broker_execution_events
+            WHERE strategy_id=? AND kind='closed' AND acknowledged_at IS NULL ORDER BY sequence""",
             (strategy_id,),
         ).fetchall()
         return [dict(row) for row in rows]
 
 
+def pending_external_execution_events(strategy_id):
+    """Return all unacknowledged broker-confirmed events for the v2 contract."""
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT sequence,event_id,position_id,asset,kind,filled_quantity,
+                      realized_pnl,fees,occurred_at
+               FROM broker_execution_events WHERE strategy_id=? AND acknowledged_at IS NULL
+               ORDER BY sequence LIMIT 512""",
+            (strategy_id,),
+        ).fetchall()
+    events = []
+    for row in rows:
+        event = dict(row)
+        if event["occurred_at"] is None:
+            event.pop("occurred_at")
+        if event["kind"] == "opened":
+            event.pop("realized_pnl")
+            event.pop("fees")
+        else:
+            event.pop("filled_quantity")
+        events.append(event)
+    return events
+
+
 def _broker_state_revision(conn, strategy_id):
     """Hash the confirmed broker book for ack compare-and-swap."""
+    route = conn.execute(
+        """SELECT venue,account_number,rhs_account_number,asset_class,capital,max_order_usd,
+                  slippage_pct,external_execution_mode
+           FROM broker_routes WHERE strategy_id=?""",
+        (strategy_id,),
+    ).fetchone()
+    strategy = conn.execute(
+        """SELECT name,status,asset,timeframe,entry_json,exit_json,execution_config_json,
+                  market_context_json,evaluation_lane
+           FROM strategies WHERE id=?""",
+        (strategy_id,),
+    ).fetchone()
     snapshot = {
+        "route": list(route) if route else None,
+        "strategy_config": list(strategy) if strategy else None,
         "orders": [
             list(row)
             for row in conn.execute(
@@ -465,10 +543,10 @@ def _broker_state_revision(conn, strategy_id):
                 (strategy_id,),
             )
         ],
-        "close_events": [
+        "execution_events": [
             list(row)
             for row in conn.execute(
-                """SELECT sequence,event_id,acknowledged_at FROM broker_close_events
+                """SELECT sequence,event_id,acknowledged_at,receipt_json FROM broker_execution_events
                 WHERE strategy_id=? ORDER BY sequence""",
                 (strategy_id,),
             )
@@ -488,6 +566,9 @@ def acknowledge_confirmed_close_events(
     expected_open_positions,
     expected_applied_through,
     expected_broker_revision,
+    receipts=None,
+    submitted_events=None,
+    reservation=None,
 ):
     """Atomically save the risk state produced by close events and acknowledge them.
 
@@ -497,8 +578,8 @@ def acknowledge_confirmed_close_events(
     compare-and-swap guard against a stale evaluation overwriting later fills
     or another acknowledgement.
     """
-    if not isinstance(event_ids, (list, tuple)) or not event_ids:
-        raise SdkError("At least one confirmed close event is required for acknowledgement.")
+    if not isinstance(event_ids, (list, tuple)):
+        raise SdkError("Invalid confirmed execution event identifiers.")
     if any(not isinstance(item, str) for item in event_ids) or len(set(event_ids)) != len(event_ids):
         raise SdkError("Invalid confirmed close event identifiers.")
     if not isinstance(execution_state, dict) or not isinstance(expected_state, dict):
@@ -529,18 +610,60 @@ def acknowledge_confirmed_close_events(
     )
     if expected_cursor_in_state != expected_applied_through:
         raise SdkError("Expected state cursor does not match the supplied cursor.")
-    if type(response_cursor) is not int:
-        raise SdkError("Invalid confirmed close response cursor.")
+    if type(response_cursor) is not int or response_cursor < 0:
+        raise SdkError("Invalid confirmed execution response cursor.")
+    if receipts is not None:
+        if not isinstance(receipts, (list, tuple)) or not isinstance(submitted_events, (list, tuple)):
+            raise SdkError("Invalid confirmed execution receipts.")
+        if [item.get("event_id") for item in submitted_events] != list(event_ids):
+            raise SdkError("Submitted events do not match the acknowledgement batch.")
+        by_id = {item.get("event_id"): item for item in receipts if isinstance(item, dict)}
+        if len(by_id) != len(receipts) or any(event_id not in by_id for event_id in event_ids):
+            raise SdkError("Hosted acknowledgement is missing a receipt for a submitted event.")
+        for event in submitted_events:
+            receipt = by_id[event["event_id"]]
+            expected_hash = _external_event_hash(event)
+            if (
+                receipt.get("sequence") != event.get("sequence")
+                or receipt.get("position_id") != event.get("position_id")
+                or receipt.get("kind") != event.get("kind")
+                or receipt.get("sha256") != expected_hash
+                or not isinstance(receipt.get("accounting_at"), str)
+            ):
+                raise SdkError("Hosted acknowledgement receipt does not match the submitted event.")
 
     with connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        rows = conn.execute(
-            """SELECT event_id,acknowledged_at FROM broker_close_events
-            WHERE strategy_id=? AND event_id IN (""" + ",".join("?" for _ in event_ids) + ")",
-            [strategy_id, *event_ids],
-        ).fetchall()
+        rows = []
+        if event_ids:
+            rows = conn.execute(
+                """SELECT event_id,sequence,position_id,asset,kind,filled_quantity,realized_pnl,fees,
+                          occurred_at,acknowledged_at,receipt_json FROM broker_execution_events
+                WHERE strategy_id=? AND event_id IN (""" + ",".join("?" for _ in event_ids) + ")",
+                [strategy_id, *event_ids],
+            ).fetchall()
         if {row["event_id"] for row in rows} != set(event_ids):
-            raise SdkError("Confirmed close acknowledgement contains an unknown event.")
+            raise SdkError("Confirmed execution acknowledgement contains an unknown event.")
+        if receipts is not None:
+            stored_by_id = {row["event_id"]: row for row in rows}
+            for submitted in submitted_events:
+                stored = stored_by_id[submitted["event_id"]]
+                expected_event = {
+                    "sequence": stored["sequence"],
+                    "event_id": stored["event_id"],
+                    "position_id": stored["position_id"],
+                    "asset": stored["asset"],
+                    "kind": stored["kind"],
+                }
+                if stored["occurred_at"] is not None:
+                    expected_event["occurred_at"] = stored["occurred_at"]
+                field = "filled_quantity" if stored["kind"] == "opened" else None
+                if field:
+                    expected_event[field] = stored[field]
+                else:
+                    expected_event.update(realized_pnl=stored["realized_pnl"], fees=stored["fees"])
+                if _external_event_hash(expected_event) != _external_event_hash(submitted):
+                    raise SdkError("Submitted execution event does not match broker-confirmed journal data.")
         current = conn.execute(
             "SELECT execution_state_json FROM strategies WHERE id=?", (strategy_id,)
         ).fetchone()
@@ -555,20 +678,17 @@ def acknowledge_confirmed_close_events(
         candidate_state = _preserve_risk_halt(execution_state, current_state)
         candidate_json = json.dumps(candidate_state, allow_nan=False)
         candidate_positions_json = json.dumps(open_positions, allow_nan=False)
-        sequences = [
-            row["sequence"]
-            for row in conn.execute(
-                """SELECT sequence FROM broker_close_events
-                WHERE strategy_id=? AND event_id IN (""" + ",".join("?" for _ in event_ids) + ")",
-                [strategy_id, *event_ids],
-            ).fetchall()
-        ]
-        if all(row["acknowledged_at"] is not None for row in rows):
+        sequences = [row["sequence"] for row in rows]
+        if event_ids and all(row["acknowledged_at"] is not None for row in rows):
             # Exact duplicate acknowledgements are no-ops. Conflicting retries
             # cannot replace a later state or its confirmed positions.
             if current_state == candidate_state and current_positions == open_positions:
-                return
-            raise SdkError("Conflicting duplicate confirmed close acknowledgement.")
+                if reservation:
+                    # A retry of an already committed response cannot introduce
+                    # a new decision or reserve a changed intent without CAS.
+                    return False
+                return None
+            raise SdkError("Conflicting duplicate confirmed execution acknowledgement.")
 
         current_external = current_state.get("external_execution") or {}
         if (
@@ -578,29 +698,66 @@ def acknowledge_confirmed_close_events(
             or _broker_state_revision(conn, strategy_id) != expected_broker_revision
         ):
             raise SdkError("Stale confirmed close acknowledgement; broker or strategy state changed.")
-        if response_cursor != max(sequences) or sorted(sequences) != list(
-            range(expected_applied_through + 1, max(sequences) + 1)
-        ):
-            raise SdkError("Confirmed close acknowledgement has a sequence gap or stale cursor.")
+        if event_ids:
+            if response_cursor != max(sequences) or sorted(sequences) != list(
+                range(expected_applied_through + 1, max(sequences) + 1)
+            ):
+                raise SdkError("Confirmed execution acknowledgement has a sequence gap or stale cursor.")
+        elif response_cursor != expected_applied_through:
+            raise SdkError("Empty acknowledgement changed the confirmed execution cursor.")
 
         timestamp = now()
         conn.execute(
             "UPDATE strategies SET execution_state_json=?,open_positions_json=? WHERE id=?",
             (candidate_json, candidate_positions_json, strategy_id),
         )
-        conn.execute(
-            """UPDATE broker_close_events SET acknowledged_at=?
-            WHERE strategy_id=? AND event_id IN (""" + ",".join("?" for _ in event_ids) + ")",
-            [timestamp, strategy_id, *event_ids],
-        )
+        if event_ids:
+            for event_id in event_ids:
+                receipt_json = json.dumps(by_id[event_id], sort_keys=True, separators=(",", ":")) if receipts is not None else None
+                conn.execute(
+                    """UPDATE broker_execution_events SET acknowledged_at=?,receipt_json=?
+                    WHERE strategy_id=? AND event_id=?""",
+                    (timestamp, receipt_json, strategy_id, event_id),
+                )
+        if reservation:
+            if not _reserve_in_transaction(conn, strategy_id, **reservation):
+                raise SdkError("Confirmed execution ACK and order reservation could not commit together.")
+            return True
+        return None
 
 
-def execution_inputs(strategy_id, mark_price, *, include_revision=False):
+def _external_event_hash(event):
+    """Match the hosted v2 canonical event hash before accepting a receipt."""
+    canonical = dict(event)
+    canonical.setdefault("occurred_at", None)
+    for key in ("filled_quantity", "realized_pnl", "fees"):
+        if key in canonical:
+            amount = decimal(canonical[key])
+            text = format(amount, "f")
+            if "." in text:
+                text = text.rstrip("0").rstrip(".")
+            canonical[key] = "0" if amount == 0 else (text or "0")
+    if canonical.get("occurred_at") is not None:
+        try:
+            parsed = datetime.fromisoformat(canonical["occurred_at"].replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                raise ValueError
+            canonical["occurred_at"] = parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        except (AttributeError, ValueError):
+            raise SdkError("Invalid broker event occurrence timestamp.") from None
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def execution_inputs(strategy_id, mark_price, *, include_revision=False, include_external_events=False):
     """Build Mangrove's stateless inputs exclusively from broker-confirmed fills."""
-    config = route(strategy_id)
     with connection() as conn:
         if include_revision:
             conn.execute("BEGIN")
+        route_row = conn.execute("SELECT * FROM broker_routes WHERE strategy_id=?", (strategy_id,)).fetchone()
+        config = dict(route_row) if route_row else None
+        if config is None:
+            raise SdkError("Strategy has no configured broker route.")
         strategy = dict(conn.execute("SELECT * FROM strategies WHERE id=?", (strategy_id,)).fetchone())
         positions = conn.execute(
             "SELECT * FROM positions WHERE strategy_id=? AND status='open'", (strategy_id,)
@@ -641,18 +798,23 @@ def execution_inputs(strategy_id, mark_price, *, include_revision=False):
             for order in payload.get("orders", []):
                 order["position_size"] = pos["entry_amount"]
             payloads.append(payload)
-        state = json.loads(strategy["execution_state_json"] or "{}")
+        raw_state = json.loads(strategy["execution_state_json"] or "{}")
+        raw_positions = json.loads(strategy["open_positions_json"] or "[]")
+        state = deepcopy(raw_state)
         state.update(
             cash_balance=float(cash),
             account_value=float(cash) + sum(p["entry_amount"] * mark_price for p in positions),
             num_open_positions=len(positions),
-            total_trades=sum(
+        )
+        if config.get("external_execution_mode", "legacy") != "confirmed_v2":
+            state["total_trades"] = sum(
                 1
                 for o in history
                 if json.loads(o["intent_json"])["side"] == "sell" and decimal(o["filled_quantity"]) > 0
-            ),
-        )
-        if state.get("risk_state"):
+            )
+        else:
+            state.setdefault("total_trades", 0)
+        if state.get("risk_state") and config.get("external_execution_mode", "legacy") != "confirmed_v2":
             risk = state["risk_state"]
             risk["open_position_count"] = len(positions)
             # A GTC exit may fill on a later day than its modeled evaluation.
@@ -670,5 +832,25 @@ def execution_inputs(strategy_id, mark_price, *, include_revision=False):
                 counts[fill["day"]] = max(counts.get(fill["day"], 0), fill["count"])
             risk["today"] = now()[:10]
         if include_revision:
-            return state, payloads, _broker_state_revision(conn, strategy_id)
+            revision = _broker_state_revision(conn, strategy_id)
+            if include_external_events:
+                events = [dict(row) for row in conn.execute(
+                    """SELECT sequence,event_id,position_id,asset,kind,filled_quantity,
+                              realized_pnl,fees,occurred_at
+                       FROM broker_execution_events WHERE strategy_id=? AND acknowledged_at IS NULL
+                       ORDER BY sequence LIMIT 512""",
+                    (strategy_id,),
+                ).fetchall()]
+                encoded_events = []
+                for event in events:
+                    if event["occurred_at"] is None:
+                        event.pop("occurred_at")
+                    if event["kind"] == "opened":
+                        event.pop("realized_pnl")
+                        event.pop("fees")
+                    else:
+                        event.pop("filled_quantity")
+                    encoded_events.append(event)
+                return state, payloads, revision, encoded_events, raw_state, raw_positions
+            return state, payloads, revision
         return state, payloads

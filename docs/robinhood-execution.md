@@ -61,6 +61,13 @@ multiple independent processes must not concurrently refresh the same OAuth gran
    bounds each order, and `slippage_pct` bounds its limit price relative to the
    Mangrove evaluation price (maximum 0.25%). The strategy must size exits within
    the same order cap. Configuration selects caller-owned stateless evaluation.
+   The default `external_execution_mode` is `legacy`. To opt into broker-confirmed
+   risk feedback, set it to `confirmed_v2` only after the Mangrove hosted v2 route
+   and compatible SDK are available. This mode can be enabled only on a pristine
+   strategy (or re-saved unchanged on an existing v2 route); it cannot be enabled
+   after broker or trade history exists. It preserves confirmed broker holdings
+   separately from hosted position templates and sends first-fill `opened` and
+   fully-flat `closed` events with exact quantities, realized PnL, and fees.
 4. Activate with `agent_update_strategy_status(strategy_id, status="live",
    confirm=true)`. A configured broker strategy needs no wallet allocation.
    Activation authorizes scheduled execution within the mandate; it does not
@@ -121,6 +128,15 @@ submitting. A network timeout or crash is **unknown**, never assumed rejected.
 Recovery searches broker history by that identity and never automatically resends
 an ambiguous placement. Missing history alone cannot clear the reservation.
 
+In `confirmed_v2` mode, the agent requires a typed hosted acknowledgement and a
+matching receipt for every submitted broker event. The state, broker-confirmed
+positions, event receipts, and (when an intent is executable) the local submitting
+reservation commit together before the broker request. A crash after that commit
+leaves a durable reservation for reconciliation; an unknown broker outcome is
+never retried automatically. No-intent and duplicate-bar evaluations are saved in
+the local evaluation audit before their acknowledgement is committed. A duplicate
+bar response containing a new order is rejected.
+
 Trades, exact decimal holdings, and journal changes commit together from cumulative
 broker fills. Repeated snapshots cannot double-count fills. Partial fills and
 canceled remainders affect only confirmed quantities. Mangrove's simulated fills
@@ -167,14 +183,15 @@ liquidated positions are not automatically reconciled into the strategy book.
   equity-only; this integration uses limit orders and does not claim an open
   crypto position is protected at Robinhood. Track native protective-order
   lifecycle support and acceptance in [issue #205](https://github.com/MangroveTechnologies/mangrove-agent/issues/205).
-- Risk state from a modeled trade advances only after an actual fill. Partial fills
+- In `legacy` mode, risk state from a modeled trade advances only after an actual fill. Partial fills
   can conservatively retain the modeled trade's cooldown/counter effects. If an
   actual exit loss differs from a modeled non-loss, new entries latch off with
   `broker_loss_diverged_from_model` rather than silently undercounting loss risk.
   Persisted risk halts survive delayed first fills, later partial fills, restarts,
   and subsequent evaluations; automatic state updates cannot clear the latch or
   replace its original recorded cause. Confirmed fills still update the book.
-  Full execution-aware risk-event feedback into Mangrove is a follow-up integration.
+  `confirmed_v2` instead sends durable broker-confirmed open/close events to Mangrove;
+  the hosted feature must be enabled separately before opting a strategy into it.
 - This build's validation uses offline order/fill fixtures plus live read-only
   account, catalog, pair, and quote checks. No live order was placed for validation.
 

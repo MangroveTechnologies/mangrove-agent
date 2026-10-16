@@ -6,9 +6,11 @@ pending-order rows also stop duplicate submission after a crash or restart.
 
 from __future__ import annotations
 
+import inspect as py_inspect
 import json
 import threading
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal
 
@@ -33,6 +35,7 @@ class VenueAllocation(BaseModel):
     capital: Decimal = Field(gt=0, allow_inf_nan=False)
     max_order_usd: Decimal = Field(gt=0, allow_inf_nan=False)
     slippage_pct: Decimal = Field(gt=0, le=Decimal("0.0025"), allow_inf_nan=False)
+    external_execution_mode: Literal["legacy", "confirmed_v2"] = "legacy"
 
 
 async def _with_venue(operation, *args):
@@ -87,22 +90,60 @@ async def configure(venue, strategy_id, allocation):
     account = await venue.account()
     if config.asset_class == "crypto" and not account.get("rhc_account_number"):
         raise SdkError("Robinhood crypto account onboarding is incomplete.")
+    if config.external_execution_mode == "confirmed_v2":
+        from src.shared.clients.mangrove import mangrove_ai_client
+
+        method = mangrove_ai_client().execution.evaluate_by_object
+        if not _supports_external_execution(method):
+            raise SdkError("Installed Mangrove SDK does not support confirmed execution feedback v2.")
     with store.connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT status FROM strategies WHERE id=?", (strategy_id,)).fetchone()
         if not row or row["status"] not in {"draft", "inactive"}:
             raise SdkError("Configure the execution venue while the strategy is draft or inactive.")
+        has_history = any(
+            conn.execute(f"SELECT 1 FROM {table} WHERE strategy_id=? LIMIT 1", (strategy_id,)).fetchone()
+            for table in ("trades", "broker_orders", "evaluations", "positions", "broker_execution_events")
+        )
+        saved = conn.execute(
+            "SELECT execution_state_json,open_positions_json FROM strategies WHERE id=?", (strategy_id,)
+        ).fetchone()
+        saved_state = json.loads(saved["execution_state_json"] or "{}")
+        saved_positions = json.loads(saved["open_positions_json"] or "[]")
+        old_route = conn.execute(
+            "SELECT * FROM broker_routes WHERE strategy_id=?", (strategy_id,)
+        ).fetchone()
         if (
             conn.execute("SELECT 1 FROM trades WHERE strategy_id=? LIMIT 1", (strategy_id,)).fetchone()
             or conn.execute("SELECT 1 FROM broker_orders WHERE strategy_id=? LIMIT 1", (strategy_id,)).fetchone()
         ):
-            raise SdkError("A strategy with execution history cannot be reassigned; create a new strategy.")
+            raise SdkError("A strategy with broker execution history cannot be reassigned.")
+        if config.external_execution_mode == "confirmed_v2":
+            valid_v2 = bool(
+                old_route
+                and old_route["external_execution_mode"] == "confirmed_v2"
+                and isinstance(saved_state.get("external_execution"), dict)
+                and type(saved_state["external_execution"].get("applied_through")) is int
+            )
+            pristine = not has_history and not saved_positions and not saved_state
+            same_v2_config = bool(
+                valid_v2
+                and old_route["asset_class"] == config.asset_class
+                and old_route["capital"] == str(config.capital)
+                and old_route["max_order_usd"] == str(config.max_order_usd)
+                and old_route["slippage_pct"] == str(config.slippage_pct)
+                and old_route["account_number"] == account["account_number"]
+                and old_route["rhs_account_number"] == account["rhs_account_number"]
+            )
+            if not (pristine or same_v2_config):
+                raise SdkError("Confirmed execution feedback can only be enabled on a pristine strategy or re-saved unchanged.")
         conn.execute(
             """INSERT INTO broker_routes(strategy_id,venue,account_number,rhs_account_number,asset_class,capital,
-            max_order_usd,slippage_pct,created_at) VALUES (?,?,?,?,?,?,?,?,?)
+            max_order_usd,slippage_pct,created_at,external_execution_mode) VALUES (?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(strategy_id) DO UPDATE SET account_number=excluded.account_number,
             rhs_account_number=excluded.rhs_account_number,asset_class=excluded.asset_class,
-            capital=excluded.capital,max_order_usd=excluded.max_order_usd,slippage_pct=excluded.slippage_pct""",
+            capital=excluded.capital,max_order_usd=excluded.max_order_usd,slippage_pct=excluded.slippage_pct,
+            external_execution_mode=excluded.external_execution_mode""",
             (
                 strategy_id,
                 "robinhood",
@@ -113,13 +154,17 @@ async def configure(venue, strategy_id, allocation):
                 str(config.max_order_usd),
                 str(config.slippage_pct),
                 store.now(),
+                config.external_execution_mode,
             ),
         )
         # Broker execution is always caller-owned, non-persisting evaluation.
-        conn.execute(
-            "UPDATE strategies SET evaluation_lane='stateless',execution_state_json=NULL,open_positions_json='[]' WHERE id=?",
-            (strategy_id,),
-        )
+        if config.external_execution_mode == "legacy":
+            conn.execute(
+                "UPDATE strategies SET evaluation_lane='stateless',execution_state_json=NULL,open_positions_json='[]' WHERE id=?",
+                (strategy_id,),
+            )
+        else:
+            conn.execute("UPDATE strategies SET evaluation_lane='stateless' WHERE id=?", (strategy_id,))
     return {
         "strategy_id": strategy_id,
         **config.model_dump(mode="json"),
@@ -168,6 +213,51 @@ def journal(strategy_id):
     return [{key: row[key] for key in fields} for row in store.orders(strategy_id)]
 
 
+def _plain(value):
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", exclude_none=True)
+    return value
+
+
+def _require_external_execution_sdk():
+    from src.shared.clients.mangrove import mangrove_ai_client
+
+    method = mangrove_ai_client().execution.evaluate_by_object
+    if not _supports_external_execution(method):
+        raise SdkError("Installed Mangrove SDK does not support confirmed execution feedback v2.")
+    return method
+
+
+def _supports_external_execution(method):
+    try:
+        return "external_execution" in py_inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _confirmed_position_view(hosted_positions, confirmed_positions):
+    """Keep hosted risk templates while broker fill facts remain authoritative."""
+    if not isinstance(hosted_positions, list):
+        raise SdkError("Mangrove v2 response is missing broker-confirmed open positions.")
+    if any(not isinstance(item, dict) or not item.get("id") for item in hosted_positions):
+        raise SdkError("Mangrove v2 response contains an invalid open position.")
+    hosted_ids = [item["id"] for item in hosted_positions]
+    if len(set(hosted_ids)) != len(hosted_ids):
+        raise SdkError("Mangrove v2 response contains duplicate open position IDs.")
+    hosted = {item["id"]: item for item in hosted_positions}
+    actual_ids = [item["id"] for item in confirmed_positions]
+    if len(set(actual_ids)) != len(actual_ids) or set(hosted_ids) != set(actual_ids):
+        raise SdkError("Mangrove v2 open positions do not match broker-confirmed holdings.")
+    actual = []
+    for confirmed in confirmed_positions:
+        item = dict(hosted.get(confirmed["id"]) or confirmed)
+        for key in ("id", "asset", "side", "position_size", "entry_price", "cost", "entry_timestamp", "open"):
+            if key in confirmed:
+                item[key] = confirmed[key]
+        actual.append(item)
+    return actual
+
+
 async def cancel(venue, order_id):
     order = next((o for o in store.orders(pending=True) if o["id"] == order_id), None)
     if not order or not order["broker_order_id"]:
@@ -191,24 +281,79 @@ async def _tick(venue, strategy_id):
         return
     if not portfolio_risk_service.check_before_live_execution()["allowed"]:
         return
+    confirmed_v2 = route.get("external_execution_mode", "legacy") == "confirmed_v2"
+    sdk_method = _require_external_execution_sdk() if confirmed_v2 else None
     pending = store.orders(strategy_id, pending=True)
     symbol = row["asset"].removesuffix("-USD")
     quote = await venue.quote(route, symbol)
     mark = float((store.decimal(quote["ask_price"]) + store.decimal(quote["bid_price"])) / 2)
-    state, positions = store.execution_inputs(strategy_id, mark)
+    if confirmed_v2:
+        state, positions, broker_revision, external_events, expected_state, expected_positions = store.execution_inputs(
+            strategy_id, mark, include_revision=True, include_external_events=True
+        )
+        expected_external = expected_state.get("external_execution") or {}
+        expected_cursor = expected_external.get("applied_through", 0)
+        if type(expected_cursor) is not int or expected_cursor < 0:
+            raise SdkError("Saved confirmed execution cursor is invalid; execution stopped.")
+    else:
+        state, positions = store.execution_inputs(strategy_id, mark)
     payload = strategy_service._stateless_strategy_dict(row)
     payload["execution_state"] = state
     payload["execution_config"]["initial_balance"] = float(route["capital"])
     payload["execution_config"]["initial_cash_balance"] = float(route["capital"])
     # All strategy logic, research and sizing remain in Mangrove.
-    result = await anyio.to_thread.run_sync(
-        lambda: mangrove_ai_client().execution.evaluate_by_object(payload, persist=False, open_positions=positions)
-    )
+    if confirmed_v2:
+        observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        external_request = {"contract_version": 2, "observed_at": observed_at, "events": external_events}
+        result = await anyio.to_thread.run_sync(
+            lambda: sdk_method(
+                payload, persist=False, open_positions=positions, external_execution=external_request
+            )
+        )
+    else:
+        result = await anyio.to_thread.run_sync(
+            lambda: mangrove_ai_client().execution.evaluate_by_object(payload, persist=False, open_positions=positions)
+        )
     dump = result.model_dump()
     if dump.get("success") is not True:
         raise SdkError("Mangrove evaluation did not succeed; no broker order submitted.")
+    ack_data = None
+    if confirmed_v2:
+        ack = _plain(getattr(result, "external_execution_ack", None))
+        if not isinstance(ack, dict) or ack.get("contract_version") != 2:
+            raise SdkError("Mangrove server did not acknowledge confirmed execution feedback v2.")
+        receipts = ack.get("receipts")
+        if not isinstance(receipts, list):
+            raise SdkError("Mangrove v2 acknowledgement is missing typed event receipts.")
+        expected_last = external_events[-1]["sequence"] if external_events else expected_cursor
+        if ack.get("applied_through") != expected_last:
+            raise SdkError("Mangrove v2 acknowledgement did not cover the submitted event batch.")
+        hosted_state = dump.get("execution_state")
+        hosted_positions = dump.get("open_positions")
+        if not isinstance(hosted_state, dict) or not isinstance(hosted_positions, list):
+            raise SdkError("Mangrove v2 response omitted state required for durable acknowledgement.")
+        confirmed_positions = _confirmed_position_view(hosted_positions, positions)
+        active_ids = ack.get("active_position_ids")
+        if (
+            not isinstance(active_ids, list)
+            or len(set(active_ids)) != len(active_ids)
+            or set(active_ids) != {item["id"] for item in confirmed_positions}
+        ):
+            raise SdkError("Mangrove v2 acknowledgement position IDs do not match broker-confirmed holdings.")
+        event_ids = [event["event_id"] for event in external_events]
+        disposition = dump.get("external_execution_disposition")
+        if disposition not in {"evaluated", "duplicate_bar"}:
+            raise SdkError("Mangrove v2 response has an unknown evaluation disposition.")
+        ack_data = (
+            event_ids, hosted_state, confirmed_positions, receipts,
+            expected_state, expected_positions, expected_cursor, broker_revision, external_events,
+        )
     eid = str(uuid.uuid4())
     intents = strategy_service._extract_order_intents(result, strategy_id=strategy_id, tick_id=eid)
+    if confirmed_v2 and dump.get("external_execution_disposition") == "duplicate_bar" and (
+        intents or any(o.get("status") == "filled" for o in dump.get("new_orders") or [])
+    ):
+        raise SdkError("Mangrove marked a bar duplicate while returning a new order intent; execution stopped.")
     blocked = bool(pending and intents)
     trade_log.log_evaluation(
         Evaluation(
@@ -223,9 +368,31 @@ async def _tick(venue, strategy_id):
             market_snapshot=strategy_service._market_snapshot(dump, asset=row["asset"]),
         )
     )
+    def commit_ack(reservation=None):
+        if ack_data is None:
+            return None
+        (event_ids, hosted_state, confirmed_positions, receipts, expected_state,
+         expected_positions, expected_cursor, broker_revision, external_events) = ack_data
+        return store.acknowledge_confirmed_close_events(
+            strategy_id,
+            event_ids,
+            hosted_state,
+            open_positions=confirmed_positions,
+            expected_state=expected_state,
+            expected_open_positions=expected_positions,
+            expected_applied_through=expected_cursor,
+            expected_broker_revision=broker_revision,
+            receipts=receipts,
+            submitted_events=external_events,
+            reservation=reservation,
+        )
+    if confirmed_v2 and dump.get("external_execution_disposition") == "duplicate_bar":
+        commit_ack()
+        return
     if not intents and any(o.get("status") == "filled" for o in dump.get("new_orders") or []):
         raise SdkError("Mangrove returned an unsupported filled intent; execution stopped.")
     if blocked:
+        commit_ack()
         # Keep evaluating confirmed holdings, but never submit against an
         # uncertain book. An exit takes priority over the unfilled remainder of
         # an entry. Cancellation can race a fill: reconcile, then evaluate the
@@ -243,11 +410,14 @@ async def _tick(venue, strategy_id):
     if not intents:
         # Advance non-execution risk/cooldown state only when no modeled trade
         # occurred. Broker cash and positions always overwrite it next tick.
-        store.save_evaluation_state(
-            strategy_id,
-            dump.get("execution_state") or state,
-            dump.get("open_positions") or positions,
-        )
+        if not confirmed_v2:
+            store.save_evaluation_state(
+                strategy_id,
+                dump.get("execution_state") or state,
+                dump.get("open_positions") or positions,
+            )
+        else:
+            commit_ack()
         return
     if len(intents) != 1:
         raise SdkError("Broker execution currently requires one Mangrove intent per evaluation.")
@@ -256,7 +426,8 @@ async def _tick(venue, strategy_id):
         raise SdkError("Mangrove intent does not match the strategy asset.")
     # Reject missing engine position state BEFORE a potentially irreversible
     # broker operation. Entry bracket templates are retained for future ticks.
-    template = next((p for p in dump.get("open_positions") or [] if p.get("id") == intent.engine_position_id), {})
+    templates = dump.get("position_templates") if confirmed_v2 else dump.get("open_positions")
+    template = next((p for p in templates or [] if p.get("id") == intent.engine_position_id), {})
     if intent.side == "buy" and not template:
         raise SdkError("Mangrove did not return the entry position template needed for reconciliation.")
     args, required = await venue.prepare(route, intent)
@@ -280,7 +451,17 @@ async def _tick(venue, strategy_id):
     ):
         return
     ref_id = str(uuid.uuid4())
-    if not store.reserve(strategy_id, eid, intent, args, template, ref_id):
+    if confirmed_v2:
+        reserved = commit_ack({
+            "evaluation_id": eid,
+            "intent": intent,
+            "request": args,
+            "template": template,
+            "ref_id": ref_id,
+        })
+    else:
+        reserved = store.reserve(strategy_id, eid, intent, args, template, ref_id)
+    if not reserved:
         return
     try:
         response = await venue.submit(route, args, ref_id)

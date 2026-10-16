@@ -356,3 +356,5 @@ MIT
 
 Mangrove strategies can use Robinhood as their broker execution venue through its
 official MCP service. See [connection, allocation, and recovery instructions](docs/robinhood-execution.md).
+Broker-confirmed risk feedback is opt-in with `external_execution_mode="confirmed_v2"`;
+the default remains `legacy` and v2 requires compatible hosted support and SDK.

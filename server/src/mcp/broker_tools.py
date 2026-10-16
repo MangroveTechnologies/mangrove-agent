@@ -33,9 +33,12 @@ def register(server):
         """Bind an inactive Mangrove strategy to Robinhood and a capital mandate.
 
         allocation: venue=robinhood, asset_class=equity|crypto, capital,
-        max_order_usd, slippage_pct. Does not activate trading. Strategy creation,
-        research, sizing and signals remain in Mangrove. Existing live activation
-        authorizes execution within this allocation without per-order prompts.
+        max_order_usd, slippage_pct, and optional external_execution_mode
+        (legacy by default; confirmed_v2 requires a compatible hosted route and
+        can only be enabled on a pristine strategy). Does not activate trading.
+        Strategy creation, research, sizing and signals remain in Mangrove.
+        Existing live activation authorizes execution within this allocation
+        without per-order prompts.
         """
         return await call(api_key, broker_execution.configure, strategy_id, allocation)
 
@@ -87,14 +90,14 @@ def register(server):
         ("agent_robinhood_status", "Robinhood execution venue readiness.", []),
         (
             "agent_configure_execution_venue",
-            "Bind an inactive strategy to a funded execution mandate.",
+            "Bind an inactive strategy to a funded execution mandate; optionally select confirmed v2 broker risk feedback.",
             [
                 strategy,
                 ToolParam(
                     name="allocation",
                     type="object",
                     required=True,
-                    description="Venue, asset class, capital, per-order maximum, slippage",
+                    description="Venue, asset class, capital, per-order maximum and slippage; optional external_execution_mode: legacy (default) or confirmed_v2 (requires compatible hosted support and pristine strategy)",
                 ),
             ],
         ),

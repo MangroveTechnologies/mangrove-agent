@@ -1,12 +1,12 @@
 """Offline broker tests: real journal/SQLite, injected broker and Mangrove I/O."""
 
+import asyncio
 import json
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from src.config import app_config
 from src.models.domain import Evaluation, OrderIntent
 from src.services import broker_execution as execution
@@ -30,7 +30,9 @@ def ledger(tmp_path, monkeypatch):
                 (sid, "mg-" + sid, sid, store.now(), store.now()),
             )
             conn.execute(
-                """INSERT INTO broker_routes VALUES (?,'robinhood','eligible','numeric','crypto','1000','500','0.0025',?)""",
+                """INSERT INTO broker_routes
+                (strategy_id,venue,account_number,rhs_account_number,asset_class,capital,max_order_usd,slippage_pct,created_at)
+                VALUES (?,'robinhood','eligible','numeric','crypto','1000','500','0.0025',?)""",
                 (sid, store.now()),
             )
         conn.execute("UPDATE broker_routes SET asset_class='equity' WHERE strategy_id='s2'")
@@ -135,6 +137,251 @@ def test_partial_fill_repeat_cancel_and_exit(ledger):
     assert close_event["occurred_at"] is None
     assert close_event["observed_at"]
     assert [event["event_id"] for event in store.pending_confirmed_close_events("s1")] == ["close:p1"]
+
+
+def test_confirmed_v2_outbox_orders_open_and_close_in_shared_sequence(ledger):
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2' WHERE strategy_id='s1'")
+        conn.execute(
+            "UPDATE strategies SET execution_state_json=? WHERE id='s1'",
+            (json.dumps({"total_trades": 4, "risk_state": {"daily_trade_counter": {"2026-10-15": 2}}}),),
+        )
+    assert reserve(side="buy", qty=1, oid="entry", key="entry")
+    store.apply_snapshot(
+        "entry", snapshot(qty="1", price="100", state="filled", net="101", oid="entry"),
+        asset_class="crypto",
+    )
+    store.apply_snapshot(
+        "entry", snapshot(qty="1", price="100", state="filled", net="101", oid="entry"),
+        asset_class="crypto",
+    )
+    assert reserve(side="sell", qty=1, oid="exit", key="exit")
+    store.apply_snapshot(
+        "exit", snapshot(qty="1", price="110", state="filled", side="sell", oid="exit", net="109"),
+        asset_class="crypto",
+    )
+    events = store.pending_external_execution_events("s1")
+    assert [(event["sequence"], event["kind"], event["event_id"]) for event in events] == [
+        (1, "opened", "open:p1"), (2, "closed", "close:p1")
+    ]
+    assert events[0]["filled_quantity"] == "1"
+    assert events[1]["realized_pnl"] == "8"
+    assert events[1]["fees"] == "2"
+    state, _ = store.execution_inputs("s1", 110)
+    assert state["total_trades"] == 4
+    assert state["risk_state"]["daily_trade_counter"] == {"2026-10-15": 2}
+    assert "bar_index" not in state  # fills never import the modeled evaluation state
+
+
+def test_confirmed_v2_ack_receipt_is_bound_to_broker_event(ledger):
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2' WHERE strategy_id='s1'")
+    assert reserve(side="buy", qty=1, oid="entry", key="entry")
+    store.apply_snapshot(
+        "entry", snapshot(qty="1", price="100", state="filled", net="101", oid="entry"),
+        asset_class="crypto",
+    )
+    state, _, revision, events, raw_state, raw_positions = store.execution_inputs(
+        "s1", 100, include_revision=True, include_external_events=True
+    )
+    del state
+    event = events[0]
+    receipt = {
+        "sequence": event["sequence"], "event_id": event["event_id"],
+        "position_id": event["position_id"], "kind": event["kind"],
+        "sha256": store._external_event_hash(event),
+        "occurred_at": None, "accounting_at": "2026-10-16T23:00:00Z",
+    }
+    next_state = {"external_execution": {"applied_through": 1, "receipts": [receipt]}}
+    wrong_receipt = {**receipt, "sha256": "0" * 64}
+    with pytest.raises(SdkError, match="receipt does not match"):
+        store.acknowledge_confirmed_close_events(
+            "s1", [event["event_id"]], next_state, open_positions=[{"id": "p1", "open": True}],
+            expected_state=raw_state, expected_open_positions=raw_positions,
+            expected_applied_through=0, expected_broker_revision=revision,
+            receipts=[wrong_receipt], submitted_events=events,
+        )
+    assert store.pending_external_execution_events("s1") == events
+    store.acknowledge_confirmed_close_events(
+        "s1", [event["event_id"]], next_state, open_positions=[{"id": "p1", "open": True}],
+        expected_state=raw_state, expected_open_positions=raw_positions,
+        expected_applied_through=0, expected_broker_revision=revision,
+        receipts=[receipt], submitted_events=events,
+    )
+    assert store.pending_external_execution_events("s1") == []
+    with store.connection() as conn:
+        stored = json.loads(conn.execute(
+            "SELECT receipt_json FROM broker_execution_events WHERE event_id='open:p1'"
+        ).fetchone()[0])
+    assert stored["sha256"] == receipt["sha256"]
+    assert store.acknowledge_confirmed_close_events(
+        "s1", [event["event_id"]], next_state, open_positions=[{"id": "p1", "open": True}],
+        expected_state=raw_state, expected_open_positions=raw_positions,
+        expected_applied_through=0, expected_broker_revision=revision,
+        receipts=[receipt], submitted_events=events,
+        reservation={
+            "evaluation_id": "eval", "intent": intent(order="changed-key"), "request": {"quantity": "1"},
+            "template": {"id": "p1"}, "ref_id": "must-not-be-reserved",
+        },
+    ) is False
+    assert not any(item["id"] == "must-not-be-reserved" for item in store.orders("s1"))
+
+
+def test_empty_confirmed_v2_ack_and_order_reservation_commit_together(ledger):
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2' WHERE strategy_id='s1'")
+        conn.execute("UPDATE strategies SET status='live' WHERE id='s1'")
+    _, _, revision, events, raw_state, raw_positions = store.execution_inputs(
+        "s1", 100, include_revision=True, include_external_events=True
+    )
+    assert events == []
+    reservation = {
+        "evaluation_id": "eval", "intent": intent(), "request": {"quantity": "1"},
+        "template": {"id": "p1", "asset": "BTC-USD"}, "ref_id": "reserved-before-submit",
+    }
+    saved = store.acknowledge_confirmed_close_events(
+        "s1", [], {"bar_index": 1, "external_execution": {"applied_through": 0}},
+        open_positions=[], expected_state=raw_state, expected_open_positions=raw_positions,
+        expected_applied_through=0, expected_broker_revision=revision,
+        receipts=[], submitted_events=[], reservation=reservation,
+    )
+    assert saved is True
+    order = next(item for item in store.orders("s1") if item["id"] == "reserved-before-submit")
+    assert order["status"] == "submitting"
+
+    class NoBrokerOrder:
+        async def account(self, *_args):
+            return None
+
+        async def find_order(self, *_args):
+            return None
+
+    # Simulate a process stop after the atomic commit and before the broker
+    # HTTP call. Reconciliation marks the outcome uncertain and never retries.
+    asyncio.run(execution.reconcile(NoBrokerOrder(), "s1"))
+    order = next(item for item in store.orders("s1") if item["id"] == "reserved-before-submit")
+    assert order["status"] == "uncertain"
+    assert not store.reserve(
+        "s1", "eval", intent(), {"quantity": "1"}, {"id": "p1"}, "retry-must-not-submit"
+    )
+
+
+def test_confirmed_v2_ack_rejects_changed_route_allocation(ledger):
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2' WHERE strategy_id='s1'")
+    _, _, revision, _, raw_state, raw_positions = store.execution_inputs(
+        "s1", 100, include_revision=True, include_external_events=True
+    )
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET max_order_usd='400' WHERE strategy_id='s1'")
+    with pytest.raises(SdkError, match="Stale confirmed close acknowledgement"):
+        store.acknowledge_confirmed_close_events(
+            "s1", [], {"external_execution": {"applied_through": 0}}, open_positions=[],
+            expected_state=raw_state, expected_open_positions=raw_positions,
+            expected_applied_through=0, expected_broker_revision=revision,
+            receipts=[], submitted_events=[],
+        )
+
+
+def test_failed_atomic_reservation_rolls_back_v2_ack(ledger):
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2' WHERE strategy_id='s1'")
+        conn.execute("UPDATE strategies SET status='inactive' WHERE id='s1'")
+    _, _, revision, _, raw_state, raw_positions = store.execution_inputs(
+        "s1", 100, include_revision=True, include_external_events=True
+    )
+    reservation = {
+        "evaluation_id": "eval", "intent": intent(), "request": {"quantity": "1"},
+        "template": {"id": "p1"}, "ref_id": "inactive-must-not-reserve",
+    }
+    with pytest.raises(SdkError, match="could not commit together"):
+        store.acknowledge_confirmed_close_events(
+            "s1", [], {"bar_index": 9, "external_execution": {"applied_through": 0}},
+            open_positions=[], expected_state=raw_state, expected_open_positions=raw_positions,
+            expected_applied_through=0, expected_broker_revision=revision,
+            receipts=[], submitted_events=[], reservation=reservation,
+        )
+    with store.connection() as conn:
+        state = json.loads(conn.execute(
+            "SELECT execution_state_json FROM strategies WHERE id='s1'"
+        ).fetchone()[0] or "{}")
+        assert conn.execute("SELECT count(*) FROM broker_orders WHERE id='inactive-must-not-reserve'").fetchone()[0] == 0
+    assert state == {}
+
+
+def test_v2_tick_sends_empty_envelope_and_commits_typed_empty_ack(ledger, monkeypatch):
+    from src.services import portfolio_risk_service
+
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2' WHERE strategy_id='s1'")
+        conn.execute("UPDATE strategies SET status='live' WHERE id='s1'")
+    monkeypatch.setattr(execution, "reconcile", AsyncMock())
+    monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": True})
+    calls = {}
+
+    def sdk_method(payload, *, persist, open_positions, external_execution):
+        calls.update(payload=payload, persist=persist, open_positions=open_positions, request=external_execution)
+        return SimpleNamespace(
+            external_execution_ack={
+                "contract_version": 2, "applied_through": 0, "receipts": [], "active_position_ids": [],
+                "last_observed_at": external_execution["observed_at"],
+            },
+            model_dump=lambda: {
+                "success": True,
+                "execution_state": {"bar_index": 1, "external_execution": {"applied_through": 0}},
+                "open_positions": [], "position_templates": [],
+                "external_execution_disposition": "evaluated", "new_orders": [],
+            },
+        )
+
+    monkeypatch.setattr(execution, "_require_external_execution_sdk", lambda: sdk_method)
+
+    class QuoteVenue:
+        async def quote(self, *_args):
+            return {"ask_price": "101", "bid_price": "99"}
+
+    asyncio.run(execution._tick(QuoteVenue(), "s1"))
+    assert calls["persist"] is False
+    assert calls["payload"]["execution_state"]["total_trades"] == 0
+    assert calls["request"]["contract_version"] == 2
+    assert calls["request"]["events"] == []
+    assert calls["request"]["observed_at"].endswith("Z")
+    with store.connection() as conn:
+        saved = json.loads(conn.execute(
+            "SELECT execution_state_json FROM strategies WHERE id='s1'"
+        ).fetchone()[0])
+        count = conn.execute("SELECT count(*) FROM evaluations WHERE strategy_id='s1'").fetchone()[0]
+    assert saved["external_execution"]["applied_through"] == 0
+    assert saved["bar_index"] == 1
+    assert count == 2
+
+
+def test_v2_confirmed_positions_preserve_hosted_entry_index_and_actual_size():
+    confirmed = [{
+        "id": "p1", "asset": "BTC-USD", "position_size": 0.25,
+        "entry_price": 101.0, "cost": 25.25, "entry_timestamp": "2026-10-16T10:00:00Z", "open": True,
+    }]
+    hosted = [{**confirmed[0], "position_size": 0.5, "entry_bar_index": 42, "orders": [{"price": 90}]}]
+    result = execution._confirmed_position_view(hosted, confirmed)
+    assert result[0]["position_size"] == 0.25
+    assert result[0]["entry_bar_index"] == 42
+    assert result[0]["orders"] == [{"price": 90}]
+    with pytest.raises(SdkError, match="do not match broker-confirmed"):
+        execution._confirmed_position_view([], confirmed)
+
+
+def test_v2_execution_rejects_sdk_without_opt_in_parameter(monkeypatch):
+    from src.shared.clients import mangrove
+
+    def old_evaluate_by_object(payload, *, persist=False, open_positions=None):
+        return None
+
+    monkeypatch.setattr(
+        mangrove, "mangrove_ai_client",
+        lambda: SimpleNamespace(execution=SimpleNamespace(evaluate_by_object=old_evaluate_by_object)),
+    )
+    with pytest.raises(SdkError, match="does not support confirmed execution feedback v2"):
+        execution._require_external_execution_sdk()
 
 
 def test_confirmed_close_outbox_is_atomic_durable_and_acknowledged_with_state(ledger):
@@ -691,6 +938,43 @@ async def test_configuration_requires_inactive_and_no_execution_history(ledger):
         conn.execute("UPDATE strategies SET status='inactive' WHERE id='s1'")
     with pytest.raises(SdkError, match="execution history"):
         await execution.configure(venue, "s1", allocation)
+
+
+async def test_confirmed_v2_configuration_requires_capable_sdk_and_preserves_state(ledger, monkeypatch):
+    from src.shared.clients import mangrove
+
+    with store.connection() as conn:
+        conn.execute(
+            """INSERT INTO strategies(id,mangrove_id,name,asset,timeframe,status,entry_json,
+            exit_json,execution_config_json,created_at,updated_at,evaluation_lane,execution_state_json,open_positions_json)
+            VALUES ('s3','mg-s3','s3','BTC-USD','1h','inactive','[]','[]','{}',?,?, 'server','{}','[]')""",
+            (store.now(), store.now()),
+        )
+    def evaluate_by_object(payload, *, persist, open_positions, external_execution=None):
+        return None
+
+    monkeypatch.setattr(
+        mangrove, "mangrove_ai_client",
+        lambda: SimpleNamespace(execution=SimpleNamespace(evaluate_by_object=evaluate_by_object)),
+    )
+    venue = SimpleNamespace(account=AsyncMock(return_value={
+        "account_number": "eligible", "rhs_account_number": "numeric", "rhc_account_number": "crypto",
+    }))
+    await execution.configure(venue, "s3", {
+        "asset_class": "crypto", "capital": "200", "max_order_usd": "100",
+        "slippage_pct": "0.0025", "external_execution_mode": "confirmed_v2",
+    })
+    with store.connection() as conn:
+        row = conn.execute(
+            "SELECT evaluation_lane,execution_state_json,open_positions_json FROM strategies WHERE id='s3'"
+        ).fetchone()
+        route = conn.execute(
+            "SELECT external_execution_mode FROM broker_routes WHERE strategy_id='s3'"
+        ).fetchone()
+    assert row["evaluation_lane"] == "stateless"
+    assert row["execution_state_json"] == "{}"
+    assert row["open_positions_json"] == "[]"
+    assert route["external_execution_mode"] == "confirmed_v2"
 
 
 def test_strategy_input_preserves_updated_brackets(ledger):
