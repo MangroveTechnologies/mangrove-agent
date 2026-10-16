@@ -1,12 +1,10 @@
 ---
 name: sweeps
 description: >-
-  Create thousands of strategies across various assets, market data windows, indicators,
-  parameters, and risk settings. Reach for it whenever the question is about searching
-  across many possibilities rather than building something specific: "what works on ETH",
-  "search for a momentum strategy", "find something that holds up in a bear market", "try
-  a lot of variations", "what should I trade", ... . Reading the runs back afterwards is
-  sweep-results.
+  Create, size and launch NEW strategy experiments: "create a sweep", "launch an
+  experiment", "try a lot of variations". For "search", "find", "look for" or
+  "pick an existing strategy", use sweep-results first to search completed runs.
+  Propose a new sweep only when existing results do not answer the question.
 uses-tools: [list_sweep_markets, build_market_window, get_sweep_limits, size_sweep, create_sweep, launch_sweep, get_sweep, pause_sweep]
 ---
 

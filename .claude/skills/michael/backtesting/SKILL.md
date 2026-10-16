@@ -138,3 +138,13 @@ clear one out, say that plainly: the record of what a strategy did is not someth
 
 A losing run is worth the most of any of them. It is the evidence for why a strategy was
 changed.
+
+
+## Venue and quote choice
+
+Use the supplied or saved market by default. Do not force a selection step when its
+venue and quote are known. Offer `list_backtest_markets` when the person asks for
+alternatives, and pass their choice as `market_data_venue` and `quote_token` to
+`run_backtest`. If either detail is missing, suggest an available matching market
+and obtain confirmation before running. Never invent confirmation or silently
+substitute another market. The selected market must cover the window and warm-up.
