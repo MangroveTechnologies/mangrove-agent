@@ -85,6 +85,11 @@ local argument names, authentication arguments and aggregation can intentionally
 be different. Added unrelated receiver tools do not fail. Missing billing IDs
 fail even when the corresponding REST route is intentionally hidden from MCP.
 
+The same check compares the declared `uses-tools` names in generated Michael
+skills with both the reviewed receiver snapshot and the live catalog. A missing
+tool fails with a source-sync instruction; the checker does not rewrite skills
+or treat a stale snapshot as proof that the deployed receiver serves them.
+
 This guards catalog compatibility, not the semantic correctness of every SDK
 route mapping. Renamed, differently named or private/context-dependent receiver
 capabilities need explicit adapter review; a names-only diff cannot infer those

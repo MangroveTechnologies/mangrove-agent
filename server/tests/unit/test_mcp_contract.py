@@ -175,6 +175,27 @@ def test_upstream_compares_its_own_schema_not_wrapper_schema():
     assert checks.compare_upstream(current, old, {"read", "wallet"}, bindings)
 
 
+def test_skill_contract_detects_tools_missing_from_the_receiver():
+    errors = checks.check_skill_catalog(
+        {"available_tool", "retired_tool"}, {"available_tool"}, "live receiver",
+    )
+    assert len(errors) == 1
+    assert "retired_tool" in errors[0]
+    assert "regenerate from MangroveAI skill source" in errors[0]
+
+
+def test_skill_tool_references_reads_generated_frontmatter(tmp_path):
+    skill = tmp_path / ".claude/skills/michael/sweeps/SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text(
+        "---\nname: sweeps\nuses-tools: [create_sweep, get_sweep]\n---\n"
+        "Body references do not define the advertised tool catalog.\n",
+        encoding="utf-8",
+    )
+
+    assert checks.skill_tool_references(tmp_path) == {"create_sweep", "get_sweep"}
+
+
 def install_http(monkeypatch, handler):
     original = httpx.Client
     def factory(**kwargs):
@@ -267,6 +288,7 @@ def test_demo_catalog_follows_configured_network_in_both_registration_paths(monk
 @pytest.mark.parametrize("confirm", [None, False])
 async def test_optional_confirmation_still_refuses_execution(name, confirm):
     from mcp.server.fastmcp import FastMCP
+
     from src.mcp import tools
     server = FastMCP("confirmation-contract")
     tools._register_dex(server)

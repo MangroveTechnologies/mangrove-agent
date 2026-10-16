@@ -348,6 +348,29 @@ def compare_upstream(current, previous, local_names, bindings):
     return errors
 
 
+def skill_tool_references(root=ROOT):
+    """Return the union of tool names declared by generated Michael skills."""
+    references = set()
+    skills = root / ".claude" / "skills" / "michael"
+    for path in sorted(skills.rglob("SKILL.md")):
+        text = path.read_text(encoding="utf-8")
+        match = re.search(r"^uses-tools:\s*\[(.*?)\]\s*$", text, flags=re.M)
+        if not match:
+            continue
+        references.update(name.strip() for name in match.group(1).split(",") if name.strip())
+    return references
+
+
+def check_skill_catalog(skill_names, catalog_names, source="receiver snapshot"):
+    missing = sorted(set(skill_names) - set(catalog_names))
+    if not missing:
+        return []
+    return [
+        f"Michael skills advertise tools absent from {source}: {', '.join(missing)}; "
+        "refresh the reviewed receiver snapshot and regenerate from MangroveAI skill source"
+    ]
+
+
 def deny_runtime_io(event, args):
     if event in {"socket.connect", "socket.getaddrinfo", "sqlite3.connect", "subprocess.Popen", "os.system"}:
         raise RuntimeError("Contract collection prohibits network, databases and subprocesses")
@@ -421,12 +444,16 @@ def main(argv=None):
     if policy.get("version") != 1 or upstream.get("version") != 1:
         raise ValueError("Unsupported policy or receiver snapshot version")
     errors += check_bindings(TOOL_PRICING, set(actual["tools"]), policy, upstream)
+    skill_names = skill_tool_references()
+    if not args.refresh_upstream:
+        errors += check_skill_catalog(skill_names, set(upstream["tools"]))
     errors += check_delegation((ROOT / "server/src/mcp/tools.py").read_text(), policy["direct_sdk_adapters"])
     if not args.refresh_local:
         errors += compare_local(actual, read_json("local.json"))
     if args.upstream_url and not args.refresh_upstream:
         live = fetch_upstream(args.upstream_url)
         errors += compare_upstream(live, upstream, set(actual["tools"]), TOOL_PRICING)
+        errors += check_skill_catalog(skill_names, set(live["tools"]), "live receiver")
     if errors:
         for error in sorted(set(errors)):
             print("FAIL:", error)
