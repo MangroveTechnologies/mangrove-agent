@@ -53,7 +53,7 @@ mangroveai>=2.0.0,<3.0.0
 # (SDK PR #50), which the CEX BYOK + OAuth paths depend on.
 mangrovemarkets>=1.1.0,<2.0.0
 apscheduler[sqlalchemy]>=3.10
-cryptography>=42
+cryptography>=50.0.1
 keyring>=24
 structlog>=24
 
