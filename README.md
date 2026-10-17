@@ -39,6 +39,7 @@ A local AI trading agent that:
 - Runs live strategies on APScheduler cron jobs. Same evaluator path for paper and live.
 - Executes live DEX swaps through [MangroveMarkets](https://github.com/MangroveTechnologies/MangroveMarkets) — 1inch routing across 10 EVM chains (Ethereum, Base, Arbitrum, Polygon, Optimism, BNB, Avalanche, zkSync Era, Gnosis, Linea; the agent defaults to Base). Client-side signing; the routing server never touches your keys.
 - Trades on **Kraken** too, with two connection modes: **bring-your-own-key** (`/setup-kraken` — a least-privilege API key that stays on your machine and talks to Kraken directly) or **keyless OAuth** (`/connect-kraken` — consent once in a browser, no key to manage).
+- Connects **Robinhood** through its official MCP and an Agent-owned OAuth grant. Authenticated MCP clients can discover and call Robinhood's advertised tools. Mangrove strategies use the managed execution adapter, with confirmed-fill reconciliation and a narrower supported order lifecycle. See [Robinhood setup, tool access, and execution limits](docs/robinhood-execution.md).
 - Logs every evaluation and trade — DEX and CEX — to local SQLite for a full audit trail.
 
 Full platform documentation and the trading knowledge base live at **https://mangrove.io/docs** (KB: https://mangrove.io/knowledge-base) — the agent's `kb_search` tool queries the same corpus.
@@ -224,7 +225,7 @@ For DEX execution, wallet setup and live trading are in Chapters 06 and 07 of th
 | DEX (1inch) | `list_dex_venues`, `get_swap_quote`, `execute_swap`, `get_tx_status`, `get_spot_price`, `get_gas_price`, `get_token_search`, `get_allowances`, `get_token_info`¹, `get_dex_chart`¹ |
 | Market data | `get_ohlcv`, `get_market_data`, `get_trending`, `list_approved_assets`, `get_asset`, `get_global_market` |
 | Signals | `list_signals`, `get_signal`, `match_signals`, `search_signals` |
-| On-chain & smart money | `get_whale_activity`, `get_whale_transactions`, `get_smart_money_sentiment`, `screen_smart_money`, `get_token_holders`, `get_exchange_flows`, `get_smart_money_historical_holdings`, `get_smart_money_dex_trades`, `get_smart_money_perp_trades`, `get_token_dex_trades`, `get_token_flows` |
+| On-chain & smart money | `get_smart_money_sentiment`, `screen_smart_money`, `get_token_holders`, `get_smart_money_historical_holdings`, `get_smart_money_dex_trades`, `get_smart_money_perp_trades`, `get_token_dex_trades`, `get_token_flows` |
 | DeFi | `get_chain_tvl`, `get_protocol_tvl`, `get_stablecoin_metrics` |
 | DeFi Pro (Pro/Startup/Enterprise) | `get_token_unlocks`, `get_perp_funding`, `get_treasuries`, `get_etf_flows`, `get_lending_borrow_rates` — starter: [docs/defi-pro.md](docs/defi-pro.md) |
 | Social | `get_sentiment`, `get_mentions`, `get_influence_score` |
@@ -356,3 +357,5 @@ MIT
 
 Mangrove strategies can use Robinhood as their broker execution venue through its
 official MCP service. See [connection, allocation, and recovery instructions](docs/robinhood-execution.md).
+Broker-confirmed risk feedback is opt-in with `external_execution_mode="confirmed_v2"`;
+the default remains `legacy` and v2 requires compatible hosted support and SDK.

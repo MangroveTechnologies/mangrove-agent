@@ -348,6 +348,30 @@ def compare_upstream(current, previous, local_names, bindings):
     return errors
 
 
+def skill_tool_references(root=ROOT):
+    """Return the union of tool names declared by generated Michael skills."""
+    references = set()
+    skills = root / ".claude" / "skills" / "michael"
+    for path in sorted(skills.rglob("SKILL.md")):
+        text = path.read_text(encoding="utf-8")
+        match = re.search(r"^uses-tools:\s*\[(.*?)\]\s*$", text, flags=re.M)
+        if not match:
+            continue
+        references.update(name.strip() for name in match.group(1).split(",") if name.strip())
+    return references
+
+
+def check_skill_catalog(skill_names, catalog_names, source="receiver snapshot"):
+    missing = sorted(set(skill_names) - set(catalog_names))
+    if not missing:
+        return []
+    return [
+        f"Michael skills advertise tools absent from {source}: {', '.join(missing)}; "
+        "check receiver catalog mode/version and skill availability before invoking; "
+        "refresh snapshots or generated skills only for a reviewed contract change"
+    ]
+
+
 def deny_runtime_io(event, args):
     if event in {"socket.connect", "socket.getaddrinfo", "sqlite3.connect", "subprocess.Popen", "os.system"}:
         raise RuntimeError("Contract collection prohibits network, databases and subprocesses")
@@ -369,10 +393,33 @@ def write_json(name, value):
     (CONTRACTS / name).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def validate_deployed_observation(observation):
+    """Validate the separate names-only capture of a deployed receiver."""
+    if (not isinstance(observation, dict) or type(observation.get("version")) is not int
+            or observation["version"] != 1
+            or not isinstance(observation.get("source"), str)
+            or not isinstance(observation.get("observed_at_utc"), str)
+            or type(observation.get("tool_count")) is not int
+            or not isinstance(observation.get("tools"), list)):
+        raise ValueError("Malformed deployed catalog observation")
+    try:
+        datetime.fromisoformat(observation["observed_at_utc"])
+    except ValueError as exc:
+        raise ValueError("Invalid deployed catalog observation timestamp") from exc
+    names = observation["tools"]
+    if (len(names) != observation["tool_count"] or len(names) > 4096
+            or any(not isinstance(name, str) or not NAME.fullmatch(name) for name in names)
+            or len(names) != len(set(names))):
+        raise ValueError("Invalid deployed catalog tool names or count")
+    return set(names)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--upstream-url", help="Opt-in anonymous live comparison; no payment calls")
     parser.add_argument("--refresh-upstream", action="store_true", help="Write a new receiver snapshot for review")
+    parser.add_argument("--refresh-deployed", action="store_true",
+                        help="Write a separate names-only observation of the live deployed catalog")
     parser.add_argument("--refresh-local", action="store_true", help="Write generated local contract for review")
     parser.add_argument("--collect", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -404,8 +451,24 @@ def main(argv=None):
         return 0
     if args.refresh_upstream and not args.upstream_url:
         parser.error("--refresh-upstream requires --upstream-url")
-    if args.refresh_local and args.refresh_upstream:
-        parser.error("Refresh local and receiver snapshots separately for review")
+    refresh_modes = sum((args.refresh_local, args.refresh_upstream, args.refresh_deployed))
+    if refresh_modes > 1:
+        parser.error("Refresh local, expected receiver, and deployed observations separately")
+    if args.refresh_deployed and not args.upstream_url:
+        parser.error("--refresh-deployed requires --upstream-url")
+    if args.refresh_deployed:
+        live = fetch_upstream(args.upstream_url)
+        observation = {
+            "version": 1,
+            "observed_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "source": args.upstream_url,
+            "tool_count": len(live["tools"]),
+            "tools": sorted(live["tools"]),
+        }
+        validate_deployed_observation(observation)
+        write_json("deployed.json", observation)
+        print("Wrote names-only deployed catalog observation; expected receiver snapshot unchanged.")
+        return 0
     import subprocess
     child = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--collect"],
                            capture_output=True, text=True, timeout=30)
@@ -418,15 +481,29 @@ def main(argv=None):
     from src.mcp.pricing_bindings import TOOL_PRICING
     policy = read_json("policy.json")
     upstream = read_json("upstream.json") if not args.refresh_upstream else fetch_upstream(args.upstream_url)
+    deployed = read_json("deployed.json")
+    deployed_names = validate_deployed_observation(deployed)
     if policy.get("version") != 1 or upstream.get("version") != 1:
         raise ValueError("Unsupported policy or receiver snapshot version")
     errors += check_bindings(TOOL_PRICING, set(actual["tools"]), policy, upstream)
+    skill_names = skill_tool_references()
+    if not args.refresh_upstream:
+        errors += check_skill_catalog(skill_names, set(upstream["tools"]))
+    missing_expected = set(upstream["tools"]) - deployed_names
+    missing_skill = skill_names - deployed_names
+    print(
+        f"Observed deployment {deployed['observed_at_utc']}: {len(deployed_names)} tools; "
+        f"{len(missing_expected)} reference-snapshot names and {len(missing_skill)} skill-referenced "
+        "tools are absent from that observation. Catalog mode/version differences may explain this; "
+        "a name diff alone does not establish a production regression."
+    )
     errors += check_delegation((ROOT / "server/src/mcp/tools.py").read_text(), policy["direct_sdk_adapters"])
     if not args.refresh_local:
         errors += compare_local(actual, read_json("local.json"))
     if args.upstream_url and not args.refresh_upstream:
         live = fetch_upstream(args.upstream_url)
         errors += compare_upstream(live, upstream, set(actual["tools"]), TOOL_PRICING)
+        errors += check_skill_catalog(skill_names, set(live["tools"]), "live receiver")
     if errors:
         for error in sorted(set(errors)):
             print("FAIL:", error)

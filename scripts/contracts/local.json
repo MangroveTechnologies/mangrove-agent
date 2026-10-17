@@ -30,6 +30,18 @@
       ],
       "variable": true
     },
+    "agent_list_oracle_experiments": {
+      "meters": [
+        "proxy:api_calls"
+      ],
+      "variable": false
+    },
+    "agent_list_oracle_results": {
+      "meters": [
+        "proxy:oracle_results_read"
+      ],
+      "variable": false
+    },
     "agent_update_strategy_status": {
       "meters": [
         "rest:strategy_status_update"
@@ -464,6 +476,49 @@
         "type": "object"
       }
     },
+    "agent_list_oracle_experiments": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "agent_list_oracle_results": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "experiment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 100,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
     "agent_list_strategies": {
       "access": "auth",
       "inputSchema": {
@@ -522,6 +577,24 @@
       }
     },
     "agent_list_venue_orders": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
+    "agent_list_venue_protection": {
       "access": "auth",
       "inputSchema": {
         "properties": {

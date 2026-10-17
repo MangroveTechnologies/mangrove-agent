@@ -11,7 +11,7 @@ uses-tools: [list_strategies, list_platform_strategies, get_strategy, archive_st
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/strategy-management/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
 
-These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
+These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. When a remote Oracle experiment/result reader is unavailable, the authenticated local agent_list_oracle_experiments and agent_list_oracle_results tools can discover experiment summaries and read bounded result pages only. They do not provide sweep-specific filtering, ranking, or mutation; never present them as equivalent to a missing remote tool. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
 
 # A strategy the user already has
 
@@ -106,8 +106,9 @@ a strategy leaves it, and what archiving and deploying do is strategy-management
 ## The marketplace: finding a strategy and offering to adopt it
 
 When the task is building a strategy rather than browsing or managing one they already have,
-the entry point is strategy-composition, which searches the marketplace first and composes
-only when nothing listed fits -- what follows here is the mechanics those calls share.
+the entry point is strategy-composition, which starts a vague request in the Strategy Engine
+and takes the marketplace route when the person asks for a listing -- what follows here is
+the mechanics the marketplace calls share.
 
 `search_marketplace` is the marketplace page in a tool: every filter the page has, applied by
 the platform. Pass the person's ask as filters rather than fetching a page and picking through

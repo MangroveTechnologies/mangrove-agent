@@ -186,9 +186,6 @@ Global market cap, BTC dominance, 24h change.
 #### `GET /api/v1/agent/on-chain/smart-money?symbol=<str>&chain=<str>`
 Smart money sentiment via `mangroveai.on_chain.get_smart_money_sentiment()`.
 
-#### `GET /api/v1/agent/on-chain/whale-activity?symbol=<str>&hours_back=<int>`
-Whale activity summary.
-
 #### `GET /api/v1/agent/on-chain/token-holders/{symbol}`
 Holder distribution and concentration.
 
@@ -425,7 +422,6 @@ Tool descriptions include parameters, return shapes, and access tier. All tools 
 | Market | `get_trending` | `GET /market/trending` |
 | Market | `get_global_market` | `GET /market/global` |
 | On-chain | `get_smart_money` | `GET /on-chain/smart-money` |
-| On-chain | `get_whale_activity` | `GET /on-chain/whale-activity` |
 | On-chain | `get_token_holders` | `GET /on-chain/token-holders/{s}` |
 | Signals | `get_signal` | `GET /signals/{name}` |
 | KB | `kb_glossary` | `GET /kb/glossary/{term}` |
@@ -1013,7 +1009,7 @@ Every user story maps to at least one endpoint.
 | US-6 OHLCV | `GET /market/ohlcv` |
 | US-7 market data | `GET /market/data` |
 | US-8 trending / global | `GET /market/trending`, `GET /market/global` |
-| US-9 on-chain | `GET /on-chain/smart-money`, `/whale-activity`, `/token-holders` |
+| US-9 on-chain | `GET /on-chain/smart-money`, `/token-holders` |
 | US-10 portfolio | `GET /wallet/{a}/portfolio`, `/history` |
 | US-11 signals | `GET /signals`, `GET /signals/{name}` |
 | US-12 create strategy | `POST /strategies/autonomous`, `POST /strategies/manual` |

@@ -27,6 +27,9 @@ from src.services.oracle import (
     data_query as svc_data_query,
 )
 from src.services.oracle import (
+    list_results as svc_list_results,
+)
+from src.services.oracle import (
     pause_experiment as svc_pause_experiment,
 )
 from src.services.oracle import (
@@ -177,6 +180,40 @@ class TestDataQuery:
         assert result["row_count"] == 1
         assert result["rows"][0]["asset"] == "BTC"
         assert "oracle:v0.14.2" in result["code_version"]
+
+
+class TestListResults:
+    @pytest.mark.asyncio
+    async def test_results_route_accepts_cross_corpus_page(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from src.api.routes.oracle import get_list_results
+
+        seen = {}
+
+        def fake_list_results(experiment_id, *, limit, offset):
+            seen.update(experiment_id=experiment_id, limit=limit, offset=offset)
+            return {"total": 1, "offset": offset, "limit": limit, "results": []}
+
+        monkeypatch.setattr("src.api.routes.oracle.oracle_service.list_results", fake_list_results)
+
+        result = await get_list_results(experiment_id=None, limit=5, offset=10)
+
+        assert result["offset"] == 10
+        assert seen == {"experiment_id": None, "limit": 5, "offset": 10}
+
+    def test_allows_visible_corpus_pagination(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = MagicMock()
+        client.oracle.list_results.return_value.model_dump.return_value = {
+            "total": 11, "offset": 5, "limit": 5, "results": [{"asset": "BTC"}],
+        }
+        monkeypatch.setattr("src.services.oracle.mangrove_ai_client", lambda: client)
+
+        result = svc_list_results(None, limit=5, offset=5)
+
+        assert result["total"] == 11
+        assert result["results"] == [{"asset": "BTC"}]
+        client.oracle.list_results.assert_called_once_with(
+            experiment_id=None, limit=5, offset=5,
+        )
 
 
 # ---------------------------------------------------------------------------

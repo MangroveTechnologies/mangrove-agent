@@ -1,18 +1,16 @@
 ---
 name: sweeps
 description: >-
-  Create thousands of strategies across various assets, market data windows, indicators,
-  parameters, and risk settings. Reach for it whenever the question is about searching
-  across many possibilities rather than building something specific: "what works on ETH",
-  "search for a momentum strategy", "find something that holds up in a bear market", "try
-  a lot of variations", "what should I trade", ... . Reading the runs back afterwards is
-  sweep-results.
+  Create, size and launch NEW strategy experiments: "create a sweep", "launch an
+  experiment", "try a lot of variations". For "search", "find", "look for" or
+  "pick an existing strategy", use sweep-results first to search completed runs.
+  Propose a new sweep only when existing results do not answer the question.
 uses-tools: [list_sweep_markets, build_market_window, get_sweep_limits, size_sweep, create_sweep, launch_sweep, get_sweep, pause_sweep]
 ---
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/sweeps/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
 
-These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
+These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. When a remote Oracle experiment/result reader is unavailable, the authenticated local agent_list_oracle_experiments and agent_list_oracle_results tools can discover experiment summaries and read bounded result pages only. They do not provide sweep-specific filtering, ranking, or mutation; never present them as equivalent to a missing remote tool. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
 
 # The engine builds the candidates, not you
 
@@ -21,6 +19,17 @@ do not write the candidates and you do not hand over a list. The engine draws ea
 strategy itself according to the settings of the experiment, such as what market windows to
 use, what assets to test, what signals to use, what risk management parameters to test,
 and other various knobs and dials.
+
+## Check the deployed capability first
+
+`uses-tools` describes the complete source capability set, not a guarantee that every
+deployment advertises every tool. Read the current MCP catalog and input schemas before
+calling a sweep tool. If a required tool such as `list_sweep_markets`, `size_sweep`,
+`create_sweep` or `launch_sweep` is absent, do not call it, invent an SDK/REST route, or
+pretend that local result readers can create or run an experiment. The local
+`agent_list_oracle_experiments` and `agent_list_oracle_results` tools, when advertised,
+can only discover experiment summaries and read bounded pages; state that sweep setup or
+launch is unavailable in this environment.
 
 The decisions a user makes are:
   1. What asset(s) to choose from. Present the following options only when the person
