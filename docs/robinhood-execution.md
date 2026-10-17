@@ -190,9 +190,14 @@ liquidated positions are not automatically reconciled into the strategy book.
   while a submit, cancel, partial entry, unknown outcome, or replacement is
   unresolved. A strategy-wide single-pending-order limit serializes protection
   and regular orders. If an exit arrives behind a stop or partial entry, the
-  exact hosted intent is durably saved with its evaluation acknowledgement. The
-  blocker is canceled and reconciled before the saved exit can reserve a sell;
-  a restart can resume this process. Unknown or paused/halted states do not submit
+  exact hosted intent is durably saved with its evaluation acknowledgement. A
+  stop or entry blocker is canceled and reconciled before the saved exit can
+  reserve a sell; a restart can resume this process. An existing strategy sell
+  is left in place. A newer exit waits for its terminal outcome and subtracts
+  subsequent fills on the same position; this does not introduce automatic
+  cancellation or repricing of an open strategy sell. The status exposes that
+  wait, which can continue while the earlier sell remains open.
+  Unknown or paused/halted states do not submit
   a replacement. The agent must be running and the strategy live to install or
   replace protection. Pausing or a portfolio halt leaves any already-accepted
   broker stop in place and prevents new orders.
