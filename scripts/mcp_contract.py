@@ -367,7 +367,8 @@ def check_skill_catalog(skill_names, catalog_names, source="receiver snapshot"):
         return []
     return [
         f"Michael skills advertise tools absent from {source}: {', '.join(missing)}; "
-        "refresh the reviewed receiver snapshot and regenerate from MangroveAI skill source"
+        "check receiver catalog mode/version and skill availability before invoking; "
+        "refresh snapshots or generated skills only for a reviewed contract change"
     ]
 
 
@@ -492,8 +493,9 @@ def main(argv=None):
     missing_skill = skill_names - deployed_names
     print(
         f"Observed deployment {deployed['observed_at_utc']}: {len(deployed_names)} tools; "
-        f"{len(missing_expected)} expected source tools and {len(missing_skill)} skill-referenced "
-        "tools are absent from that observation."
+        f"{len(missing_expected)} reference-snapshot names and {len(missing_skill)} skill-referenced "
+        "tools are absent from that observation. Catalog mode/version differences may explain this; "
+        "a name diff alone does not establish a production regression."
     )
     errors += check_delegation((ROOT / "server/src/mcp/tools.py").read_text(), policy["direct_sdk_adapters"])
     if not args.refresh_local:

@@ -46,7 +46,7 @@ The collector is an accidental-side-effect guard, not a sandbox for hostile Pyth
 
 ## Reviewed artifacts
 
-All three files live under `scripts/contracts/`:
+All four files live under `scripts/contracts/`:
 
 | File | Purpose |
 | --- | --- |
@@ -55,18 +55,31 @@ All three files live under `scripts/contracts/`:
 | `deployed.json` | Separate names-only observation of the deployed receiver's anonymous catalog at a recorded time |
 | `policy.json` | Reasons for non-upstream/unknown pricing and fingerprinted direct-SDK exceptions |
 
-`upstream.json` is the reviewed 96-tool expected catalog used for source-level
-contract and billing checks. It must not be overwritten just to make an older
-deployment appear current. `deployed.json` records a separate anonymous
+`upstream.json` is the reviewed 96-tool reference used for source-level
+contract and billing checks. Its provenance is an anonymous catalog from
+`http://127.0.0.1:15702/mcp/` on 2026-10-11, not a production baseline.
+It must not be overwritten just to hide a catalog difference.
+`deployed.json` records a separate anonymous
 `tools/list` observation; it does not assert which source commit the service runs
 or that another environment has the same capabilities. On 2026-10-17 the
 deployed catalog returned 72 tools and lacked 31 names in the reviewed snapshot,
 including `find_sweep_runs`, `get_sweep_run`, and the sweep/condition-study
 lifecycle. Of those, 30 distinct names appear in current generated skill
 `uses-tools` declarations; the extra missing source name is not advertised by
-those declarations. The live comparison continues to report the tool gaps until deployment
-and skill availability are aligned. Counts describe observations, not runtime
-limits.
+those declarations. Counts describe observations, not runtime limits, and do
+not establish that production is running an older or broken implementation.
+
+MangroveAI's catalog mode matters. With `MCP_SSOT_MODE=false`, discovery combines
+public skills and billable REST tools. With both `MCP_SSOT_MODE=true` and
+`MCP_USES_MICHAEL_TOOLS=true`, discovery uses visible Michael tools and residual
+public skills, omitting the legacy billable REST catalog. The Michael flag is
+inert when SSOT mode is off. In source revision `27092af`, 30 absent reference
+names map to visible Michael core tools; `propose_action_for_confirmation` is
+intentionally hidden from MCP. The production image uses the legacy mode.
+Switching modes would also remove REST-only tools such as `managers_evaluate_by_object`;
+it is not a safe automatic repair for the name difference. Review consumer
+compatibility before changing the image's config. Continue checking actual
+discovery before following a Michael skill that requires unavailable tools.
 
 ## Live receiver comparison
 
@@ -93,7 +106,7 @@ fail even when the corresponding REST route is intentionally hidden from MCP.
 
 The same check compares the declared `uses-tools` names in generated Michael
 skills with both the reviewed receiver snapshot and the live catalog. A missing
-tool fails with a source-sync instruction; the checker does not rewrite skills
+tool fails with a catalog-mode/version and skill-availability diagnostic; the checker does not rewrite skills
 or treat a reviewed source snapshot as proof that the deployed receiver serves
 them. The live catalog artifact is kept separately so the 96-tool source contract
 remains reviewable while capabilities are documented against what is deployed.

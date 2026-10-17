@@ -197,7 +197,8 @@ def test_skill_contract_detects_tools_missing_from_the_receiver():
     )
     assert len(errors) == 1
     assert "retired_tool" in errors[0]
-    assert "regenerate from MangroveAI skill source" in errors[0]
+    assert "check receiver catalog mode/version" in errors[0]
+    assert "only for a reviewed contract change" in errors[0]
 
 
 def test_skill_tool_references_reads_generated_frontmatter(tmp_path):
