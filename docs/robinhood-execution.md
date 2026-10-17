@@ -103,6 +103,9 @@ until its outcome is known. It never bypasses broker controls.
   identity, state, confirmed quantity, notional, and fees.
 - `agent_reconcile_venue_orders(strategy_id)` reads broker history and updates
   confirmed trades and holdings; it never submits or retries an order.
+- `agent_list_venue_protection(strategy_id)` reports the last observed stop
+  coverage and any saved hosted exit waiting for a broker order to become
+  terminal. It does not call Robinhood.
 - `agent_cancel_venue_order(order_id)` requests cancellation of a known pending
   order. A cancel acknowledgement is not proof that it did not fill.
 - Set the strategy inactive with the existing lifecycle tool to stop new orders.
@@ -117,6 +120,7 @@ REST equivalents (all require the agent API key):
 | Read readiness | `GET /brokers/robinhood/status` |
 | Configure mandate | `PUT /brokers/strategies/{id}/venue` |
 | Read journal | `GET /brokers/strategies/{id}/orders` |
+| Read stop coverage | `GET /brokers/strategies/{id}/protection` |
 | Reconcile | `POST /brokers/strategies/{id}/reconcile` |
 | Cancel | `POST /brokers/orders/{id}/cancel` |
 
@@ -161,28 +165,37 @@ liquidated positions are not automatically reconciled into the strategy book.
 
 ## Initial scope and limits
 
-- Long-only spot crypto and whole-share equities; limit orders only. Crypto
-  quantities round down to venue increments. Fractional equity intent is rejected.
+- Long-only spot crypto and whole-share equities. Strategy entries and exits use
+  limit orders. Crypto quantities round down to venue increments. Fractional
+  equity intent is rejected.
 - Crossed quotes (bid greater than ask) are rejected before preview or placement.
 - Equity placement is restricted to regular weekday market hours. Fresh quotes,
   tradability, and broker pre-trade checks must also pass. Crypto pairs must support
   both sides and limit orders.
 - One actionable Mangrove intent per evaluation and one pending order per strategy.
   Multi-order evaluations are rejected before placement.
-- Bracket exits are evaluated by Mangrove on the strategy schedule. They are not
-  native standing Robinhood protective orders. Pending orders do not stop
-  evaluation of confirmed holdings. If Mangrove requests an exit while an entry
-  remainder is pending, the adapter requests cancellation of that entry. It waits
-  for a confirmed terminal outcome and re-evaluates the resulting holdings on the
-  next scheduled tick before placing an exit. Pending sells and unknown placements
-  continue blocking new orders; evaluation cannot make an uncertain order safe to
-  duplicate. Exit execution can therefore still be delayed by broker uncertainty
-  and the strategy schedule. The local agent must remain running.
-- Native crypto protective orders are not implemented. The cached broker catalog
-  advertises `stop_loss` and `stop_limit` for crypto, while advanced OCO is
-  equity-only; this integration uses limit orders and does not claim an open
-  crypto position is protected at Robinhood. Track native protective-order
-  lifecycle support and acceptance in [issue #205](https://github.com/MangroveTechnologies/mangrove-agent/issues/205).
+- Native crypto stop-loss protection is opt-in, default off, and available only
+  with `confirmed_v2` on a pristine strategy before its first broker order. It
+  takes the trigger price from Mangrove's actual pending stop template; the
+  adapter does not calculate or move the hosted risk level. The adapter may round
+  the routed trigger up to Robinhood's price increment, and reports both values.
+  It requires a fresh quote, sellable confirmed quantity, route limits, a broker
+  order acknowledgement, and an observed original order quantity before it
+  reports standing coverage. Missing or mismatched quantity evidence remains
+  unverified. The status is last-observed and can become stale if the agent stops.
+- Robinhood's crypto `stop_loss` is a stop-triggered market order with a venue
+  execution collar; it is not the hosted strategy's limit exit and can execute at
+  a different price. Crypto OCO is unavailable, so this feature installs only the
+  hosted stop and does not couple it to take-profit. It never claims coverage
+  while a submit, cancel, partial entry, unknown outcome, or replacement is
+  unresolved. A strategy-wide single-pending-order limit serializes protection
+  and regular orders. If an exit arrives behind a stop or partial entry, the
+  exact hosted intent is durably saved with its evaluation acknowledgement. The
+  blocker is canceled and reconciled before the saved exit can reserve a sell;
+  a restart can resume this process. Unknown or paused/halted states do not submit
+  a replacement. The agent must be running and the strategy live to install or
+  replace protection. Pausing or a portfolio halt leaves any already-accepted
+  broker stop in place and prevents new orders.
 - In `legacy` mode, risk state from a modeled trade advances only after an actual fill. Partial fills
   can conservatively retain the modeled trade's cooldown/counter effects. If an
   actual exit loss differs from a modeled non-loss, new entries latch off with

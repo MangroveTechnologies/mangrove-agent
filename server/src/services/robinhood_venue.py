@@ -169,6 +169,64 @@ class RobinhoodVenue:
             raise SdkError("Invalid Robinhood fee estimate.")
         return args, qty * limit + fee
 
+    async def prepare_protective_stop(self, route, symbol, quantity, stop_price):
+        """Prepare a Robinhood crypto stop_loss at the hosted engine's level.
+
+        This does not derive or adjust risk. Quantity must be exact; venue
+        price precision rounds a sell stop upward only and stores the hosted
+        desired level separately for audit.
+        """
+        if route["asset_class"] != "crypto" or not route.get("native_stop_loss_enabled"):
+            raise SdkError("Native protective stops are disabled for this route.")
+        quantity, stop_price = decimal(quantity), decimal(stop_price)
+        if quantity <= 0 or stop_price <= 0:
+            raise SdkError("Native protective stop requires positive quantity and hosted stop price.")
+        account = await self.account(route["account_number"])
+        if account["rhs_account_number"] != route["rhs_account_number"] or not account.get("rhc_account_number"):
+            raise SdkError("Robinhood crypto account mapping is unavailable.")
+        pairs = await self.pages("get_currency_pairs", "results")
+        pair = next((p for p in pairs if p and p.get("symbol") == symbol + "-USD"), None)
+        if not pair or pair.get("tradability") != "tradable" or pair.get("halted") or pair.get("display_only"):
+            raise SdkError("Robinhood crypto pair cannot accept this protective stop.")
+        if not isinstance(pair.get("market_orders_only"), bool):
+            raise SdkError("Robinhood pair order-type capability is unavailable.")
+        # stop_loss is a stop-triggered market order, including on pairs that
+        # accept market orders only. Never route a limit or stop_limit here.
+        step = decimal(pair["min_order_quantity_increment"])
+        increment = decimal(pair["min_order_price_increment"])
+        if step <= 0 or increment <= 0 or quantity % step:
+            raise SdkError("Confirmed quantity is not exactly representable at Robinhood increments.")
+        # Preserve the hosted stop level as audit data. Venue price precision
+        # for a sell stop is rounded upward only, so normalization cannot widen
+        # the loss threshold; it is never used to calculate a risk level.
+        routed_stop = (stop_price / increment).to_integral_value(rounding=ROUND_CEILING) * increment
+        if not decimal(pair["min_order_size"]) <= quantity <= decimal(pair["max_order_size"]):
+            raise SdkError("Confirmed quantity is outside Robinhood crypto pair limits.")
+        quote = await self.quote(route, symbol)
+        bid = decimal(quote["bid_price"])
+        if routed_stop >= bid:
+            raise SdkError("Hosted stop is at or above the current bid; immediate-trigger risk requires review.")
+        stop_notional = quantity * routed_stop
+        if stop_notional > decimal(route["max_order_usd"]) or stop_notional > decimal(route["capital"]):
+            raise SdkError("Protective stop exceeds this route's per-order allocation.")
+        if pair.get("min_order_quote_amount") and quantity * bid < decimal(pair["min_order_quote_amount"]):
+            raise SdkError("Confirmed quantity is below Robinhood's minimum protective-order notional.")
+        if await self.sellable(route, symbol) < quantity:
+            raise SdkError("Confirmed quantity is not currently sellable at Robinhood.")
+        args = {
+            "rhs_account_number": route["rhs_account_number"],
+            "symbol": symbol + "-USD",
+            "side": "sell",
+            "type": "stop_loss",
+            "quantity": str(quantity),
+            "stop_price": str(routed_stop),
+            "time_in_force": "gtc",
+        }
+        review = await self.call("preview_crypto_order", **args)
+        if review.get("order_checks") or review.get("customer_approval_required") is True:
+            raise SdkError("Robinhood did not approve the protective stop preview.")
+        return args, routed_stop
+
     async def submit(self, route, args, ref_id):
         return await self.call(
             "place_crypto_order" if route["asset_class"] == "crypto" else "place_equity_order", **args, ref_id=ref_id

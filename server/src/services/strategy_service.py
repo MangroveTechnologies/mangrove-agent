@@ -293,6 +293,8 @@ class ExecutionVenueResponse(BaseModel):
     capital: str
     max_order_usd: str
     slippage_pct: str
+    external_execution_mode: str = "legacy"
+    native_stop_loss_enabled: bool = False
 
 
 class StrategyDetailResponse(BaseModel):

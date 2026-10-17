@@ -91,7 +91,17 @@ def route(strategy_id):
         return dict(row) if row else None
 
 
-def orders(strategy_id=None, *, pending=False):
+def native_protection_strategies():
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT r.strategy_id FROM broker_routes r JOIN strategies s ON s.id=r.strategy_id
+               WHERE r.native_stop_loss_enabled=1 AND r.external_execution_mode='confirmed_v2'
+               AND r.asset_class='crypto' AND s.status='live' ORDER BY r.strategy_id"""
+        ).fetchall()
+        return [row["strategy_id"] for row in rows]
+
+
+def orders(strategy_id=None, *, pending=False, order_kind=None):
     sql, values = "SELECT * FROM broker_orders WHERE 1=1", []
     if strategy_id:
         sql += " AND strategy_id=?"
@@ -99,11 +109,15 @@ def orders(strategy_id=None, *, pending=False):
     if pending:
         sql += " AND status IN (" + ",".join("?" for _ in PENDING) + ")"
         values.extend(PENDING)
+    if order_kind:
+        sql += " AND order_kind=?"
+        values.append(order_kind)
     with connection() as conn:
         return [dict(r) for r in conn.execute(sql + " ORDER BY created_at", values).fetchall()]
 
 
-def _reserve_in_transaction(conn, strategy_id, evaluation_id, intent, request, template, ref_id):
+def _reserve_in_transaction(conn, strategy_id, evaluation_id, intent, request, template, ref_id,
+                           deferred_exit_id=None):
     key = intent.engine_order_id or f"{evaluation_id}:{intent.engine_position_id}:{intent.action}"
     if intent.side == "sell":
         key += ":" + str(intent.amount)
@@ -132,6 +146,14 @@ def _reserve_in_transaction(conn, strategy_id, evaluation_id, intent, request, t
             now(),
         ),
     )
+    if deferred_exit_id:
+        changed = conn.execute(
+            """UPDATE broker_deferred_exits SET status='submitted',detail=NULL,reserved_order_id=?,updated_at=?
+            WHERE id=? AND strategy_id=? AND status IN ('waiting_stop_terminal','blocked')""",
+            (ref_id, now(), deferred_exit_id, strategy_id),
+        ).rowcount
+        if changed != 1:
+            raise SdkError("Deferred exit changed before its broker reservation committed.")
     return True
 
 
@@ -141,12 +163,259 @@ def reserve(strategy_id, evaluation_id, intent, request, template, ref_id):
         return _reserve_in_transaction(conn, strategy_id, evaluation_id, intent, request, template, ref_id)
 
 
+def reserve_deferred_exit(strategy_id, deferred, intent, request, ref_id):
+    """Atomically reserve a preserved hosted exit and retire its deferral."""
+    with connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """SELECT d.*,p.status AS position_status,h.quantity AS held_quantity
+            FROM broker_deferred_exits d
+            JOIN positions p ON p.id=d.position_id
+            JOIN broker_holdings h ON h.position_id=d.position_id
+            WHERE d.id=? AND d.strategy_id=?""",
+            (deferred["id"], strategy_id),
+        ).fetchone()
+        risk = conn.execute("SELECT tripped FROM portfolio_risk WHERE id=1").fetchone()
+        if (
+            not row or row["status"] not in {"waiting_stop_terminal", "blocked"}
+            or row["position_status"] != "open"
+            or not risk or risk["tripped"]
+            or _route_fingerprint_in_conn(conn, strategy_id) != row["route_fingerprint"]
+            or decimal(intent.amount) <= 0 or decimal(intent.amount) > decimal(row["held_quantity"])
+        ):
+            return False
+        original = OrderIntent.model_validate_json(row["intent_json"])
+        if (
+            intent.side != "sell" or intent.action != "exit"
+            or intent.engine_position_id != original.engine_position_id
+            or intent.symbol != original.symbol or intent.engine_order_id != original.engine_order_id
+            or intent.reason != original.reason
+            or decimal(request.get("quantity", "-1")) != decimal(intent.amount)
+            or request.get("side") != "sell"
+        ):
+            return False
+        authorized = min(decimal(original.amount), decimal(row["decision_quantity"]))
+        blocker_delta = Decimal(0)
+        if row["blocker_order_id"]:
+            blocker = conn.execute(
+                "SELECT order_kind,protected_position_id,intent_json,filled_quantity FROM broker_orders WHERE id=? AND strategy_id=?",
+                (row["blocker_order_id"], strategy_id),
+            ).fetchone()
+            blocker_intent = json.loads(blocker["intent_json"]) if blocker else {}
+            same_position_reduction = (
+                blocker and (
+                    blocker["order_kind"] == "protective_stop"
+                    and blocker["protected_position_id"] == row["position_id"]
+                    or blocker["order_kind"] == "strategy"
+                    and blocker_intent.get("side") == "sell"
+                    and blocker_intent.get("engine_position_id") == row["position_id"]
+                )
+            )
+            if same_position_reduction:
+                blocker_delta = decimal(blocker["filled_quantity"]) - decimal(row["blocker_filled_at_decision"])
+                if blocker_delta < 0:
+                    return False
+        expected_amount = min(decimal(row["held_quantity"]), max(Decimal(0), authorized - blocker_delta))
+        if decimal(intent.amount) != expected_amount:
+            return False
+        return _reserve_in_transaction(
+            conn, strategy_id, deferred["evaluation_id"], intent, request,
+            json.loads(row["position_template_json"]), ref_id, deferred_exit_id=deferred["id"],
+        )
+
+
+def reserve_protective_stop(strategy_id, evaluation_id, position_id, asset, quantity, stop_price,
+                            routed_stop_price, request, template, ref_id):
+    """Reserve a hosted-template crypto stop under the strategy order lock.
+
+    The held quantity is rechecked in the same transaction as reservation. A
+    stop never reserves more than the exact broker-confirmed position, and it
+    cannot overlap an entry or exit submission.
+    """
+    quantity, stop_price, routed_stop_price = map(decimal, (quantity, stop_price, routed_stop_price))
+    if quantity <= 0 or stop_price <= 0 or routed_stop_price <= 0:
+        raise SdkError("Protective stop requires positive confirmed quantity and hosted stop price.")
+    intent = OrderIntent(
+        action="exit", side="sell", symbol=asset.removesuffix("-USD"), amount=float(quantity),
+        reason="hosted native stop-loss", ref_price=float(routed_stop_price), engine_position_id=position_id,
+    )
+    with connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        route = conn.execute(
+            "SELECT asset_class,native_stop_loss_enabled,external_execution_mode FROM broker_routes WHERE strategy_id=?",
+            (strategy_id,),
+        ).fetchone()
+        strategy = conn.execute("SELECT status,asset FROM strategies WHERE id=?", (strategy_id,)).fetchone()
+        risk = conn.execute("SELECT tripped FROM portfolio_risk WHERE id=1").fetchone()
+        holding = conn.execute(
+            "SELECT quantity FROM broker_holdings WHERE strategy_id=? AND position_id=?",
+            (strategy_id, position_id),
+        ).fetchone()
+        if (
+            not route or route["asset_class"] != "crypto" or not route["native_stop_loss_enabled"]
+            or route["external_execution_mode"] != "confirmed_v2"
+            or not risk or risk["tripped"]
+            or not strategy or strategy["status"] != "live" or strategy["asset"] != asset
+            or not holding or decimal(holding["quantity"]) != quantity
+        ):
+            return False
+        pending = conn.execute(
+            "SELECT 1 FROM broker_orders WHERE strategy_id=? AND status IN (" +
+            ",".join("?" for _ in PENDING) + ") LIMIT 1",
+            (strategy_id, *PENDING),
+        ).fetchone()
+        if pending:
+            return False
+        intent_key = f"native-stop:{position_id}:{ref_id}"
+        conn.execute(
+            """INSERT INTO broker_orders
+            (id,strategy_id,evaluation_id,intent_key,intent_json,position_template_json,request_json,
+             status,created_at,updated_at,order_kind,protected_position_id,hosted_stop_price,routed_stop_price)
+            VALUES (?,?,?,?,?,?,?,'submitting',?,?,'protective_stop',?,?,?)""",
+            (ref_id, strategy_id, evaluation_id, intent_key, intent.model_dump_json(), json.dumps(template),
+             json.dumps(request), now(), now(), position_id, _exact_decimal_text(stop_price),
+             _exact_decimal_text(routed_stop_price)),
+        )
+        conn.execute(
+            """INSERT INTO broker_protection_state
+            (strategy_id,position_id,desired_stop_price,routed_stop_price,desired_quantity,status,detail,active_order_id,updated_at)
+            VALUES (?,?,?,?,?,'submitting',NULL,?,?)
+            ON CONFLICT(strategy_id,position_id) DO UPDATE SET
+            desired_stop_price=excluded.desired_stop_price,desired_quantity=excluded.desired_quantity,
+            routed_stop_price=excluded.routed_stop_price,
+            status='submitting',detail=NULL,active_order_id=excluded.active_order_id,updated_at=excluded.updated_at""",
+            (strategy_id, position_id, _exact_decimal_text(stop_price), _exact_decimal_text(routed_stop_price),
+             _exact_decimal_text(quantity), ref_id, now()),
+        )
+    return True
+
+
+def set_protection_state(strategy_id, position_id, *, stop_price=None, routed_stop_price=None, quantity="0", status, detail=None,
+                         active_order_id=None):
+    with connection() as conn:
+        conn.execute(
+            """INSERT INTO broker_protection_state
+            (strategy_id,position_id,desired_stop_price,routed_stop_price,desired_quantity,status,detail,active_order_id,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(strategy_id,position_id) DO UPDATE SET
+            desired_stop_price=excluded.desired_stop_price,desired_quantity=excluded.desired_quantity,
+            routed_stop_price=COALESCE(excluded.routed_stop_price,broker_protection_state.routed_stop_price),
+            status=excluded.status,detail=excluded.detail,
+            active_order_id=COALESCE(excluded.active_order_id,broker_protection_state.active_order_id),
+            updated_at=excluded.updated_at""",
+            (strategy_id, position_id, None if stop_price is None else _exact_decimal_text(stop_price),
+             None if routed_stop_price is None else _exact_decimal_text(routed_stop_price),
+             _exact_decimal_text(quantity), status, detail, active_order_id, now()),
+        )
+
+
+def protection_states(strategy_id):
+    with connection() as conn:
+        return [dict(row) for row in conn.execute(
+            "SELECT * FROM broker_protection_state WHERE strategy_id=? ORDER BY position_id", (strategy_id,)
+        ).fetchall()]
+
+
+def route_fingerprint(strategy_id):
+    with connection() as conn:
+        route = conn.execute("SELECT * FROM broker_routes WHERE strategy_id=?", (strategy_id,)).fetchone()
+        strategy = conn.execute("SELECT asset FROM strategies WHERE id=?", (strategy_id,)).fetchone()
+        if not route or not strategy:
+            return None
+        return _route_fingerprint_in_conn(conn, strategy_id)
+
+
+def _route_fingerprint_in_conn(conn, strategy_id):
+    route = conn.execute("SELECT * FROM broker_routes WHERE strategy_id=?", (strategy_id,)).fetchone()
+    strategy = conn.execute("SELECT asset FROM strategies WHERE id=?", (strategy_id,)).fetchone()
+    if not route or not strategy:
+        return None
+    fields = (
+        "venue", "account_number", "rhs_account_number", "asset_class", "capital",
+        "max_order_usd", "slippage_pct", "external_execution_mode", "native_stop_loss_enabled",
+    )
+    encoded = json.dumps({**{key: route[key] for key in fields}, "strategy_asset": strategy["asset"]},
+                         sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def deferred_exits(strategy_id, *, pending_only=False):
+    sql = "SELECT * FROM broker_deferred_exits WHERE strategy_id=?"
+    values = [strategy_id]
+    if pending_only:
+        sql += " AND status IN ('waiting_stop_terminal','blocked')"
+    with connection() as conn:
+        return [dict(row) for row in conn.execute(sql + " ORDER BY created_at", values).fetchall()]
+
+
+def latest_order_snapshot(order_id):
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT snapshot_json FROM broker_events WHERE order_id=? ORDER BY observed_at DESC,id DESC LIMIT 1",
+            (order_id,),
+        ).fetchone()
+        return json.loads(row["snapshot_json"]) if row else None
+
+
+def latest_order_observation(order_id):
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT snapshot_json,observed_at FROM broker_events
+               WHERE order_id=? ORDER BY observed_at DESC,id DESC LIMIT 1""",
+            (order_id,),
+        ).fetchone()
+    return {"snapshot": json.loads(row["snapshot_json"]), "observed_at": row["observed_at"]} if row else None
+
+
+def protective_snapshot_quantity(order_id):
+    """Return broker-accepted quantity, or None when the snapshot omits it."""
+    latest = latest_order_snapshot(order_id)
+    if not latest or latest.get("quantity") is None:
+        return None
+    try:
+        return decimal(latest["quantity"])
+    except SdkError:
+        return None
+
+
+def protective_snapshot_quantity_matches(order_id):
+    """Whether the latest broker observation proves the requested stop size."""
+    with connection() as conn:
+        row = conn.execute("SELECT request_json FROM broker_orders WHERE id=?", (order_id,)).fetchone()
+    if not row:
+        return False
+    accepted = protective_snapshot_quantity(order_id)
+    try:
+        return accepted is not None and accepted == decimal(json.loads(row["request_json"])["quantity"])
+    except (KeyError, TypeError, ValueError, SdkError):
+        return False
+
+
+def confirmed_position_quantity(strategy_id, position_id):
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT quantity FROM broker_holdings WHERE strategy_id=? AND position_id=?",
+            (strategy_id, position_id),
+        ).fetchone()
+        return decimal(row["quantity"]) if row else Decimal(0)
+
+
+def set_deferred_exit_status(exit_id, status, detail=None):
+    with connection() as conn:
+        conn.execute(
+            "UPDATE broker_deferred_exits SET status=?,detail=?,updated_at=? WHERE id=?",
+            (status, detail, now(), exit_id),
+        )
+
+
 def mark(order_id, status, *, broker_id=None, approval_id=None, error=None):
     with connection() as conn:
         conn.execute(
             """UPDATE broker_orders SET status=?,broker_order_id=COALESCE(?,broker_order_id),
-            approval_id=COALESCE(?,approval_id),error_code=?,updated_at=? WHERE id=?""",
-            (status, broker_id, approval_id, error, now(), order_id),
+            approval_id=COALESCE(?,approval_id),error_code=?,updated_at=?,
+            cancel_requested_at=CASE WHEN ?='cancel_pending' THEN ? ELSE cancel_requested_at END
+            WHERE id=?""",
+            (status, broker_id, approval_id, error, now(), status, now(), order_id),
         )
 
 
@@ -233,6 +502,13 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
             raise SdkError("Unknown local broker order.")
         intent = OrderIntent.model_validate_json(row["intent_json"])
         expected = json.loads(row["request_json"])
+        if row["order_kind"] == "protective_stop":
+            if (
+                snapshot.get("type") != "stop_loss"
+                or snapshot.get("side") != "sell"
+                or decimal(snapshot.get("stop_price")) != decimal(row["routed_stop_price"])
+            ):
+                raise SdkError("Robinhood protective order type or stop price does not match the hosted instruction.")
         if (
             snapshot.get("side") != intent.side
             or snapshot.get("symbol", snapshot.get("currency_code", intent.symbol)).removesuffix("-USD")
@@ -458,6 +734,12 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
             fees=?,updated_at=?,error_code=NULL WHERE id=?""",
             (snapshot["id"], state, str(quantity), str(gross), str(fees), timestamp, order_id),
         )
+        if state not in PENDING:
+            conn.execute(
+                """UPDATE broker_deferred_exits SET status='completed',detail=?,updated_at=?
+                WHERE reserved_order_id=? AND status='submitted'""",
+                (f"Preserved hosted exit reached terminal broker state: {state}.", timestamp, order_id),
+            )
         conn.execute(
             """INSERT OR IGNORE INTO broker_events
             (order_id,status,filled_quantity,created_at,observed_at,snapshot_json,snapshot_key)
@@ -569,6 +851,7 @@ def acknowledge_confirmed_close_events(
     receipts=None,
     submitted_events=None,
     reservation=None,
+    deferred_exit=None,
 ):
     """Atomically save the risk state produced by close events and acknowledge them.
 
@@ -683,6 +966,8 @@ def acknowledge_confirmed_close_events(
             # Exact duplicate acknowledgements are no-ops. Conflicting retries
             # cannot replace a later state or its confirmed positions.
             if current_state == candidate_state and current_positions == open_positions:
+                if deferred_exit:
+                    raise SdkError("A duplicate acknowledgement cannot add a new deferred exit.")
                 if reservation:
                     # A retry of an already committed response cannot introduce
                     # a new decision or reserve a changed intent without CAS.
@@ -719,9 +1004,35 @@ def acknowledge_confirmed_close_events(
                     WHERE strategy_id=? AND event_id=?""",
                     (timestamp, receipt_json, strategy_id, event_id),
                 )
+        if deferred_exit:
+            intent = OrderIntent.model_validate_json(deferred_exit["intent_json"])
+            if (
+                intent.side != "sell" or intent.action != "exit"
+                or intent.engine_position_id != deferred_exit.get("position_id")
+                or deferred_exit.get("evaluation_id") is None
+            ):
+                raise SdkError("Deferred exit does not match its hosted position decision.")
+            if _route_fingerprint_in_conn(conn, strategy_id) != deferred_exit.get("route_fingerprint"):
+                raise SdkError("Deferred exit route changed before acknowledgement.")
+            conn.execute(
+                """INSERT INTO broker_deferred_exits
+                (id,strategy_id,position_id,evaluation_id,engine_order_id,intent_json,
+                 position_template_json,decision_quantity,blocker_order_id,blocker_filled_at_decision,
+                 route_fingerprint,status,detail,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,'waiting_stop_terminal',NULL,?,?)""",
+                (deferred_exit["id"], strategy_id, deferred_exit["position_id"], deferred_exit["evaluation_id"],
+                 deferred_exit.get("engine_order_id"), deferred_exit["intent_json"],
+                 json.dumps(deferred_exit["position_template"], allow_nan=False),
+                 _exact_decimal_text(deferred_exit["decision_quantity"]), deferred_exit.get("blocker_order_id"),
+                 _exact_decimal_text(deferred_exit.get("blocker_filled_at_decision", "0")),
+                 deferred_exit["route_fingerprint"],
+                 timestamp, timestamp),
+            )
         if reservation:
             if not _reserve_in_transaction(conn, strategy_id, **reservation):
                 raise SdkError("Confirmed execution ACK and order reservation could not commit together.")
+            return True
+        if deferred_exit:
             return True
         return None
 

@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from jsonschema import Draft202012Validator
+
 from src.models.domain import OrderIntent
 from src.services import robinhood_client
 from src.services.robinhood_venue import RobinhoodVenue
@@ -191,3 +192,119 @@ async def test_crossed_quote_rejected_before_order_preview(venue, asset_class):
         await adapter.quote({**ROUTE, "asset_class": asset_class}, "BTC")
     assert all(name not in {"preview_crypto_order", "review_equity_order", "place_crypto_order", "place_equity_order"}
                for name, _ in calls)
+
+
+def stop_route(**overrides):
+    return {
+        **ROUTE,
+        "native_stop_loss_enabled": True,
+        "capital": "300",
+        **overrides,
+    }
+
+
+async def test_protective_stop_uses_exact_quantity_and_rounds_stop_up_to_tick(venue):
+    adapter, replies, calls = venue
+    replies["get_crypto_positions"]["results"][0]["quantity_held_for_sell"] = "0.5"
+
+    args, routed_stop = await adapter.prepare_protective_stop(
+        stop_route(), "BTC", Decimal("1.234"), Decimal("99.901")
+    )
+
+    assert args == {
+        "rhs_account_number": "numeric",
+        "symbol": "BTC-USD",
+        "side": "sell",
+        "type": "stop_loss",
+        "quantity": "1.234",
+        "stop_price": "99.91",
+        "time_in_force": "gtc",
+    }
+    assert routed_stop == Decimal("99.91")
+    assert routed_stop > Decimal("99.901")
+    assert calls[-1] == ("preview_crypto_order", args)
+    assert all(name != "place_crypto_order" for name, _ in calls)
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        {"asset_class": "equity", "native_stop_loss_enabled": True},
+        {"asset_class": "crypto", "native_stop_loss_enabled": False},
+    ],
+)
+async def test_protective_stop_requires_crypto_route_with_native_feature_enabled(venue, route):
+    adapter, _, calls = venue
+
+    with pytest.raises(SdkError, match="disabled"):
+        await adapter.prepare_protective_stop({**stop_route(), **route}, "BTC", "1", "90")
+
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "mutation,message",
+    [
+        ("pair", "pair cannot accept"),
+        ("per_order_cap", "per-order allocation"),
+        ("capital_cap", "per-order allocation"),
+        ("minimum_notional", "minimum protective-order notional"),
+        ("sellable", "not currently sellable"),
+    ],
+)
+async def test_protective_stop_constraints_fail_closed_before_preview(venue, mutation, message):
+    adapter, replies, calls = venue
+    route = stop_route()
+    quantity = Decimal("1")
+    if mutation == "pair":
+        replies["get_currency_pairs"]["results"][0]["halted"] = True
+    elif mutation == "per_order_cap":
+        route["max_order_usd"] = "50"
+    elif mutation == "capital_cap":
+        route["capital"] = "50"
+    elif mutation == "minimum_notional":
+        replies["get_currency_pairs"]["results"][0]["min_order_quote_amount"] = "1000"
+    elif mutation == "sellable":
+        quantity = Decimal("1.001")
+
+    with pytest.raises(SdkError, match=message):
+        await adapter.prepare_protective_stop(route, "BTC", quantity, "90")
+
+    assert all(name != "preview_crypto_order" for name, _ in calls)
+    assert all(not name.startswith("place_") for name, _ in calls)
+
+
+async def test_protective_stop_rejects_quantity_off_pair_increment(venue):
+    adapter, _, calls = venue
+
+    with pytest.raises(SdkError, match="exactly representable"):
+        await adapter.prepare_protective_stop(stop_route(), "BTC", "1.0001", "90")
+
+    assert all(name != "preview_crypto_order" for name, _ in calls)
+
+
+async def test_protective_stop_rejects_immediate_trigger_at_current_bid(venue):
+    adapter, _, calls = venue
+
+    with pytest.raises(SdkError, match="immediate-trigger"):
+        await adapter.prepare_protective_stop(stop_route(), "BTC", "1", "99.99")
+
+    assert all(name != "preview_crypto_order" for name, _ in calls)
+
+
+@pytest.mark.parametrize(
+    "denial",
+    ["order_checks", "customer_approval_required"],
+)
+async def test_protective_stop_preview_denial_fails_without_submission(venue, denial):
+    adapter, replies, calls = venue
+    if denial == "order_checks":
+        replies["preview_crypto_order"]["order_checks"] = {"insufficient_funds": True}
+    else:
+        replies["preview_crypto_order"]["customer_approval_required"] = True
+
+    with pytest.raises(SdkError, match="did not approve"):
+        await adapter.prepare_protective_stop(stop_route(), "BTC", "1", "90")
+
+    assert calls[-1][0] == "preview_crypto_order"
+    assert all(not name.startswith("place_") for name, _ in calls)

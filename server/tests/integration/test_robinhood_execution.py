@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from src.config import app_config
 from src.models.domain import Evaluation, OrderIntent
 from src.services import broker_execution as execution
@@ -871,8 +872,8 @@ def test_paused_strategy_cannot_reserve(ledger):
 async def test_tick_uses_mangrove_stateless_then_broker_not_dex(ledger, monkeypatch):
     from src.services import order_executor, portfolio_risk_service
     from src.shared.clients import mangrove
-
     sdk = MagicMock()
+
     modeled = {
         "success": True,
         "execution_state": {"cash_balance": 800, "bar_index": 1},
@@ -1166,7 +1167,8 @@ async def test_strategy_reads_expose_broker_mandate_without_account_ids(ledger):
 
     expected = {
         "venue": "robinhood", "asset_class": "crypto", "capital": "1000",
-        "max_order_usd": "500", "slippage_pct": "0.0025",
+            "max_order_usd": "500", "slippage_pct": "0.0025",
+            "external_execution_mode": "legacy", "native_stop_loss_enabled": False,
     }
     assert strategy_service.get_strategy("s1").execution_venue.model_dump() == expected
     assert next(s for s in strategy_service.list_strategies() if s.id == "s1").execution_venue.model_dump() == expected
@@ -1272,3 +1274,487 @@ async def test_exit_evaluation_never_duplicates_uncertain_order_or_pending_sell(
     assert state["cash_balance"] == 800
     assert positions[0]["position_size"] == 2
     assert store.orders("s1", pending=True)[0]["status"] == ("uncertain" if pending_side == "buy" else "open")
+
+
+async def test_scheduled_reconciliation_protects_delayed_confirmed_entry_without_evaluation(ledger, monkeypatch):
+    from src.services import portfolio_risk_service
+
+    template = {
+        "id": "p1", "asset": "BTC-USD", "stop_loss_price": 90,
+        "orders": [{"id": "stop1", "asset": "BTC-USD", "position_id": "p1",
+                    "order_type": "stop_loss", "side": "exit_long", "status": "pending",
+                    "price": 90, "position_size": 2}],
+    }
+    assert store.reserve("s1", "eval", intent(qty=2), {"quantity": "2"}, template, "entry-late")
+    with store.connection() as conn:
+        conn.execute(
+            "UPDATE broker_routes SET external_execution_mode='confirmed_v2',native_stop_loss_enabled=1 WHERE strategy_id='s1'"
+        )
+    entry_snapshot = snapshot(qty="2", state="filled", oid="entry-late")
+    stop_snapshot = {
+        "id": "broker-protect", "currency_code": "BTC",
+        "symbol": "BTC", "side": "sell", "type": "stop_loss", "stop_price": "90",
+        "quantity": "2", "state": "confirmed", "cumulative_quantity": "0",
+        "average_price": None, "fees": "0", "net_rounded_executed_notional": "0",
+    }
+    venue = SimpleNamespace(
+        account=AsyncMock(), find_order=AsyncMock(return_value=entry_snapshot),
+        quote=AsyncMock(return_value={"bid_price": "100", "ask_price": "101"}),
+        prepare_protective_stop=AsyncMock(return_value=({"quantity": "2", "side": "sell"}, Decimal(90))),
+        submit=AsyncMock(),
+    )
+    async def submit(_route, _args, ref_id):
+        return {"order": {**stop_snapshot, "ref_id": ref_id}}
+    venue.submit.side_effect = submit
+    monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": True})
+
+    await execution._scheduled_reconcile_and_maintain(venue)
+
+    protective = next(item for item in store.orders("s1") if item["order_kind"] == "protective_stop")
+    assert protective["status"] == "open"
+    assert protective["evaluation_id"] == "eval"
+    assert store.protective_snapshot_quantity_matches(protective["id"])
+    status = execution.protection_status("s1")["positions"][0]
+    assert status["status"] == "standing_coverage_last_observed"
+    assert status["broker_acknowledged_standing"] is True
+    venue.submit.assert_awaited_once()
+    venue.find_order.assert_awaited_once()
+
+
+async def test_duplicate_bar_still_syncs_native_protection(ledger, monkeypatch):
+    from src.services import portfolio_risk_service
+    from src.shared.clients import mangrove
+
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2',native_stop_loss_enabled=1 WHERE strategy_id='s1'")
+    sdk = MagicMock()
+    modeled = {
+        "success": True, "execution_state": {"external_execution": {"applied_through": 0}},
+        "open_positions": [], "new_orders": [], "external_execution_disposition": "duplicate_bar",
+    }
+    result = SimpleNamespace(
+        new_orders=[], model_dump=lambda: modeled,
+        external_execution_ack={"contract_version": 2, "applied_through": 0, "receipts": [], "active_position_ids": []},
+    )
+    def evaluate(payload, *, persist, open_positions, external_execution=None):
+        return result
+
+    sdk = SimpleNamespace(execution=SimpleNamespace(evaluate_by_object=evaluate))
+    monkeypatch.setattr(mangrove, "mangrove_ai_client", lambda: sdk)
+    monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": True})
+    sync = AsyncMock()
+    monkeypatch.setattr(execution, "_sync_native_protection", sync)
+    venue = SimpleNamespace(
+        account=AsyncMock(), find_order=AsyncMock(return_value=None),
+        quote=AsyncMock(return_value={"ask_price": "100", "bid_price": "100"}),
+    )
+
+    await execution._tick(venue, "s1")
+
+    sync.assert_awaited_once()
+    assert sync.await_args.args[1] == "s1"
+
+
+async def test_deferred_hosted_exit_survives_cancel_retry_and_subtracts_stop_fill(ledger, monkeypatch):
+    from src.services import portfolio_risk_service
+
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2',native_stop_loss_enabled=1 WHERE strategy_id='s1'")
+    assert store.reserve("s1", "eval", intent(qty=2), {"quantity": "2"}, {"id": "p1", "asset": "BTC-USD"}, "entry-deferred")
+    store.apply_snapshot("entry-deferred", snapshot(qty="2", state="filled", oid="entry-deferred"), asset_class="crypto")
+    template = {
+        "id": "p1", "asset": "BTC-USD", "stop_loss_price": 90,
+        "orders": [{"id": "stop1", "asset": "BTC-USD", "position_id": "p1",
+                    "order_type": "stop_loss", "side": "exit_long", "status": "pending",
+                    "price": 90, "position_size": 2}],
+    }
+    assert store.reserve_protective_stop(
+        "s1", "eval", "p1", "BTC-USD", 2, 90, 90,
+        {"quantity": "2", "side": "sell"}, template, "stop-ref",
+    )
+    stop_open = {
+        "id": "broker-stop", "ref_id": "stop-ref", "currency_code": "BTC", "symbol": "BTC",
+        "side": "sell", "type": "stop_loss", "stop_price": "90", "quantity": "2",
+        "state": "confirmed", "cumulative_quantity": "0", "average_price": None,
+        "fees": "0", "net_rounded_executed_notional": "0",
+    }
+    store.apply_snapshot("stop-ref", stop_open, asset_class="crypto")
+    original = intent(side="sell", qty=1, order="hosted-exit", position_id="p1")
+    deferred = {
+        "id": "deferred-1", "position_id": "p1", "evaluation_id": "eval",
+        "engine_order_id": "hosted-exit", "intent_json": original.model_dump_json(),
+        "position_template": template, "decision_quantity": "2", "blocker_order_id": "stop-ref",
+        "blocker_filled_at_decision": "0", "route_fingerprint": store.route_fingerprint("s1"),
+    }
+    with store.connection() as conn:
+        conn.execute(
+            """INSERT INTO broker_deferred_exits
+            (id,strategy_id,position_id,evaluation_id,engine_order_id,intent_json,position_template_json,
+             decision_quantity,blocker_order_id,blocker_filled_at_decision,route_fingerprint,status,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,'waiting_stop_terminal',?,?)""",
+            (deferred["id"], "s1", "p1", "eval", deferred["engine_order_id"], deferred["intent_json"],
+             json.dumps(template), "2", "stop-ref", "0", deferred["route_fingerprint"], store.now(), store.now()),
+        )
+    monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": True})
+    venue = SimpleNamespace(
+        account=AsyncMock(), cancel=AsyncMock(), find_order=AsyncMock(return_value=stop_open),
+        prepare=AsyncMock(return_value=({"quantity": "0.5", "side": "sell"}, Decimal(40))),
+        sellable=AsyncMock(return_value=Decimal("0.5")),
+        submit=AsyncMock(),
+    )
+
+    await execution._process_deferred_exit(venue, "s1", store.route("s1"))
+    await execution._process_deferred_exit(venue, "s1", store.route("s1"))
+    assert venue.cancel.await_count == 2  # restart/retry reissues cancel only after active snapshots
+    assert venue.submit.await_count == 0
+
+    stop_partial_cancelled = {
+        **stop_open, "state": "partially_filled_rest_cancelled", "cumulative_quantity": "0.5",
+        "average_price": "80", "net_rounded_executed_notional": "40",
+    }
+    store.apply_snapshot("stop-ref", stop_partial_cancelled, asset_class="crypto")
+    async def submit(_route, args, ref_id):
+        return {"order": {
+            "id": "broker-exit", "ref_id": ref_id, "currency_code": "BTC", "symbol": "BTC",
+            "side": "sell", "state": "confirmed", "cumulative_quantity": "0",
+            "average_price": None, "fees": "0", "net_rounded_executed_notional": "0",
+        }}
+    venue.submit.side_effect = submit
+    await execution._process_deferred_exit(venue, "s1", store.route("s1"))
+
+    assert venue.prepare.await_args.args[1].amount == 0.5
+    assert venue.submit.await_count == 1
+    saved_exit = next(item for item in store.orders("s1") if item["id"] == store.deferred_exits("s1")[0]["reserved_order_id"])
+    assert saved_exit["status"] == "open"
+    assert store.deferred_exits("s1")[0]["status"] == "submitted"
+
+
+async def test_deferred_exit_subtracts_same_position_partial_sell_after_decision(ledger, monkeypatch):
+    from src.services import portfolio_risk_service
+
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2',native_stop_loss_enabled=1 WHERE strategy_id='s1'")
+    assert reserve("buy", 2, "entry", "entry", position_id="p1")
+    store.apply_snapshot("entry", snapshot(qty="2", state="filled", oid="entry"), asset_class="crypto")
+    assert reserve("sell", 1, "old-sell", "old-sell", position_id="p1")
+    store.apply_snapshot(
+        "old-sell", snapshot(qty="0.25", state="partially_filled", side="sell", oid="old-sell"),
+        asset_class="crypto",
+    )
+    blocker = store.orders("s1", pending=True)[0]
+    original = intent("sell", 1, "hosted-exit", "p1")
+    template = {"id": "p1", "asset": "BTC-USD", "orders": []}
+    deferred = {
+        "id": "deferred-sell", "position_id": "p1", "evaluation_id": "eval",
+        "engine_order_id": "hosted-exit", "intent_json": original.model_dump_json(),
+        "position_template": template, "decision_quantity": "1.75",
+        "blocker_order_id": blocker["id"], "blocker_filled_at_decision": blocker["filled_quantity"],
+        "route_fingerprint": store.route_fingerprint("s1"),
+    }
+    with store.connection() as conn:
+        conn.execute(
+            """INSERT INTO broker_deferred_exits
+            (id,strategy_id,position_id,evaluation_id,engine_order_id,intent_json,position_template_json,
+             decision_quantity,blocker_order_id,blocker_filled_at_decision,route_fingerprint,status,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,'waiting_stop_terminal',?,?)""",
+            (deferred["id"], "s1", "p1", "eval", deferred["engine_order_id"], deferred["intent_json"],
+             json.dumps(template), "1.75", blocker["id"], blocker["filled_quantity"],
+             deferred["route_fingerprint"], store.now(), store.now()),
+        )
+    store.apply_snapshot(
+        "old-sell", snapshot(qty="0.5", state="partially_filled_rest_cancelled", side="sell", oid="old-sell"),
+        asset_class="crypto",
+    )
+    monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": True})
+    async def submit(_route, _args, ref_id):
+        return {"order": {
+            "id": "broker-new-exit", "ref_id": ref_id, "currency_code": "BTC", "symbol": "BTC",
+            "side": "sell", "state": "confirmed", "cumulative_quantity": "0",
+            "average_price": None, "fees": "0", "net_rounded_executed_notional": "0",
+        }}
+    venue = SimpleNamespace(
+        prepare=AsyncMock(return_value=({"quantity": "0.75", "side": "sell"}, Decimal(75))),
+        sellable=AsyncMock(return_value=Decimal("0.75")), submit=AsyncMock(side_effect=submit),
+    )
+
+    await execution._process_deferred_exit(venue, "s1", store.route("s1"))
+
+    assert venue.prepare.await_args.args[1].amount == 0.75
+    assert venue.submit.await_count == 1
+    assert store.deferred_exits("s1")[0]["status"] == "submitted"
+
+
+async def test_other_positions_stop_fill_does_not_reduce_hosted_exit_authorization(ledger, monkeypatch):
+    from src.services import portfolio_risk_service
+
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2',native_stop_loss_enabled=1 WHERE strategy_id='s1'")
+    assert reserve("buy", 2, "entry-p1", "entry-p1", position_id="p1")
+    store.apply_snapshot("entry-p1", snapshot(qty="2", state="filled", oid="entry-p1"), asset_class="crypto")
+    assert reserve("buy", 1, "entry-p2", "entry-p2", position_id="p2")
+    store.apply_snapshot("entry-p2", snapshot(qty="1", state="filled", oid="entry-p2"), asset_class="crypto")
+    template2 = {
+        "id": "p2", "asset": "BTC-USD", "stop_loss_price": 90,
+        "orders": [{"id": "stop2", "asset": "BTC-USD", "position_id": "p2",
+                    "order_type": "stop_loss", "side": "exit_long", "status": "pending",
+                    "price": 90, "position_size": 1}],
+    }
+    assert store.reserve_protective_stop(
+        "s1", "eval", "p2", "BTC-USD", 1, 90, 90, {"quantity": "1", "side": "sell"}, template2, "stop-p2",
+    )
+    stop_snapshot = {
+        "id": "broker-stop-p2", "ref_id": "stop-p2", "currency_code": "BTC", "symbol": "BTC",
+        "side": "sell", "type": "stop_loss", "stop_price": "90", "quantity": "1",
+        "state": "confirmed", "cumulative_quantity": "0", "average_price": None,
+        "fees": "0", "net_rounded_executed_notional": "0",
+    }
+    store.apply_snapshot("stop-p2", stop_snapshot, asset_class="crypto")
+    original = intent("sell", 1, "hosted-exit-p1", "p1")
+    deferred = {
+        "id": "deferred-p1", "position_id": "p1", "evaluation_id": "eval",
+        "engine_order_id": "hosted-exit-p1", "intent_json": original.model_dump_json(),
+        "position_template": {"id": "p1", "asset": "BTC-USD", "orders": []},
+        "decision_quantity": "2", "blocker_order_id": "stop-p2", "blocker_filled_at_decision": "0",
+        "route_fingerprint": store.route_fingerprint("s1"),
+    }
+    with store.connection() as conn:
+        conn.execute(
+            """INSERT INTO broker_deferred_exits
+            (id,strategy_id,position_id,evaluation_id,engine_order_id,intent_json,position_template_json,
+             decision_quantity,blocker_order_id,blocker_filled_at_decision,route_fingerprint,status,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,'waiting_stop_terminal',?,?)""",
+            (deferred["id"], "s1", "p1", "eval", deferred["engine_order_id"], deferred["intent_json"],
+             json.dumps(deferred["position_template"]), "2", "stop-p2", "0",
+             deferred["route_fingerprint"], store.now(), store.now()),
+        )
+    store.apply_snapshot(
+        "stop-p2",
+        {**stop_snapshot, "state": "partially_filled_rest_cancelled", "cumulative_quantity": "0.5",
+         "average_price": "80", "net_rounded_executed_notional": "40"},
+        asset_class="crypto",
+    )
+    monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": True})
+    async def submit(_route, _args, ref_id):
+        return {"order": {
+            "id": "broker-p1-exit", "ref_id": ref_id, "currency_code": "BTC", "symbol": "BTC",
+            "side": "sell", "state": "confirmed", "cumulative_quantity": "0",
+            "average_price": None, "fees": "0", "net_rounded_executed_notional": "0",
+        }}
+    venue = SimpleNamespace(
+        prepare=AsyncMock(return_value=({"quantity": "1", "side": "sell"}, Decimal(100))),
+        sellable=AsyncMock(return_value=Decimal("1")), submit=AsyncMock(side_effect=submit),
+    )
+
+    await execution._process_deferred_exit(venue, "s1", store.route("s1"))
+
+    assert venue.prepare.await_args.args[1].amount == 1
+    assert venue.submit.await_count == 1
+
+
+async def test_immediate_confirmed_entry_fill_triggers_protection_maintenance(ledger, monkeypatch):
+    from src.services import portfolio_risk_service
+    from src.shared.clients import mangrove
+
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2',native_stop_loss_enabled=1 WHERE strategy_id='s1'")
+    template = {
+        "id": "p1", "asset": "BTC-USD", "stop_loss_price": 90,
+        "orders": [{"id": "stop1", "asset": "BTC-USD", "position_id": "p1",
+                    "order_type": "stop_loss", "side": "exit_long", "status": "pending",
+                    "price": 90, "position_size": 2}],
+    }
+    modeled_order = {
+        "order_id": "engine-entry", "asset": "BTC-USD", "side": "enter_long",
+        "status": "filled", "position_size": 2, "price": 100, "position_id": "p1",
+    }
+    modeled = {
+        "success": True, "execution_state": {"external_execution": {"applied_through": 0}},
+        "open_positions": [], "position_templates": [template], "new_orders": [modeled_order],
+        "external_execution_disposition": "evaluated",
+    }
+    result = SimpleNamespace(
+        new_orders=[modeled_order], model_dump=lambda: modeled,
+        external_execution_ack={"contract_version": 2, "applied_through": 0, "receipts": [], "active_position_ids": []},
+    )
+    def evaluate(payload, *, persist, open_positions, external_execution=None):
+        return result
+    sdk = SimpleNamespace(execution=SimpleNamespace(evaluate_by_object=evaluate))
+    monkeypatch.setattr(mangrove, "mangrove_ai_client", lambda: sdk)
+    monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": True})
+    sync = AsyncMock()
+    monkeypatch.setattr(execution, "_sync_native_protection", sync)
+    venue = SimpleNamespace(
+        account=AsyncMock(), find_order=AsyncMock(return_value=None),
+        quote=AsyncMock(return_value={"ask_price": "100", "bid_price": "100"}),
+        prepare=AsyncMock(return_value=({"quantity": "2", "side": "buy"}, Decimal(200))),
+        balance=AsyncMock(return_value=Decimal(1000)), submit=AsyncMock(),
+    )
+    async def submit(_route, args, ref_id):
+        return {"order": snapshot(qty=args["quantity"], state="filled", oid=ref_id)}
+    venue.submit.side_effect = submit
+
+    await execution._tick(venue, "s1")
+
+    assert store.execution_inputs("s1", 100)[1][0]["position_size"] == 2
+    sync.assert_awaited_once()
+    assert sync.await_args.args[1] == "s1"
+    assert sync.await_args.args[5][0]["id"] == "p1"
+
+
+async def test_native_protection_maintenance_never_places_while_paused_or_halted(ledger, monkeypatch):
+    from src.services import portfolio_risk_service
+
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2',native_stop_loss_enabled=1 WHERE strategy_id='s1'")
+        conn.execute("UPDATE strategies SET status='inactive' WHERE id='s1'")
+    venue = SimpleNamespace(quote=AsyncMock(), submit=AsyncMock())
+    await execution._native_protection_maintenance(venue)
+    venue.quote.assert_not_awaited()
+    venue.submit.assert_not_awaited()
+    with store.connection() as conn:
+        conn.execute("UPDATE strategies SET status='live' WHERE id='s1'")
+    monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": False})
+    await execution._native_protection_maintenance(venue)
+    venue.quote.assert_not_awaited()
+    venue.submit.assert_not_awaited()
+
+
+async def test_missing_stop_quantity_evidence_stays_unverified_without_churn(ledger):
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2',native_stop_loss_enabled=1 WHERE strategy_id='s1'")
+    template = {
+        "id": "p1", "asset": "BTC-USD", "stop_loss_price": 90,
+        "orders": [{"id": "stop1", "asset": "BTC-USD", "position_id": "p1",
+                    "order_type": "stop_loss", "side": "exit_long", "status": "pending",
+                    "price": 90, "position_size": 2}],
+    }
+    assert reserve(qty=2, oid="entry", key="entry", position_id="p1")
+    store.apply_snapshot("entry", snapshot(qty="2", state="filled", oid="entry"), asset_class="crypto")
+    assert store.reserve_protective_stop(
+        "s1", "eval", "p1", "BTC-USD", 2, 90, 90, {"quantity": "2", "side": "sell"}, template, "stop-ref",
+    )
+    observed = {
+        "id": "broker-stop", "ref_id": "stop-ref", "currency_code": "BTC", "symbol": "BTC",
+        "side": "sell", "type": "stop_loss", "stop_price": "90", "state": "confirmed",
+        "cumulative_quantity": "0", "average_price": None, "fees": "0",
+        "net_rounded_executed_notional": "0",
+    }
+    store.apply_snapshot("stop-ref", observed, asset_class="crypto")
+    _, positions = store.execution_inputs("s1", 100)
+    venue = SimpleNamespace(cancel=AsyncMock(), submit=AsyncMock(), prepare_protective_stop=AsyncMock())
+
+    await execution._sync_native_protection(venue, "s1", store.route("s1"), "eval", [template], positions)
+    await execution._sync_native_protection(venue, "s1", store.route("s1"), "eval", [template], positions)
+
+    status = execution.protection_status("s1")["positions"][0]
+    assert status["status"] == "coverage_unverified"
+    assert status["broker_acknowledged_standing"] is False
+    venue.cancel.assert_not_awaited()
+    venue.submit.assert_not_awaited()
+    venue.prepare_protective_stop.assert_not_awaited()
+
+
+async def test_blocked_hosted_exit_ack_persists_before_cancel(ledger, monkeypatch):
+    from src.services import portfolio_risk_service
+    from src.shared.clients import mangrove
+
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2',native_stop_loss_enabled=1 WHERE strategy_id='s1'")
+    assert reserve(qty=2, oid="entry", key="entry", position_id="p1")
+    store.apply_snapshot("entry", snapshot(qty="2", state="filled", oid="entry"), asset_class="crypto")
+    template = {
+        "id": "p1", "asset": "BTC-USD", "stop_loss_price": 90,
+        "orders": [{"id": "stop1", "asset": "BTC-USD", "position_id": "p1",
+                    "order_type": "stop_loss", "side": "exit_long", "status": "pending",
+                    "price": 90, "position_size": 2}],
+    }
+    assert store.reserve_protective_stop(
+        "s1", "eval", "p1", "BTC-USD", 2, 90, 90, {"quantity": "2", "side": "sell"}, template, "stop-ref",
+    )
+    blocker = {
+        "id": "broker-stop", "ref_id": "stop-ref", "currency_code": "BTC", "symbol": "BTC",
+        "side": "sell", "type": "stop_loss", "stop_price": "90", "quantity": "2",
+        "state": "confirmed", "cumulative_quantity": "0", "average_price": None,
+        "fees": "0", "net_rounded_executed_notional": "0",
+    }
+    store.apply_snapshot("stop-ref", blocker, asset_class="crypto")
+    _, positions, _, events, _, _ = store.execution_inputs(
+        "s1", 100, include_revision=True, include_external_events=True
+    )
+    event = events[0]
+    receipt = {
+        "sequence": event["sequence"], "event_id": event["event_id"],
+        "position_id": event["position_id"], "kind": event["kind"],
+        "sha256": store._external_event_hash(event), "occurred_at": event.get("occurred_at"),
+        "accounting_at": "2026-10-17T07:00:00Z",
+    }
+    hosted_exit = {
+        "order_id": "hosted-exit", "asset": "BTC-USD", "side": "exit_long",
+        "status": "filled", "position_size": 1, "price": 100, "position_id": "p1",
+    }
+    modeled = {
+        "success": True,
+        "execution_state": {"external_execution": {"applied_through": 1, "receipts": [receipt]}},
+        "open_positions": [positions[0]], "position_templates": [template],
+        "new_orders": [hosted_exit], "external_execution_disposition": "evaluated",
+    }
+    result = SimpleNamespace(
+        new_orders=[hosted_exit], model_dump=lambda: modeled,
+        external_execution_ack={
+            "contract_version": 2, "applied_through": 1, "receipts": [receipt],
+            "active_position_ids": ["p1"],
+        },
+    )
+    def evaluate(payload, *, persist, open_positions, external_execution=None):
+        assert external_execution["events"] == events
+        return result
+    sdk = SimpleNamespace(execution=SimpleNamespace(evaluate_by_object=evaluate))
+    monkeypatch.setattr(mangrove, "mangrove_ai_client", lambda: sdk)
+    monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": True})
+    async def verify_saved_then_cancel(_route, _broker_id):
+        saved = store.deferred_exits("s1", pending_only=True)
+        assert len(saved) == 1
+        assert saved[0]["engine_order_id"] == "hosted-exit"
+        state, _ = store.execution_inputs("s1", 100)
+        assert state["external_execution"]["applied_through"] == 1
+    venue = SimpleNamespace(
+        account=AsyncMock(), find_order=AsyncMock(return_value=blocker),
+        quote=AsyncMock(return_value={"ask_price": "100", "bid_price": "100"}),
+        cancel=AsyncMock(side_effect=verify_saved_then_cancel),
+    )
+
+    await execution._tick(venue, "s1")
+
+    saved = store.deferred_exits("s1", pending_only=True)
+    assert len(saved) == 1
+    assert saved[0]["status"] == "waiting_stop_terminal"
+    assert venue.cancel.await_count == 1
+    assert store.pending_external_execution_events("s1") == []
+
+
+def test_deferred_exit_ack_conflict_rolls_back_cursor_and_intent(ledger):
+    with store.connection() as conn:
+        conn.execute("UPDATE broker_routes SET external_execution_mode='confirmed_v2',native_stop_loss_enabled=1 WHERE strategy_id='s1'")
+    _, _, revision, events, raw_state, raw_positions = store.execution_inputs(
+        "s1", 100, include_revision=True, include_external_events=True
+    )
+    assert events == []
+    deferred = {
+        "id": "bad-deferred", "position_id": "p1", "evaluation_id": "eval",
+        "engine_order_id": "exit1", "intent_json": intent(side="sell", qty=1, order="exit1").model_dump_json(),
+        "position_template": {"id": "p1", "asset": "BTC-USD"}, "decision_quantity": "1",
+        "blocker_order_id": None, "blocker_filled_at_decision": "0", "route_fingerprint": "wrong",
+    }
+    with pytest.raises(SdkError, match="route changed"):
+        store.acknowledge_confirmed_close_events(
+            "s1", [], {"bar_index": 99, "external_execution": {"applied_through": 0}},
+            open_positions=[], expected_state=raw_state, expected_open_positions=raw_positions,
+            expected_applied_through=0, expected_broker_revision=revision,
+            receipts=[], submitted_events=[], deferred_exit=deferred,
+        )
+    with store.connection() as conn:
+        saved = conn.execute("SELECT execution_state_json,open_positions_json FROM strategies WHERE id='s1'").fetchone()
+        count = conn.execute("SELECT count(*) FROM broker_deferred_exits WHERE strategy_id='s1'").fetchone()[0]
+    assert saved["execution_state_json"] is None
+    assert saved["open_positions_json"] is None
+    assert count == 0
