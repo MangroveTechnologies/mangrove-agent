@@ -14,6 +14,12 @@ These instructions describe MangroveAI server tools and server-owned records. Di
 
 # The engine builds the candidates, not you
 
+A backtest asks what one strategy did. A sweep asks what a whole space of them does. You
+do not write the candidates and you do not hand over a list. The engine draws each run's
+strategy itself according to the settings of the experiment, such as what market windows to
+use, what assets to test, what signals to use, what risk management parameters to test,
+and other various knobs and dials.
+
 ## Check the deployed capability first
 
 `uses-tools` describes the complete source capability set, not a guarantee that every
@@ -24,12 +30,6 @@ pretend that local result readers can create or run an experiment. The local
 `agent_list_oracle_experiments` and `agent_list_oracle_results` tools, when advertised,
 can only discover experiment summaries and read bounded pages; state that sweep setup or
 launch is unavailable in this environment.
-
-A backtest asks what one strategy did. A sweep asks what a whole space of them does. You
-do not write the candidates and you do not hand over a list. The engine draws each run's
-strategy itself according to the settings of the experiment, such as what market windows to
-use, what assets to test, what signals to use, what risk management parameters to test,
-and other various knobs and dials.
 
 The decisions a user makes are:
   1. What asset(s) to choose from. Present the following options only when the person

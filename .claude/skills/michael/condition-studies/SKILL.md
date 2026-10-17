@@ -18,6 +18,11 @@ These instructions describe MangroveAI server tools and server-owned records. Di
 
 # The strategy does not change; only the market does
 
+A condition study takes one saved strategy and runs it on each of several historical windows that
+carry the same market label. The rules, the parameters and the execution config are identical on
+every window. Nothing is fitted, nothing is searched, and the windows are chosen by their label
+before any backtest runs.
+
 ## Check the deployed capability first
 
 `uses-tools` describes the source capability set; a deployment may advertise fewer tools.
@@ -29,11 +34,6 @@ When advertised locally, `agent_list_oracle_experiments` and
 pages only; they do not select market conditions, preview cost, run a study or poll its
 status. Report the specific unavailable step instead of presenting a generic result read
 as a condition study.
-
-A condition study takes one saved strategy and runs it on each of several historical windows that
-carry the same market label. The rules, the parameters and the execution config are identical on
-every window. Nothing is fitted, nothing is searched, and the windows are chosen by their label
-before any backtest runs.
 
 That is the whole reason the answer is worth anything, and it is worth saying out loud when you
 report one. A backtest that has been tuned until it looked good says nothing about the future. A

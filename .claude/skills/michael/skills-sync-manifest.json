@@ -3,8 +3,8 @@
   "source": {
     "repo": "MangroveTechnologies/MangroveAI",
     "path": "src/MangroveAI/domains/agent/michael/skills",
-    "commit": "7899b597d481653547e87ce833abaa06260e6c32",
-    "ref": "7899b597"
+    "commit": "35d5aa098075ef15a8d9199effdc613f3bc9f445",
+    "ref": "35d5aa09"
   },
   "dropped_skills": [
     "conversation-memory",
@@ -12,7 +12,7 @@
   ],
   "source_files": {
     "backtesting/SKILL.md": "e90fcbdab992e0d1e69c11165554156890f8ba9a7780d194deb8b4d271582ff0",
-    "condition-studies/SKILL.md": "96cb942343ea137a385c6341d26db75bba853034fb68a51e2b424a26385b8aae",
+    "condition-studies/SKILL.md": "6b0f3f959ae7bbb517555e8e292234ca82619255b9e05f219242863b28c252c9",
     "market-intelligence/SKILL.md": "d3317f9c09dc955a20b8b9acace16d72c379845d28bf4b75502cf9f0940e9c4a",
     "portfolio/SKILL.md": "68b02b141e0aa98b2efc58081f6b769eee079adb6f6c18af4faee922d8ba062c",
     "product-facts/SKILL.md": "2b037c1803424999b1bd35aa5f1ab79b7d7a67afef87e707535fff8dee0f4e3c",
@@ -20,11 +20,11 @@
     "strategy-composition/signal_archetype_map.yaml": "5b8f411abab3a53a6c418ba803ad0440c076f59d21ada2555f4d05214267cec4",
     "strategy-management/SKILL.md": "909f2c4a7e75c3e58392798455e616cc1ffd1e201434ad7978cde64548a0dd09",
     "sweep-results/SKILL.md": "51af8829b1880ad75a1819094dc3f293275431a27d25c88df5edc076d7f60c28",
-    "sweeps/SKILL.md": "5f3e68830f7b07e315644d2a471aab54c536f90d480ada9f583469f1a04cc6d4"
+    "sweeps/SKILL.md": "fb449566c05371e0183eee765df44d067ddb9e5196f3955ccbd54b7bf8483351"
   },
   "files": {
     "backtesting/SKILL.md": "fe94989dd9d242cdfbaeefa8f9093d0c3eae16271fe404d4702af0f4c815dc79",
-    "condition-studies/SKILL.md": "fb3afdfa7b4efbd15e47c7d2a4b38bd89c9bddfaf005352d33993d9876a8c0be",
+    "condition-studies/SKILL.md": "3378f51d800ba708136fc1bee91da5acd935e32d7008081eacd0c82e9e3c46f1",
     "market-intelligence/SKILL.md": "4f4f0c88af218dd4e979aaa9d87dd1143513c5ca83ef84ebc1ea40774740a051",
     "portfolio/SKILL.md": "0e6eafa2986b4aba1f82e598611aa44ba817ea09b3e402f6dc40c0f85b61e653",
     "product-facts/SKILL.md": "c125a2b652805a829df5a90f6b4aabd37feabba9dd629cd9d1d1d33edf1c5c41",
@@ -32,6 +32,6 @@
     "strategy-composition/signal_archetype_map.yaml": "5b8f411abab3a53a6c418ba803ad0440c076f59d21ada2555f4d05214267cec4",
     "strategy-management/SKILL.md": "ff682b078b9c0351c090586c3543d30568f817712344850c84206dc4a02096c1",
     "sweep-results/SKILL.md": "be00bbe20e15f3dda0f95c44a43416110d54dd217f196eff47a9c7ad9e880996",
-    "sweeps/SKILL.md": "4b4355cf6812eb77e8f78a1f93b85c220784a74cc761e6a44250fec01df830a5"
+    "sweeps/SKILL.md": "6c4bed7865eec060082da2842425cf16af1b117f902a8514eef2cc9be95ff38b"
   }
 }
