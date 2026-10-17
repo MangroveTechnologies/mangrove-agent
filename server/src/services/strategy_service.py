@@ -60,6 +60,18 @@ _TRANSITIONS: dict[str, set[str]] = {
 
 _VALID_STATUSES = {"draft", "inactive", "paper", "live", "archived"}
 
+# Stable core of a server-resolved execution config. Extra keys remain
+# forward-compatible; these established fields distinguish an effective
+# strategy config from a partial response that would re-default at evaluation.
+_EFFECTIVE_CONFIG_REQUIRED_FIELDS = {
+    "initial_balance": (int, float),
+    "max_risk_per_trade": (int, float),
+    "max_open_positions": (int,),
+    "position_size_calc": (str,),
+    "stop_model": (str,),
+    "cooldown_config": (dict,),
+}
+
 
 def _validate_status_transition(current: str, target: str) -> None:
     """Raise StrategyInvalidStatusTransition if the transition is not in _TRANSITIONS."""
@@ -387,6 +399,120 @@ def _insert_cache(
     return local_id
 
 
+def _detail_value(detail: Any, name: str) -> Any:
+    """Read a declared or extra SDK response field without guessing defaults."""
+    if isinstance(detail, dict):
+        return detail.get(name)
+    dump = getattr(detail, "model_dump", None)
+    if callable(dump):
+        try:
+            values = dump()
+        except Exception:  # noqa: BLE001 - tolerate legacy SDK response shapes
+            values = None
+        if isinstance(values, dict) and name in values:
+            return values[name]
+    return None
+
+
+def _created_market_context(
+    detail: Any, *, asset: str, requested: StrategyMarketContext | None,
+) -> StrategyMarketContext | None:
+    """Use validated market metadata returned by create, preserving explicit choice.
+
+    Older servers omit quote/venue metadata. In that case keep an explicit
+    caller selection, or leave the strategy unresolved; never infer a market
+    locally that may differ from the server's resolver.
+    """
+    response_asset = _detail_value(detail, "asset")
+    if response_asset and response_asset != asset:
+        raise SdkError("strategies.create returned a different strategy asset.")
+
+    quote = _detail_value(detail, "quote_token")
+    venue = _detail_value(detail, "market_data_venue")
+    base = _detail_value(detail, "base_token") or response_asset or asset
+    if quote is None and venue is None:
+        return requested
+    if quote is None or venue is None:
+        raise SdkError("strategies.create returned incomplete market metadata.")
+    try:
+        resolved = StrategyMarketContext(
+            base_token=base,
+            quote_token=quote,
+            market_data_venue=venue,
+        )
+    except Exception as exc:  # noqa: BLE001 - malformed upstream metadata
+        raise SdkError("strategies.create returned invalid market metadata.") from exc
+    if resolved.base_token != asset:
+        raise SdkError("strategies.create market base token does not match the strategy asset.")
+    if requested is not None and resolved != requested:
+        raise SdkError("strategies.create resolved a market different from the requested market.")
+    return resolved
+
+
+def _created_execution_config(
+    detail: Any,
+    *,
+    overrides: dict[str, Any] | None,
+    fallback_base: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], str]:
+    """Prefer the server's effective config; merge overrides on legacy responses."""
+    effective = _detail_value(detail, "execution_config")
+    invalid_fields = []
+    if isinstance(effective, dict):
+        for key, expected_types in _EFFECTIVE_CONFIG_REQUIRED_FIELDS.items():
+            if key not in effective:
+                continue
+            value = effective[key]
+            valid = isinstance(value, expected_types)
+            valid = valid and not (
+                expected_types in {(int, float), (int,)} and isinstance(value, bool)
+            )
+            valid = valid and not (expected_types == (str,) and not value)
+            if not valid:
+                invalid_fields.append(key)
+    if invalid_fields:
+        upstream_id = _detail_value(detail, "id") or _detail_value(detail, "strategy_id")
+        raise SdkError(
+            "strategies.create returned invalid execution_config field(s) "
+            f"{', '.join(sorted(invalid_fields))}; the upstream strategy may already exist"
+            + (f" (id {upstream_id})" if upstream_id else ".")
+        )
+
+    complete = isinstance(effective, dict) and all(
+        key in effective for key in _EFFECTIVE_CONFIG_REQUIRED_FIELDS
+    )
+    if complete:
+        return dict(effective), "upstream"
+    if effective is None:
+        reason = "missing"
+    elif isinstance(effective, dict) and effective:
+        reason = "incomplete"
+    else:
+        reason = "malformed_or_empty"
+    _log.warning(
+        "strategy.create.execution_config_unavailable",
+        response_state=reason,
+        note="using local defaults merged with explicit overrides; effective config is unverified",
+    )
+    base = fallback_base if fallback_base is not None else backtest_service.flattened_defaults()
+    partial = effective if isinstance(effective, dict) else {}
+    return {**base, **(overrides or {}), **partial}, f"local_fallback_{reason}"
+
+
+def _execution_config_mismatches(
+    expected: dict[str, Any], actual: dict[str, Any], *,
+    include_unexpected: bool = False,
+) -> list[str]:
+    """List keys whose saved effective values differ from the tested values."""
+    keys = set(expected)
+    if include_unexpected:
+        keys.update(actual)
+    return sorted(
+        key for key in keys
+        if key not in expected or key not in actual or expected[key] != actual[key]
+    )
+
+
 def _extract_timeframe(entry: list[dict]) -> str:
     if not entry:
         return "1h"
@@ -537,6 +663,16 @@ def create_autonomous(req: StrategyAutonomousRequest) -> tuple[StrategyDetailRes
         goal=req.goal, asset=req.asset, timeframe=timeframe,
         n=req.candidate_count, seed=req.seed,
     )
+    # Freeze the exact canon used for every candidate in this creation run.
+    # `_build_request` merges these values over its defaults, so the selected
+    # candidate can later be created with the same tested config.
+    defaults = backtest_service.flattened_defaults()
+    candidates = [
+        candidate.model_copy(update={
+            "execution_config": {**defaults, **candidate.execution_config},
+        })
+        for candidate in candidates
+    ]
 
     # Use timeframe-aware recommended lookback if caller didn't specify one.
     lookback_months = (
@@ -570,10 +706,30 @@ def create_autonomous(req: StrategyAutonomousRequest) -> tuple[StrategyDetailRes
                 entry=winner.candidate.entry,
                 exit=winner.candidate.exit,
                 status="inactive",
+                execution_config=winner.candidate.execution_config,
             ),
         )
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"strategies.create failed: {e}") from e
+
+    saved_execution_config, config_source = _created_execution_config(
+        detail,
+        overrides=winner.candidate.execution_config,
+        fallback_base=defaults,
+    )
+    config_mismatches = _execution_config_mismatches(
+        winner.candidate.execution_config, saved_execution_config,
+        include_unexpected=True,
+    )
+    if config_mismatches:
+        _log.warning(
+            "strategy.create.execution_config_differs_from_backtest",
+            config_keys=config_mismatches,
+            config_source=config_source,
+        )
+    market_context = _created_market_context(
+        detail, asset=winner.candidate.asset, requested=None,
+    )
 
     generation_report = {
         "candidates_tried": len(candidates),
@@ -589,6 +745,15 @@ def create_autonomous(req: StrategyAutonomousRequest) -> tuple[StrategyDetailRes
             "max_drawdown": full.max_drawdown,
             "net_pnl": full.net_pnl,
         },
+        "execution_config_source": config_source,
+        "execution_config_verification": (
+            "verified_against_backtest"
+            if config_source == "upstream" and not config_mismatches
+            else "retest_required"
+        ),
+        "tested_execution_config": winner.candidate.execution_config,
+        "saved_execution_config": saved_execution_config,
+        "execution_config_mismatch_keys": config_mismatches,
         "rejected_reasons": [
             {"candidate": r.candidate.name, "reason": r.reject_reason}
             for r in rejected
@@ -599,8 +764,9 @@ def create_autonomous(req: StrategyAutonomousRequest) -> tuple[StrategyDetailRes
         detail,
         entry=winner.candidate.entry,
         exit_rules=winner.candidate.exit,
-        execution_config=backtest_service.flattened_defaults(),
+        execution_config=saved_execution_config,
         generation_report=generation_report,
+        market_context=market_context,
     )
     row = _get_row(local_id)
     resp = _row_to_response(row)
@@ -651,14 +817,31 @@ def create_manual(req: StrategyManualRequest) -> StrategyDetailResponse:
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"strategies.create failed: {e}") from e
 
+    saved_execution_config, config_source = _created_execution_config(
+        detail,
+        overrides=req.execution_config,
+    )
+    config_mismatches = _execution_config_mismatches(
+        req.execution_config or {}, saved_execution_config,
+    )
+    if config_mismatches:
+        _log.warning(
+            "strategy.create.execution_config_differs_from_request",
+            config_keys=config_mismatches,
+            config_source=config_source,
+        )
+    market_context = _created_market_context(
+        detail, asset=req.asset, requested=req.market_context,
+    )
+
     local_id = _insert_cache(
         detail,
         entry=entry,
         exit_rules=exit_rules,
-        execution_config=req.execution_config or backtest_service.flattened_defaults(),
+        execution_config=saved_execution_config,
         generation_report=None,
         evaluation_lane=req.evaluation_lane,
-        market_context=req.market_context,
+        market_context=market_context,
     )
     row = _get_row(local_id)
     resp = _row_to_response(row)

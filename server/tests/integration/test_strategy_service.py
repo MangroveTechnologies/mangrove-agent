@@ -164,7 +164,232 @@ def test_explicit_market_survives_creation_and_stateless_evaluation(temp_db, moc
     assert service.get_strategy(detail.id).market_context.model_dump() == market
     payload = service._stateless_strategy_dict(service._get_row(detail.id))
     assert all(payload[k] == v for k, v in market.items())
-    assert payload["execution_config"] == {"initial_balance": 200}
+    assert payload["execution_config"] == detail.execution_config
+    assert payload["execution_config"]["initial_balance"] == 200
+
+
+def test_manual_persists_resolved_market_and_effective_config(temp_db, mock_ai_sdk):
+    from src.services import strategy_service as service
+
+    effective = {
+        "initial_balance": 900,
+        "max_open_positions": 3,
+        "max_risk_per_trade": 0.01,
+        "position_size_calc": "v2",
+        "stop_model": "atr_width_dial",
+        "cooldown_config": {"1h": {}},
+    }
+    mock_ai_sdk.strategies.create.side_effect = lambda request: SimpleNamespace(
+        id="mg-resolved-market",
+        name=request.name,
+        asset=request.asset,
+        status="inactive",
+        model_dump=lambda: {
+            "id": "mg-resolved-market",
+            "name": request.name,
+            "asset": request.asset,
+            "status": "inactive",
+            "quote_token": "USD",
+            "market_data_venue": "KRAKEN",
+            "execution_config": effective,
+        },
+    )
+
+    detail = service.create_manual(service.StrategyManualRequest(
+        name="Resolved market", asset="XLM", timeframe="1h",
+        entry=[{"name": "mom_cross_up", "signal_type": "TRIGGER"}],
+        execution_config={"initial_balance": 900}, evaluation_lane="stateless",
+    ))
+
+    assert detail.market_context == service.StrategyMarketContext(
+        base_token="XLM", quote_token="USD", market_data_venue="KRAKEN",
+    )
+    assert detail.execution_config == effective
+    request = mock_ai_sdk.strategies.create.call_args.args[0]
+    assert request.execution_config == {"initial_balance": 900}
+
+
+def test_manual_legacy_create_response_merges_overrides_over_defaults(
+    temp_db, mock_ai_sdk, monkeypatch,
+):
+    from src.services import backtest_service
+    from src.services import strategy_service as service
+
+    defaults = {"initial_balance": 10000, "max_open_positions": 10}
+    monkeypatch.setattr(backtest_service, "flattened_defaults", lambda: dict(defaults))
+    detail = service.create_manual(service.StrategyManualRequest(
+        name="Legacy response", asset="ETH", timeframe="1h",
+        entry=[{"name": "rsi_oversold", "signal_type": "TRIGGER"}],
+        execution_config={"initial_balance": 250},
+    ))
+
+    assert detail.execution_config == {"initial_balance": 250, "max_open_positions": 10}
+    assert detail.market_context is None
+
+
+def test_manual_partial_effective_config_is_merged_and_treated_as_incomplete(
+    temp_db, mock_ai_sdk, monkeypatch,
+):
+    from src.services import backtest_service
+    from src.services import strategy_service as service
+
+    defaults = {"initial_balance": 10000, "max_open_positions": 10}
+    monkeypatch.setattr(backtest_service, "flattened_defaults", lambda: dict(defaults))
+    mock_ai_sdk.strategies.create.side_effect = lambda request: SimpleNamespace(
+        id="mg-partial-config",
+        name=request.name,
+        asset=request.asset,
+        status="inactive",
+        model_dump=lambda: {
+            "id": "mg-partial-config",
+            "name": request.name,
+            "asset": request.asset,
+            "status": "inactive",
+            "execution_config": {"initial_balance": 900},
+        },
+    )
+
+    detail = service.create_manual(service.StrategyManualRequest(
+        name="Partial config", asset="ETH", timeframe="1h",
+        entry=[{"name": "rsi_oversold", "signal_type": "TRIGGER"}],
+        execution_config={"initial_balance": 700},
+    ))
+
+    # Preserve the hosted value we did receive, but fill the absent core from
+    # defaults and keep the result visibly on the legacy/incomplete path.
+    assert detail.execution_config == {"initial_balance": 900, "max_open_positions": 10}
+
+
+def test_manual_rejects_invalid_known_effective_config_field(temp_db, mock_ai_sdk):
+    from src.services import strategy_service as service
+    from src.shared.db.sqlite import get_connection
+    from src.shared.errors import SdkError
+
+    mock_ai_sdk.strategies.create.side_effect = lambda request: SimpleNamespace(
+        id="mg-invalid-config",
+        name=request.name,
+        asset=request.asset,
+        status="inactive",
+        model_dump=lambda: {
+            "id": "mg-invalid-config",
+            "name": request.name,
+            "asset": request.asset,
+            "status": "inactive",
+            "execution_config": {"initial_balance": True},
+        },
+    )
+
+    with pytest.raises(SdkError, match="invalid execution_config.*initial_balance.*may already exist"):
+        service.create_manual(service.StrategyManualRequest(
+            name="Invalid config", asset="ETH", timeframe="1h",
+            entry=[{"name": "rsi_oversold", "signal_type": "TRIGGER"}],
+        ))
+
+    rows = get_connection().execute(
+        "SELECT COUNT(*) FROM strategies WHERE mangrove_id = ?", ("mg-invalid-config",),
+    ).fetchone()[0]
+    assert rows == 0
+
+
+def test_autonomous_reuses_tested_config_and_persists_resolved_market(
+    temp_db, mock_ai_sdk, monkeypatch,
+):
+    from src.services import backtest_service
+    from src.services import strategy_service as service
+
+    tested = {
+        "initial_balance": 1234,
+        "max_open_positions": 4,
+        "max_risk_per_trade": 0.01,
+        "position_size_calc": "v2",
+        "stop_model": "atr_width_dial",
+        "cooldown_config": {"1h": {}},
+    }
+    monkeypatch.setattr(backtest_service, "flattened_defaults", lambda: dict(tested))
+    mock_ai_sdk.strategies.create.side_effect = lambda request: SimpleNamespace(
+        id="mg-auto-resolved",
+        name=request.name,
+        asset=request.asset,
+        status="inactive",
+        model_dump=lambda: {
+            "id": "mg-auto-resolved",
+            "name": request.name,
+            "asset": request.asset,
+            "status": "inactive",
+            "quote_token": "USD",
+            "market_data_venue": "KRAKEN",
+            "execution_config": dict(request.execution_config),
+        },
+    )
+
+    detail, report = service.create_autonomous(service.StrategyAutonomousRequest(
+        goal="momentum on ETH", asset="ETH", timeframe="1h",
+        candidate_count=5, backtest_lookback_months=3, seed=42,
+    ))
+
+    create_request = mock_ai_sdk.strategies.create.call_args.args[0]
+    assert create_request.execution_config == tested
+    for backtest_call in mock_ai_sdk.backtesting.run.call_args_list:
+        assert backtest_call.args[0].initial_balance == tested["initial_balance"]
+        assert backtest_call.args[0].max_open_positions == tested["max_open_positions"]
+    full_request = mock_ai_sdk.backtesting.submit_async.call_args.args[0]
+    assert full_request.initial_balance == tested["initial_balance"]
+    assert full_request.max_open_positions == tested["max_open_positions"]
+    assert detail.execution_config == tested
+    assert detail.market_context == service.StrategyMarketContext(
+        base_token="ETH", quote_token="USD", market_data_venue="KRAKEN",
+    )
+    assert report["execution_config_source"] == "upstream"
+    assert report["execution_config_verification"] == "verified_against_backtest"
+    assert report["execution_config_mismatch_keys"] == []
+
+
+def test_autonomous_marks_backtest_unverified_when_create_changes_config(
+    temp_db, mock_ai_sdk, monkeypatch,
+):
+    from src.services import backtest_service
+    from src.services import strategy_service as service
+
+    tested = {
+        "initial_balance": 1234,
+        "max_open_positions": 4,
+        "max_risk_per_trade": 0.01,
+        "position_size_calc": "v2",
+        "stop_model": "atr_width_dial",
+        "cooldown_config": {"1h": {}},
+    }
+    monkeypatch.setattr(backtest_service, "flattened_defaults", lambda: dict(tested))
+    mock_ai_sdk.strategies.create.side_effect = lambda request: SimpleNamespace(
+        id="mg-auto-normalized",
+        name=request.name,
+        asset=request.asset,
+        status="inactive",
+        model_dump=lambda: {
+            "id": "mg-auto-normalized",
+            "name": request.name,
+            "asset": request.asset,
+            "status": "inactive",
+            "execution_config": {
+                **request.execution_config,
+                "initial_balance": 2000,
+                "new_risk_default": 0.02,
+            },
+        },
+    )
+
+    detail, report = service.create_autonomous(service.StrategyAutonomousRequest(
+        goal="momentum on ETH", asset="ETH", timeframe="1h",
+        candidate_count=5, backtest_lookback_months=3, seed=42,
+    ))
+
+    assert detail.execution_config["initial_balance"] == 2000
+    assert detail.execution_config["new_risk_default"] == 0.02
+    assert report["tested_execution_config"] == tested
+    assert report["saved_execution_config"]["initial_balance"] == 2000
+    assert report["execution_config_verification"] == "retest_required"
+    assert report["execution_config_mismatch_keys"] == [
+        "initial_balance", "new_risk_default",
+    ]
 
 
 def test_market_configuration_preserves_rules_and_requires_inactive_stateless(temp_db, mock_ai_sdk):
@@ -267,12 +492,24 @@ def test_create_manual_same_rules_twice_returns_existing_strategy(temp_db, mock_
     from src.services.strategy_service import StrategyManualRequest, create_manual
     from src.shared.db.sqlite import get_connection
 
+    calls = {"count": 0}
+
     def _same_upstream(_request):
+        calls["count"] += 1
         m = MagicMock()
         m.id = "mg-existing"
         m.name = getattr(_request, "name", "x")
         m.asset = "ETH"
         m.status = "inactive"
+        m.model_dump.return_value = {
+            "id": "mg-existing",
+            "name": m.name,
+            "asset": "ETH",
+            "status": "inactive",
+            "quote_token": "USD" if calls["count"] == 1 else "EUR",
+            "market_data_venue": "KRAKEN" if calls["count"] == 1 else "COINBASE",
+            "execution_config": {"initial_balance": 1000 * calls["count"]},
+        }
         return m
 
     mock_ai_sdk.strategies.create.side_effect = _same_upstream
@@ -286,6 +523,8 @@ def test_create_manual_same_rules_twice_returns_existing_strategy(temp_db, mock_
 
     assert second.id == first.id
     assert second.mangrove_id == "mg-existing"
+    assert second.market_context == first.market_context
+    assert second.execution_config == first.execution_config
     rows = get_connection().execute(
         "SELECT COUNT(*) FROM strategies WHERE mangrove_id = ?", ("mg-existing",),
     ).fetchone()[0]
