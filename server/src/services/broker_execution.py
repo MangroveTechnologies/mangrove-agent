@@ -9,6 +9,7 @@ from __future__ import annotations
 import inspect as py_inspect
 import json
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -774,19 +775,40 @@ async def _tick(venue, strategy_id):
     payload["execution_state"] = state
     payload["execution_config"]["initial_balance"] = float(route["capital"])
     payload["execution_config"]["initial_cash_balance"] = float(route["capital"])
+    eid = str(uuid.uuid4())
+    evaluation_started = time.monotonic()
+    evaluation_context = {
+        "strategy_id": strategy_id,
+        "evaluation_id": eid,
+        "execution_venue": "robinhood",
+        "base_token": payload.get("base_token"),
+        "quote_token": payload.get("quote_token"),
+        "market_data_venue": payload.get("market_data_venue"),
+        "timeframe": row["timeframe"],
+        "external_execution_mode": "confirmed_v2" if confirmed_v2 else "legacy",
+    }
+    _log.info("broker.evaluation.started", **evaluation_context)
     # All strategy logic, research and sizing remain in Mangrove.
-    if confirmed_v2:
-        observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        external_request = {"contract_version": 2, "observed_at": observed_at, "events": external_events}
-        result = await anyio.to_thread.run_sync(
-            lambda: sdk_method(
-                payload, persist=False, open_positions=positions, external_execution=external_request
+    try:
+        if confirmed_v2:
+            observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            external_request = {"contract_version": 2, "observed_at": observed_at, "events": external_events}
+            result = await anyio.to_thread.run_sync(
+                lambda: sdk_method(
+                    payload, persist=False, open_positions=positions, external_execution=external_request
+                )
             )
+        else:
+            result = await anyio.to_thread.run_sync(
+                lambda: mangrove_ai_client().execution.evaluate_by_object(payload, persist=False, open_positions=positions)
+            )
+    except Exception:
+        # Upstream exception text can contain request/account data.
+        _log.warning(
+            "broker.evaluation.failed", **evaluation_context,
+            duration_ms=int((time.monotonic() - evaluation_started) * 1000),
         )
-    else:
-        result = await anyio.to_thread.run_sync(
-            lambda: mangrove_ai_client().execution.evaluate_by_object(payload, persist=False, open_positions=positions)
-        )
+        raise
     dump = result.model_dump()
     if dump.get("success") is not True:
         raise SdkError("Mangrove evaluation did not succeed; no broker order submitted.")
@@ -821,25 +843,31 @@ async def _tick(venue, strategy_id):
             event_ids, hosted_state, confirmed_positions, receipts,
             expected_state, expected_positions, expected_cursor, broker_revision, external_events,
         )
-    eid = str(uuid.uuid4())
     intents = strategy_service._extract_order_intents(result, strategy_id=strategy_id, tick_id=eid)
     if confirmed_v2 and dump.get("external_execution_disposition") == "duplicate_bar" and (
         intents or any(o.get("status") == "filled" for o in dump.get("new_orders") or [])
     ):
         raise SdkError("Mangrove marked a bar duplicate while returning a new order intent; execution stopped.")
     blocked = bool(pending and intents)
+    duration_ms = int((time.monotonic() - evaluation_started) * 1000)
     trade_log.log_evaluation(
         Evaluation(
             id=eid,
             strategy_id=strategy_id,
             timestamp=trade_log.now_utc(),
-            duration_ms=0,
+            duration_ms=duration_ms,
             status="skipped" if blocked else "ok",
             error_msg="Execution deferred until pending broker orders reconcile." if blocked else None,
             sdk_response=dump,
             order_intents=intents,
             market_snapshot=strategy_service._market_snapshot(dump, asset=row["asset"]),
         )
+    )
+    _log.info(
+        "broker.evaluation.completed", **evaluation_context,
+        response_market_data_venue=dump.get("market_data_venue"),
+        duration_ms=duration_ms, order_count=len(intents),
+        execution_deferred=blocked,
     )
     def commit_ack(reservation=None, deferred_exit=None):
         if ack_data is None:

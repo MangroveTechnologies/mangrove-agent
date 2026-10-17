@@ -939,6 +939,50 @@ def test_broker_route_bypasses_dex_tick(ledger, monkeypatch):
     mocked.assert_called_once_with("s1")
 
 
+@pytest.mark.parametrize("sdk_fails", [False, True])
+async def test_evaluation_telemetry_identifies_feed_without_account_payloads(ledger, monkeypatch, sdk_fails):
+    from src.services import portfolio_risk_service
+    from src.shared.clients import mangrove
+
+    with store.connection() as conn:
+        conn.execute("UPDATE strategies SET market_context_json=? WHERE id='s1'", (
+            json.dumps({"base_token": "BTC", "quote_token": "USD", "market_data_venue": "KRAKEN"}),
+        ))
+    sdk = MagicMock()
+    modeled = {"success": True, "new_orders": [], "market_data_venue": "KRAKEN"}
+    sdk.execution.evaluate_by_object.return_value = SimpleNamespace(new_orders=[], model_dump=lambda: modeled)
+    if sdk_fails:
+        sdk.execution.evaluate_by_object.side_effect = RuntimeError("private-account-payload")
+    monkeypatch.setattr(mangrove, "mangrove_ai_client", lambda: sdk)
+    monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": True})
+    clock = iter([10.0, 10.25])
+    monkeypatch.setattr(execution, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    logger = MagicMock()
+    monkeypatch.setattr(execution, "_log", logger)
+    venue = SimpleNamespace(account=AsyncMock(), quote=AsyncMock(return_value={"ask_price": "100", "bid_price": "100"}),
+                            prepare=AsyncMock(), submit=AsyncMock())
+    if sdk_fails:
+        with pytest.raises(RuntimeError, match="private-account-payload"):
+            await execution._tick(venue, "s1")
+        event = logger.warning.call_args
+        assert event.args == ("broker.evaluation.failed",)
+    else:
+        await execution._tick(venue, "s1")
+        event = logger.info.call_args
+        assert event.args == ("broker.evaluation.completed",)
+        saved = trade_log.list_evaluations("s1", limit=1)[0]
+        assert saved.duration_ms == 250
+        assert saved.id == event.kwargs["evaluation_id"]
+        assert event.kwargs["response_market_data_venue"] == "KRAKEN"
+    assert event.kwargs["market_data_venue"] == "KRAKEN"
+    assert event.kwargs["quote_token"] == "USD"
+    assert event.kwargs["execution_venue"] == "robinhood"
+    assert event.kwargs["duration_ms"] == 250
+    assert "private-account-payload" not in str(logger.mock_calls)
+    assert "account_number" not in str(logger.mock_calls)
+    venue.submit.assert_not_awaited()
+
+
 async def test_configuration_requires_inactive_and_no_execution_history(ledger):
     allocation = {"asset_class": "crypto", "capital": "200", "max_order_usd": "100", "slippage_pct": "0.0025"}
     venue = SimpleNamespace(
