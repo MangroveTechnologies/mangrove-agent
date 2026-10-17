@@ -1,0 +1,639 @@
+{
+  "cancel_advanced_order": {
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "account_number": {
+          "description": "Brokerage account that owns the advanced order. Must come from the user or be clearly implied \u2014 never default from get_accounts. Must be agentic_allowed=true. The upstream rejects mismatches against the order's owning account.",
+          "type": "string"
+        },
+        "order_id": {
+          "description": "Advanced-order UUID from get_advanced_orders. Must live in account_number.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_number",
+        "order_id"
+      ],
+      "type": "object"
+    }
+  },
+  "get_advanced_orders": {
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "account_number": {
+          "description": "Brokerage account number. Must come from the user or be clearly implied \u2014 never default from get_accounts.",
+          "type": "string"
+        },
+        "contingency_type": {
+          "description": "Filter by kind: 'oco', 'oto', or 'fx_at_trade'.",
+          "type": "string"
+        },
+        "created_at_gte": {
+          "description": "Lower bound (inclusive). ISO 8601 UTC or YYYY-MM-DD; naive values are interpreted as UTC.",
+          "type": "string"
+        },
+        "cursor": {
+          "description": "Pagination cursor. Omit for the first page; for the next page, pass the prior response's next value back verbatim.",
+          "type": "string"
+        },
+        "order_id": {
+          "description": "Filter to a single advanced order by its UUID (the id from a prior result).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_number"
+      ],
+      "type": "object"
+    }
+  },
+  "place_advanced_order": {
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "account_number": {
+          "description": "Brokerage account number. Must come from the user or be clearly implied \u2014 never default from get_accounts. Must be agentic_allowed=true; non-agentic accounts are rejected.",
+          "type": "string"
+        },
+        "market_hours": {
+          "description": "'regular_hours' \u2014 the only session OCO supports; extended_hours and all_day_hours are rejected. Both legs share it.",
+          "type": "string"
+        },
+        "quantity": {
+          "description": "Whole-share quantity. Both legs use the same quantity.",
+          "type": "string"
+        },
+        "ref_id": {
+          "description": "Idempotency key (UUID) for the advanced order. Generate once per logical order and re-send on transient retries; a fresh key is generated when omitted.",
+          "type": "string"
+        },
+        "side": {
+          "description": "'buy' or 'sell'. Both legs use this side (an exit for an existing position: 'sell' to protect a long, 'buy' to cover a short).",
+          "type": "string"
+        },
+        "stop_loss_stop_price": {
+          "description": "Stop trigger price of the stop-loss leg. The stop-loss leg is always a stop-market order \u2014 there is no stop-limit option for it.",
+          "type": "string"
+        },
+        "symbol": {
+          "description": "Stock symbol. Both OCO legs are on this symbol.",
+          "type": "string"
+        },
+        "take_profit_limit_price": {
+          "description": "Limit price of the take-profit leg.",
+          "type": "string"
+        },
+        "time_in_force": {
+          "description": "Can be 'gfd' or 'gtc'. Both legs share it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_number",
+        "symbol",
+        "side",
+        "quantity",
+        "take_profit_limit_price",
+        "stop_loss_stop_price"
+      ],
+      "type": "object"
+    }
+  },
+  "place_crypto_order": {
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "dollar_amount": {
+          "description": "USD notional (e.g. '100.00'). Valid with every order type. Provide exactly one of quantity or dollar_amount. For market, quantity is derived server-side: a buy is sized at the current market price \u2014 the same sizing as the app \u2014 so the typical debit is ~dollar_amount, with a worst case up to ~1% more if the price moves before execution (the buy collar); a sell is likewise sized at the current market price, so the typical credit is ~dollar_amount, with a worst case up to ~5% less if the price moves before execution (the sell collar). For stop_loss, quantity is derived from dollar_amount at stop_price (the trigger price) when the order is placed, not the live quote \u2014 the triggered market order executes near the trigger, so the typical fill notional is ~dollar_amount, with a worst case up to the collar worse (a higher debit for buy stops, a lower credit for sell stops). For limit and stop_limit, quantity is derived from dollar_amount at limit_price when the order is placed \u2014 fills execute at the limit price or better, so a buy's debit is capped at dollar_amount (no collar buffer; on fee-priced accounts fee rounding can add at most one cent) and a sell's credit is at least the derived quantity's worth at the limit, minus any fee. On fee-priced accounts a buy's quantity is sized from the fee-netted amount so the total debit targets dollar_amount, and a sell's fee is deducted from the credit.",
+          "type": "string"
+        },
+        "limit_price": {
+          "description": "Limit price; required for limit and stop_limit.",
+          "type": "string"
+        },
+        "quantity": {
+          "description": "Asset quantity to trade (e.g. amount of BTC). Provide exactly one of quantity or dollar_amount. Crypto is measured in coins/units, not shares \u2014 when speaking to the user, including order confirmations, NEVER call a crypto quantity 'shares' ('shares' is equity terminology); state the amount of the asset, e.g. '0.001542 ETH'.",
+          "type": "string"
+        },
+        "ref_id": {
+          "description": "Idempotency key (UUID). Generate once per logical order and re-send the SAME value on retries of transient failures \u2014 the upstream deduplicates by ref_id. Omitting falls back to a server-generated key (loses client\u2194gateway idempotency). Use a new value only when the user wants a new order.",
+          "type": "string"
+        },
+        "rhs_account_number": {
+          "description": "Numeric brokerage account number (the 'rhs_account_number' field on get_accounts entries \u2014 distinct from the alphanumeric 'account_number'). Must be an agentic-enabled crypto account. Required. Do NOT pass rhc_account_number (the linked crypto account, labeled 'Crypto Account' on get_accounts) \u2014 that is a different identifier space and will return no crypto account found.",
+          "type": "string"
+        },
+        "side": {
+          "description": "'buy' or 'sell'. Required.",
+          "type": "string"
+        },
+        "stop_price": {
+          "description": "Stop trigger price; required for stop_loss and stop_limit.",
+          "type": "string"
+        },
+        "symbol": {
+          "description": "Crypto symbol (e.g. 'BTC', 'ETH', or 'BTC-USD'). Resolved to a currency pair before the order is placed. Required.",
+          "type": "string"
+        },
+        "tax_lots": {
+          "description": "Optional specified-lot selection for a SELL order. To sell specific tax lots instead of the default disposal, pass {open_lot_id, quantity} objects whose quantities sum to the order quantity, with open_lot_id taken from the account's crypto tax lots (see the request guide). Omit for the default. Sell only; quantity-based orders only (not dollar_amount); at most 50 lots; only when the lot listing reports selection_state 'enabled'. Not every account can select lots: if the tool rejects tax_lots as not available, tell the user and offer the default disposal instead.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "open_lot_id": {
+                "description": "open_lot_id of the open tax lot to sell, from get_crypto_tax_lots.",
+                "type": "string"
+              },
+              "quantity": {
+                "description": "Units to sell from this lot as a decimal string; at most the lot's quantity_available (or exactly quantity_to_sell from a strategy result).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "open_lot_id",
+              "quantity"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "time_in_force": {
+          "description": "Allowed values depend on type. market and limit: 'gtc' (good till canceled) only \u2014 market orders execute immediately so a bounded duration does not apply, and limit orders are always for 90 days; omit this field or pass 'gtc' for both. stop_loss and stop_limit: 'gtc' (good for 90 days), 'gfd' (good for day), 'gfw' (good for 7 days), or 'gfm' (good for 30 days). If omitted, defaults to gtc for market and limit, and gfd for stop_loss and stop_limit. 'ioc' is NEVER supported for crypto orders.",
+          "type": "string"
+        },
+        "type": {
+          "description": "'market', 'limit', 'stop_loss', or 'stop_limit'. Required. 'stop_loss' is a stop-triggered market order \u2014 despite the name it applies to buy stops too; the equity/option tools call the same concept 'stop_market'. ALWAYS call these by their app names when speaking to the user, including when listing what types are supported: 'stop_loss' is a 'stop order' and 'stop_limit' a 'stop limit order'; the raw values are tool inputs only. A user asking for a 'stop loss', 'stop order', or 'stop market' order means this stop_loss type \u2014 do not ask which stop type (but a limit price given alongside the trigger makes it stop_limit); ask only when the phrasing names no type, e.g. a bare 'stop' or 'protect my position'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rhs_account_number",
+        "symbol",
+        "side",
+        "type"
+      ],
+      "type": "object"
+    }
+  },
+  "place_equity_order": {
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "account_number": {
+          "description": "Brokerage account number. Must come from the user or be clearly implied \u2014 never default from get_accounts. Must be agentic_allowed=true; non-agentic accounts are rejected.",
+          "type": "string"
+        },
+        "dollar_amount": {
+          "description": "USD notional (e.g. '100.00'). Only valid with type=market.",
+          "type": "string"
+        },
+        "limit_price": {
+          "description": "Limit price; required for limit or stop_limit.",
+          "type": "string"
+        },
+        "market_hours": {
+          "description": "'regular_hours' (default, 9:30\u201316:00 ET), 'extended_hours' (pre-/post-market), or 'all_day_hours' (the 24 Hour Market / overnight session). extended_hours and all_day_hours execute limit orders only \u2014 market, stop_market, and stop_limit are regular_hours-only and are rejected if tagged to another session.",
+          "type": "string"
+        },
+        "quantity": {
+          "description": "Number of shares. Decimals (fractional) allowed for market + regular_hours only.",
+          "type": "string"
+        },
+        "ref_id": {
+          "description": "Idempotency key (UUID). Generate once per logical order and re-send on retry \u2014 the upstream deduplicates by ref_id. Omitting falls back to a server-generated key (loses client\u2194gateway idempotency).",
+          "type": "string"
+        },
+        "side": {
+          "description": "'buy' or 'sell'.",
+          "type": "string"
+        },
+        "stop_price": {
+          "description": "Stop trigger price; required for stop_market or stop_limit.",
+          "type": "string"
+        },
+        "symbol": {
+          "description": "Stock symbol.",
+          "type": "string"
+        },
+        "tax_lots": {
+          "description": "Optional specified-lot selection for a SELL order. To sell specific tax lots instead of the default FIFO cost basis, pass the exact lots as {open_lot_id, quantity} objects, where open_lot_id comes from get_equity_tax_lots and the quantities sum to the order quantity. Omit for default FIFO. Sell only; at most 30 lots; US accounts only. Not allowed with dollar_amount, stop_market/stop_limit, all_day_hours, or fractional-share limit orders.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "open_lot_id": {
+                "description": "open_lot_id of the open tax lot to sell, from get_equity_tax_lots.",
+                "type": "string"
+              },
+              "quantity": {
+                "description": "Shares to sell from this lot as a decimal string; at most the lot's quantity_available.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "open_lot_id",
+              "quantity"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "time_in_force": {
+          "description": "'gfd' or 'gtc'. Default: gfd.",
+          "type": "string"
+        },
+        "type": {
+          "description": "'market', 'limit', 'stop_market', or 'stop_limit'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_number",
+        "symbol",
+        "side",
+        "type"
+      ],
+      "type": "object"
+    }
+  },
+  "place_option_order": {
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "account_number": {
+          "description": "Brokerage account number. Must come from the user or be clearly implied \u2014 never default from get_accounts. Must be agentic_allowed=true.",
+          "type": "string"
+        },
+        "direction": {
+          "description": "Net direction of the whole order: 'debit' (you pay the net premium) or 'credit' (you receive it). Required with 2 or more legs; for one leg it is derived from that leg's side, so omit it.",
+          "type": "string"
+        },
+        "legs": {
+          "description": "1 to 4 legs, all on the same underlying and each a different contract. Several legs are filled together as one strategy. Should match the legs the user reviewed.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "option_id": {
+                "description": "Option instrument UUID (from get_option_instruments).",
+                "type": "string"
+              },
+              "position_effect": {
+                "description": "'open' (new position) or 'close' (existing position). To close a long use sell; to close a short use buy.",
+                "type": "string"
+              },
+              "ratio_quantity": {
+                "description": "Contracts for this leg per unit of the order's quantity. Defaults to 1, which is what standard spreads, condors, calendars, and rolls use. Must be 1 on a single-leg order; across legs the ratios must be in lowest terms (1:2, not 2:4).",
+                "type": "integer"
+              },
+              "side": {
+                "description": "'buy' or 'sell'.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "option_id",
+              "side",
+              "position_effect"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "market_hours": {
+          "description": "'regular_hours' (default), 'regular_curb_hours', or 'regular_curb_overnight_hours'. Non-limit-immediate orders only place in regular_hours. CURB requires an index chain with extended_hours_state='enabled'.",
+          "type": "string"
+        },
+        "price": {
+          "description": "Limit price. Per contract for one leg; with several legs it is the net premium of the whole strategy per unit of quantity, always positive \u2014 direction says whether it is paid or received. Required for limit/stop_limit; must be omitted for market/stop_market.",
+          "type": "string"
+        },
+        "quantity": {
+          "description": "Positive integer contract count. With several legs it counts whole strategies \u2014 each leg fills quantity \u00d7 its ratio_quantity contracts.",
+          "type": "string"
+        },
+        "ref_id": {
+          "description": "Idempotency key (UUID). Generate once per logical order and re-send on retry. Omitting falls back to a server-generated key.",
+          "type": "string"
+        },
+        "stop_price": {
+          "description": "Stop trigger price per contract. Required for stop_limit/stop_market; must be omitted for limit/market.",
+          "type": "string"
+        },
+        "time_in_force": {
+          "description": "'gfd' (default) or 'gtc'. Market orders must be 'gfd'.",
+          "type": "string"
+        },
+        "type": {
+          "description": "'limit' (default), 'market', 'stop_limit', or 'stop_market'. Should match the type the user reviewed. Only 'limit' is available with 2 or more legs.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_number",
+        "legs",
+        "quantity"
+      ],
+      "type": "object"
+    }
+  },
+  "preview_crypto_order": {
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "dollar_amount": {
+          "description": "USD notional (e.g. '100.00'). Valid with every order type. Provide exactly one of quantity or dollar_amount. For market, quantity is derived server-side: a buy is sized at the current market price \u2014 the same sizing as the app \u2014 so the typical debit is ~dollar_amount, with a worst case up to ~1% more if the price moves before execution (the buy collar); a sell is likewise sized at the current market price, so the typical credit is ~dollar_amount, with a worst case up to ~5% less if the price moves before execution (the sell collar). For stop_loss, quantity is derived from dollar_amount at stop_price (the trigger price) when the order is placed, not the live quote \u2014 the triggered market order executes near the trigger, so the typical fill notional is ~dollar_amount, with a worst case up to the collar worse (a higher debit for buy stops, a lower credit for sell stops). For limit and stop_limit, quantity is derived from dollar_amount at limit_price when the order is placed \u2014 fills execute at the limit price or better, so a buy's debit is capped at dollar_amount (no collar buffer; on fee-priced accounts fee rounding can add at most one cent) and a sell's credit is at least the derived quantity's worth at the limit, minus any fee. On fee-priced accounts a buy's quantity is sized from the fee-netted amount so the total debit targets dollar_amount, and a sell's fee is deducted from the credit.",
+          "type": "string"
+        },
+        "limit_price": {
+          "description": "Limit price; required for limit and stop_limit.",
+          "type": "string"
+        },
+        "quantity": {
+          "description": "Asset quantity to trade (e.g. amount of BTC). Provide exactly one of quantity or dollar_amount. Crypto is measured in coins/units, not shares \u2014 when speaking to the user, including order confirmations, NEVER call a crypto quantity 'shares' ('shares' is equity terminology); state the amount of the asset, e.g. '0.001542 ETH'.",
+          "type": "string"
+        },
+        "rhs_account_number": {
+          "description": "Numeric brokerage account number (the 'rhs_account_number' field on get_accounts entries \u2014 distinct from the alphanumeric 'account_number'). Must be an agentic-enabled crypto account. Required. Do NOT pass rhc_account_number (the linked crypto account, labeled 'Crypto Account' on get_accounts) \u2014 that is a different identifier space and will return no crypto account found.",
+          "type": "string"
+        },
+        "side": {
+          "description": "'buy' or 'sell'. Required.",
+          "type": "string"
+        },
+        "stop_price": {
+          "description": "Stop trigger price; required for stop_loss and stop_limit.",
+          "type": "string"
+        },
+        "symbol": {
+          "description": "Crypto symbol (e.g. 'BTC', 'ETH', or 'BTC-USD'). Resolved to a currency pair before the preview. Required.",
+          "type": "string"
+        },
+        "tax_lots": {
+          "description": "Optional specified-lot selection for a SELL order. To sell specific tax lots instead of the default disposal, pass {open_lot_id, quantity} objects whose quantities sum to the order quantity, with open_lot_id taken from the account's crypto tax lots (see the request guide). Omit for the default. Sell only; quantity-based orders only (not dollar_amount); at most 50 lots; only when the lot listing reports selection_state 'enabled'. Not every account can select lots: if the tool rejects tax_lots as not available, tell the user and offer the default disposal instead.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "open_lot_id": {
+                "description": "open_lot_id of the open tax lot to sell, from get_crypto_tax_lots.",
+                "type": "string"
+              },
+              "quantity": {
+                "description": "Units to sell from this lot as a decimal string; at most the lot's quantity_available (or exactly quantity_to_sell from a strategy result).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "open_lot_id",
+              "quantity"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "time_in_force": {
+          "description": "Allowed values depend on type. market and limit: 'gtc' (good till canceled) only \u2014 market orders execute immediately so a bounded duration does not apply, and limit orders are always for 90 days; omit this field or pass 'gtc' for both. stop_loss and stop_limit: 'gtc' (good for 90 days), 'gfd' (good for day), 'gfw' (good for 7 days), or 'gfm' (good for 30 days). If omitted, defaults to gtc for market and limit, and gfd for stop_loss and stop_limit. 'ioc' is NEVER supported for crypto orders.",
+          "type": "string"
+        },
+        "type": {
+          "description": "'market', 'limit', 'stop_loss', or 'stop_limit'. Required. 'stop_loss' is a stop-triggered market order \u2014 despite the name it applies to buy stops too; the equity/option tools call the same concept 'stop_market'. ALWAYS call these by their app names when speaking to the user, including when listing what types are supported: 'stop_loss' is a 'stop order' and 'stop_limit' a 'stop limit order'; the raw values are tool inputs only. A user asking for a 'stop loss', 'stop order', or 'stop market' order means this stop_loss type \u2014 do not ask which stop type (but a limit price given alongside the trigger makes it stop_limit); ask only when the phrasing names no type, e.g. a bare 'stop' or 'protect my position'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rhs_account_number",
+        "symbol",
+        "side",
+        "type"
+      ],
+      "type": "object"
+    }
+  },
+  "review_advanced_order": {
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "account_number": {
+          "description": "Brokerage account number. Must come from the user or be clearly implied \u2014 never default from get_accounts. Must be agentic_allowed=true; non-agentic accounts are rejected.",
+          "type": "string"
+        },
+        "market_hours": {
+          "description": "'regular_hours' \u2014 the only session OCO supports; extended_hours and all_day_hours are rejected.",
+          "type": "string"
+        },
+        "quantity": {
+          "description": "Whole-share quantity. Both legs use the same quantity.",
+          "type": "string"
+        },
+        "side": {
+          "description": "'buy' or 'sell'. Both legs use this side.",
+          "type": "string"
+        },
+        "stop_loss_stop_price": {
+          "description": "Stop trigger price of the stop-loss leg. The stop-loss leg is always a stop-market order \u2014 there is no stop-limit option for it.",
+          "type": "string"
+        },
+        "symbol": {
+          "description": "Stock symbol. Both OCO legs are on this symbol.",
+          "type": "string"
+        },
+        "take_profit_limit_price": {
+          "description": "Limit price of the take-profit leg.",
+          "type": "string"
+        },
+        "time_in_force": {
+          "description": "Can be 'gfd' or 'gtc'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_number",
+        "symbol",
+        "side",
+        "quantity",
+        "take_profit_limit_price",
+        "stop_loss_stop_price"
+      ],
+      "type": "object"
+    }
+  },
+  "review_equity_order": {
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "account_number": {
+          "description": "Brokerage account number. Must come from the user or be clearly implied \u2014 never default from get_accounts. Must be agentic_allowed=true; non-agentic accounts are rejected.",
+          "type": "string"
+        },
+        "dollar_amount": {
+          "description": "USD notional (e.g. '100.00'). Only valid with type=market.",
+          "type": "string"
+        },
+        "limit_price": {
+          "description": "Limit price; required for limit or stop_limit.",
+          "type": "string"
+        },
+        "market_hours": {
+          "description": "'regular_hours' (default, 9:30\u201316:00 ET), 'extended_hours' (pre-/post-market), or 'all_day_hours' (the 24 Hour Market / overnight session). extended_hours and all_day_hours execute limit orders only \u2014 market, stop_market, and stop_limit are regular_hours-only and are rejected if tagged to another session.",
+          "type": "string"
+        },
+        "quantity": {
+          "description": "Number of shares. Decimals (fractional) allowed for market + regular_hours only.",
+          "type": "string"
+        },
+        "side": {
+          "description": "'buy' or 'sell'.",
+          "type": "string"
+        },
+        "stop_price": {
+          "description": "Stop trigger price; required for stop_market or stop_limit.",
+          "type": "string"
+        },
+        "symbol": {
+          "description": "Stock symbol.",
+          "type": "string"
+        },
+        "tax_lots": {
+          "description": "Optional specified-lot selection for a SELL order. To sell specific tax lots instead of the default FIFO cost basis, pass the exact lots as {open_lot_id, quantity} objects, where open_lot_id comes from get_equity_tax_lots and the quantities sum to the order quantity. Omit for default FIFO. Sell only; at most 30 lots; US accounts only. Not allowed with dollar_amount, stop_market/stop_limit, all_day_hours, or fractional-share limit orders.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "open_lot_id": {
+                "description": "open_lot_id of the open tax lot to sell, from get_equity_tax_lots.",
+                "type": "string"
+              },
+              "quantity": {
+                "description": "Shares to sell from this lot as a decimal string; at most the lot's quantity_available.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "open_lot_id",
+              "quantity"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "time_in_force": {
+          "description": "'gfd' (good for day) or 'gtc' (good till cancelled). Default: gfd.",
+          "type": "string"
+        },
+        "type": {
+          "description": "'market', 'limit', 'stop_market', or 'stop_limit'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_number",
+        "symbol",
+        "side",
+        "type"
+      ],
+      "type": "object"
+    }
+  },
+  "review_option_order": {
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "account_number": {
+          "description": "Brokerage account number. Must come from the user or be clearly implied \u2014 never default from get_accounts. Must be agentic_allowed=true.",
+          "type": "string"
+        },
+        "chain_symbol": {
+          "description": "Underlying ticker (e.g. 'AAPL', 'SPXW'). Supply alongside underlying_type to include fees and collateral in the response \u2014 always do so when known.",
+          "type": "string"
+        },
+        "direction": {
+          "description": "Net direction of the whole order: 'debit' (you pay the net premium) or 'credit' (you receive it). Required with 2 or more legs; for one leg it is derived from that leg's side, so omit it.",
+          "type": "string"
+        },
+        "legs": {
+          "description": "1 to 4 legs, all on the same underlying and each a different contract. Several legs are filled together as one strategy.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "option_id": {
+                "description": "Option instrument UUID (from get_option_instruments).",
+                "type": "string"
+              },
+              "position_effect": {
+                "description": "'open' (new position) or 'close' (existing position). To close a long use sell; to close a short use buy.",
+                "type": "string"
+              },
+              "ratio_quantity": {
+                "description": "Contracts for this leg per unit of the order's quantity. Defaults to 1, which is what standard spreads, condors, calendars, and rolls use. Must be 1 on a single-leg order; across legs the ratios must be in lowest terms (1:2, not 2:4).",
+                "type": "integer"
+              },
+              "side": {
+                "description": "'buy' or 'sell'.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "option_id",
+              "side",
+              "position_effect"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "market_hours": {
+          "description": "'regular_hours' (default), 'regular_curb_hours', or 'regular_curb_overnight_hours'. Extended-hours sessions only accept limit+immediate. CURB requires an index chain with extended_hours_state='enabled' (per get_option_chains); rejection surfaces at place time.",
+          "type": "string"
+        },
+        "price": {
+          "description": "Limit price (e.g. '1.50'). Per contract for one leg; with several legs it is the net premium of the whole strategy per unit of quantity, always positive \u2014 direction says whether it is paid or received. Required for limit/stop_limit; must be omitted for market/stop_market.",
+          "type": "string"
+        },
+        "quantity": {
+          "description": "Positive integer contract count. With several legs it counts whole strategies \u2014 each leg fills quantity \u00d7 its ratio_quantity contracts.",
+          "type": "string"
+        },
+        "stop_price": {
+          "description": "Stop trigger price per contract. Required for stop_limit/stop_market; must be omitted for limit/market. For sell-side stop_market, must be below the current ask.",
+          "type": "string"
+        },
+        "time_in_force": {
+          "description": "'gfd' (default) or 'gtc'. Market orders must be 'gfd'.",
+          "type": "string"
+        },
+        "type": {
+          "description": "'limit' (default), 'market', 'stop_limit', or 'stop_market'. Only 'limit' is available with 2 or more legs.",
+          "type": "string"
+        },
+        "underlying_type": {
+          "description": "'equity' or 'index'. Required alongside chain_symbol to enable the fee + collateral fetch.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_number",
+        "legs",
+        "quantity"
+      ],
+      "type": "object"
+    }
+  }
+}

@@ -27,6 +27,24 @@ this document as a frozen broker API specification. The encrypted grant persists
 across restarts. The host should run one agent worker against this data directory;
 multiple independent processes must not concurrently refresh the same OAuth grant.
 
+## Direct Robinhood MCP tools
+
+After the local API key and Robinhood OAuth grant are configured, the Agent's
+MCP `tools/list` exposes the current Robinhood catalog under names prefixed with
+`robinhood_mcp__`. The names, input/output schemas, descriptions, and annotations
+come from Robinhood's live catalog. Calls are validated against a freshly fetched
+schema and forwarded once. The Agent does not retry a call whose response is
+lost; check Robinhood's order history before repeating a call whose outcome is
+unclear. Robinhood's own account scopes, previews, approval requirements, and
+tool behavior remain in force.
+
+Direct Robinhood MCP calls are not Mangrove strategy executions. Their orders,
+fills, watchlist changes, alerts, and other effects are not automatically linked
+to a local strategy or added to its managed order journal. Use the managed
+strategy route below for orders a Mangrove strategy owns. A local API key is
+required to list or call forwarded tools, and a Robinhood OAuth grant is also
+required. Without an authenticated live catalog, forwarded tools are not listed.
+
 ## Configure a Mangrove strategy
 
 1. Use Mangrove's existing research, create, and backtest tools to prepare an
@@ -165,9 +183,18 @@ liquidated positions are not automatically reconciled into the strategy book.
 
 ## Initial scope and limits
 
-- Long-only spot crypto and whole-share equities. Strategy entries and exits use
-  limit orders. Crypto quantities round down to venue increments. Fractional
-  equity intent is rejected.
+- Direct `robinhood_mcp__*` calls expose Robinhood's current MCP tool catalog,
+  including account/portfolio reads, watchlists, market data, equity, options,
+  crypto, scanners, alerts, charting, approvals, and broker order tools. The
+  catalog is authoritative for each direct call. Crypto transfers, staking, and
+  lending are not part of Robinhood's agent MCP surface.
+- Managed Mangrove strategies remain narrower: long spot crypto and whole-share
+  equities, with marketable-limit protection expressed as limit orders. Crypto
+  quantity rounds down to venue increments; fractional equity intent is
+  rejected. Strategy routing does not support market, dollar-based, equity
+  stop-market/stop-limit, crypto stop-limit, options, or OCO strategy orders.
+  Native crypto `stop_loss` protection below is an explicit hosted stop-template
+  lifecycle, not a general strategy order type.
 - Crossed quotes (bid greater than ask) are rejected before preview or placement.
 - Equity placement is restricted to regular weekday market hours. Fresh quotes,
   tradability, and broker pre-trade checks must also pass. Crypto pairs must support

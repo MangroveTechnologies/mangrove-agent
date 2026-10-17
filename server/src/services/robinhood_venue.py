@@ -2,7 +2,9 @@
 
 Mangrove supplies symbols, direction, quantity and exit logic. This adapter
 handles broker eligibility, quote precision, order review and order state.
-Only long spot crypto and whole-share equities with limit prices are supported.
+Managed strategies support long spot crypto and whole-share equities with limit
+orders, plus opt-in hosted crypto stop templates. Other Robinhood MCP tools and
+order types are exposed separately through the authenticated direct MCP proxy.
 """
 
 from __future__ import annotations
