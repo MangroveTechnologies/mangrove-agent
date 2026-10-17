@@ -594,6 +594,24 @@
         "type": "object"
       }
     },
+    "agent_list_venue_protection": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
     "agent_reconcile_venue_orders": {
       "access": "auth",
       "inputSchema": {
