@@ -12,7 +12,7 @@ uses-tools: [list_sweeps, get_sweep, find_sweep_runs, list_run_filters, get_swee
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/sweep-results/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
 
-These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
+These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. When a remote Oracle experiment/result reader is unavailable, the authenticated local agent_list_oracle_experiments and agent_list_oracle_results tools can discover experiment summaries and read bounded result pages only. They do not provide sweep-specific filtering, ranking, or mutation; never present them as equivalent to a missing remote tool. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
 
 # A sweep has no winner
 
@@ -47,6 +47,21 @@ same labels under `window`; strategy-composition has the full protocol for a bui
 `list_run_filters` says which assets, candle sizes and entry triggers a sweep's runs
 actually carry. Read it before filtering on one of them, because a value nothing carries
 comes back as an empty page that reads exactly like a search with nothing good in it.
+
+Use only filters the advertised receiver schema supports. Do not send a filter through an
+SDK/REST path unless that caller's published request model exposes it; an accepted method
+argument is not evidence that the server applies it. If a requested filter is unavailable,
+say that the filtered search cannot be completed here rather than dropping it or ranking an
+incomplete page. When the receiver does not advertise experiment/result readers, the
+authenticated local `agent_list_oracle_experiments` and `agent_list_oracle_results` tools can
+discover experiment summaries and inspect bounded result pages. They do not implement
+sweep-run filters, sweep-specific ranking, or sweep-run reconstruction, so they cannot
+replace `find_sweep_runs` or `get_sweep_run`.
+
+Before starting a search, inspect the deployed MCP catalog. If `find_sweep_runs` is absent,
+do not call it just because it appears in this skill's source list. Use a documented
+published SDK/REST path only when its request model supports the full requested filter set
+and pagination; otherwise report that search capability as unavailable.
 
 Execution values -- the reward factor a run used, its cooldown, its ATR period -- can only
 be filtered inside ONE sweep. Naming one without an experiment_id is refused rather than
