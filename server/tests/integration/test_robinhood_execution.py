@@ -226,6 +226,20 @@ def test_confirmed_v2_ack_receipt_is_bound_to_broker_event(ledger):
         },
     ) is False
     assert not any(item["id"] == "must-not-be-reserved" for item in store.orders("s1"))
+    with pytest.raises(SdkError, match="duplicate acknowledgement cannot add a new deferred exit"):
+        store.acknowledge_confirmed_close_events(
+            "s1", [event["event_id"]], next_state, open_positions=[{"id": "p1", "open": True}],
+            expected_state=raw_state, expected_open_positions=raw_positions,
+            expected_applied_through=0, expected_broker_revision=revision,
+            receipts=[receipt], submitted_events=events,
+            deferred_exit={
+                "id": "must-not-be-deferred", "position_id": "p1", "evaluation_id": "eval",
+                "engine_order_id": "changed-exit", "decision_quantity": "1",
+                "intent_json": intent(side="sell", qty=1, order="changed-exit").model_dump_json(),
+                "position_template": {"id": "p1"}, "route_fingerprint": store.route_fingerprint("s1"),
+            },
+        )
+    assert store.deferred_exits("s1") == []
 
 
 def test_empty_confirmed_v2_ack_and_order_reservation_commit_together(ledger):
@@ -1167,8 +1181,8 @@ async def test_strategy_reads_expose_broker_mandate_without_account_ids(ledger):
 
     expected = {
         "venue": "robinhood", "asset_class": "crypto", "capital": "1000",
-            "max_order_usd": "500", "slippage_pct": "0.0025",
-            "external_execution_mode": "legacy", "native_stop_loss_enabled": False,
+        "max_order_usd": "500", "slippage_pct": "0.0025",
+        "external_execution_mode": "legacy", "native_stop_loss_enabled": False,
     }
     assert strategy_service.get_strategy("s1").execution_venue.model_dump() == expected
     assert next(s for s in strategy_service.list_strategies() if s.id == "s1").execution_venue.model_dump() == expected
