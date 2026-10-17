@@ -39,6 +39,7 @@ A local AI trading agent that:
 - Runs live strategies on APScheduler cron jobs. Same evaluator path for paper and live.
 - Executes live DEX swaps through [MangroveMarkets](https://github.com/MangroveTechnologies/MangroveMarkets) — 1inch routing across 10 EVM chains (Ethereum, Base, Arbitrum, Polygon, Optimism, BNB, Avalanche, zkSync Era, Gnosis, Linea; the agent defaults to Base). Client-side signing; the routing server never touches your keys.
 - Trades on **Kraken** too, with two connection modes: **bring-your-own-key** (`/setup-kraken` — a least-privilege API key that stays on your machine and talks to Kraken directly) or **keyless OAuth** (`/connect-kraken` — consent once in a browser, no key to manage).
+- Connects **Robinhood** through its official MCP and an Agent-owned OAuth grant. Authenticated MCP clients can discover and call Robinhood's advertised tools. Mangrove strategies use the managed execution adapter, with confirmed-fill reconciliation and a narrower supported order lifecycle. See [Robinhood setup, tool access, and execution limits](docs/robinhood-execution.md).
 - Logs every evaluation and trade — DEX and CEX — to local SQLite for a full audit trail.
 
 Full platform documentation and the trading knowledge base live at **https://mangrove.io/docs** (KB: https://mangrove.io/knowledge-base) — the agent's `kb_search` tool queries the same corpus.
