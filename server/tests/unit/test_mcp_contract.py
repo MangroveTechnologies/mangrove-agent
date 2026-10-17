@@ -99,6 +99,22 @@ def test_binding_classifications_and_hidden_rest_meter():
     assert checks.check_bindings(bindings, {"read", "kb", "wallet"}, policy, upstream)
 
 
+def test_deployed_catalog_is_a_validated_observation_separate_from_expected_snapshot():
+    observation = checks.read_json("deployed.json")
+    deployed_names = checks.validate_deployed_observation(observation)
+    expected_names = set(checks.read_json("upstream.json")["tools"])
+    skill_names = checks.skill_tool_references()
+
+    assert len(deployed_names) == observation["tool_count"]
+    assert expected_names - deployed_names
+    assert skill_names - deployed_names
+    assert len(skill_names - deployed_names) <= len(expected_names - deployed_names)
+
+    malformed = {**observation, "tool_count": observation["tool_count"] + 1}
+    with pytest.raises(ValueError, match="Invalid deployed catalog tool names or count"):
+        checks.validate_deployed_observation(malformed)
+
+
 SOURCE = '''
 from src.shared.clients.mangrove import mangrove_ai_client as backend
 @server.tool()
@@ -394,6 +410,8 @@ def test_synced_guidance_preserves_server_tool_names():
         assert 'create_strategy_manual' not in result
         assert 'Not in mangrove-agent yet' not in result
         assert 'Discover current tools' in result
+        assert 'agent_list_oracle_experiments' in result
+        assert 'do not provide sweep-specific filtering' in result
         assert module.render_skill('fixture', source, available) == result
         unavailable = module.render_skill('fixture', source, {'query_signal_behavior'})
         assert 'uses-tools: [query_signal_behavior]' in unavailable

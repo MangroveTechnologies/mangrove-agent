@@ -16,10 +16,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import anyio
 from httpx import HTTPStatusError
 from mangrove_ai.exceptions import APIError as AIAPIError
 from mangrove_markets.exceptions import APIError as MarketsAPIError
 from mcp.server.fastmcp import FastMCP
+from pydantic import StrictInt
 
 from src.mcp.registry import ToolEntry, ToolParam, clear_tools, register_tool
 from src.shared.auth.middleware import get_request_api_key, has_valid_api_key
@@ -109,6 +111,7 @@ def register(server: FastMCP):
     _register_strategy(server)
     from src.mcp.broker_tools import register as register_brokers
     register_brokers(server)
+    _register_oracle_reads(server)
     _register_logs(server)
     _register_x402_spend(server)
     _register_hello_mangrove(server)
@@ -146,6 +149,89 @@ def _register_discovery(server: FastMCP) -> None:
         description="MCP tool catalog (name, tier, params, pricing). Free, no auth.",
         access="free",
         parameters=[],
+    ))
+
+
+# ---------------------------------------------------------------------------
+# Oracle read-only discovery (auth)
+# ---------------------------------------------------------------------------
+
+
+def _register_oracle_reads(server: FastMCP) -> None:
+    """Expose the existing tenant-scoped Oracle read services over MCP."""
+
+    @server.tool()
+    async def agent_list_oracle_experiments(api_key: str = "") -> str:
+        """List experiment summaries visible to the authenticated Oracle account.
+
+        Read-only discovery for finding experiment IDs before requesting results.
+        This does not create, validate, launch, pause, or otherwise change an
+        experiment.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        try:
+            from src.services.oracle import list_experiments as svc
+            result = await anyio.to_thread.run_sync(svc)
+            return json.dumps(result)
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
+            return _handle_agent_error(e)
+
+    register_tool(ToolEntry(
+        name="agent_list_oracle_experiments",
+        description=(
+            "Read experiment summaries visible to the authenticated Oracle account. "
+            "Use this to discover experiment IDs. Read-only; no experiment is launched."
+        ),
+        access="auth",
+        parameters=[_APIKEY],
+    ))
+
+    @server.tool()
+    async def agent_list_oracle_results(
+        experiment_id: str | None = None,
+        limit: StrictInt = 100,
+        offset: StrictInt = 0,
+        api_key: str = "",
+    ) -> str:
+        """Read one bounded page of Oracle backtest results.
+
+        Omit experiment_id to query the authenticated account's visible corpus.
+        Pages contain at most 500 results; use offset to request a later page.
+        This is read-only and never starts a backtest.
+        """
+        if not _require(api_key):
+            return _auth_error()
+        if type(limit) is not int or not 1 <= limit <= 500:
+            return _err("VALIDATION_ERROR", "limit must be an integer from 1 to 500.")
+        if type(offset) is not int or offset < 0:
+            return _err("VALIDATION_ERROR", "offset must be a non-negative integer.")
+        try:
+            from src.services.oracle import list_results as svc
+            result = await anyio.to_thread.run_sync(
+                lambda: svc(experiment_id, limit=limit, offset=offset)
+            )
+            return json.dumps(result)
+        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
+            return _handle_agent_error(e)
+
+    register_tool(ToolEntry(
+        name="agent_list_oracle_results",
+        description=(
+            "Read one page (1-500 rows) of Oracle backtest results visible to the "
+            "authenticated account. Optionally scope by experiment_id; use offset "
+            "for pagination. Read-only."
+        ),
+        access="auth",
+        parameters=[
+            ToolParam(name="experiment_id", type="string", required=False,
+                      description="Optional experiment ID; omit for the visible account corpus."),
+            ToolParam(name="limit", type="integer", required=False,
+                      description="Page size, 1-500 (default 100)."),
+            ToolParam(name="offset", type="integer", required=False,
+                      description="Zero-based result offset (default 0)."),
+            _APIKEY,
+        ],
     ))
 
 

@@ -16,6 +16,8 @@ class PriceBinding:
 
 
 TOOL_PRICING: dict[str, PriceBinding] = {
+    "agent_list_oracle_experiments": PriceBinding(("proxy:api_calls",)),
+    "agent_list_oracle_results": PriceBinding(("proxy:oracle_results_read",)),
     "agent_create_strategy_autonomous": PriceBinding(("rest:signals_list", "rest:strategy_list_or_create", "rest:backtest_async_submit", "rest:backtest_async_status"), variable=True),
     "agent_create_strategy_manual": PriceBinding(("rest:strategy_list_or_create",)),
     "agent_update_strategy_status": PriceBinding(("rest:strategy_status_update",), variable=True),

@@ -4,7 +4,9 @@
 MangroveAI is the source of truth for these skills. This script copies them from
 a MangroveAI checkout into ``.claude/skills/michael/<skill>/`` and adapts them to
 this agent's file-resource references. Tool names and server behavior are preserved;
-there is no local tool remapping or fallback catalogue. Output is deterministic.
+remote tool names are not remapped. A bounded local Oracle read surface is documented
+as a limited fallback for experiment discovery and paginated result inspection; it
+does not emulate sweep search or other missing remote capabilities. Output is deterministic.
 
 Usage (stdlib only, run from anywhere):
 
@@ -126,6 +128,11 @@ def render_skill(skill: str, text: str, available_tools: set[str]) -> str:
         "These instructions describe MangroveAI server tools and server-owned records. "
         "Discover current tools and input schemas through MCP before calling them; "
         "report unavailable capabilities without substituting a local implementation. "
+        "When a remote Oracle experiment/result reader is unavailable, the authenticated "
+        "local agent_list_oracle_experiments and agent_list_oracle_results tools can "
+        "discover experiment summaries and read bounded result pages only. They do not "
+        "provide sweep-specific filtering, ranking, or mutation; never present them as "
+        "equivalent to a missing remote tool. "
         "Local execution workflows use agent_ tools and local strategy IDs. "
         "Do not pass IDs between those stores."
     )

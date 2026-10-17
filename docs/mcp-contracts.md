@@ -51,16 +51,22 @@ All three files live under `scripts/contracts/`:
 | File | Purpose |
 | --- | --- |
 | `local.json` | Complete generated local input schemas, access labels and billing bindings; no amounts |
-| `upstream.json` | Public receiver input schemas and billing IDs, captured through anonymous MCP discovery; no amounts or descriptions |
+| `upstream.json` | Reviewed expected receiver input schemas and billing IDs; no amounts or descriptions |
+| `deployed.json` | Separate names-only observation of the deployed receiver's anonymous catalog at a recorded time |
 | `policy.json` | Reasons for non-upstream/unknown pricing and fingerprinted direct-SDK exceptions |
 
-The initial receiver capture contains 84 callable tools and 99 billing IDs.
-Its source URL and retrieval timestamp are recorded in the file. It is an
-observation of that running receiver, **not** an assertion that it loaded a
-particular Git commit or represents every hosted environment. Initial agent
-baseline: 106 tools, 69 pricing bindings (57 nonempty, 12 unknown), 37 explicitly
-excluded tools and 55 remaining direct-SDK adapters after the two market fixes.
-Counts describe this baseline; they are not hardcoded runtime limits.
+`upstream.json` is the reviewed 96-tool expected catalog used for source-level
+contract and billing checks. It must not be overwritten just to make an older
+deployment appear current. `deployed.json` records a separate anonymous
+`tools/list` observation; it does not assert which source commit the service runs
+or that another environment has the same capabilities. On 2026-10-17 the
+deployed catalog returned 72 tools and lacked 31 names in the reviewed snapshot,
+including `find_sweep_runs`, `get_sweep_run`, and the sweep/condition-study
+lifecycle. Of those, 30 distinct names appear in current generated skill
+`uses-tools` declarations; the extra missing source name is not advertised by
+those declarations. The live comparison continues to report the tool gaps until deployment
+and skill availability are aligned. Counts describe observations, not runtime
+limits.
 
 ## Live receiver comparison
 
@@ -88,7 +94,17 @@ fail even when the corresponding REST route is intentionally hidden from MCP.
 The same check compares the declared `uses-tools` names in generated Michael
 skills with both the reviewed receiver snapshot and the live catalog. A missing
 tool fails with a source-sync instruction; the checker does not rewrite skills
-or treat a stale snapshot as proof that the deployed receiver serves them.
+or treat a reviewed source snapshot as proof that the deployed receiver serves
+them. The live catalog artifact is kept separately so the 96-tool source contract
+remains reviewable while capabilities are documented against what is deployed.
+
+For read-only Oracle fallback, local authenticated MCP tools
+`agent_list_oracle_experiments` and `agent_list_oracle_results` call the shared
+Oracle services. They discover experiment summaries and return one result page
+of at most 500 rows. They do not provide sweep-specific filters or ranking and
+must not be presented as substitutes for missing sweep tools. Result search
+filters are limited to parameters supported by the published SDK/REST surface;
+unsupported filters must be rejected explicitly, never silently dropped.
 
 This guards catalog compatibility, not the semantic correctness of every SDK
 route mapping. Renamed, differently named or private/context-dependent receiver
