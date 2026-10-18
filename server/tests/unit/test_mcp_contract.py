@@ -104,15 +104,32 @@ def test_deployed_catalog_is_a_validated_observation_separate_from_expected_snap
     deployed_names = checks.validate_deployed_observation(observation)
     expected_names = set(checks.read_json("upstream.json")["tools"])
     skill_names = checks.skill_tool_references()
+    manifest = json.loads((checks.ROOT / '.claude/skills/michael/skills-sync-manifest.json').read_text())
+    source_skill_names = {name for row in manifest['skill_tools'].values() for name in row['source']}
 
     assert len(deployed_names) == observation["tool_count"]
     assert expected_names - deployed_names
-    assert skill_names - deployed_names
+    assert source_skill_names - deployed_names
     assert len(skill_names - deployed_names) <= len(expected_names - deployed_names)
 
     malformed = {**observation, "tool_count": observation["tool_count"] + 1}
     with pytest.raises(ValueError, match="Invalid deployed catalog tool names or count"):
         checks.validate_deployed_observation(malformed)
+
+
+def test_catalog_diagnostic_names_expected_gaps_even_for_filtered_skill_profile():
+    message, missing_expected, missing_skill, missing_source_skill = checks.deployed_catalog_diagnostic(
+        {'read', 'missing-a', 'missing-b'}, {'read'}, {'read'},
+        {'mode': 'deployed', 'snapshot_sha256': 'abc', 'observed_at_utc': '2026-10-17T07:00:00Z'},
+        {'read', 'missing-skill-only'},
+    )
+    assert missing_expected == ['missing-a', 'missing-b']
+    assert missing_skill == []
+    assert missing_source_skill == ['missing-skill-only']
+    assert 'Skill profile=deployed' in message
+    assert 'snapshot_sha256=abc' in message
+    assert 'Missing expected names: missing-a, missing-b.' in message
+    assert 'Missing source-skill names: missing-skill-only.' in message
 
 
 SOURCE = '''
@@ -305,6 +322,7 @@ def test_demo_catalog_follows_configured_network_in_both_registration_paths(monk
 @pytest.mark.parametrize("confirm", [None, False])
 async def test_optional_confirmation_still_refuses_execution(name, confirm):
     from mcp.server.fastmcp import FastMCP
+
     from src.mcp import tools
     server = FastMCP("confirmation-contract")
     tools._register_dex(server)
@@ -414,7 +432,145 @@ def test_synced_guidance_preserves_server_tool_names():
         assert 'agent_list_oracle_experiments' in result
         assert 'do not provide sweep-specific filtering' in result
         assert module.render_skill('fixture', source, available) == result
-        unavailable = module.render_skill('fixture', source, {'query_signal_behavior'})
+        unavailable = module.render_skill('fixture', source, {'query_signal_behavior'}, 'deployed')
         assert 'uses-tools: [query_signal_behavior]' in unavailable
+        assert 'source-uses-tools: [query_signal_behavior, save_strategy]' in unavailable
+        assert 'unavailable-tools: [save_strategy]' in unavailable
+        assert 'absent from the recorded catalog snapshot' in unavailable
+        assert '`save_strategy`' in unavailable
     finally:
         sys.modules.pop(spec.name, None)
+
+
+def _skill_sync_module():
+    import importlib.util
+    script = ROOT / 'scripts' / 'sync-michael-skills.py'
+    spec = importlib.util.spec_from_file_location('skill_sync_profiles', script)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module, spec.name
+
+
+def test_skill_sync_source_profile_keeps_full_reviewed_catalog():
+    module, name = _skill_sync_module()
+    try:
+        catalog = module.load_catalog('source')
+        expected = set(checks.read_json('upstream.json')['tools'])
+        assert catalog.names == expected
+        assert catalog.metadata['tool_count'] == len(expected) == 96
+        rendered = module.render_skill(
+            'fixture',
+            '---\nname: fixture\nuses-tools: [query_signal_behavior, save_strategy]\n---\nUse both.\n',
+            {'query_signal_behavior', 'save_strategy'},
+        )
+        assert 'uses-tools: [query_signal_behavior, save_strategy]' in rendered
+        assert 'unavailable-tools: []' in rendered
+        assert 'catalog-mode: source' in rendered
+        assert 'source-uses-tools: [query_signal_behavior, save_strategy]' in rendered
+        assert 'absent from the recorded catalog snapshot' not in rendered
+    finally:
+        sys.modules.pop(name, None)
+
+
+def test_deployed_profile_is_explicit_fresh_names_only_and_deterministic(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    module, name = _skill_sync_module()
+    try:
+        root = tmp_path
+        contracts = root / 'scripts' / 'contracts'
+        contracts.mkdir(parents=True)
+        (contracts / 'upstream.json').write_text(json.dumps({'version': 1, 'tools': {'query_signal_behavior': {}}}))
+        observation = {
+            'version': 1,
+            'observed_at_utc': '2026-10-17T07:01:04+00:00',
+            'source': 'https://api.example.test/mcp/',
+            'tool_count': 1,
+            'tools': ['query_signal_behavior'],
+        }
+        (contracts / 'deployed.json').write_text(json.dumps(observation))
+        monkeypatch.setattr(module, 'REPO_ROOT', root)
+        now = datetime(2026, 10, 17, 8, tzinfo=timezone.utc)
+        first = module.load_catalog('deployed', now=now)
+        second = module.load_catalog('deployed', now=now)
+        assert first == second
+        assert first.names == {'query_signal_behavior'}
+        assert first.metadata['observed_at_utc'] == observation['observed_at_utc']
+        assert len(first.metadata['snapshot_sha256']) == 64
+        source_text = ('---\nname: fixture\nuses-tools: [query_signal_behavior, save_strategy]\n'
+                       '---\nUse both remote capabilities as documented.\n')
+        rendered = module.render_skill('fixture', source_text, first.names, 'deployed')
+        assert 'uses-tools: [query_signal_behavior]' in rendered
+        assert 'source-uses-tools: [query_signal_behavior, save_strategy]' in rendered
+        assert 'unavailable-tools: [save_strategy]' in rendered
+        assert '`save_strategy`' in rendered
+        assert 'Check the active MCP `tools/list`' in rendered
+        assert 'Use both remote capabilities as documented.' in rendered
+    finally:
+        sys.modules.pop(name, None)
+
+
+@pytest.mark.parametrize('mutation, message', [
+    ('stale', 'snapshot is stale'),
+    ('malformed_timestamp', 'must include a UTC offset'),
+    ('malformed_count', 'Invalid deployed catalog tool names or count'),
+])
+def test_deployed_profile_rejects_stale_or_malformed_snapshot(tmp_path, monkeypatch, mutation, message):
+    from datetime import datetime, timezone
+    module, name = _skill_sync_module()
+    try:
+        contracts = tmp_path / 'scripts' / 'contracts'
+        contracts.mkdir(parents=True)
+        (contracts / 'upstream.json').write_text(json.dumps({'version': 1, 'tools': {'read': {}}}))
+        observation = {
+            'version': 1, 'observed_at_utc': '2026-10-17T07:01:04+00:00',
+            'source': 'https://api.example.test/mcp/', 'tool_count': 1, 'tools': ['read'],
+        }
+        now = datetime(2026, 10, 17, 8, tzinfo=timezone.utc)
+        if mutation == 'stale':
+            now = datetime(2026, 11, 1, 8, tzinfo=timezone.utc)
+        elif mutation == 'malformed_timestamp':
+            observation['observed_at_utc'] = '2026-10-17T07:01:04'
+        elif mutation == 'malformed_count':
+            observation['tool_count'] = 2
+        (contracts / 'deployed.json').write_text(json.dumps(observation))
+        monkeypatch.setattr(module, 'REPO_ROOT', tmp_path)
+        with pytest.raises(module.SyncError, match=message):
+            module.load_catalog('deployed', now=now)
+    finally:
+        sys.modules.pop(name, None)
+
+
+def test_manifest_verification_binds_generated_skills_to_snapshot_hash(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    module, name = _skill_sync_module()
+    try:
+        root = tmp_path / 'repo'
+        contracts = root / 'scripts' / 'contracts'
+        contracts.mkdir(parents=True)
+        (contracts / 'upstream.json').write_text(json.dumps({'version': 1, 'tools': {'read': {}}}))
+        observation_path = contracts / 'deployed.json'
+        observation = {
+            'version': 1, 'observed_at_utc': '2026-10-17T07:01:04+00:00',
+            'source': 'https://api.example.test/mcp/', 'tool_count': 1, 'tools': ['read'],
+        }
+        observation_path.write_text(json.dumps(observation))
+        destination = root / '.claude' / 'skills' / 'michael'
+        monkeypatch.setattr(module, 'REPO_ROOT', root)
+        monkeypatch.setattr(module, 'DEST', destination)
+        catalog = module.load_catalog('deployed', now=datetime(2026, 10, 17, 8, tzinfo=timezone.utc))
+        class SourceFixture:
+            def list_files(self, _):
+                return ['fixture/SKILL.md']
+            def read(self, _):
+                return '---\nname: fixture\nuses-tools: [read]\n---\nCall `read`.\n'
+        rendered = module.render(SourceFixture(), catalog)
+        manifest = module.manifest_for(rendered, 'fixture-commit', 'fixture-ref', catalog)
+        module.write(rendered, manifest)
+        assert module.verify_manifest() == 0
+        observation['tools'].append('new_tool')
+        observation['tool_count'] = 2
+        observation_path.write_text(json.dumps(observation))
+        assert module.verify_manifest() == 1
+    finally:
+        sys.modules.pop(name, None)

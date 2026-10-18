@@ -7,12 +7,20 @@ description: >-
   marketplace. A vague ask -- "build me a strategy", "build me a BTC strategy on 1h", "make me
   something for ETH" -- starts in the Strategy Engine. Reach for it on those and on "set up a
   mean-reversion strategy", ... (etc). Use strategy-management to draft, archive, or deploy.
-uses-tools: [evaluate_signal, evaluate_multiple_signals_series, validate_signal_params, list_signal_labels, list_playground_datasets, get_playground_data, find_sweep_runs, get_sweep_run, run_backtest, search_marketplace, get_marketplace_strategy, propose_adopt, query_signal_behavior, save_strategy, update_strategy, verify_strategy, list_strategies, get_strategy, get_market_regime]
+uses-tools: [evaluate_signal, evaluate_multiple_signals_series, validate_signal_params, list_signal_labels, list_playground_datasets, get_playground_data, query_signal_behavior, list_strategies, get_strategy, get_market_regime]
+source-uses-tools: [list_backtest_markets, evaluate_signal, evaluate_multiple_signals_series, validate_signal_params, list_signal_labels, list_playground_datasets, get_playground_data, find_sweep_runs, get_sweep_run, run_backtest, search_marketplace, get_marketplace_strategy, propose_adopt, query_knowledge, query_signal_behavior, save_strategy, update_strategy, verify_strategy, list_strategies, get_strategy, get_market_regime, get_execution_config_schema]
+unavailable-tools: [list_backtest_markets, find_sweep_runs, get_sweep_run, run_backtest, search_marketplace, get_marketplace_strategy, propose_adopt, save_strategy, update_strategy, verify_strategy, get_execution_config_schema]
+unreviewed-tools: [query_knowledge]
+catalog-mode: deployed
 ---
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/strategy-composition/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
 
 These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. When a remote Oracle experiment/result reader is unavailable, the authenticated local agent_list_oracle_experiments and agent_list_oracle_results tools can discover experiment summaries and read bounded result pages only. They do not provide sweep-specific filtering, ranking, or mutation; never present them as equivalent to a missing remote tool. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
+
+Catalog snapshot note (observed deployed tools only): this skill references tools absent from the recorded catalog snapshot: `list_backtest_markets`, `find_sweep_runs`, `get_sweep_run`, `run_backtest`, `search_marketplace`, `get_marketplace_strategy`, `propose_adopt`, `save_strategy`, `update_strategy`, `verify_strategy`, `get_execution_config_schema`. Do not call or replace these by assumption. Check the active MCP `tools/list`; use a capability only when that live catalog exposes its schema.
+
+Catalog review note: these source tools appear in the observed deployment but are not in the reviewed source contract, so this bundle does not advertise them: `query_knowledge`. Their schemas were not validated by this snapshot; inspect the active MCP `tools/list` schema before use.
 
 # Build coherent and active strategies
 

@@ -11,6 +11,10 @@ description: >-
   named stretch of the past was like in the sweep catalog's own terms, and
   list_approved_assets for what the platform allows a strategy to be built on.
 uses-tools: [get_market_data, get_market_regime, classify_market_segment, list_approved_assets]
+source-uses-tools: [get_market_data, get_market_regime, classify_market_segment, list_approved_assets]
+unavailable-tools: []
+unreviewed-tools: []
+catalog-mode: deployed
 ---
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/market-intelligence/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->

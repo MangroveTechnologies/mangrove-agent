@@ -7,12 +7,18 @@ description: >-
   "how did that go". Search across all visible experiments unless one is named.
   Filter and sort existing results before proposing a new sweep. New experiment
   creation and launching belong to sweeps.
-uses-tools: [list_sweeps, get_sweep, find_sweep_runs, list_run_filters, get_sweep_run]
+uses-tools: []
+source-uses-tools: [list_backtest_markets, list_sweeps, get_sweep, find_sweep_runs, list_run_filters, get_sweep_run]
+unavailable-tools: [list_backtest_markets, list_sweeps, get_sweep, find_sweep_runs, list_run_filters, get_sweep_run]
+unreviewed-tools: []
+catalog-mode: deployed
 ---
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/sweep-results/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
 
 These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. When a remote Oracle experiment/result reader is unavailable, the authenticated local agent_list_oracle_experiments and agent_list_oracle_results tools can discover experiment summaries and read bounded result pages only. They do not provide sweep-specific filtering, ranking, or mutation; never present them as equivalent to a missing remote tool. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
+
+Catalog snapshot note (observed deployed tools only): this skill references tools absent from the recorded catalog snapshot: `list_backtest_markets`, `list_sweeps`, `get_sweep`, `find_sweep_runs`, `list_run_filters`, `get_sweep_run`. Do not call or replace these by assumption. Check the active MCP `tools/list`; use a capability only when that live catalog exposes its schema.
 
 # A sweep has no winner
 

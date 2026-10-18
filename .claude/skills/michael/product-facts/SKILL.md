@@ -1,12 +1,18 @@
 ---
 name: product-facts
 description: Answer questions about Mangrove custody, loss alerts, creator payments and product guarantees from maintained facts and the person's current notification preferences.
-uses-tools: [get_notification_settings]
+uses-tools: []
+source-uses-tools: [query_product_facts, get_notification_settings]
+unavailable-tools: [query_product_facts, get_notification_settings]
+unreviewed-tools: []
+catalog-mode: deployed
 ---
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/product-facts/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
 
 These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. When a remote Oracle experiment/result reader is unavailable, the authenticated local agent_list_oracle_experiments and agent_list_oracle_results tools can discover experiment summaries and read bounded result pages only. They do not provide sweep-specific filtering, ranking, or mutation; never present them as equivalent to a missing remote tool. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
+
+Catalog snapshot note (observed deployed tools only): this skill references tools absent from the recorded catalog snapshot: `query_product_facts`, `get_notification_settings`. Do not call or replace these by assumption. Check the active MCP `tools/list`; use a capability only when that live catalog exposes its schema.
 
 # Ground product answers
 

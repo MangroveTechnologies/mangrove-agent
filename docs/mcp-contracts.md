@@ -105,11 +105,16 @@ be different. Added unrelated receiver tools do not fail. Missing billing IDs
 fail even when the corresponding REST route is intentionally hidden from MCP.
 
 The same check compares the declared `uses-tools` names in generated Michael
-skills with both the reviewed receiver snapshot and the live catalog. A missing
-tool fails with a catalog-mode/version and skill-availability diagnostic; the checker does not rewrite skills
-or treat a reviewed source snapshot as proof that the deployed receiver serves
-them. The live catalog artifact is kept separately so the 96-tool source contract
-remains reviewable while capabilities are documented against what is deployed.
+skills with both the reviewed receiver snapshot and the live catalog. Diagnostics
+include every expected name absent from the observed deployment, even when the
+distributed skills use a filtered profile. The skills manifest records whether the
+bundle uses `source` or `deployed` mode and, for deployed mode, the snapshot timestamp,
+SHA-256, available names, and per-skill source/advertised/unavailable names. The
+optional deployed profile filters only frontmatter advertisement; skill instructions
+retain the upstream tool references and explain how to check live `tools/list`.
+The default sync mode remains `source`, so installations serving the full 96-tool
+contract can render it without masking those tools. Neither catalog snapshot changes
+runtime discovery or acts as a tool-call fallback.
 
 For read-only Oracle fallback, local authenticated MCP tools
 `agent_list_oracle_experiments` and `agent_list_oracle_results` call the shared

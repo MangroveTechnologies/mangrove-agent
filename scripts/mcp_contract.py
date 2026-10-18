@@ -414,6 +414,27 @@ def validate_deployed_observation(observation):
     return set(names)
 
 
+def deployed_catalog_diagnostic(upstream_names, deployed_names, skill_names, skill_catalog,
+                                source_skill_names=None):
+    """Describe observed gaps without letting a filtered skill profile hide them."""
+    missing_expected = sorted(set(upstream_names) - set(deployed_names))
+    missing_skill = sorted(set(skill_names) - set(deployed_names))
+    missing_source_skill = sorted(set(source_skill_names or skill_names) - set(deployed_names))
+    profile = skill_catalog.get("mode", "unknown")
+    snapshot_hash = skill_catalog.get("snapshot_sha256", "unknown")
+    observed_at = skill_catalog.get("observed_at_utc")
+    detail = (
+        f"Observed deployment {observed_at}: {len(deployed_names)} tools; "
+        f"{len(missing_expected)} reference-snapshot names and {len(missing_skill)} skill-referenced "
+        "tools are absent from that observation. Catalog mode/version differences may explain this; "
+        "a name diff alone does not establish a production regression. "
+        f"Skill profile={profile}, snapshot_sha256={snapshot_hash}. "
+        f"Missing expected names: {', '.join(missing_expected) or '(none)'}. "
+        f"Missing source-skill names: {', '.join(missing_source_skill) or '(none)'}."
+    )
+    return detail, missing_expected, missing_skill, missing_source_skill
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--upstream-url", help="Opt-in anonymous live comparison; no payment calls")
@@ -489,14 +510,19 @@ def main(argv=None):
     skill_names = skill_tool_references()
     if not args.refresh_upstream:
         errors += check_skill_catalog(skill_names, set(upstream["tools"]))
-    missing_expected = set(upstream["tools"]) - deployed_names
-    missing_skill = skill_names - deployed_names
-    print(
-        f"Observed deployment {deployed['observed_at_utc']}: {len(deployed_names)} tools; "
-        f"{len(missing_expected)} reference-snapshot names and {len(missing_skill)} skill-referenced "
-        "tools are absent from that observation. Catalog mode/version differences may explain this; "
-        "a name diff alone does not establish a production regression."
-    )
+    skill_manifest = {}
+    try:
+        skill_manifest = json.loads((ROOT / ".claude/skills/michael/skills-sync-manifest.json").read_text())
+        skill_catalog = skill_manifest.get("catalog", {})
+    except (OSError, json.JSONDecodeError):
+        skill_catalog = {}
+        errors.append("Michael skill sync manifest is unavailable or malformed")
+    skill_catalog.setdefault("observed_at_utc", deployed["observed_at_utc"])
+    source_skill_names = {name for row in skill_manifest.get("skill_tools", {}).values()
+                          for name in row.get("source", [])}
+    diagnostic = deployed_catalog_diagnostic(
+        upstream["tools"], deployed_names, skill_names, skill_catalog, source_skill_names)[0]
+    print(diagnostic)
     errors += check_delegation((ROOT / "server/src/mcp/tools.py").read_text(), policy["direct_sdk_adapters"])
     if not args.refresh_local:
         errors += compare_local(actual, read_json("local.json"))
