@@ -293,7 +293,7 @@ def _live_swap(
     # Upstream `dex.prepare_swap` takes slippage as a PERCENTAGE
     # (1.0 = 1%, documented in MangroveMarkets-MCP-Server/src/dex/tools.py).
     # Our API convention is DECIMAL (0.005 = 0.5%) to match the rest of
-    # the trading stack (trading_defaults.backtest_defaults.slippage_pct
+    # the trading stack (MangroveAI trading defaults: backtest slippage_pct
     # = 0.004 = 0.4%). Convert at the boundary.
     sdk_slippage = slippage_pct * 100.0  # type: ignore[operator]
     try:

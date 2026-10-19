@@ -143,7 +143,7 @@ config. All three of the bot's upstream dependencies live there:
 
 ### `mangroveai` — signals, strategies, evaluations
 
-The core intelligence. When you call `backtest_strategy` or
+The core intelligence. When you call `run_backtest` or
 `evaluate_strategy`, the mangrove-agent calls Mangrove, which runs the
 strategy logic against historical or current OHLCV, applies the
 signals (RSI, MACD, ichimoku, etc.), computes risk/position sizing,

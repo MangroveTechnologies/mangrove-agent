@@ -83,11 +83,12 @@ positions in SQLite). So the **portfolio kill switch** lives here
 
 Layers 1 and 2 protect **trading capital**. This one protects the wallet the
 agent pays *with*. When the agent buys data from MangroveAI over x402
-(signals, backtests, Oracle runs), each call is cents — but volume is the
-risk, not price: an autonomous sweep is 99 backtests ≈ $2, and
-`oracle_backtest_async` + `oracle_backtest_poll` form a poll loop against a
-priced meter, so a 5-second poll on a two-minute backtest is 24 paid calls for
-one result. Every one of those is individually reasonable.
+(signals, backtests, Strategy Engine runs), each call is cents — but volume
+is the risk, not price. Backtests run on MangroveAI, and reading a result is
+itself a paid call: `get_backtest` after `run_backtest`. Checking every 5 seconds
+on a two-minute backtest is 24 paid reads for one result, so check once when
+the user asks, or after the run has had time to finish. Every one of those calls
+is individually reasonable.
 
 Same argument as the kill switch, one layer over: the receiving server sees
 one payment, the signing guard sees one payload, and only this agent sees the

@@ -4,6 +4,15 @@
 **Status:** Draft
 **Based on:** `docs/user-stories.md` (approved requirements)
 
+> **Superseded in part (2026-10).** Strategy authoring and backtesting moved to
+> MangroveAI, which is now the single source of truth. The agent no longer generates
+> candidates, runs or grades backtests, or proxies Oracle, market-data, signal, KB or
+> on-chain reads: it forwards MangroveAI's tools over MCP. `POST /strategies/autonomous`
+> and `/strategies/manual` return 410; `candidate_generator`, `backtest_service`,
+> `backtest_verdict`, `threshold_spec.json` and the `BACKTEST_*` config keys are gone.
+> Sections describing them are kept for history only. See `README.md` for the current
+> tool surface.
+
 ## Overview
 
 mangrove-agent is a FastAPI + MCP service that wraps the `mangroveai` and `mangrovemarkets` Python SDKs with local state, autonomous strategy generation, cron-based execution, and a full audit trail.
@@ -923,9 +932,6 @@ x402 keys from the template stay required — payment middleware needs them at s
     "DB_PATH",
     "KEYRING_SERVICE_NAME",
     "MASTER_KEY_ENV_FALLBACK",
-    "BACKTEST_CANDIDATE_COUNT",
-    "BACKTEST_MIN_TRADES",
-    "BACKTEST_DEFAULT_LOOKBACK_MONTHS",
     "LOG_RETENTION_DAYS",
     "X402_FACILITATOR_URL",
     "X402_NETWORK",
@@ -950,9 +956,6 @@ x402 keys from the template stay required — payment middleware needs them at s
   "DB_PATH": "./agent.db",
   "KEYRING_SERVICE_NAME": "mangrove-agent",
   "MASTER_KEY_ENV_FALLBACK": "",
-  "BACKTEST_CANDIDATE_COUNT": 7,
-  "BACKTEST_MIN_TRADES": 10,
-  "BACKTEST_DEFAULT_LOOKBACK_MONTHS": 3,
   "LOG_RETENTION_DAYS": 90,
   "X402_FACILITATOR_URL": "https://x402.org/facilitator",
   "X402_NETWORK": "eip155:84532",
@@ -979,14 +982,12 @@ All routes and MCP tools delegate to these services. Never duplicate business lo
 
 **Service principle:** if a service would just forward arguments to an SDK call and return the result, it doesn't exist. Routes call the SDK clients directly (via `shared/clients/mangrove.py` singletons). Services exist only when they add orchestration the SDK doesn't provide.
 
-The 9 services that stay:
+The services that stay:
 
 | Module | Responsibility |
 |--------|---------------|
 | `services/wallet_manager.py` | Key gen, Fernet encryption, local signing of unsigned txs from the SDK |
 | `services/strategy_service.py` | Cron-tick orchestration: call `mangroveai.execution.evaluate(strategy_id)` (SDK handles market data fetch + signal eval + risk gates internally), dispatch returned orders to `order_executor`. Strategy CRUD against `mangroveai.strategies` + local cache writes. No local signal evaluation or risk logic. |
-| `services/candidate_generator.py` | Autonomous: goal → 5–10 signal combos (deterministic heuristics over the `mangroveai.signals` catalog) |
-| `services/backtest_service.py` | Quick + full backtest orchestration; filter + rank by IRR |
 | `services/order_executor.py` | The single execution path for all DEX swaps. Takes an `OrderIntent` (from `strategy_service` for cron-driven trades, or built from a user request for the `POST /dex/swap` route). Orchestrates the full 6-step flow against `mangrovemarkets.dex` (quote → conditional approve → sign → broadcast → poll → prepare → sign → broadcast → poll). Branches paper vs live. |
 | `services/scheduler_service.py` | APScheduler wrapper: register, cancel, list active jobs |
 | `services/trade_log.py` | SQLite writes: evaluations, trades, positions |

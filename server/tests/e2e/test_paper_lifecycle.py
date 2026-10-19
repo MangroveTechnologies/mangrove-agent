@@ -1,8 +1,9 @@
 """E2E paper lifecycle test — non-blocking observation.
 
-Simulates the full user-facing flow: wallet create → autonomous strategy
-create → activate to paper → APScheduler fires the tick → evaluation +
-paper trade logged → deactivate.
+Simulates the user-facing flow from a saved strategy: activate to paper →
+APScheduler fires the tick → evaluation + paper trade logged → deactivate.
+Strategies are authored on MangroveAI, so local creation answers 410 and the
+strategy enters as an existing execution record.
 
 Observation principle (from the implementation plan): the test must NOT
 sleep past a tick interval. It polls GET /status and
@@ -115,10 +116,7 @@ def client(tmp_path, monkeypatch):
     sdk.crypto_assets.get_market_data.return_value = md
 
     for path in (
-        "src.services.candidate_generator.mangrove_ai_client",
-        "src.services.backtest_service.mangrove_ai_client",
         "src.services.strategy_service.mangrove_ai_client",
-        "src.services.benchmark_service.mangrove_ai_client",
         "src.services.order_executor.mangrove_ai_client",
     ):
         monkeypatch.setattr(path, lambda s=sdk: s)
@@ -137,31 +135,34 @@ def _auth() -> dict:
 
 
 def test_paper_lifecycle_end_to_end(client):
-    """Full happy path: create autonomous strategy → paper → observe tick → stop.
+    """Full happy path: saved strategy → paper → observe tick → stop.
 
     Validates:
-    - POST /strategies/autonomous succeeds, returns a generation_report
+    - Local authoring (POST /strategies/autonomous) is retired with 410
     - PATCH /status to paper registers a cron + increments active_cron_jobs
     - Manual tick via POST /strategies/{id}/evaluate produces an ok
       evaluation AND a paper trade
     - /status stays responsive (<200 ms) throughout
     - PATCH /status back to inactive cancels the cron
     """
-    # 1. Autonomous strategy creation.
+    # 1. Local authoring is retired: strategies are built on MangroveAI.
     r = client.post(
         "/api/v1/agent/strategies/autonomous",
         headers=_auth(),
-        json={"goal": "momentum on ETH", "asset": "ETH", "timeframe": "1h",
-              "candidate_count": 5, "seed": 1},
+        json={"goal": "momentum on ETH", "asset": "ETH", "timeframe": "1h"},
     )
-    assert r.status_code == 201, r.text
-    body = r.json()
-    strat = body["strategy"]
-    assert strat["id"]
-    assert strat["mangrove_id"].startswith("mg-paper-")
-    report = body["generation_report"]
-    assert report["candidates_tried"] == 5
-    assert report["candidates_passed_filter"] >= 1
+    assert r.status_code == 410, r.text
+    assert "retired" in r.json()["detail"]
+
+    # The strategy enters as an existing execution record.
+    from src.services.strategy_service import StrategyManualRequest
+    from tests.existing_strategies import existing_strategy
+    strat = existing_strategy(StrategyManualRequest(
+        name="paper e2e", asset="ETH", timeframe="1h",
+        entry=[{"name": "macd_cross_up", "signal_type": "TRIGGER", "timeframe": "1h"}],
+        exit=[],
+    )).model_dump(mode="json")
+    assert strat["id"] and strat["status"] == "inactive"
 
     # 2. Transition draft → inactive → paper (draft → paper is illegal).
     client.patch(

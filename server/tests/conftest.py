@@ -21,3 +21,16 @@ def client():
     app = create_app()
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture(autouse=True)
+def _fresh_mangrove_sessions(monkeypatch):
+    """Each test opens its own MangroveAI MCP sessions: a shared session belongs to the
+    event loop that opened it, and every test runs on a new loop."""
+    import anyio
+
+    from src.mcp import mangrove_proxy
+    monkeypatch.setattr(mangrove_proxy, "_sessions", {})
+    monkeypatch.setattr(mangrove_proxy, "_sessions_lock", anyio.Lock())
+    monkeypatch.setattr(mangrove_proxy, "_open_locks", {})
+    monkeypatch.setattr(mangrove_proxy, "_open_failures", {})

@@ -116,11 +116,19 @@ def create_app() -> FastAPI:
         # FastMCP's session manager must be running for the /mcp endpoint to
         # handle requests. Without this, calls into /mcp raise
         # "RuntimeError: Task group is not initialized."
-        async with mcp_server.session_manager.run():
-            _log.info("app.startup", version=application.version, environment=str(app_config.ENVIRONMENT))
-            yield
-            _log.info("app.shutdown")
-        scheduler_shutdown()  # wait=False so we don't block on in-flight ticks
+        try:
+            async with mcp_server.session_manager.run():
+                _log.info("app.startup", version=application.version, environment=str(app_config.ENVIRONMENT))
+                yield
+                _log.info("app.shutdown")
+        finally:
+            # Always, even when startup or the session manager raised: open MangroveAI
+            # MCP sessions and their transport tasks must not outlive the app.
+            from src.mcp.mangrove_proxy import close_sessions
+            try:
+                await close_sessions()  # the reused MangroveAI MCP sessions
+            finally:
+                scheduler_shutdown()  # wait=False so we don't block on in-flight ticks
 
     application = FastAPI(
         title="Mangrove Agent",

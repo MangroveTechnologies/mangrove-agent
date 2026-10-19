@@ -1,8 +1,7 @@
 """strategy_service — CRUD, lifecycle, cron tick.
 
 Responsibilities:
-- Autonomous creation (goal → candidates → backtest → filter → rank → full → persist)
-- Manual creation (validate composition → persist)
+- Strategy authoring is owned by MangroveAI and accessed over MCP.
 - List + get + status transitions (single source of truth for lifecycle)
 - Cron tick: call mangroveai.execution.evaluate(strategy_id), dispatch
   returned OrderIntents to order_executor.
@@ -20,29 +19,22 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from mangrove_ai.models import CreateStrategyRequest
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.config import app_config
 from src.models.domain import Evaluation, OrderIntent
 from src.services import (
     allocation_service,
-    backtest_service,
-    backtest_verdict,
-    candidate_generator,
     order_executor,
     scheduler_service,
     trade_log,
 )
-from src.shared import timeframes
 from src.shared.clients.mangrove import mangrove_ai_client
 from src.shared.db.sqlite import get_connection
 from src.shared.errors import (
     SdkError,
-    StrategyInvalidComposition,
     StrategyInvalidStatusTransition,
     StrategyNotFound,
-    StrategyNoViableCandidates,
 )
 from src.shared.logging import get_logger, with_correlation_id
 
@@ -224,18 +216,6 @@ def _get_live_allocation(
 # -- Pydantic request/response models ---------------------------------------
 
 
-class StrategyAutonomousRequest(BaseModel):
-    goal: str
-    asset: str
-    timeframe: str
-    candidate_count: int = Field(7, ge=5, le=10)
-    # None = auto-pick from timeframes.recommended_lookback_months(timeframe):
-    #   5m/15m/30m/1h → 3 months; 4h → 6 months; 1d → 12 months.
-    # Explicit value overrides the recommendation.
-    backtest_lookback_months: int | None = None
-    seed: int | None = None  # reproducibility
-
-
 class StrategyMarketContext(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -313,25 +293,6 @@ class StrategyDetailResponse(BaseModel):
 
 
 # -- Composition validation --------------------------------------------------
-
-
-def _validate_composition(entry: list[dict], exit_rules: list[dict]) -> None:
-    """Entry must be exactly 1 TRIGGER + 0+ FILTERs; exit 0-1 TRIGGERs + 0+ FILTERs."""
-    entry_triggers = [r for r in entry if (r.get("signal_type") or "").upper() == "TRIGGER"]
-    if len(entry_triggers) != 1:
-        raise StrategyInvalidComposition(
-            f"Entry must have exactly 1 TRIGGER; got {len(entry_triggers)}.",
-            suggestion="Compose entry as: [one TRIGGER, zero or more FILTERs].",
-        )
-    exit_triggers = [r for r in exit_rules if (r.get("signal_type") or "").upper() == "TRIGGER"]
-    if len(exit_triggers) > 1:
-        raise StrategyInvalidComposition(
-            f"Exit may have at most 1 TRIGGER; got {len(exit_triggers)}.",
-            suggestion="Compose exit as: [zero or one TRIGGER, zero or more FILTERs].",
-        )
-
-
-# -- Local cache helpers -----------------------------------------------------
 
 
 def _insert_cache(
@@ -519,149 +480,6 @@ def _set_status(strategy_id: str, new_status: str) -> None:
 
 
 # -- Public API --------------------------------------------------------------
-
-
-def create_autonomous(req: StrategyAutonomousRequest) -> tuple[StrategyDetailResponse, dict[str, Any]]:
-    """Generate candidates, backtest, filter, rank, create winner.
-
-    Returns (strategy_detail_response, generation_report). The report is
-    also persisted in the local strategies cache for audit.
-    """
-    # Reject unsupported timeframes (e.g. 1m) up front — the server would
-    # otherwise silently fall back to 1h and produce misleading results.
-    timeframe = timeframes.canonicalize_timeframe(req.timeframe)
-
-    candidates = candidate_generator.generate(
-        goal=req.goal, asset=req.asset, timeframe=timeframe,
-        n=req.candidate_count, seed=req.seed,
-    )
-
-    # Use timeframe-aware recommended lookback if caller didn't specify one.
-    lookback_months = (
-        req.backtest_lookback_months
-        if req.backtest_lookback_months is not None
-        else timeframes.recommended_lookback_months(timeframe)
-    )
-
-    results = backtest_service.quick_backtest_all(
-        candidates, lookback_months=lookback_months,
-    )
-    survivors, rejected = backtest_service.filter_and_rank(results)
-
-    if not survivors:
-        raise StrategyNoViableCandidates(
-            f"No candidate passed filters (n_tried={len(candidates)}, n_rejected={len(rejected)}).",
-            suggestion="Try a different goal, longer timeframe, or longer backtest lookback.",
-        )
-
-    winner = survivors[0]
-    full = backtest_service.full_backtest(
-        winner.candidate, lookback_months=lookback_months,
-    )
-
-    # Build the SDK request from the winning candidate.
-    try:
-        detail = mangrove_ai_client().strategies.create(
-            CreateStrategyRequest(
-                name=winner.candidate.name,
-                asset=winner.candidate.asset,
-                entry=winner.candidate.entry,
-                exit=winner.candidate.exit,
-                status="inactive",
-            ),
-        )
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"strategies.create failed: {e}") from e
-
-    generation_report = {
-        "candidates_tried": len(candidates),
-        "candidates_passed_filter": len(survivors),
-        "winner_rank": 1,
-        # Same server-side grading as POST /strategies/{id}/backtest.
-        "verdict": backtest_verdict.compute_verdict(full.raw_metrics),
-        "full_backtest_metrics": {
-            "irr_annualized": full.irr_annualized,
-            "win_rate": full.win_rate,
-            "total_trades": full.total_trades,
-            "sharpe_ratio": full.sharpe_ratio,
-            "max_drawdown": full.max_drawdown,
-            "net_pnl": full.net_pnl,
-        },
-        "rejected_reasons": [
-            {"candidate": r.candidate.name, "reason": r.reject_reason}
-            for r in rejected
-        ],
-    }
-
-    local_id = _insert_cache(
-        detail,
-        entry=winner.candidate.entry,
-        exit_rules=winner.candidate.exit,
-        execution_config=backtest_service.flattened_defaults(),
-        generation_report=generation_report,
-    )
-    row = _get_row(local_id)
-    resp = _row_to_response(row)
-    _log.info("strategy.created",
-              strategy_id=local_id, mangrove_id=resp.mangrove_id, mode="autonomous",
-              asset=req.asset, timeframe=req.timeframe,
-              winner_irr=full.irr_annualized, winner_trades=full.total_trades)
-    return resp, generation_report
-
-
-def create_manual(req: StrategyManualRequest) -> StrategyDetailResponse:
-    """Manual creation — caller supplies explicit entry/exit rules."""
-    # The SDK/engine carry candle sizes on each rule, not on the create
-    # request. Supply the requested default where absent, while preserving
-    # explicit multi-timeframe rules. Use the same normalized rules upstream
-    # and locally so the scheduler cannot silently fall back to 1h.
-    timeframe = timeframes.canonicalize_timeframe(req.timeframe)
-    entry = [
-        {**rule, "timeframe": timeframes.canonicalize_timeframe(rule.get("timeframe") or timeframe)}
-        for rule in req.entry
-    ]
-    exit_rules = [
-        {**rule, "timeframe": timeframes.canonicalize_timeframe(rule.get("timeframe") or timeframe)}
-        for rule in req.exit
-    ]
-
-    _validate_composition(entry, exit_rules)
-    if req.market_context and req.market_context.base_token != req.asset:
-        raise SdkError("Market base token must match the strategy asset.")
-
-    # Created as `inactive`, deliberately NOT `draft`. In MangroveAI a draft
-    # is an UNPROVEN strategy: its update_status refuses draft → paper/live,
-    # and the only exit from draft is promote_proven_draft(), fired when a
-    # backtest *by strategy_id* meets the spec. This agent backtests by
-    # strategy_json and issues its own verdict, so a draft would be stranded
-    # upstream and paper promotion would fail. `inactive` = saved, not
-    # scheduled; promote with update_status(paper).
-    try:
-        detail = mangrove_ai_client().strategies.create(
-            CreateStrategyRequest(
-                name=req.name, asset=req.asset,
-                entry=entry, exit=exit_rules,
-                status="inactive",
-                execution_config=req.execution_config,
-                **(req.market_context.model_dump() if req.market_context else {}),
-            ),
-        )
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"strategies.create failed: {e}") from e
-
-    local_id = _insert_cache(
-        detail,
-        entry=entry,
-        exit_rules=exit_rules,
-        execution_config=req.execution_config or backtest_service.flattened_defaults(),
-        generation_report=None,
-        evaluation_lane=req.evaluation_lane,
-        market_context=req.market_context,
-    )
-    row = _get_row(local_id)
-    resp = _row_to_response(row)
-    _log.info("strategy.created", strategy_id=local_id, mangrove_id=resp.mangrove_id, mode="manual")
-    return resp
 
 
 def list_strategies(

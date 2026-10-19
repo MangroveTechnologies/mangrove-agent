@@ -136,12 +136,7 @@ class AllocationInsufficient(AgentError):
     http_status = 400
 
 
-# -- Backtests / knowledge / market data -------------------------------
-
-
-class BacktestNotFound(AgentError):
-    code = "BACKTEST_NOT_FOUND"
-    http_status = 404
+# -- Knowledge / market data -------------------------------------------
 
 
 class InsufficientData(AgentError):

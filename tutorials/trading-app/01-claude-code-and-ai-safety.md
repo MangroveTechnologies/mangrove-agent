@@ -61,8 +61,10 @@ Claude Code doesn't know about trading out of the box. It gets
 trading capabilities from a **Model Context Protocol (MCP) server** —
 in this repo, that's the local FastAPI process running on your
 laptop. On session start, Claude fetches the list of tools the MCP
-server exposes: `create_wallet`, `backtest_strategy`, `list_trades`,
-and so on. Forty-one tools total in this setup.
+server exposes: its own local tools (`create_wallet`, `get_balances`,
+`execute_swap`, ...) and MangroveAI's tools, which it forwards
+(`save_strategy`, `run_backtest`, `get_backtest`, ...). Ask for
+`list_tools` to see the current set.
 
 If the MCP server isn't running, the bot has no tools and will fall
 through to "I can't actually do anything" behavior. Chapter 03 gets

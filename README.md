@@ -176,13 +176,13 @@ State is persisted in the `./agent-data/` directory (bind-mounted into the conta
 
 This section is a fast tour. The full walkthrough is in [`tutorials/trading-app/`](tutorials/trading-app/00-index.md); come back here if you want the shorter reference.
 
-**Stage 0 — platform tour.** Start Claude Code in the repo directory. The agent runs status, list_tools, get_market_data, kb_search, and search_reference_strategies, and offers to help you build a strategy. No wallet needed yet.
+**Stage 0 — platform tour.** Start Claude Code in the repo directory. The agent runs status, list_tools, get_market_data and kb_search, and offers to help you build a strategy. No wallet needed yet.
 
 **Paper trading (payment wallet needed for paid API calls in x402 mode).**
 
-> "Build me a momentum strategy for ETH on 1h. Use a reference."
+> "Build me a strategy for ETH on 1h."
 
-Agent searches curated reference strategies, picks a candidate, builds it, backtests with a timeframe-appropriate lookback, reports PASS/MARGINAL/FAIL against 6 thresholds.
+The agent calls MangroveAI's `build_strategy_for_regime`: the server reads the current market regime, searches the Strategy Engine's completed runs with fixed floors (more than 10 trades, Sharpe at least 1, IRR at least 10%, beats benchmarks) in that regime, picks one at random from those whose entry the regime admits, saves it as a draft and backtests it on the last 90 days. Ask for a *new* strategy to have one composed from regime-allowed signals instead.
 
 > "Promote it to paper."
 
@@ -214,37 +214,35 @@ For DEX execution, wallet setup and live trading are in Chapters 06 and 07 of th
 
 ## What the agent can do
 
-100 MCP tools as of 2026-09 (including the `hello_mangrove` x402 demo). Run `list_tools` for the live catalog, which is authoritative.
+The agent has two kinds of tools. Run `list_tools` for the live, authoritative catalog.
+
+**1. MangroveAI tools (the single source of truth).** Everything about strategies, backtests, signals, market data, on-chain data, the knowledge base and the Strategy Engine lives in MangroveAI. The agent keeps **no copy** of these tools: at startup it reads MangroveAI's live MCP catalog and forwards each call to MangroveAI's `/mcp/` endpoint, paying per call in x402 wallet mode or using your API key. When MangroveAI adds or changes a tool, the agent picks it up without a code change.
+
+| Area (examples, not a fixed list) | MangroveAI tools |
+|---|---|
+| Strategy building | `load_skill`, `build_strategy_for_regime`, `list_backtest_markets`, `save_strategy`, `update_strategy`, `verify_strategy`, `list_strategies`, `get_strategy` |
+| Backtests | `run_backtest` + `get_backtest` (a saved strategy), `get_backtest_trades`, `list_backtests`, `get_benchmark`, `screen_candidates` |
+| Sweep results | `find_sweep_runs` |
+| Signals & regime | `list_signals`, `get_signal`, `search_signals`, `match_signals`, `query_signal_behavior`, `get_market_regime` |
+| Market, on-chain, DeFi, social | `get_ohlcv`, `get_market_data`, `get_trending`, `get_token_holders`, `get_smart_money_sentiment`, `get_chain_tvl`, `get_social_sentiment`, and more |
+| Knowledge base | `kb_search`, `kb_glossary_get`, `kb_get_document`, `query_knowledge` |
+| Marketplace | `search_marketplace`, `get_marketplace_strategy` |
+| Your MangroveAI positions & trades | `list_positions`, `list_trades` |
+
+**2. Local tools (things only your machine can do).** These stay in the agent because they need your keys, your wallet or your local records.
 
 | Category | Tools |
 |---|---|
-| Discovery (free) | `status`, `list_tools`, `hello_mangrove` |
+| Discovery (free) | `status`, `list_tools`, `hello_mangrove` (x402 demo) |
 | Wallets & portfolio | `create_wallet`, `import_wallet`, `list_wallets`, `get_balances`, `portfolio_value`, `portfolio_pnl`, `portfolio_tokens`, `portfolio_defi`, `portfolio_history` |
 | Kraken (CEX) | `cex_status`, `cex_connect_kraken`, `cex_balances`, `cex_validate_order`, `cex_sync_fills` |
-| DEX (1inch) | `list_dex_venues`, `get_swap_quote`, `execute_swap`, `get_tx_status`, `get_spot_price`, `get_gas_price`, `get_token_search`, `get_allowances`, `get_token_info`¹, `get_dex_chart`¹ |
-| Market data | `get_ohlcv`, `get_market_data`, `get_trending`, `list_approved_assets`, `get_asset`, `get_global_market` |
-| Signals | `list_signals`, `get_signal`, `match_signals`, `search_signals` |
-| On-chain & smart money | `get_whale_activity`, `get_whale_transactions`, `get_smart_money_sentiment`, `screen_smart_money`, `get_token_holders`, `get_exchange_flows`, `get_smart_money_historical_holdings`, `get_smart_money_dex_trades`, `get_smart_money_perp_trades`, `get_token_dex_trades`, `get_token_flows` |
-| DeFi | `get_chain_tvl`, `get_protocol_tvl`, `get_stablecoin_metrics` |
-| DeFi Pro (Pro/Startup/Enterprise) | `get_token_unlocks`, `get_perp_funding`, `get_treasuries`, `get_etf_flows`, `get_lending_borrow_rates` — starter: [docs/defi-pro.md](docs/defi-pro.md) |
-| Social | `get_sentiment`, `get_mentions`, `get_influence_score` |
-| Strategy | `create_strategy_autonomous`, `create_strategy_manual`, `search_reference_strategies`, `build_strategy_from_reference`, `list_strategies`, `get_strategy`, `update_strategy_status`, `delete_strategy`, `backtest_strategy`, `evaluate_strategy` |
-| Execution & logs | `list_account_positions`, `get_account_position`, `list_account_trades`, `list_evaluations`, `list_trades`, `list_all_trades` |
-| Knowledge base & docs | `kb_search`, `kb_glossary_get`, `kb_get_document`, `kb_list_indicators`, `kb_list_tags`, `list_docs`, `get_doc_content` |
-| Oracle research | `sieve_score`, `oracle_data_query`, `oracle_backtest`, `oracle_backtest_async`, `oracle_backtest_poll`, `oracle_backtest_bulk`, `oracle_create_experiment`, `oracle_list_experiments`, `oracle_get_experiment`, `oracle_update_experiment`, `oracle_delete_experiment`, `oracle_validate_experiment`, `oracle_launch_experiment`, `oracle_pause_experiment`, `oracle_list_results`, `oracle_list_datasets`, `oracle_list_signals`, `oracle_list_templates` |
+| DEX (1inch) | `list_dex_venues`, `get_swap_quote`, `execute_swap`, `get_tx_status`, `get_spot_price`, `get_gas_price`, `get_token_search`, `get_allowances`, `get_token_info`, `get_dex_chart` |
+| Local execution records | `agent_list_strategies`, `agent_get_strategy`, `agent_update_strategy_status`, `agent_evaluate_strategy`, `agent_list_evaluations`, `agent_list_trades`, `agent_list_all_trades` |
+| x402 spend budget | `x402_spend_status`, `x402_spend_reset` |
 
-¹ Currently broken upstream; the tool description says why.
+Local tools also have REST endpoints at `/api/v1/agent/*`, calling the same service layer. MangroveAI tools have **no** local REST copy; call them over the agent's MCP endpoint, or call MangroveAI directly. Authenticated routes take `X-API-Key` set to the first entry of `API_KEYS` in `server/src/config/local-config.json` (a unique key `setup.sh` generates). That is the agent's own local key, **not** your MangroveAI API key. `/health`, `status` and `list_tools` need no key, so a wrong key looks fine until the first authenticated call returns 401.
 
-Every tool has a mirrored REST endpoint at `/api/v1/agent/*`. Both call the same service layer — pick whichever fits your caller. Authenticated routes take `X-API-Key` set to the first entry of `API_KEYS` in `server/src/config/local-config.json` (a unique key `setup.sh` generates). That is the agent's own local key, **not** your MangroveAI API key. `/health`, `status` and `list_tools` need no key, so a wrong key looks fine until the first authenticated call returns 401.
-
-**SIEVE + Sweep — screen many ideas, then find the best config.** Two of those Oracle tools are the research workhorses:
-
-| Tool | What it does | When |
-|---|---|---|
-| **SIEVE** (`sieve_score`) | Scores up to 99 strategy ideas in milliseconds and tells you which are worth testing. | You have *many* ideas and want to skip the duds. |
-| **Sweep** (`oracle_*_experiment`) | Runs many backtests in one managed experiment (`create → validate → launch → results`) and ranks them. | You want the *best* config out of many. |
-
-Example asks: *"Score these 40 variations and tell me which are worth testing"* (`/sieve`), *"Sweep the RSI window from 7 to 21 on BTC 1h and rank them"* (`/sweep`). Full walkthrough: [`docs/getting-started.md`](docs/getting-started.md); deeper dives in the KB [SIEVE guide](https://mangrove.io/docs/guides/using-sieve-prefilter) and [Experiments reference](https://mangrove.io/docs/api-reference/experiments).
+**Backtests and the Strategy Engine.** Backtests run on MangroveAI, never in the agent. For a saved strategy, `run_backtest` submits the run and `get_backtest` reads the result when it finishes. To search what the Strategy Engine has already measured, use `find_sweep_runs`. Creating and launching new sweeps is not offered over MCP today. Deeper dives: the KB [SIEVE guide](https://mangrove.io/docs/guides/using-sieve-prefilter) and [Experiments reference](https://mangrove.io/docs/api-reference/experiments).
 
 ---
 
@@ -270,10 +268,10 @@ Example asks: *"Score these 40 variations and tell me which are worth testing"* 
 └─────────────────────────────────────────────────────────────┘
               │                      │
               ▼                      ▼
-       mangroveai SDK         mangrovemarkets SDK
-       (strategies, backtest, (DEX swap, portfolio,
-        signals, market,       wallet)
-        KB, on-chain)
+    MangroveAI /mcp/ +        mangrovemarkets SDK
+    mangroveai SDK            (DEX swap, portfolio,
+    (every MangroveAI tool,    wallet)
+     strategy evaluation)
 ```
 
 Strategy evaluation happens inside `mangroveai.execution.evaluate()` — the agent does **not** re-implement signal logic, risk gates, position sizing, or cooldowns. It orchestrates: fetch strategy → call SDK → dispatch returned `OrderIntent[]` to the executor → log.
@@ -294,7 +292,7 @@ For live trades the agent decrypts your wallet's secret in-process, signs the un
 
 ## Development
 
-Extending the agent — adding a new endpoint, MCP tool, signal, or strategy — follows the service-layer pattern documented in [`docs/contributing.md`](docs/contributing.md). Trading-bot-specific skills available in this repo: `/create-strategy`, `/backtest`, `/custom-signal`, `/audit-security`, `/check-alignment`, `/tool-spec`. See `.claude/skills/` for what each one does.
+Extending the agent — adding a new endpoint, MCP tool, signal, or strategy — follows the service-layer pattern documented in [`docs/contributing.md`](docs/contributing.md). Strategy creation and backtesting instructions are loaded live from MangroveAI through the MCP `load_skill` tool. The agent ships no copies of server skills or strategy generators. Contributor skills remain in `.claude/skills/`.
 
 ## Tests
 
@@ -310,7 +308,7 @@ Or from inside the running container:
 docker compose exec app pytest tests/
 ```
 
-Expect: 239 passed, 2 skipped (opt-in live-swap tests).
+Expect everything to pass apart from the 2 opt-in live-swap tests, which are skipped.
 
 To run the opt-in live swaps:
 

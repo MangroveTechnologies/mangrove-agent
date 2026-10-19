@@ -49,28 +49,9 @@ async def _call(server, name: str, args: dict | None = None) -> dict | list:
 CORE_TOOLS = {
     "status", "list_tools", "create_wallet", "list_wallets", "get_balances",
     "list_dex_venues", "get_swap_quote", "execute_swap", "agent_list_strategies",
-    "agent_get_strategy", "agent_update_strategy_status", "agent_backtest_strategy",
-    "agent_evaluate_strategy", "agent_create_strategy_manual", "x402_spend_status",
+    "agent_get_strategy", "agent_update_strategy_status",
+    "agent_evaluate_strategy", "x402_spend_status",
 }
-
-
-async def test_reference_next_step_resolves_to_local_creation(mcp_server, monkeypatch):
-    from src.mcp import tools
-    from src.services import strategy_service
-    from unittest.mock import Mock
-
-    monkeypatch.setattr(tools, '_require', lambda _: True)
-    payload = await _call(mcp_server, 'agent_build_strategy_from_reference', {'reference_id': 'ref-001'})
-    next_tool = payload['next_step']['mcp_tool']
-    assert next_tool == 'agent_create_strategy_manual'
-    assert next_tool in mcp_server._tool_manager._tools
-    create = Mock(return_value=Mock(model_dump=Mock(return_value={'strategy_id': 'local-fixture'})))
-    monkeypatch.setattr(strategy_service, 'create_manual', create)
-    result = await _call(mcp_server, next_tool, {
-        key: payload[key] for key in ('name', 'asset', 'timeframe', 'entry', 'exit', 'execution_config')
-    })
-    assert result['strategy_id'] == 'local-fixture'
-    create.assert_called_once()
 
 
 

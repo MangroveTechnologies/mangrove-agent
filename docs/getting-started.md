@@ -40,10 +40,13 @@ Best when you have a specific idea.
 
 > **You:** "Build me a momentum strategy for ETH on the 1-hour chart."
 
-Sage searches the reference library and the knowledge base, builds a
-strategy with evidence-backed parameters, and backtests it. You get a
-PASS/FAIL verdict against six performance thresholds plus a "did it beat
-buy-and-hold?" line. (This is the `/create-strategy` → `/backtest` flow.)
+Sage first checks what MangroveAI's Strategy Engine has already measured
+for the current market regime; if nothing fits, it composes a fresh
+strategy from regime-appropriate signals, saves it as a draft and
+backtests it. You get the metrics next to buy-and-hold over the same
+window. The build and the backtest both run on MangroveAI
+(`build_strategy_for_regime`, or `save_strategy` then `run_backtest` /
+`get_backtest`, over MCP).
 
 ### Path B — "Find me the best one" (this is the powerful one)
 
@@ -52,23 +55,23 @@ Best when you don't know the right parameters yet — which is usually.
 > **You:** "Find me the best MACD strategy for BTC on 1h. Try a bunch of
 > window settings."
 
-Here's what Sage does for you, automatically:
+Here's what Sage does for you, using MangroveAI's tools:
 
-1. **Generates the variations** — e.g. 50 combinations of MACD fast/slow
+1. **Generates the variations** — e.g. 30 combinations of MACD fast/slow
    windows.
-2. **Runs them through SIEVE** (`/sieve`) — one cheap call scores all 50,
-   drops the ones predicted to never trade, and ranks the rest by their
-   probability of winning.
-3. **Sweeps the survivors** (`/sweep`) — fans the top handful into a
-   managed Oracle experiment (`create → validate → launch → results`),
-   backtests them all, and ranks by risk-adjusted return (Sortino).
-4. **Confirms the winner** — runs the top result through a full backtest
-   for a trustworthy verdict.
-5. **Shows you the leaderboard** — the top configs with their metrics and
-   how they compare to just holding the asset.
+2. **Screens them with SIEVE** (`screen_candidates`) — one call ranks all
+   of them by how likely each is to place trades at all. It says nothing
+   about profit; it only tells Sage which to backtest first.
+3. **Checks what's already been measured** (`find_sweep_runs`) — searches
+   the Strategy Engine's completed sweeps for similar strategies and how
+   they did.
+4. **Backtests the best few** (`save_strategy`, `run_backtest`, then
+   `get_backtest` when they finish) — backtests run on MangroveAI.
+5. **Shows you the comparison** — the candidates' metrics and how they
+   compare to just holding the asset.
 
-You end up with a ranked winner you can promote to paper, having tested
-dozens of ideas for a fraction of the compute.
+You end up with a ranked winner you can promote to paper, having screened
+dozens of ideas and backtested only the promising ones.
 
 ---
 
@@ -95,17 +98,18 @@ terminal. See [`wallet-presentation.md`](../.claude/rules/wallet-presentation.md
 
 ## What to say — a cheat sheet
 
-| You want to… | Say something like… | Skill |
+| You want to… | Say something like… | What Sage uses |
 |---|---|---|
 | See what the bot can do | "Give me a tour." | — |
-| Build one specific strategy | "Build a mean-reversion strategy for SOL 15m." | `/create-strategy` |
-| Screen many ideas cheaply | "Score these 40 variations and tell me which are worth testing." | `/sieve` |
-| Search for the best config | "Sweep the RSI window from 7 to 21 on BTC 1h and rank them." | `/sweep` |
-| Verdict on one strategy | "Backtest that one over the last year." | `/backtest` |
+| Build a strategy for today's market | "Build me a BTC 1h strategy." | `build_strategy_for_regime` (MangroveAI) |
+| Build one specific strategy | "Build a mean-reversion strategy for SOL 15m." | `load_skill` + `save_strategy` (MangroveAI) |
+| Screen many ideas cheaply | "Score these 40 variations and tell me which are worth testing." | `screen_candidates` (MangroveAI) |
+| See what has already worked | "Show me BTC 1h strategies with Sharpe above 1 that traded at least 20 times." | `find_sweep_runs` (MangroveAI) |
+| Verdict on one strategy | "Backtest that one over the last 90 days." | `run_backtest` + `get_backtest` (MangroveAI) |
 | Start paper trading | "Promote it to paper." | — |
 | Check on a strategy | "How are my paper strategies doing?" | — |
 
-You don't need to name the skills — Sage picks the right one from what
+You don't need to name the tools — Sage picks the right one from what
 you ask. They're listed so you know what's happening under the hood.
 
 ---
@@ -117,5 +121,5 @@ you ask. They're listed so you know what's happening under the hood.
   and [SIEVE end-to-end](https://mangrove.io/docs/guides/sieve-end-to-end-workflow).
 - **Sweeps / experiments** — KB [Experiments reference](https://mangrove.io/docs/api-reference/experiments).
 - **The full trading workflow** the bot follows — [`trading-bot-workflow.md`](../.claude/rules/trading-bot-workflow.md).
-- **The SDK** behind it all (if you want to script directly) — the
-  `mangroveai` Python package, `client.oracle.*`.
+- **Scripting directly** — call MangroveAI's tools yourself over its MCP
+  endpoint, or use the `mangroveai` Python package.

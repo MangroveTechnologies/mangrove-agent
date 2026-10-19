@@ -462,6 +462,85 @@ def _private_mcp_diagnostics():
         _remote_mcp_active.reset(token)
 
 
+def _raise_transport_failure(error: BaseException, attempt) -> None:
+    """Report an MCP payment call the transport broke, as certain or uncertain.
+
+    Types and HTTP statuses only are logged: the leaves of an ExceptionGroup say what
+    actually failed (a 429 from the receiver's rate limit reads very differently from a
+    reset connection), and neither carries a payment header or a body.
+    """
+    leaves, statuses, stack = [], [], [error]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, BaseExceptionGroup):
+            stack.extend(current.exceptions)
+            continue
+        leaves.append(type(current).__name__)
+        status = getattr(getattr(current, "response", None), "status_code", None)
+        if isinstance(status, int):
+            statuses.append(status)
+    _log.warning("x402.mcp.transport_failed", error_type=type(error).__name__,
+                 causes=",".join(sorted(set(leaves))) or None,
+                 http_status=",".join(map(str, sorted(set(statuses)))) or None)
+    pending = [error]
+    while pending:
+        nested = pending.pop()
+        if isinstance(nested, AgentError):
+            raise nested from None
+        if isinstance(nested, BaseExceptionGroup):
+            pending.extend(nested.exceptions)
+    try:
+        reservations = payment_operations.reservation_ids(attempt.operation_id)
+    except Exception:
+        reservations = []
+    if reservations:
+        raise X402PaymentUncertain(operation_id=attempt.operation_id, reservation_ids=reservations) from None
+    raise X402PaymentError("The remote MCP request was interrupted; check pending payments before retrying.") from None
+
+
+class _OpenSession:
+    """A session the caller already initialized: payment reuses it without re-opening it."""
+
+    def __init__(self, session):
+        self._session = session
+
+    async def initialize(self):
+        return None
+
+    async def call_tool(self, *args, **kwargs):
+        return await self._session.call_tool(*args, **kwargs)
+
+
+async def pay_on_open_mcp_session(
+    session: Any, endpoint: str, *, name: str, arguments: dict[str, Any] | None = None,
+    wallet_address: str | None = None, operation_id: str | None = None,
+    timeout: float = _DEFAULT_TIMEOUT_S,
+) -> PaymentResult:
+    """Pay a tool over an MCP session the caller keeps open across calls.
+
+    The MCP specification has a client open one session and reuse it; opening a fresh
+    one per call made every paid call four requests (open, initialized, unpaid call,
+    paid retry) instead of two. Same payment flow, recovery and failure reporting as
+    ``pay_remote_mcp``; the caller owns the session's lifetime.
+    """
+    import anyio
+
+    operation_id = operation_id or str(uuid.uuid4())
+    attempt = payment_operations.PaymentAttempt(operation_id)
+    attempt_token = payment_operations.current_attempt.set(attempt)
+    try:
+        with _private_mcp_diagnostics(), anyio.fail_after(timeout):
+            return await pay_mcp(_OpenSession(session), name=name, arguments=arguments,
+                                 resource=endpoint, wallet_address=wallet_address,
+                                 operation_id=operation_id)
+    except AgentError:
+        raise
+    except Exception as error:
+        _raise_transport_failure(error, attempt)
+    finally:
+        payment_operations.current_attempt.reset(attempt_token)
+
+
 async def pay_remote_mcp(
     endpoint: str, *, name: str, arguments: dict[str, Any] | None = None,
     wallet_address: str | None = None, operation_id: str | None = None,
@@ -498,21 +577,7 @@ async def pay_remote_mcp(
     except AgentError:
         raise
     except Exception as error:
-        _log.warning("x402.mcp.transport_failed", error_type=type(error).__name__)
-        pending = [error]
-        while pending:
-            nested = pending.pop()
-            if isinstance(nested, AgentError):
-                raise nested from None
-            if isinstance(nested, BaseExceptionGroup):
-                pending.extend(nested.exceptions)
-        try:
-            reservations = payment_operations.reservation_ids(attempt.operation_id)
-        except Exception:
-            reservations = []
-        if reservations:
-            raise X402PaymentUncertain(operation_id=attempt.operation_id, reservation_ids=reservations) from None
-        raise X402PaymentError("The remote MCP request was interrupted; check pending payments before retrying.") from None
+        _raise_transport_failure(error, attempt)
     finally:
         payment_operations.current_attempt.reset(attempt_token)
 

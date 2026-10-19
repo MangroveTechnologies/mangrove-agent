@@ -205,8 +205,8 @@ Live adds three guarantees over paper:
 | Step | Tool |
 |---|---|
 | Create | `create_strategy_autonomous` OR `search_reference_strategies` + `build_strategy_from_reference` + `create_strategy_manual` |
-| Backtest | `backtest_strategy` |
-| Review | `backtest_strategy(mode="full")` returns a server-computed `verdict` (PASS / MARGINAL / FAIL / INSUFFICIENT_TRADES) against `server/src/services/data/threshold_spec.json` — see `server/src/services/backtest_verdict.py` |
+| Backtest | `run_backtest` (MangroveAI, over MCP) -- starts the run and returns its `backtest_id` |
+| Review | `get_backtest(backtest_id)` (MangroveAI, over MCP) -- metrics and the server's verdict; this agent computes no verdict of its own |
 | Promote paper | `update_strategy_status(status="paper")` |
 | Watch paper | `list_evaluations`, `list_trades` |
 | Create wallet | `create_wallet` (secret returned via `vault_token` → `reveal-secret.sh`) |

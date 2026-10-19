@@ -105,86 +105,28 @@ def automatic_client(monkeypatch):
 
 
 async def call_sdk_workflow(name, arguments):
-    """Exercise retained SDK consumers; MCP transport is tested in test_remote_mcp."""
-    from src.services.signals import list_signals
+    """Exercise the SDK's x402 transport directly; MCP transport is tested in test_remote_mcp."""
     from src.shared.clients.mangrove import mangrove_ai_client
     from src.mcp.tools import _handle_upstream_error
     from mangrove_ai.models import SearchSignalsRequest
 
     args = {key: value for key, value in arguments.items() if key != 'api_key'}
     try:
-        if name == 'list_signals':
-            result = list_signals(collect=True, **args)
-        else:
-            sdk = mangrove_ai_client()
-            calls = {
-                'get_signal': lambda: sdk.signals.get(**args),
-                'search_signals': lambda: sdk.signals.search(SearchSignalsRequest(**args)),
-                'match_signals': lambda: sdk.signals.match(**args),
-                'get_trending': lambda: sdk.crypto_assets.get_trending(),
-                'list_docs': lambda: sdk.docs.list(),
-                'kb_list_tags': lambda: sdk.kb.tags.list(),
-                'get_whale_activity': lambda: sdk.on_chain.get_whale_activity(**args),
-            }
-            result = calls[name]()
+        sdk = mangrove_ai_client()
+        calls = {
+            'list_signals': lambda: sdk.signals.list(**args),
+            'get_signal': lambda: sdk.signals.get(**args),
+            'search_signals': lambda: sdk.signals.search(SearchSignalsRequest(**args)),
+            'match_signals': lambda: sdk.signals.match(**args),
+            'get_trending': lambda: sdk.crypto_assets.get_trending(),
+            'list_docs': lambda: sdk.docs.list(),
+            'kb_list_tags': lambda: sdk.kb.tags.list(),
+            'get_whale_activity': lambda: sdk.on_chain.get_whale_activity(**args),
+        }
+        result = calls[name]()
         return json.dumps(result, default=lambda item: item.model_dump())
     except Exception as error:
         return _handle_upstream_error('WORKFLOW_FAILED', error)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("limit,search,expected_payments", [(1, None, 1), (100, None, 4), (101, None, 4), (250, None, 9), (1, "trend", 1)])
-async def test_sdk_workflow_automatically_pays_only_needed_pages(
-    wallet, automatic_client, monkeypatch, limit, search, expected_payments,
-):
-    from src.shared.auth.middleware import reset_request_api_key, set_request_api_key
-
-    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
-    # Config URLs/environment must take precedence over every ambient SDK default.
-    monkeypatch.setenv("MANGROVE_ENVIRONMENT", "prod")
-    monkeypatch.setenv("MANGROVE_BASE_URL", "https://wrong.test/api/v1")
-    monkeypatch.setenv("MANGROVE_KB_BASE_URL", "https://wrong.test/kb")
-    monkeypatch.setattr("mangrove_ai._config._maybe_load_dotenv", lambda: pytest.fail("dotenv loaded"))
-    seen, nonces = [], []
-
-    def handle(request):
-        seen.append(request)
-        assert request.url.host == "payments.test"
-        assert "Authorization" not in request.headers
-        assert "X-API-Key" not in request.headers  # local key must not be forwarded
-        if "PAYMENT-SIGNATURE" not in request.headers:
-            return challenge()
-        signed = payment(request)
-        assert signed["authorization"]["from"] == wallet
-        nonces.append(signed["authorization"]["nonce"])
-        if search:
-            body = json.loads(request.content)
-            assert request.method == "POST"
-            assert request.url.path == "/api/v1/signals/search"
-            assert body["query"] == search
-            size, offset = body["limit"], 0
-        else:
-            assert request.method == "GET"
-            assert request.url.path == "/api/v1/signals/"
-            size, offset = min(30, int(request.url.params["limit"])), int(request.url.params["offset"])
-        return httpx.Response(200, json={
-            "signals": [{"name": f"signal_{i}", "category": "trend"} for i in range(offset, offset + size)],
-            "total": 10000, "limit": size, "offset": offset,
-        }, headers={"payment-response": receipt(wallet)})
-
-    automatic_client(handle)
-    token = set_request_api_key("test-key-1")
-    try:
-        result = json.loads(await call_sdk_workflow("list_signals", {"limit": limit, "search": search}))
-    finally:
-        reset_request_api_key(token)
-    assert len(result["items"]) == limit
-    assert len(seen) == 2 * expected_payments
-    assert len(set(nonces)) == expected_payments
-    rows = spend_service.list_payments()
-    assert len(rows) == expected_payments
-    assert all(row["state"] == "settled" for row in rows)
-    assert spend_service.check_before_payment()["spent_usd"] == pytest.approx(expected_payments * 0.001)
 
 
 @pytest.mark.asyncio
@@ -276,27 +218,6 @@ def test_automatic_mode_refuses_ambient_key_without_mutating_environment(databas
     with pytest.raises(ValidationError, match="credentials"):
         get_client().signals.list()
     assert os.environ["MANGROVE_API_KEY"] == "prod_ambient"
-    assert spend_service.list_payments() == []
-
-
-@pytest.mark.asyncio
-async def test_normal_rest_route_keeps_payment_error_code(wallet, automatic_client, monkeypatch):
-    from src.api.routes.signals import list_signals
-
-    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
-    monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 0.0001)
-    automatic_client(lambda request: challenge())
-    with pytest.raises(X402SpendCapExceeded):
-        await list_signals(limit=1)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("limit", [0, -1, 1001])
-async def test_invalid_signal_limit_does_not_call_upstream(database, automatic_client, limit):
-
-    automatic_client(lambda request: pytest.fail("invalid limit reached upstream"))
-    result = json.loads(await call_sdk_workflow("list_signals", {"api_key": "test-key-1", "limit": limit}))
-    assert result["code"] == "VALIDATION_ERROR"
     assert spend_service.list_payments() == []
 
 
@@ -723,42 +644,6 @@ async def test_sdk_signal_calls_preserve_cap_error(wallet, automatic_client, mon
 
 
 @pytest.mark.asyncio
-async def test_category_is_filtered_upstream_before_paid_limit(wallet, automatic_client, monkeypatch):
-
-    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
-    seen = []
-
-    def handle(request):
-        seen.append(request)
-        assert request.url.params["category"] == "trend"
-        assert request.url.params["limit"] == "1"
-        if "payment-signature" not in request.headers:
-            return challenge()
-        return httpx.Response(200, json={"signals": [{"name": "trend", "category": "trend"}], "total": 100},
-                              headers={"payment-response": receipt(wallet)})
-
-    automatic_client(handle)
-    result = json.loads(await call_sdk_workflow("list_signals", {"api_key": "test-key-1", "limit": 1, "category": "trend"}))
-    assert result["items"][0]["name"] == "trend"
-    assert len(seen) == 2
-    assert len(spend_service.list_payments()) == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("detail", [False, True])
-async def test_signal_rest_errors_do_not_echo_remote_data(database, automatic_client, detail):
-    from src.api.routes.signals import get_signal, list_signals
-    from src.shared.errors import SdkError
-
-    sentinel = "synthetic-private-token user@example.test"
-    automatic_client(lambda request: httpx.Response(403, json={"message": sentinel, "error": sentinel}))
-    with pytest.raises(SdkError) as error:
-        await (get_signal("trend") if detail else list_signals(limit=1))
-    assert sentinel not in json.dumps(error.value.to_dict())
-    assert error.value.__suppress_context__
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("name,args", [
     ("get_trending", {}), ("list_docs", {}),
     ("kb_list_tags", {}), ("get_whale_activity", {"symbol": "ETH"}),
@@ -785,27 +670,6 @@ async def test_other_sdk_calls_sanitize_errors_and_preserve_cap(
     if refused_payment:
         assert json.loads(result)["code"] == "X402_SPEND_CAP_EXCEEDED"
     assert len(seen) == 1
-    assert spend_service.list_payments() == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("route", ["market", "on_chain", "kb"])
-@pytest.mark.parametrize("refused_payment", [False, True])
-async def test_other_rest_routes_sanitize_errors_and_preserve_cap(
-    wallet, automatic_client, monkeypatch, route, refused_payment,
-):
-    from src.api.routes import kb, market, on_chain
-    from src.shared.errors import SdkError
-
-    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
-    monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 0.0001)
-    sentinel = "synthetic-private-token user@example.test"
-    automatic_client(lambda request: challenge() if refused_payment else httpx.Response(403, json={"message": sentinel}))
-    calls = {"market": lambda: market.trending(), "on_chain": lambda: on_chain.whale_activity("ETH"),
-             "kb": lambda: kb.search("trend")}
-    with pytest.raises(X402SpendCapExceeded if refused_payment else SdkError) as error:
-        await calls[route]()
-    assert sentinel not in json.dumps(error.value.to_dict())
     assert spend_service.list_payments() == []
 
 
@@ -990,39 +854,6 @@ def test_reentrant_duplicate_during_signing_cannot_abandon_original_owner(wallet
     with client(handle, wallet) as http:
         assert http.get(URL).status_code == 200
     assert len(spend_service.list_payments()) == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["price_increase", "uncertain"])
-async def test_signal_workflow_stops_on_second_page_payment_failure(wallet, automatic_client, monkeypatch, failure):
-
-    monkeypatch.setattr(app_config, "X402_PAYER_WALLET", wallet)
-    signed_offsets = []
-
-    def handler(request):
-        offset = int(request.url.params["offset"])
-        if "PAYMENT-SIGNATURE" not in request.headers:
-            return challenge("2000" if offset and failure == "price_increase" else "1000")
-        signed_offsets.append(offset)
-        if offset:
-            raise httpx.ReadTimeout("lost response", request=request)
-        return httpx.Response(200, json={
-            "signals": [{"name": f"s{i}", "category": "trend"} for i in range(30)],
-            "offset": 0, "limit": 30, "total": 100, "has_more": True, "next_offset": 30,
-        }, headers={"payment-response": receipt(wallet)})
-
-    automatic_client(handler)
-    result = json.loads(await call_sdk_workflow("list_signals", {"api_key": "test-key-1", "limit": 100}))
-    if failure == "price_increase":
-        assert result["code"] == "X402_SPEND_CAP_EXCEEDED"
-        assert signed_offsets == [0]
-    else:
-        assert result["code"] == "X402_PAYMENT_UNCERTAIN"
-        assert result["retry_payment"] is False
-        assert result["reservation_ids"]
-        assert signed_offsets == [0, 30]
-    assert len(spend_service.list_payments()) == len(signed_offsets)
-    assert spend_service.check_before_payment()["spent_usd"] == len(signed_offsets) * 0.001
 
 
 def test_normal_http_retry_releases_proven_unused_authorization_and_accepts_empty_result(wallet, monkeypatch):

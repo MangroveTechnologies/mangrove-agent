@@ -45,6 +45,12 @@
     "rest:defi_stablecoins_metrics",
     "rest:defi_token_unlocks",
     "rest:defi_treasuries",
+    "rest:knowledge_get_document",
+    "rest:knowledge_glossary",
+    "rest:knowledge_list_documents",
+    "rest:knowledge_query",
+    "rest:knowledge_quick_reference",
+    "rest:knowledge_search",
     "rest:managers_account_detail",
     "rest:managers_accounts_list_or_create",
     "rest:managers_evaluate_bulk",
@@ -84,6 +90,23 @@
     "rest:strategy_list_or_create",
     "rest:strategy_status_update",
     "rest:strategy_verify",
+    "rest:workflow_build_strategy_for_regime",
+    "rest:workflow_find_sweep_runs",
+    "rest:workflow_get_backtest",
+    "rest:workflow_get_backtest_trades",
+    "rest:workflow_get_execution_config_schema",
+    "rest:workflow_get_marketplace_strategy",
+    "rest:workflow_get_strategy",
+    "rest:workflow_list_backtest_markets",
+    "rest:workflow_list_backtests",
+    "rest:workflow_list_trades",
+    "rest:workflow_load_skill",
+    "rest:workflow_run_backtest",
+    "rest:workflow_save_strategy",
+    "rest:workflow_screen_candidates",
+    "rest:workflow_search_marketplace",
+    "rest:workflow_update_strategy",
+    "rest:workflow_verify_strategy",
     "skill:backtest_async_status",
     "skill:backtest_async_submit",
     "skill:backtest_bulk",
@@ -129,98 +152,23 @@
     "skill:strategy_status_update"
   ],
   "source": {
-    "endpoint": "http://127.0.0.1:15702/mcp/",
+    "endpoint": "http://127.0.0.1:5002/mcp/",
     "kind": "anonymous-tools-list",
-    "retrieved_at": "2026-10-11T01:18:58.724176+00:00"
+    "retrieved_at": "2026-10-19T16:08:08.613204+00:00"
   },
   "tools": {
-    "archive_strategy": {
-      "properties": {
-        "archived": {
-          "default": true,
-          "type": "boolean"
-        },
-        "strategy_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "strategy_id"
-      ],
-      "type": "object"
-    },
-    "build_market_window": {
+    "build_strategy_for_regime": {
       "properties": {
         "asset": {
           "type": "string"
         },
         "candle_size": {
-          "default": "1h",
-          "type": "string"
-        },
-        "end_date": {
-          "type": "string"
-        },
-        "source": {
-          "default": "mangrove",
-          "type": "string"
-        },
-        "start_date": {
           "type": "string"
         }
       },
       "required": [
-        "asset",
-        "end_date",
-        "start_date"
+        "asset"
       ],
-      "type": "object"
-    },
-    "build_strategy": {
-      "properties": {
-        "asset": {
-          "type": "string"
-        },
-        "atr_volatility_factor": {
-          "type": "number"
-        },
-        "entry_signals": {
-          "items": {
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "exit_signals": {
-          "items": {
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "max_open_positions": {
-          "type": "integer"
-        },
-        "max_risk_per_trade": {
-          "type": "number"
-        },
-        "name": {
-          "type": "string"
-        },
-        "reference_index": {
-          "type": "integer"
-        },
-        "regime_direction": {
-          "type": "string"
-        },
-        "regime_override": {
-          "type": "boolean"
-        },
-        "reward_factor": {
-          "type": "number"
-        },
-        "timeframe": {
-          "type": "string"
-        }
-      },
       "type": "object"
     },
     "classify_market_segment": {
@@ -235,6 +183,15 @@
         "end_date": {
           "type": "string"
         },
+        "market_data_venue": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "quote_token": {
+          "type": "string"
+        },
         "start_date": {
           "type": "string"
         },
@@ -243,182 +200,6 @@
         }
       },
       "required": [],
-      "type": "object"
-    },
-    "create_sweep": {
-      "properties": {
-        "assets": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "candidate_shape": {
-          "type": "object"
-        },
-        "candle_sizes": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "categories": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "draws_per_dataset": {
-          "default": 100,
-          "type": "integer"
-        },
-        "entry_filters": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "entry_triggers": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "execution_base": {
-          "type": "object"
-        },
-        "execution_sweeps": {
-          "type": "object"
-        },
-        "exit_filters": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "exit_triggers": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "include_gapped": {
-          "default": false,
-          "type": "boolean"
-        },
-        "max_total_runs": {
-          "type": "integer"
-        },
-        "param_samples": {
-          "default": 3,
-          "type": "integer"
-        },
-        "pre_filter_threshold": {
-          "type": "number"
-        },
-        "regimes": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "signal_groups": {
-          "items": {
-            "additionalProperties": false,
-            "properties": {
-              "categories": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "exclude": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "filters": {
-                "additionalProperties": false,
-                "properties": {
-                  "categories": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "exclude": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "include": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  }
-                },
-                "required": [],
-                "type": "object"
-              },
-              "include": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "name": {
-                "type": "string"
-              },
-              "triggers": {
-                "additionalProperties": false,
-                "properties": {
-                  "categories": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "exclude": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "include": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  }
-                },
-                "required": [],
-                "type": "object"
-              },
-              "weight": {
-                "type": "number"
-              }
-            },
-            "required": [],
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "sweep_name": {
-          "type": "string"
-        },
-        "windows": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "sweep_name"
-      ],
       "type": "object"
     },
     "delete_strategy": {
@@ -462,6 +243,15 @@
           "type": "string"
         },
         "end_date": {
+          "type": "string"
+        },
+        "market_data_venue": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "quote_token": {
           "type": "string"
         },
         "signals": {
@@ -620,6 +410,9 @@
         "regime_composite": {
           "type": "string"
         },
+        "regime_direction": {
+          "type": "string"
+        },
         "reward_factor": {
           "type": "number"
         },
@@ -669,6 +462,25 @@
       ],
       "type": "object"
     },
+    "get_backtest_trades": {
+      "properties": {
+        "backtest_id": {
+          "type": "string"
+        },
+        "limit": {
+          "default": 100,
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "backtest_id"
+      ],
+      "type": "object"
+    },
     "get_benchmark": {
       "properties": {
         "asset": {
@@ -708,18 +520,12 @@
       ],
       "type": "object"
     },
-    "get_condition_study": {
-      "properties": {
-        "study_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "study_id"
-      ],
+    "get_etf_flows": {
+      "properties": {},
+      "required": [],
       "type": "object"
     },
-    "get_etf_flows": {
+    "get_execution_config_schema": {
       "properties": {},
       "required": [],
       "type": "object"
@@ -747,7 +553,13 @@
     },
     "get_market_data": {
       "properties": {
+        "market_data_venue": {
+          "type": "string"
+        },
         "provider": {
+          "type": "string"
+        },
+        "quote_token": {
           "type": "string"
         },
         "symbol": {
@@ -767,6 +579,15 @@
         "lookback_days": {
           "default": 365,
           "type": "integer"
+        },
+        "market_data_venue": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "quote_token": {
+          "type": "string"
         }
       },
       "required": [
@@ -785,18 +606,19 @@
       ],
       "type": "object"
     },
-    "get_notification_settings": {
-      "properties": {},
-      "required": [],
-      "type": "object"
-    },
     "get_ohlcv": {
       "properties": {
         "lookback_days": {
           "default": 30,
           "type": "integer"
         },
+        "market_data_venue": {
+          "type": "string"
+        },
         "provider": {
+          "type": "string"
+        },
+        "quote_token": {
           "type": "string"
         },
         "symbol": {
@@ -1109,37 +931,6 @@
       "required": [],
       "type": "object"
     },
-    "get_sweep": {
-      "properties": {
-        "experiment_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "experiment_id"
-      ],
-      "type": "object"
-    },
-    "get_sweep_limits": {
-      "properties": {},
-      "required": [],
-      "type": "object"
-    },
-    "get_sweep_run": {
-      "properties": {
-        "experiment_id": {
-          "type": "string"
-        },
-        "run_index": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "experiment_id",
-        "run_index"
-      ],
-      "type": "object"
-    },
     "get_symbol_exchanges": {
       "properties": {
         "symbol": {
@@ -1246,24 +1037,9 @@
       "required": [],
       "type": "object"
     },
-    "get_trade_history": {
-      "properties": {
-        "asset": {
-          "type": "string"
-        },
-        "limit": {
-          "type": "integer"
-        },
-        "outcome": {
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
     "get_trades_for_strategy": {
       "properties": {
         "limit": {
-          "default": 50,
           "type": "integer"
         },
         "strategy_id": {
@@ -1287,10 +1063,30 @@
     },
     "kb_get_document": {
       "properties": {
+        "full": {
+          "default": false,
+          "type": "boolean"
+        },
         "max_chars": {
           "type": "integer"
         },
+        "offset": {
+          "default": 0,
+          "type": "integer"
+        },
+        "section_anchor": {
+          "type": "string"
+        },
         "slug": {
+          "type": "string"
+        },
+        "view": {
+          "default": "content",
+          "enum": [
+            "overview",
+            "section",
+            "content"
+          ],
           "type": "string"
         }
       },
@@ -1301,8 +1097,28 @@
     },
     "kb_get_signal_quick_reference": {
       "properties": {
+        "full": {
+          "default": false,
+          "type": "boolean"
+        },
         "max_chars": {
           "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "type": "integer"
+        },
+        "section_anchor": {
+          "type": "string"
+        },
+        "view": {
+          "default": "content",
+          "enum": [
+            "overview",
+            "section",
+            "content"
+          ],
+          "type": "string"
         }
       },
       "required": [],
@@ -1338,21 +1154,16 @@
         },
         "tag": {
           "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
         "q"
-      ],
-      "type": "object"
-    },
-    "launch_sweep": {
-      "properties": {
-        "experiment_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "experiment_id"
       ],
       "type": "object"
     },
@@ -1363,6 +1174,17 @@
         }
       },
       "required": [],
+      "type": "object"
+    },
+    "list_backtest_markets": {
+      "properties": {
+        "asset": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset"
+      ],
       "type": "object"
     },
     "list_backtests": {
@@ -1381,11 +1203,9 @@
     "list_evaluations": {
       "properties": {
         "limit": {
-          "default": 50,
           "type": "integer"
         },
         "offset": {
-          "default": 0,
           "type": "integer"
         },
         "strategy_id": {
@@ -1402,28 +1222,6 @@
       "required": [],
       "type": "object"
     },
-    "list_market_conditions": {
-      "properties": {
-        "asset": {
-          "type": "string"
-        },
-        "candle_size": {
-          "type": "string"
-        }
-      },
-      "required": [],
-      "type": "object"
-    },
-    "list_platform_strategies": {
-      "properties": {
-        "limit": {
-          "default": 100,
-          "type": "integer"
-        }
-      },
-      "required": [],
-      "type": "object"
-    },
     "list_playground_datasets": {
       "properties": {},
       "type": "object"
@@ -1434,37 +1232,15 @@
           "type": "string"
         },
         "limit": {
-          "default": 100,
           "type": "integer"
         },
         "open_only": {
-          "default": true,
           "type": "boolean"
         },
         "strategy_id": {
           "type": "string"
         }
       },
-      "required": [],
-      "type": "object"
-    },
-    "list_recent_backtests": {
-      "properties": {
-        "scope": {
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "list_run_filters": {
-      "properties": {
-        "experiment_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "experiment_id"
-      ],
       "type": "object"
     },
     "list_signal_labels": {
@@ -1503,50 +1279,6 @@
       "required": [],
       "type": "object"
     },
-    "list_sweep_markets": {
-      "properties": {
-        "assets": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "candle_sizes": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "include_gapped": {
-          "default": false,
-          "type": "boolean"
-        },
-        "regimes": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "windows": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [],
-      "type": "object"
-    },
-    "list_sweeps": {
-      "properties": {
-        "limit": {
-          "default": 20,
-          "type": "integer"
-        }
-      },
-      "required": [],
-      "type": "object"
-    },
     "list_trades": {
       "properties": {
         "asset": {
@@ -1564,6 +1296,23 @@
         }
       },
       "required": [],
+      "type": "object"
+    },
+    "load_skill": {
+      "properties": {
+        "resource": {
+          "type": "string"
+        },
+        "section": {
+          "type": "string"
+        },
+        "skill": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "skill"
+      ],
       "type": "object"
     },
     "match_signals": {
@@ -1599,145 +1348,109 @@
       ],
       "type": "object"
     },
-    "oracle_backtest_async": {
+    "query_knowledge": {
       "properties": {
-        "asset": {
+        "bounded": {
+          "type": "boolean"
+        },
+        "direction": {
+          "default": "both",
+          "enum": [
+            "in",
+            "out",
+            "both"
+          ],
           "type": "string"
         },
-        "end_date": {
-          "type": "string"
-        },
-        "execution_config": {
-          "type": "object"
-        },
-        "interval": {
-          "type": "string"
-        },
-        "lookback_months": {
+        "hops": {
+          "default": 1,
           "type": "integer"
         },
-        "start_date": {
+        "kind": {
           "type": "string"
         },
-        "strategy_json": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "asset",
-        "interval",
-        "strategy_json"
-      ],
-      "type": "object"
-    },
-    "oracle_backtest_bulk": {
-      "properties": {
-        "end_date": {
+        "limit": {
+          "default": 25,
+          "type": "integer"
+        },
+        "max_depth": {
+          "type": "integer"
+        },
+        "max_nodes": {
+          "default": 50,
+          "type": "integer"
+        },
+        "op": {
+          "enum": [
+            "stats",
+            "find",
+            "ask",
+            "get",
+            "neighbors",
+            "outputs",
+            "path",
+            "walk",
+            "paths",
+            "ancestors",
+            "descendants",
+            "under"
+          ],
           "type": "string"
         },
-        "start_date": {
+        "param": {
           "type": "string"
         },
-        "strategy_ids": {
+        "primitive": {
+          "type": "string"
+        },
+        "q": {
+          "type": "string"
+        },
+        "radius": {
+          "default": 1,
+          "type": "integer"
+        },
+        "relation": {
+          "type": "string"
+        },
+        "relation_category": {
+          "type": "string"
+        },
+        "relations": {
           "items": {
             "type": "string"
           },
           "type": "array"
-        }
-      },
-      "required": [
-        "end_date",
-        "start_date",
-        "strategy_ids"
-      ],
-      "type": "object"
-    },
-    "oracle_backtest_poll": {
-      "properties": {
-        "backtest_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "backtest_id"
-      ],
-      "type": "object"
-    },
-    "pause_sweep": {
-      "properties": {
-        "experiment_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "experiment_id"
-      ],
-      "type": "object"
-    },
-    "preview_condition_study": {
-      "properties": {
-        "condition": {
-          "type": "object"
         },
-        "strategy_id": {
+        "requires": {
           "type": "string"
         },
-        "window_count": {
-          "default": 10,
+        "role": {
+          "type": "string"
+        },
+        "seeds": {
+          "default": 3,
           "type": "integer"
-        }
-      },
-      "required": [
-        "strategy_id"
-      ],
-      "type": "object"
-    },
-    "propose_action_for_confirmation": {
-      "properties": {
-        "action": {
+        },
+        "sibling_hops": {
+          "default": false,
+          "type": "boolean"
+        },
+        "status": {
           "type": "string"
         },
-        "args": {
-          "type": "object"
-        },
-        "summary": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "action",
-        "args",
-        "summary"
-      ],
-      "type": "object"
-    },
-    "propose_adopt": {
-      "properties": {
-        "mode": {
-          "default": "paper",
+        "to": {
           "type": "string"
         },
-        "strategy_id": {
+        "units": {
+          "type": "string"
+        },
+        "why": {
           "type": "string"
         }
       },
       "required": [
-        "strategy_id"
-      ],
-      "type": "object"
-    },
-    "propose_deploy": {
-      "properties": {
-        "mode": {
-          "default": "paper",
-          "type": "string"
-        },
-        "strategy_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "strategy_id"
+        "op"
       ],
       "type": "object"
     },
@@ -1814,6 +1527,15 @@
         "end_date": {
           "type": "string"
         },
+        "engine_generation": {
+          "type": "integer"
+        },
+        "market_data_venue": {
+          "type": "string"
+        },
+        "quote_token": {
+          "type": "string"
+        },
         "start_date": {
           "type": "string"
         },
@@ -1824,24 +1546,6 @@
       "required": [
         "end_date",
         "start_date",
-        "strategy_id"
-      ],
-      "type": "object"
-    },
-    "run_condition_study": {
-      "properties": {
-        "condition": {
-          "type": "object"
-        },
-        "strategy_id": {
-          "type": "string"
-        },
-        "window_count": {
-          "default": 10,
-          "type": "integer"
-        }
-      },
-      "required": [
         "strategy_id"
       ],
       "type": "object"
@@ -1914,6 +1618,12 @@
           },
           "type": "array"
         },
+        "market_data_venue": {
+          "type": "string"
+        },
+        "quote_token": {
+          "type": "string"
+        },
         "regime_direction": {
           "type": "string"
         },
@@ -1921,13 +1631,21 @@
           "default": false,
           "type": "boolean"
         },
+        "source_config_hash": {
+          "type": "string"
+        },
+        "source_experiment_id": {
+          "type": "string"
+        },
+        "source_run_index": {
+          "type": "integer"
+        },
         "strategy_name": {
           "type": "string"
         }
       },
       "required": [
         "asset",
-        "entry_signals",
         "strategy_name"
       ],
       "type": "object"
@@ -2125,177 +1843,6 @@
       ],
       "type": "object"
     },
-    "size_sweep": {
-      "properties": {
-        "assets": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "candidate_shape": {
-          "type": "object"
-        },
-        "candle_sizes": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "categories": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "draws_per_dataset": {
-          "default": 100,
-          "type": "integer"
-        },
-        "entry_filters": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "entry_triggers": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "execution_base": {
-          "type": "object"
-        },
-        "execution_sweeps": {
-          "type": "object"
-        },
-        "exit_filters": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "exit_triggers": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "include_gapped": {
-          "default": false,
-          "type": "boolean"
-        },
-        "max_total_runs": {
-          "type": "integer"
-        },
-        "param_samples": {
-          "default": 3,
-          "type": "integer"
-        },
-        "pre_filter_threshold": {
-          "type": "number"
-        },
-        "regimes": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "signal_groups": {
-          "items": {
-            "additionalProperties": false,
-            "properties": {
-              "categories": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "exclude": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "filters": {
-                "additionalProperties": false,
-                "properties": {
-                  "categories": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "exclude": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "include": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  }
-                },
-                "required": [],
-                "type": "object"
-              },
-              "include": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "name": {
-                "type": "string"
-              },
-              "triggers": {
-                "additionalProperties": false,
-                "properties": {
-                  "categories": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "exclude": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "include": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  }
-                },
-                "required": [],
-                "type": "object"
-              },
-              "weight": {
-                "type": "number"
-              }
-            },
-            "required": [],
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "windows": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [],
-      "type": "object"
-    },
     "update_strategy": {
       "properties": {
         "constraints": {
@@ -2383,13 +1930,6 @@
     "update_strategy_status": {
       "properties": {
         "new_status": {
-          "enum": [
-            "draft",
-            "inactive",
-            "paper",
-            "live",
-            "archived"
-          ],
           "type": "string"
         },
         "strategy_id": {

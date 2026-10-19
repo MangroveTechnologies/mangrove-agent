@@ -11,6 +11,8 @@ os.environ.setdefault("ENVIRONMENT", "test")
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from tests.existing_strategies import existing_response
+
 _API_KEY = "test-key-1"
 
 
@@ -26,10 +28,8 @@ def client(tmp_path, monkeypatch):
     ss.reset_scheduler_cache()
 
     # Reuse the catalog fixture from candidate_generator tests.
-    from tests.unit.test_candidate_generator import _catalog
 
     sdk = MagicMock()
-    sdk.signals.list_iter.side_effect = lambda **kw: iter(_catalog())
 
     bt = MagicMock()
     bt.success = True
@@ -76,10 +76,7 @@ def client(tmp_path, monkeypatch):
     sdk.execution.evaluate.return_value = eval_resp
 
     for path in (
-        "src.services.candidate_generator.mangrove_ai_client",
-        "src.services.backtest_service.mangrove_ai_client",
         "src.services.strategy_service.mangrove_ai_client",
-        "src.services.benchmark_service.mangrove_ai_client",
     ):
         monkeypatch.setattr(path, lambda s=sdk: s)
 
@@ -102,11 +99,8 @@ def test_create_autonomous(client):
         json={"goal": "momentum on ETH", "asset": "ETH", "timeframe": "1h",
               "candidate_count": 5, "seed": 1},
     )
-    assert r.status_code == 201
-    body = r.json()
-    assert body["strategy"]["mangrove_id"].startswith("mg-")
-    assert body["generation_report"]["candidates_tried"] == 5
-    assert body["generation_report"]["candidates_passed_filter"] >= 1
+    assert r.status_code == 410
+    assert "retired" in r.json()["detail"]
 
 
 def test_create_manual(client):
@@ -117,8 +111,8 @@ def test_create_manual(client):
               "entry": [{"name": "rsi_oversold", "signal_type": "TRIGGER",
                          "timeframe": "1h", "params": {}}]},
     )
-    assert r.status_code == 201
-    assert r.json()["asset"] == "ETH"
+    assert r.status_code == 410
+    assert "retired" in r.json()["detail"]
 
 
 def test_create_manual_bad_composition_returns_400(client):
@@ -131,12 +125,12 @@ def test_create_manual_bad_composition_returns_400(client):
                   {"name": "b", "signal_type": "TRIGGER"},
               ]},
     )
-    assert r.status_code == 400
-    assert r.json()["code"] == "STRATEGY_INVALID_COMPOSITION"
+    assert r.status_code == 410
+    assert "retired" in r.json()["detail"]
 
 
 def test_list_and_get(client):
-    created = client.post(
+    created = existing_response(
         "/api/v1/agent/strategies/manual",
         headers=_auth(),
         json={"name": "s", "asset": "ETH", "timeframe": "1h",
@@ -160,7 +154,7 @@ def test_get_missing_returns_404(client):
 
 
 def test_patch_status_requires_confirm_for_live(client):
-    created = client.post(
+    created = existing_response(
         "/api/v1/agent/strategies/manual",
         headers=_auth(),
         json={"name": "s", "asset": "ETH", "timeframe": "1h",
@@ -182,54 +176,17 @@ def test_patch_status_requires_confirm_for_live(client):
     assert r.json()["code"] == "CONFIRMATION_REQUIRED"
 
 
-def test_backtest_full(client):
-    created = client.post(
-        "/api/v1/agent/strategies/manual",
-        headers=_auth(),
-        json={"name": "s", "asset": "ETH", "timeframe": "1h",
-              "entry": [{"name": "rsi_oversold", "signal_type": "TRIGGER",
-                         "timeframe": "1h"}]},
-    ).json()
-    r = client.post(
-        f"/api/v1/agent/strategies/{created['id']}/backtest",
-        headers=_auth(),
-        json={"mode": "full", "lookback_months": 3},
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["success"] is True
-    assert body["metrics"]["irr_annualized"] == 0.4
-    assert body["trade_history"] == [{"entry": "2026-01-01", "pnl": 10}]
-    # New top-level keys; the existing response shape is unchanged.
-    assert body["backtest_id"] == "bt-1"
-    assert body["metric_units"]["total_return"] == "percent_0_100"
-    bench = body["benchmark"]
-    assert bench["available"] is True
-    assert bench["asset"] == "ETH"
-    assert bench["buy_and_hold_return_pct"] == 10.0
-    assert bench["strategy_minus_benchmark_pct"] == -5.0
-
-
-def test_backtest_full_can_skip_benchmark(client):
-    created = client.post(
-        "/api/v1/agent/strategies/manual",
-        headers=_auth(),
-        json={"name": "s", "asset": "ETH", "timeframe": "1h",
-              "entry": [{"name": "rsi_oversold", "signal_type": "TRIGGER",
-                         "timeframe": "1h"}]},
-    ).json()
-    r = client.post(
-        f"/api/v1/agent/strategies/{created['id']}/backtest",
-        headers=_auth(),
-        json={"mode": "full", "lookback_months": 3, "include_benchmark": False},
-    )
-    assert r.status_code == 200
-    assert "benchmark" not in r.json()
+def test_backtests_are_not_run_by_this_client(client):
+    """Backtests are MangroveAI's: run_backtest / get_backtest over MCP. This client has
+    no backtest route of its own to drift from them."""
+    r = client.post("/api/v1/agent/strategies/any-id/backtest", headers=_auth(),
+                    json={"mode": "full", "lookback_months": 3})
+    assert r.status_code in (404, 405)
 
 
 def test_evaluate_manual_tick(client):
     """POST /evaluate runs a tick and returns the latest evaluation row."""
-    created = client.post(
+    created = existing_response(
         "/api/v1/agent/strategies/manual",
         headers=_auth(),
         json={"name": "s", "asset": "ETH", "timeframe": "1h",
@@ -253,38 +210,3 @@ def test_evaluate_manual_tick(client):
 def test_auth_required(client):
     assert client.get("/api/v1/agent/strategies").status_code == 401
 
-
-@pytest.mark.parametrize("mode", ["full", "quick"])
-def test_saved_backtest_preserves_configuration_market_and_overrides(client, mode):
-    import json
-
-    from src.services import backtest_service
-
-    sdk = backtest_service.mangrove_ai_client()
-    market = {"base_token": "ETH", "quote_token": "USD", "market_data_venue": "KRAKEN"}
-    saved_config = {"initial_balance": 200, "max_risk_per_trade": 0.007,
-                    "reward_factor": 2, "cooldown_config": {"1h": {"short_loss_limit": 3}}}
-    created = client.post("/api/v1/agent/strategies/manual", headers=_auth(), json={
-        "name": "saved context", "asset": "ETH", "timeframe": "1h",
-        "entry": [{"name": "mom_cross_up", "signal_type": "TRIGGER", "timeframe": "1h"}],
-        "execution_config": saved_config, "market_context": market,
-    }).json()
-    response = client.post(f"/api/v1/agent/strategies/{created['id']}/backtest", headers=_auth(), json={
-        "mode": mode, "lookback_months": 1, "config": {"reward_factor": 2.5},
-    })
-    assert response.status_code == 200, response.text
-    method = sdk.backtesting.submit_async if mode == "full" else sdk.backtesting.run
-    request = method.call_args.args[0].model_dump()
-    assert request["initial_balance"] == 200
-    assert request["max_risk_per_trade"] == 0.007
-    assert request["reward_factor"] == 2.5
-    assert request["cooldown_config"] == saved_config["cooldown_config"]
-    for key, value in market.items():
-        assert request[key] == value
-        assert json.loads(request["strategy_json"])[key] == value
-    if mode == "full":
-        assert all(sdk.backtesting.get_benchmark.call_args.kwargs[k] == v for k, v in market.items())
-    # Per-call overrides must not mutate the saved strategy.
-    detail = client.get(f"/api/v1/agent/strategies/{created['id']}", headers=_auth()).json()
-    assert detail["execution_config"]["reward_factor"] == 2
-    assert detail["execution_venue"] is None

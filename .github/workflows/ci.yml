@@ -38,12 +38,8 @@ jobs:
           server/tests/unit/test_x402_payer.py
           server/tests/unit/test_fernet_read_safety.py
 
-      # The synced Michael skills are generated from the private MangroveAI
-      # repo, which CI cannot read. The generator records a sha256 per file in
-      # skills-sync-manifest.json; this fails if a committed copy was
-      # hand-edited or the manifest is stale.
-      - name: Verify synced Michael skills match their manifest
-        run: python scripts/sync-michael-skills.py --verify-manifest
+      - name: Verify strategy workflow remains server-owned
+        run: python -m pytest server/tests/unit/test_server_owned_strategy.py -q
 
       - name: Lint MCP contract checks
         run: ruff check --config server/pyproject.toml scripts/mcp_contract.py server/tests/unit/test_mcp_contract.py

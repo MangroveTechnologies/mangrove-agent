@@ -1,10 +1,9 @@
 """Integration tests for strategy_service — CRUD + lifecycle + tick.
 
 These exercise the full stack against the real SQLite, with mocked
-Mangrove + DEX SDKs. The autonomous path and tick path touch enough
-collaborators (candidate_generator, backtest_service, order_executor,
-allocation_service, scheduler_service) that this lives in integration
-rather than unit.
+Mangrove + DEX SDKs. The tick path touches enough collaborators
+(order_executor, allocation_service, scheduler_service) that this lives in
+integration rather than unit.
 """
 from __future__ import annotations
 
@@ -15,6 +14,8 @@ from unittest.mock import MagicMock, patch
 os.environ.setdefault("ENVIRONMENT", "test")
 
 import pytest  # noqa: E402
+
+from tests.existing_strategies import existing_strategy as create_manual
 
 
 @pytest.fixture
@@ -54,11 +55,9 @@ def temp_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def mock_ai_sdk(monkeypatch):
-    """Stub mangrove_ai_client used by strategy_service + candidate_generator + backtest_service."""
-    from tests.unit.test_candidate_generator import _catalog
+    """Stub mangrove_ai_client used by strategy_service."""
 
     client = MagicMock()
-    client.signals.list_iter.side_effect = lambda **kw: iter(_catalog())
 
     # Backtests always succeed with the same metrics.
     bt_result = MagicMock()
@@ -111,56 +110,28 @@ def mock_ai_sdk(monkeypatch):
     client.execution.evaluate.return_value = eval_resp
 
     for path in (
-        "src.services.candidate_generator.mangrove_ai_client",
-        "src.services.backtest_service.mangrove_ai_client",
         "src.services.strategy_service.mangrove_ai_client",
     ):
         monkeypatch.setattr(path, lambda c=client: c)
     return client
 
 
-def test_create_autonomous_happy_path(temp_db, mock_ai_sdk):
-    from src.services.strategy_service import StrategyAutonomousRequest, create_autonomous
-
-    detail, report = create_autonomous(StrategyAutonomousRequest(
-        goal="momentum on ETH", asset="ETH", timeframe="1h",
-        candidate_count=5, backtest_lookback_months=3, seed=42,
-    ))
-    assert detail.mangrove_id.startswith("mg-new-")
-    assert detail.asset == "ETH"
-    assert report["candidates_tried"] == 5
-    assert report["candidates_passed_filter"] >= 1
-    assert report["winner_rank"] == 1
-    assert "irr_annualized" in report["full_backtest_metrics"]
 
 
-def test_create_autonomous_no_viable_candidates(temp_db, mock_ai_sdk):
-    """If every backtest fails the filter, raise StrategyNoViableCandidates."""
-    from src.services.strategy_service import StrategyAutonomousRequest, create_autonomous
-    from src.shared.errors import StrategyNoViableCandidates
-
-    # Drop win_rate under the threshold.
-    mock_ai_sdk.backtesting.run.return_value.metrics["win_rate"] = 20.0  # < 25% spec floor
-
-    with pytest.raises(StrategyNoViableCandidates):
-        create_autonomous(StrategyAutonomousRequest(
-            goal="momentum on ETH", asset="ETH", timeframe="1h",
-            candidate_count=5, seed=1,
-        ))
 
 
-def test_explicit_market_survives_creation_and_stateless_evaluation(temp_db, mock_ai_sdk):
+
+
+def test_explicit_market_survives_saving_and_stateless_evaluation(temp_db, mock_ai_sdk):
     from src.services import strategy_service as service
 
     market = {"base_token": "XLM", "quote_token": "USD", "market_data_venue": "KRAKEN"}
-    detail = service.create_manual(service.StrategyManualRequest(
+    detail = create_manual(service.StrategyManualRequest(
         name="Explicit market", asset="XLM", timeframe="1h",
         entry=[{"name": "mom_cross_up", "signal_type": "TRIGGER", "timeframe": "1h"}],
         execution_config={"initial_balance": 200}, evaluation_lane="stateless",
         market_context=market,
     ))
-    request = mock_ai_sdk.strategies.create.call_args.args[0].model_dump()
-    assert all(request[k] == v for k, v in market.items())
     assert service.get_strategy(detail.id).market_context.model_dump() == market
     payload = service._stateless_strategy_dict(service._get_row(detail.id))
     assert all(payload[k] == v for k, v in market.items())
@@ -172,7 +143,7 @@ def test_market_configuration_preserves_rules_and_requires_inactive_stateless(te
     from src.shared.db.sqlite import get_connection
     from src.shared.errors import SdkError, StrategyInvalidStatusTransition
 
-    detail = service.create_manual(service.StrategyManualRequest(
+    detail = create_manual(service.StrategyManualRequest(
         name="Staged market", asset="XLM", timeframe="1h",
         entry=[{"name": "mom_cross_up", "signal_type": "TRIGGER", "timeframe": "1h"}],
         execution_config={"initial_balance": 200}, evaluation_lane="stateless",
@@ -196,118 +167,12 @@ def test_market_configuration_preserves_rules_and_requires_inactive_stateless(te
         service.configure_market(detail.id, market)
 
 
-def test_create_manual_happy_path(temp_db, mock_ai_sdk):
-    from src.services.strategy_service import StrategyManualRequest, create_manual
-
-    detail = create_manual(StrategyManualRequest(
-        name="my strategy",
-        asset="ETH",
-        timeframe="1h",
-        entry=[{"name": "rsi_oversold", "signal_type": "TRIGGER", "timeframe": "1h", "params": {}}],
-        exit=[],
-    ))
-    assert detail.mangrove_id.startswith("mg-new-")
 
 
-@pytest.mark.parametrize("timeframe", ["5m", "5MIN"])
-def test_manual_sma_test_carries_requested_candles_upstream_and_locally(temp_db, mock_ai_sdk, timeframe):
-    from src.services.strategy_service import StrategyManualRequest, create_manual, get_strategy
-
-    entry = [{"name": "sma_cross_up", "signal_type": "TRIGGER",
-              "params": {"window_fast": 3, "window_slow": 5}}]
-    exits = [{"name": "sma_cross_down", "signal_type": "TRIGGER",
-              "params": {"window_fast": 3, "window_slow": 5}}]
-    detail = create_manual(StrategyManualRequest(
-        name="ETH 5m SMA 3/5 Test", asset="ETH", timeframe=timeframe,
-        entry=entry, exit=exits,
-    ))
-
-    upstream = mock_ai_sdk.strategies.create.call_args.args[0].model_dump()
-    assert upstream["entry"] == [{**entry[0], "timeframe": "5m"}]
-    assert upstream["exit"] == [{**exits[0], "timeframe": "5m"}]
-    saved = get_strategy(detail.id)
-    assert saved.timeframe == "5m"
-    assert saved.entry == upstream["entry"]
-    assert saved.exit == upstream["exit"]
-    assert "timeframe" not in entry[0]
-    assert "timeframe" not in exits[0]
-
-
-def test_manual_preserves_explicit_rule_candle_sizes(temp_db, mock_ai_sdk):
-    from src.services.strategy_service import StrategyManualRequest, create_manual
-
-    detail = create_manual(StrategyManualRequest(
-        name="multi timeframe", asset="ETH", timeframe="5m",
-        entry=[{"name": "sma_cross_up", "signal_type": "TRIGGER", "timeframe": "15MIN"}],
-        exit=[{"name": "sma_cross_down", "signal_type": "TRIGGER", "timeframe": "1h"}],
-    ))
-    upstream = mock_ai_sdk.strategies.create.call_args.args[0]
-    assert upstream.entry[0]["timeframe"] == "15m"
-    assert upstream.exit[0]["timeframe"] == "1h"
-    assert detail.timeframe == "15m"
-
-
-def test_manual_rejects_unsupported_rule_timeframe_before_saving(temp_db, mock_ai_sdk):
-    from src.services.strategy_service import StrategyManualRequest, create_manual
-    from src.shared.errors import ValidationError
-
-    with pytest.raises(ValidationError):
-        create_manual(StrategyManualRequest(
-            name="unsupported", asset="ETH", timeframe="5m",
-            entry=[{"name": "sma_cross_up", "signal_type": "TRIGGER"}],
-            exit=[{"name": "sma_cross_down", "signal_type": "TRIGGER", "timeframe": "1m"}],
-        ))
-    mock_ai_sdk.strategies.create.assert_not_called()
-
-
-def test_create_manual_same_rules_twice_returns_existing_strategy(temp_db, mock_ai_sdk):
-    """Regression: MangroveAI's create returns the EXISTING strategy when the
-    rules already exist for the account. The local UNIQUE(mangrove_id) insert
-    used to 500; now the existing local row comes back."""
-    from src.services.strategy_service import StrategyManualRequest, create_manual
-    from src.shared.db.sqlite import get_connection
-
-    def _same_upstream(_request):
-        m = MagicMock()
-        m.id = "mg-existing"
-        m.name = getattr(_request, "name", "x")
-        m.asset = "ETH"
-        m.status = "inactive"
-        return m
-
-    mock_ai_sdk.strategies.create.side_effect = _same_upstream
-    req = StrategyManualRequest(
-        name="dup", asset="ETH", timeframe="1h",
-        entry=[{"name": "rsi_oversold", "signal_type": "TRIGGER", "timeframe": "1h", "params": {}}],
-        exit=[],
-    )
-    first = create_manual(req)
-    second = create_manual(req)
-
-    assert second.id == first.id
-    assert second.mangrove_id == "mg-existing"
-    rows = get_connection().execute(
-        "SELECT COUNT(*) FROM strategies WHERE mangrove_id = ?", ("mg-existing",),
-    ).fetchone()[0]
-    assert rows == 1
-
-
-def test_create_manual_invalid_composition_raises(temp_db, mock_ai_sdk):
-    from src.services.strategy_service import StrategyManualRequest, create_manual
-    from src.shared.errors import StrategyInvalidComposition
-
-    with pytest.raises(StrategyInvalidComposition):
-        create_manual(StrategyManualRequest(
-            name="bad", asset="ETH", timeframe="1h",
-            entry=[  # two triggers — not allowed
-                {"name": "rsi_oversold", "signal_type": "TRIGGER"},
-                {"name": "macd_cross_up", "signal_type": "TRIGGER"},
-            ],
-        ))
 
 
 def test_list_and_get_strategy(temp_db, mock_ai_sdk):
-    from src.services.strategy_service import StrategyManualRequest, create_manual, get_strategy, list_strategies
+    from src.services.strategy_service import StrategyManualRequest, get_strategy, list_strategies
 
     a = create_manual(StrategyManualRequest(
         name="a", asset="ETH", timeframe="1h",
@@ -331,7 +196,6 @@ def test_status_paper_to_live_requires_confirm(temp_db, mock_ai_sdk):
         StrategyAllocationInput,
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         update_status,
     )
     from src.shared.errors import ConfirmationRequired
@@ -365,7 +229,6 @@ def test_status_to_live_registers_cron_and_allocation(temp_db, mock_ai_sdk):
         StrategyAllocationInput,
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         update_status,
     )
 
@@ -400,7 +263,6 @@ def test_deactivating_live_releases_allocation_and_cancels_cron(temp_db, mock_ai
         StrategyAllocationInput,
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         update_status,
     )
 
@@ -432,7 +294,6 @@ def test_tick_paper_mode_logs_simulated_trade(temp_db, mock_ai_sdk, monkeypatch)
     from src.services.strategy_service import (
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         tick,
         update_status,
     )
@@ -484,7 +345,6 @@ def test_tick_maps_engine_shaped_orders(temp_db, mock_ai_sdk, monkeypatch):
     from src.services.strategy_service import (
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         tick,
         update_status,
     )
@@ -564,7 +424,6 @@ def test_tick_skips_resting_bracket_orders(temp_db, mock_ai_sdk, monkeypatch):
     from src.services.strategy_service import (
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         tick,
         update_status,
     )
@@ -626,7 +485,6 @@ def test_tick_stateless_lane_round_trips_state(temp_db, mock_ai_sdk, monkeypatch
     from src.services.strategy_service import (
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         tick,
         update_status,
     )
@@ -706,7 +564,6 @@ def test_tick_default_lane_stays_server(temp_db, mock_ai_sdk, monkeypatch):
     from src.services.strategy_service import (
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         tick,
         update_status,
     )
@@ -737,7 +594,6 @@ def test_tick_catches_sdk_errors(temp_db, mock_ai_sdk):
     from src.services.strategy_service import (
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         tick,
         update_status,
     )
@@ -764,7 +620,6 @@ def test_invalid_transition_raises(temp_db, mock_ai_sdk):
     from src.services.strategy_service import (
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         update_status,
     )
     from src.shared.errors import StrategyInvalidStatusTransition
@@ -791,7 +646,7 @@ def test_get_missing_strategy_raises(temp_db, mock_ai_sdk):
 # ---------------------------------------------------------------------------
 
 
-def _paper_strategy(mock_ai_sdk, create_manual, update_status, StrategyManualRequest, StrategyStatusUpdate):
+def _paper_strategy(mock_ai_sdk, update_status, StrategyManualRequest, StrategyStatusUpdate):
     """Create and promote a strategy to paper — shared setup for tick tests."""
     s = create_manual(StrategyManualRequest(
         name="tick-test", asset="ETH", timeframe="1h",
@@ -811,7 +666,6 @@ def test_tick_logs_warning_when_order_intent_fails_validation(temp_db, mock_ai_s
     from src.services.strategy_service import (
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         tick,
         update_status,
     )
@@ -823,7 +677,7 @@ def test_tick_logs_warning_when_order_intent_fails_validation(temp_db, mock_ai_s
     eval_resp.model_dump.return_value = {}
     mock_ai_sdk.execution.evaluate.return_value = eval_resp
 
-    s = _paper_strategy(mock_ai_sdk, create_manual, update_status, StrategyManualRequest, StrategyStatusUpdate)
+    s = _paper_strategy(mock_ai_sdk, update_status, StrategyManualRequest, StrategyStatusUpdate)
 
     with patch("src.services.strategy_service._log.warning") as mock_warn:
         tick(s.id)
@@ -846,7 +700,6 @@ def test_tick_warning_log_contains_only_keys_not_values(temp_db, mock_ai_sdk):
     from src.services.strategy_service import (
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         tick,
         update_status,
     )
@@ -867,7 +720,7 @@ def test_tick_warning_log_contains_only_keys_not_values(temp_db, mock_ai_sdk):
     eval_resp.model_dump.return_value = {}
     mock_ai_sdk.execution.evaluate.return_value = eval_resp
 
-    s = _paper_strategy(mock_ai_sdk, create_manual, update_status, StrategyManualRequest, StrategyStatusUpdate)
+    s = _paper_strategy(mock_ai_sdk, update_status, StrategyManualRequest, StrategyStatusUpdate)
 
     with patch("src.services.strategy_service._log.warning") as mock_warn:
         tick(s.id)
@@ -888,7 +741,6 @@ def test_tick_warning_payload_keys_lists_field_names(temp_db, mock_ai_sdk):
     from src.services.strategy_service import (
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         tick,
         update_status,
     )
@@ -900,7 +752,7 @@ def test_tick_warning_payload_keys_lists_field_names(temp_db, mock_ai_sdk):
     eval_resp.model_dump.return_value = {}
     mock_ai_sdk.execution.evaluate.return_value = eval_resp
 
-    s = _paper_strategy(mock_ai_sdk, create_manual, update_status, StrategyManualRequest, StrategyStatusUpdate)
+    s = _paper_strategy(mock_ai_sdk, update_status, StrategyManualRequest, StrategyStatusUpdate)
 
     with patch("src.services.strategy_service._log.warning") as mock_warn:
         tick(s.id)
@@ -917,7 +769,6 @@ def test_tick_mixed_valid_and_invalid_intents_processes_only_valid(temp_db, mock
     from src.services.strategy_service import (
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         tick,
         update_status,
     )
@@ -938,7 +789,7 @@ def test_tick_mixed_valid_and_invalid_intents_processes_only_valid(temp_db, mock
     eval_resp.model_dump.return_value = {}
     mock_ai_sdk.execution.evaluate.return_value = eval_resp
 
-    s = _paper_strategy(mock_ai_sdk, create_manual, update_status, StrategyManualRequest, StrategyStatusUpdate)
+    s = _paper_strategy(mock_ai_sdk, update_status, StrategyManualRequest, StrategyStatusUpdate)
 
     with patch("src.services.strategy_service._log.warning") as mock_warn:
         tick(s.id)
@@ -957,7 +808,6 @@ def test_tick_all_malformed_intents_still_completes_with_ok_evaluation(temp_db, 
     from src.services.strategy_service import (
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         tick,
         update_status,
     )
@@ -973,7 +823,7 @@ def test_tick_all_malformed_intents_still_completes_with_ok_evaluation(temp_db, 
     eval_resp.model_dump.return_value = {}
     mock_ai_sdk.execution.evaluate.return_value = eval_resp
 
-    s = _paper_strategy(mock_ai_sdk, create_manual, update_status, StrategyManualRequest, StrategyStatusUpdate)
+    s = _paper_strategy(mock_ai_sdk, update_status, StrategyManualRequest, StrategyStatusUpdate)
 
     with patch("src.services.strategy_service._log.warning") as mock_warn:
         tick(s.id)
@@ -992,7 +842,6 @@ def test_tick_warning_includes_strategy_id_for_correlation(temp_db, mock_ai_sdk)
     from src.services.strategy_service import (
         StrategyManualRequest,
         StrategyStatusUpdate,
-        create_manual,
         tick,
         update_status,
     )
@@ -1004,7 +853,7 @@ def test_tick_warning_includes_strategy_id_for_correlation(temp_db, mock_ai_sdk)
     eval_resp.model_dump.return_value = {}
     mock_ai_sdk.execution.evaluate.return_value = eval_resp
 
-    s = _paper_strategy(mock_ai_sdk, create_manual, update_status, StrategyManualRequest, StrategyStatusUpdate)
+    s = _paper_strategy(mock_ai_sdk, update_status, StrategyManualRequest, StrategyStatusUpdate)
 
     with patch("src.services.strategy_service._log.warning") as mock_warn:
         tick(s.id)
