@@ -1,34 +1,124 @@
 ---
 name: strategy-composition
 description: >-
-  Build high quality trading strategies -- starting from the marketplace. Find a few listings
-  that fit what the person wants and offer them before composing anything new; compose, using
-  the knowledge graph to acquire relevant information, judgements, insights, and signals, only
-  when nothing on the marketplace fits. Reach for it when you encounter things like : "build me
-  a strategy", "make me something for ETH", "set up a mean-reversion strategy", ... (etc). Use
-  strategy-management to draft, archive, or deploy.
-uses-tools: [evaluate_signal, evaluate_multiple_signals_series, validate_signal_params, list_signal_labels, list_playground_datasets, get_playground_data, search_marketplace, get_marketplace_strategy, propose_adopt, query_signal_behavior, save_strategy, update_strategy, verify_strategy, list_strategies, get_strategy, get_market_regime]
+  Build a trading strategy, by one of three routes: search the Strategy Engine's completed
+  runs for one that fits the current market regime and backtest it on current data; build a
+  fresh one from the current regime and the knowledge graph; or adopt a listing from the
+  marketplace. A vague ask -- "build me a strategy", "build me a BTC strategy on 1h", "make me
+  something for ETH" -- starts in the Strategy Engine. Reach for it on those and on "set up a
+  mean-reversion strategy", ... (etc). Use strategy-management to draft, archive, or deploy.
+uses-tools: [evaluate_signal, evaluate_multiple_signals_series, validate_signal_params, list_signal_labels, list_playground_datasets, get_playground_data, query_signal_behavior, list_strategies, get_strategy, get_market_regime]
+source-uses-tools: [list_backtest_markets, evaluate_signal, evaluate_multiple_signals_series, validate_signal_params, list_signal_labels, list_playground_datasets, get_playground_data, find_sweep_runs, get_sweep_run, run_backtest, search_marketplace, get_marketplace_strategy, propose_adopt, query_knowledge, query_signal_behavior, save_strategy, update_strategy, verify_strategy, list_strategies, get_strategy, get_market_regime, get_execution_config_schema]
+unavailable-tools: [list_backtest_markets, find_sweep_runs, get_sweep_run, run_backtest, search_marketplace, get_marketplace_strategy, propose_adopt, save_strategy, update_strategy, verify_strategy, get_execution_config_schema]
+unreviewed-tools: [query_knowledge]
+catalog-mode: deployed
 ---
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/strategy-composition/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
 
-These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
+These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. When a remote Oracle experiment/result reader is unavailable, the authenticated local agent_list_oracle_experiments and agent_list_oracle_results tools can discover experiment summaries and read bounded result pages only. They do not provide sweep-specific filtering, ranking, or mutation; never present them as equivalent to a missing remote tool. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
+
+Catalog snapshot note (observed deployed tools only): this skill references tools absent from the recorded catalog snapshot: `list_backtest_markets`, `find_sweep_runs`, `get_sweep_run`, `run_backtest`, `search_marketplace`, `get_marketplace_strategy`, `propose_adopt`, `save_strategy`, `update_strategy`, `verify_strategy`, `get_execution_config_schema`. Do not call or replace these by assumption. Check the active MCP `tools/list`; use a capability only when that live catalog exposes its schema.
+
+Catalog review note: these source tools appear in the observed deployment but are not in the reviewed source contract, so this bundle does not advertise them: `query_knowledge`. Their schemas were not validated by this snapshot; inspect the active MCP `tools/list` schema before use.
 
 # Build coherent and active strategies
 
-Read the market regime, then load into your context knowledge atoms, relationships, and information that would be beneficial to
+Read the market regime first, every route. Then load into your context knowledge atoms, relationships, and information that would be beneficial to
 have when reasoning about strategy composition and signal & parameter selection. You must understand the parameter
 values and ranges of the signals as different parameter settings have different effects on when, how often, and how long, a given signal fires or remains true. You must reason about the parameter values and their impact on the underlying signal and how that will change the firing frequency, duration, and location of the signal.
 
-## Start with the marketplace
+## Three routes to a strategy
 
-Composing is not the first move. Once you know what the person wants -- asset and
-candle_size, at minimum -- and you have read the regime with `get_market_regime`, call
-`search_marketplace` ONCE: `asset`, `candle_size`, `free_only=true` unless they have said
-they will pay, `sort="sharpe"`, `limit=5`. In the same round as the regime read where you
-can. Do not pass `risk_level` or any performance floor in the query, and do not call it a
-second time with the filters loosened or narrowed -- fit is judged from the rows that one
-call returns, never by re-querying.
+1. **The Strategy Engine.** Search its completed runs for one that already did well in the
+   current regime, save it, and backtest it on current market data. The default for a
+   vague request.
+2. **A fresh build.** Compose a new strategy from the current regime and the knowledge
+   graph. Taken when the person names signals or a style, asks for something new, or the
+   engine search came back with nothing that fits.
+3. **The marketplace.** Adopt a strategy someone already listed. Taken when the person asks
+   for it: "something ready-made", "what is on the marketplace", "something I can
+   subscribe to".
+
+There is no fourth route.
+
+## A vague request starts in the Strategy Engine
+
+A request that says little more than an asset -- "build me a BTC strategy on 1h", "make me
+something for ETH" -- goes to the engine first. Run steps 1 to 5 in ONE turn, without
+stopping to ask: the person asked for a strategy, and the search, the save and the backtest
+are how you give them one. "Say continue" spends a turn they did not ask to spend.
+
+1. `get_market_regime` for the asset with `lookback_days=90`. Record its `asset`, `timeframe`,
+   `classification_venue`, `source_venue`, `history_start`, `history_end`, exact history
+   `history_start_timestamp`, `history_end_timestamp`, `as_of`, `as_of_timestamp` when
+   available, `gating_horizon_days`, and `gating_band`; these identify the interval, model
+   venue, actual source when returned, and closes classified. Keep legacy `venue` as the
+   regime-classification label; never infer the provider from it. Use `gating_band` for `save_strategy`'s
+   direction-only entry gate. `window.direction` is also direction-only. The complete
+   current-window label is `window.direction` + `window.volatility` + `window.trend`; do not
+   describe either direction field alone as a full-composite match.
+2. `find_sweep_runs` ONCE, across every sweep (leave `experiment_id` out): `asset`,
+   `min_trades=11`, `min_sharpe=1`, `min_irr=10`, `beats_benchmarks=true`,
+   `market_direction` = `window.direction`, `regime_direction` = `gating_band`,
+   `sort_by="irr_annualized"`, `limit=50`. Add `candle_size` only when the person named one.
+   First inspect the available MCP tool catalog. If `find_sweep_runs` is not advertised,
+   do not call the missing tool or assume the source snapshot's tool count matches the
+   deployed catalog. Use the documented SDK or REST search path if it is available to
+   this caller, and paginate until the full matching set is covered; otherwise state that
+   the sweep search is unavailable in this environment.
+   This is a **direction-only** historical match. It does not match the current window's
+   volatility or trend. To answer a request for full-composite matches, use the separate
+   `regime_composite` filter with the three current `window` fields joined by underscores,
+   and label that narrower result full-composite. Never silently substitute one meaning for
+   the other. For either query, search every experiment by omitting `experiment_id`, then
+   request every page: advance `offset` by the returned row count until the cumulative count
+   equals `total_matching`. Report the exact total and any unresolved or unavailable rows;
+   do not pick from only the first page.
+3. Keep only the rows whose `regime_fit.fits` is true. It is the save's own regime check,
+   plus the archetype map's rule that a bearish `role: exit` trigger is not a long entry,
+   already applied to every row -- so do not look up signals one by one to decide it. Then
+   pick one at random: when the person named a candle size, from the rows on it; when they
+   did not, choose a candle size at random from those the kept rows carry, then a row on it
+   at random. It is a pick, not a ranking: never call
+   it the best or the top one.
+4. `save_strategy` with `source_experiment_id`, `source_run_index` and
+   `source_config_hash` set to that row's own `experiment_id`, `run_index` and
+   `config_hash`, and `regime_direction` = `gating_band`. The save reloads the
+   run from those three itself, and the row already carries its rules for you to describe,
+   so do not call `get_sweep_run` first, never call `list_sweeps`, `get_sweep` or
+   `find_sweep_runs` again to look a row up, and never guess an experiment id. Never
+   retype the row's signals into `entry_signals` / `exit_signals`: saving from the source
+   keeps the run's exact settings. If it comes back `created: false`, the person already
+   has this strategy: say it is their existing draft, by name, rather than presenting it
+   as new.
+5. `run_backtest` on the saved id over the last 90 days ending today -- the last 30 days
+   for 5m candles, because one backtest is capped at 10,000 bars -- so the result is a
+   measurement on current market data and not the window the engine ran. It checks the
+   strategy before it spends anything, so a separate `verify_strategy` round is not needed
+   here. If it is refused because the price series ends earlier, end the window on the
+   series' last bar and submit again in the same turn.
+
+A turn has a time budget of a few rounds, and these five steps fit in it only when calls
+that do not depend on each other go out together: `get_market_regime` with
+`list_strategies` in the first round, then the search, then the save, then the backtest.
+
+Say what you did in one short paragraph: the regime you read, that you searched the
+engine's completed runs with those floors, the run you picked and its entry and exit
+rules, and that the backtest is running. The engine row's numbers are the old window's;
+the backtest is the current one, and you name them as different.
+
+If the search comes back empty, or no row's entry fits the regime, say what you searched
+for -- asset, the regime, the floors -- and that nothing met them, then move straight to a
+fresh build. Never search again with the floors loosened.
+
+## The marketplace route
+
+When the person asks for the marketplace, call `search_marketplace` ONCE: `asset`,
+`candle_size`, `free_only=true` unless they have said they will pay, `sort="sharpe"`,
+`limit=5`. Do not pass `risk_level` or any performance floor in the query, and do not call
+it a second time with the filters loosened or narrowed -- fit is judged from the rows that
+one call returns, never by re-querying.
 
 Judge fit from the rows you got, not from the query. Match the person's risk appetite
 against each row's `risk_level` after the fact -- that is a read of the row, not a search
@@ -55,22 +145,18 @@ One button per turn, by design, so resolve their pick to exactly one listing bef
 call it. If they pick a paid listing, say so and name its marketplace page;
 `propose_adopt` only ever offers a free one, and asking it for a paid listing is refused.
 
-Compose a new strategy only when the person declines every fit, asks for something no
-listing covers, or the one search came back with nothing. When it is empty, say what you
-searched for -- asset, candle_size -- and that nothing fit, then move straight to
-composing. Never loop back and search again with different filters; one search per turn
-is the whole of the marketplace step. `list_strategies` still runs first for duplicates of
-their OWN compositions; that is a different question from whether the marketplace already
-has what they want, and does not replace this step.
+If nothing fits, say what you searched for -- asset, candle_size -- and that nothing fit,
+and offer the other two routes. Never loop back and search again with different filters;
+one search per turn is the whole of the marketplace step.
 
 ## Work in as few rounds as the build allows
 
 Every round -- one reply from you, with its tool calls -- costs the person seconds of waiting, and
 a turn has a time budget. Calls that do not depend on each other go out together in ONE round:
 
-1. `get_market_regime`, `search_marketplace`, `list_strategies`, `get_execution_config_schema`
-   and your first `query_knowledge` (`op=ask` or `op=find`) in the same round -- the marketplace
-   filters follow from what the person already told you, so there is nothing to wait on.
+1. For a fresh build: `get_market_regime`, `list_strategies`, `get_execution_config_schema`
+   and your first `query_knowledge` (`op=ask` or `op=find`) in the same round -- none of them
+   waits on another.
 2. `query_signal_behavior` for every signal you are weighing, in the same round.
 3. `save_strategy`, then `verify_strategy`.
 
@@ -79,10 +165,36 @@ is only for when you do not. Do not look up a node you already have in this conv
 
 ## Read the regime before you choose, not after
 
-`get_market_regime` for the asset, and let it decide what you compose. If we are in a sideways market
-then don't build a trend following strategy. If what they asked for does not fit what the market is doing,
-**explain why and steer them**. If they persist then you may use `regime_override=true`, but NEVER as
-something you do on your own.
+`get_market_regime` for the asset with `lookback_days=90`, and let it decide what you
+compose. The direction gate for a build is `direction["90d"].band`, the 90-day direction.
+Pass it to `save_strategy` as `regime_direction` every time: without it the regime check is
+skipped, and a strategy composed against the wrong regime gets saved.
+
+`save_strategy` refuses an entry whose trigger's archetype the regime does not admit. This
+book is long-only, so the admitted archetypes are:
+
+| 90-day direction | entry archetypes admitted |
+|---|---|
+| bull, super_bull, mega_bull | trend_following, momentum, breakout |
+| neutral | mean_reversion, breakout |
+| bear | mean_reversion, breakout (long dip-buys only) |
+| super_bear, mega_bear | none -- stand aside |
+
+Choose the trigger from an admitted archetype BEFORE you save -- `signal_archetype_map.yaml`
+gives each signal's archetype. Trend-following in a bear is a short, which this book does
+not take, and mean-reversion fails in a strong up-trend. In super_bear or mega_bear, say
+the market is falling hard and that standing aside is the answer, rather than forcing a
+long.
+
+The build gate is the 90-day direction. `window.direction`, `window.volatility` and
+`window.trend` describe the full 90-day composite separately. Do not call a direction-only
+result a full-composite match.
+
+If what they asked for does not fit what the market is doing, **explain why and steer
+them**. If they persist then you may use `regime_override=true`, but NEVER as something you
+do on your own. If `save_strategy` refuses on the regime, tell them in plain words what the
+market is doing and why the entry does not fit, then recompose with an admitted archetype
+or ask whether to override.
 
 ## Resolve every signal in the runtime catalog
 
@@ -140,15 +252,27 @@ alike, and quote the numbers when you justify the choice. Pass `signal_type`: a
 `FILTER` and a `TRIGGER` are measured for different things and the tool will tell you
 if you asked under the wrong one.
 
-**Every signal has two things to ask about: how much it acts, and how that action is
-spread out over the chart.** The two come apart -- settings that cover the chart
-identically, or fire at the same rate, still behave completely differently. Ask for
-both. For a `FILTER` that is `selectivity` and the length of its true stretches; for a
-`TRIGGER` it is `per_1000_bars` and the spacing between firings. The second of each pair
-is a search constraint you pass to `pick`, not a property the signal has.
+**Every signal has three things to ask about, and both signal types report all three:
+how much it acts, how long each episode lasts, and how long it waits in between.** They
+come apart -- settings that cover the chart identically, or fire at the same rate, still
+behave completely differently. How much it acts is `selectivity` for a `FILTER` and
+`per_1000_bars` for a `TRIGGER`. How long an episode lasts is `mean_run_bars` for a
+`FILTER` and `stays_true_bars` for a `TRIGGER`, which is one bar unless the signal
+reports a state. How long it waits is `mean_gap_bars` for both, with the median, tightest
+and longest gap also given for a `TRIGGER`. The spacing is also a search constraint you
+pass to `pick`.
 
-**For a FILTER, ask how often and for how long.** A filter is an ongoing state, so ask how often it
-is true (`selectivity`, 0 to 1) and how long it stays true once it turns.
+**`runs` is the number of chances to enter, and it is not `fired_bars`.** For a signal
+true on more than one bar the two differ, which is the case for the candlestick patterns.
+Size a search on `runs`, not on the rate alone, or you will count bars instead of
+opportunities.
+
+**For a FILTER, ask how often, for how long, and how long between.** A filter is an
+ongoing state, so ask how often it is true (`selectivity`, 0 to 1), how long it stays true
+once it turns (`mean_run_bars`), and how long it waits between episodes
+(`mean_gap_bars`). A filter that is true a fifth of the time in one long stretch and one
+that is true a fifth of the time in two hundred short ones suit completely different
+strategies.
 
 Neither extreme announces itself: a filter true on 99% of bars admits almost every bar,
 one true on 0% admits none, and both return a clean boolean with no error. Read the
@@ -180,7 +304,7 @@ about and state that number, so trade frequency is part of the decision.
 **Read reactivity as a distribution rather than an average.** Two settings can fire at
 the same rate and space their firings completely differently. `describe` gives the
 median, shortest, longest and tenth-percentile gap, as `median_gap_bars`,
-`shortest_gap_bars` and `longest_gap_bars`.
+`mean_gap_bars`, `shortest_gap_bars` and `longest_gap_bars`.
 
 `min_gap_bars` and `max_gap_bars` select on the median, so they shape typical spacing
 and thin out clustered settings, but put no floor on the shortest gap: a setting can
@@ -229,7 +353,7 @@ When a new composition inherits the platform's default cooldown, its loss-count 
 to cover the selected trigger's exact measured median-gap reference times the configured loss limit. This is a
 trigger-only cadence reference, not a promise about joint entries or executed trades: filters and execution
 constraints alter realized spacing, and losses can cluster. A cooldown explicitly supplied by the person or
-inherited from a reference strategy is preserved. `verify_strategy` reports when the saved windows are narrower
+carried over from a Strategy Engine run is preserved. `verify_strategy` reports when the saved windows are narrower
 than the measured reference or when the selected trigger configuration has no exact measurement; resolve those
 warnings before treating cooldown behavior as validated.
 That is just one example.
@@ -273,3 +397,11 @@ returned result. Do not treat an HTTP success as proof that every series succeed
 Leave out chart data unless requested. Signal matches are not trades or strategy
 returns; use a backtest for those questions. Use `query_signal_behavior` for existing
 historical coverage measurements rather than inferring coverage from descriptions.
+
+## Preserve or confirm the market
+
+Use a supplied or recorded venue and quote token without asking the person to choose again.
+They can optionally inspect alternatives with `list_backtest_markets` and select another.
+If either value is missing, match available markets while retaining any supplied value,
+propose a match, and wait for the person to confirm or choose before saving or backtesting.
+Never treat an inferred suggestion as their consent, or silently substitute an unavailable market.

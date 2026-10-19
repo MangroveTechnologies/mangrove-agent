@@ -123,13 +123,51 @@ def test_every_synced_skill_is_shipped_and_conversation_memory_is_not():
 
 
 def test_synced_server_skills_declare_reviewed_remote_tools():
-    tools = set(json.loads((ROOT / 'scripts/contracts/upstream.json').read_text())['tools'])
+    upstream = set(json.loads((ROOT / 'scripts/contracts/upstream.json').read_text())['tools'])
+    manifest = json.loads(SYNC_MANIFEST.read_text())
+    catalog = manifest['catalog']
+    assert catalog['mode'] == 'deployed'
+    assert catalog['observed_at_utc'] == json.loads(
+        (ROOT / 'scripts/contracts/deployed.json').read_text())['observed_at_utc']
+    assert len(catalog['snapshot_sha256']) == 64
+    deployed = set(json.loads((ROOT / 'scripts/contracts/deployed.json').read_text())['tools'])
+    assert set(catalog['available_tools']) == deployed
+    assert set(catalog['advertised_tools']) == deployed & upstream
+    assert set(catalog['missing_expected_tools']) == upstream - deployed
+    assert len(catalog['missing_expected_tools']) == 31
+    assert set(manifest['skill_tools']) == _michael_skills()
     for skill in _michael_skills():
         frontmatter = (MICHAEL_DIR / skill / "SKILL.md").read_text().split("---")[1]
         declared = re.search(r"^uses-tools:\s*\[(.*?)\]\s*$", frontmatter, re.M)
+        source_declared = re.search(r"^source-uses-tools:\s*\[(.*?)\]\s*$", frontmatter, re.M)
+        unavailable_declared = re.search(r"^unavailable-tools:\s*\[(.*?)\]\s*$", frontmatter, re.M)
+        unreviewed_declared = re.search(r"^unreviewed-tools:\s*\[(.*?)\]\s*$", frontmatter, re.M)
         assert declared, skill
+        assert source_declared and unavailable_declared and unreviewed_declared, skill
         names = {t.strip() for t in declared.group(1).split(",") if t.strip()}
-        assert names <= tools, f"{skill}: {sorted(names - tools)}"
+        source_names = {t.strip() for t in source_declared.group(1).split(",") if t.strip()}
+        unavailable = {t.strip() for t in unavailable_declared.group(1).split(",") if t.strip()}
+        unreviewed = {t.strip() for t in unreviewed_declared.group(1).split(",") if t.strip()}
+        record = manifest['skill_tools'][skill]
+        source_list = [t.strip() for t in source_declared.group(1).split(",") if t.strip()]
+        advertised_list = [t.strip() for t in declared.group(1).split(",") if t.strip()]
+        unavailable_list = [t.strip() for t in unavailable_declared.group(1).split(",") if t.strip()]
+        unreviewed_list = [t.strip() for t in unreviewed_declared.group(1).split(",") if t.strip()]
+        assert names <= deployed, f"{skill}: {sorted(names - deployed)}"
+        assert source_names == names | unavailable | unreviewed
+        assert record == {
+            'source': source_list,
+            'advertised': advertised_list,
+            'unavailable': unavailable_list,
+            'unreviewed': unreviewed_list,
+        }
+        if unavailable:
+            body = (MICHAEL_DIR / skill / "SKILL.md").read_text()
+            assert 'Check the active MCP `tools/list`' in body, skill
+        if unreviewed:
+            body = (MICHAEL_DIR / skill / "SKILL.md").read_text()
+            assert 'not in the reviewed source contract' in body, skill
+            assert 'inspect the active MCP `tools/list` schema before use' in body, skill
 
 
 def test_session_context_names_every_shipped_skill():

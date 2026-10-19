@@ -29,6 +29,7 @@ EXPECTED_TABLES = {
     "evaluations",
     "trades",
     "positions",
+    "broker_events",
     "_migrations",
 }
 
@@ -53,6 +54,8 @@ EXPECTED_COLUMNS = {
                   "exit_trade_id", "entry_price", "entry_amount", "entry_time",
                   "exit_price", "exit_amount", "exit_time", "status",
                   "stop_loss", "take_profit"},
+    "broker_events": {"id", "order_id", "status", "filled_quantity",
+                      "created_at", "observed_at", "snapshot_json", "snapshot_key"},
 }
 
 

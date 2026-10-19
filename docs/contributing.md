@@ -55,17 +55,29 @@ are generated from MangroveAI's copilot, which is their source of truth. Do not 
 here — CI (`--verify-manifest`) fails on a hand-edited copy. To pick up upstream changes:
 
 ```bash
-python scripts/sync-michael-skills.py --source ~/mangrove-workspace/MangroveAI --ref origin/main
-python scripts/sync-michael-skills.py --source ~/mangrove-workspace/MangroveAI --ref origin/main --check
+python scripts/sync-michael-skills.py --source ~/mangrove-workspace/MangroveAI --ref origin/main --catalog-mode deployed
+python scripts/sync-michael-skills.py --source ~/mangrove-workspace/MangroveAI --ref origin/main --catalog-mode deployed --check
 ```
 
-The script preserves server tool names and adapts bundled file-resource references.
-It filters declared `uses-tools` against the reviewed upstream contract snapshot for
-generation only. Runtime discovery and calls always use the live MangroveAI MCP
-catalogue; the snapshot is never a fallback. Local execution uses separate `agent_`
-tools and local IDs. Refresh the reviewed snapshot and regenerate guidance when the
-server contract changes. The script's docstring also covers syncing from a `gh api`
-tarball when there is no local checkout.
+The checked-in plugin is rendered in explicit `deployed` mode against the fresh,
+names-only `scripts/contracts/deployed.json` observation. Its manifest records the
+catalog mode, snapshot time and hash, every source tool declaration, advertised names,
+and names absent from that observation. A stale or malformed deployed snapshot fails
+generation. This changes skill advertisement only; it does not change server flags or
+runtime catalog behavior. Each skill keeps its full source tool list and an explicit
+unavailable-tools list, and its body tells the reader to verify active MCP `tools/list`
+before using any capability.
+
+The default `source` mode preserves the full reviewed `upstream.json` catalog for
+installations serving that contract. Use `--catalog-mode source` to generate that
+profile. Runtime discovery and calls always use the live MangroveAI MCP catalogue;
+neither snapshot is a call fallback. Local execution uses separate `agent_` tools and
+local IDs. Refresh the observed catalog with `scripts/mcp_contract.py --refresh-deployed
+--upstream-url <anonymous-mcp-url>` only after reviewing the capture. The script's
+docstring also covers syncing from a `gh api` tarball when there is no local checkout.
+The normal sync and `--check` reject observations older than 14 days. CI's
+`--verify-manifest` verifies the recorded snapshot hash and generated declarations
+without expiring an otherwise unchanged reviewed snapshot solely due to age.
 
 ## Git workflow
 

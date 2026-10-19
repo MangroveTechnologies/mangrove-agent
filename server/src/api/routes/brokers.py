@@ -23,6 +23,11 @@ def orders(strategy_id: str):
     return broker_execution.journal(strategy_id)
 
 
+@router.get("/strategies/{strategy_id}/protection")
+def protection(strategy_id: str):
+    return broker_execution.protection_status(strategy_id)
+
+
 @router.post("/strategies/{strategy_id}/reconcile")
 def reconcile(strategy_id: str):
     return broker_execution.run(broker_execution.reconcile, strategy_id)

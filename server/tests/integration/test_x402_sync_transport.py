@@ -9,6 +9,9 @@ import httpx
 import pytest
 from eth_account import Account
 from eth_account.messages import encode_typed_data
+from x402.http.utils import encode_payment_required_header
+from x402.schemas.payments import PaymentRequired, PaymentRequirements
+
 from src.config import app_config
 from src.services import spend_service, wallet_manager, x402_payer
 from src.shared.clients.mangrove import create_x402_mangrove_client
@@ -16,8 +19,6 @@ from src.shared.crypto import fernet
 from src.shared.db import sqlite
 from src.shared.errors import AgentError, ValidationError, X402PaymentError, X402PaymentUncertain, X402SpendCapExceeded
 from src.shared.x402.sync_transport import X402SyncTransport
-from x402.http.utils import encode_payment_required_header
-from x402.schemas.payments import PaymentRequired, PaymentRequirements
 
 ORIGIN = "https://payments.test"
 URL = ORIGIN + "/api/v1/signals/"
@@ -106,10 +107,11 @@ def automatic_client(monkeypatch):
 
 async def call_sdk_workflow(name, arguments):
     """Exercise retained SDK consumers; MCP transport is tested in test_remote_mcp."""
+    from mangrove_ai.models import SearchSignalsRequest
+
+    from src.mcp.tools import _handle_upstream_error
     from src.services.signals import list_signals
     from src.shared.clients.mangrove import mangrove_ai_client
-    from src.mcp.tools import _handle_upstream_error
-    from mangrove_ai.models import SearchSignalsRequest
 
     args = {key: value for key, value in arguments.items() if key != 'api_key'}
     try:
@@ -124,7 +126,6 @@ async def call_sdk_workflow(name, arguments):
                 'get_trending': lambda: sdk.crypto_assets.get_trending(),
                 'list_docs': lambda: sdk.docs.list(),
                 'kb_list_tags': lambda: sdk.kb.tags.list(),
-                'get_whale_activity': lambda: sdk.on_chain.get_whale_activity(**args),
             }
             result = calls[name]()
         return json.dumps(result, default=lambda item: item.model_dump())
@@ -761,7 +762,7 @@ async def test_signal_rest_errors_do_not_echo_remote_data(database, automatic_cl
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name,args", [
     ("get_trending", {}), ("list_docs", {}),
-    ("kb_list_tags", {}), ("get_whale_activity", {"symbol": "ETH"}),
+    ("kb_list_tags", {}),
 ])
 @pytest.mark.parametrize("refused_payment", [False, True])
 async def test_other_sdk_calls_sanitize_errors_and_preserve_cap(
@@ -801,7 +802,7 @@ async def test_other_rest_routes_sanitize_errors_and_preserve_cap(
     monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 0.0001)
     sentinel = "synthetic-private-token user@example.test"
     automatic_client(lambda request: challenge() if refused_payment else httpx.Response(403, json={"message": sentinel}))
-    calls = {"market": lambda: market.trending(), "on_chain": lambda: on_chain.whale_activity("ETH"),
+    calls = {"market": lambda: market.trending(), "on_chain": lambda: on_chain.smart_money("ETH"),
              "kb": lambda: kb.search("trend")}
     with pytest.raises(X402SpendCapExceeded if refused_payment else SdkError) as error:
         await calls[route]()
@@ -823,7 +824,7 @@ async def test_sdk_preserves_uncertainty_without_blocking_other_operations(walle
         return httpx.Response(status, json={'error': reason or {'secret': 'SYNTHETIC_SECRET'},
             'message': 'SYNTHETIC_SECRET', 'retry_payment': False, 'correlation_id': correlation})
     automatic_client(handle)
-    first = json.loads(await call_sdk_workflow('get_whale_activity', {'api_key': 'test-key-1', 'symbol': 'BTC'}))
+    first = json.loads(await call_sdk_workflow('get_trending', {'api_key': 'test-key-1'}))
     assert first['code'] == 'X402_PAYMENT_UNCERTAIN'
     assert first['retry_payment'] is False
     assert first['upstream_status'] == status

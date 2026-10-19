@@ -10,12 +10,18 @@ description: >-
   discussing any execution-config parameter. Also covers choosing which of several candidates to
   spend a backtest on. Uses run_backtest, screen_candidates, get_backtest, list_backtests,
   get_benchmark and get_execution_config_schema.
-uses-tools: [run_backtest, screen_candidates, get_backtest, list_backtests, get_benchmark]
+uses-tools: [get_backtest, get_benchmark]
+source-uses-tools: [list_backtest_markets, run_backtest, screen_candidates, get_backtest, list_backtests, get_benchmark, get_execution_config_schema]
+unavailable-tools: [list_backtest_markets, run_backtest, screen_candidates, list_backtests, get_execution_config_schema]
+unreviewed-tools: []
+catalog-mode: deployed
 ---
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/backtesting/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
 
-These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
+These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. When a remote Oracle experiment/result reader is unavailable, the authenticated local agent_list_oracle_experiments and agent_list_oracle_results tools can discover experiment summaries and read bounded result pages only. They do not provide sweep-specific filtering, ranking, or mutation; never present them as equivalent to a missing remote tool. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
+
+Catalog snapshot note (observed deployed tools only): this skill references tools absent from the recorded catalog snapshot: `list_backtest_markets`, `run_backtest`, `screen_candidates`, `list_backtests`, `get_execution_config_schema`. Do not call or replace these by assumption. Check the active MCP `tools/list`; use a capability only when that live catalog exposes its schema.
 
 # Say what the run actually did
 
@@ -138,3 +144,13 @@ clear one out, say that plainly: the record of what a strategy did is not someth
 
 A losing run is worth the most of any of them. It is the evidence for why a strategy was
 changed.
+
+
+## Venue and quote choice
+
+Use the supplied or saved market by default. Do not force a selection step when its
+venue and quote are known. Offer `list_backtest_markets` when the person asks for
+alternatives, and pass their choice as `market_data_venue` and `quote_token` to
+`run_backtest`. If either detail is missing, suggest an available matching market
+and obtain confirmation before running. Never invent confirmation or silently
+substitute another market. The selected market must cover the window and warm-up.

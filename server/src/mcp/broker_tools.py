@@ -33,9 +33,12 @@ def register(server):
         """Bind an inactive Mangrove strategy to Robinhood and a capital mandate.
 
         allocation: venue=robinhood, asset_class=equity|crypto, capital,
-        max_order_usd, slippage_pct. Does not activate trading. Strategy creation,
-        research, sizing and signals remain in Mangrove. Existing live activation
-        authorizes execution within this allocation without per-order prompts.
+        max_order_usd, slippage_pct, and optional external_execution_mode
+        (legacy by default; confirmed_v2 requires a compatible hosted route and
+        can only be enabled on a pristine strategy). Does not activate trading.
+        Strategy creation, research, sizing and signals remain in Mangrove.
+        Existing live activation authorizes execution within this allocation
+        without per-order prompts.
         """
         return await call(api_key, broker_execution.configure, strategy_id, allocation)
 
@@ -63,6 +66,13 @@ def register(server):
         return json.dumps(broker_execution.journal(strategy_id))
 
     @server.tool()
+    async def agent_list_venue_protection(strategy_id: str, api_key: str = "") -> str:
+        """Read last-observed native crypto stop status and preserved exits."""
+        if not _require(api_key):
+            return _auth_error()
+        return json.dumps(broker_execution.protection_status(strategy_id))
+
+    @server.tool()
     async def agent_reconcile_venue_orders(strategy_id: str, api_key: str = "") -> str:
         """Read broker outcomes and persist confirmed fills. Never submits or retries an order."""
         return await call(api_key, broker_execution.reconcile, strategy_id)
@@ -87,18 +97,19 @@ def register(server):
         ("agent_robinhood_status", "Robinhood execution venue readiness.", []),
         (
             "agent_configure_execution_venue",
-            "Bind an inactive strategy to a funded execution mandate.",
+            "Bind an inactive strategy to a funded execution mandate; optionally select confirmed v2 broker risk feedback.",
             [
                 strategy,
                 ToolParam(
                     name="allocation",
                     type="object",
                     required=True,
-                    description="Venue, asset class, capital, per-order maximum, slippage",
+                    description="Venue, asset class, capital, per-order maximum and slippage; optional external_execution_mode (legacy default or confirmed_v2) and native_stop_loss_enabled (false default; crypto + confirmed_v2 only; fresh inactive strategy only)",
                 ),
             ],
         ),
         ("agent_list_venue_orders", "Local broker order journal.", [strategy]),
+        ("agent_list_venue_protection", "Last-observed broker stop coverage and deferred hosted exits.", [strategy]),
         ("agent_reconcile_venue_orders", "Reconcile broker orders without submission.", [strategy]),
         (
             "agent_cancel_venue_order",

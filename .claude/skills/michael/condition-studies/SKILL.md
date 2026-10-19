@@ -9,12 +9,18 @@ description: >-
   window, and from a sweep, which searches for a strategy. Covers what markets the catalog can
   cover, what a question would run on before it is paid for, and reading the answer back. Uses
   list_market_conditions, preview_condition_study, run_condition_study and get_condition_study.
-uses-tools: [list_market_conditions, preview_condition_study, run_condition_study, get_condition_study]
+uses-tools: []
+source-uses-tools: [list_market_conditions, preview_condition_study, run_condition_study, get_condition_study]
+unavailable-tools: [list_market_conditions, preview_condition_study, run_condition_study, get_condition_study]
+unreviewed-tools: []
+catalog-mode: deployed
 ---
 
 <!-- Synced from MangroveTechnologies/MangroveAI src/MangroveAI/domains/agent/michael/skills/condition-studies/SKILL.md by scripts/sync-michael-skills.py. Edit the upstream skill and regenerate. -->
 
-These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
+These instructions describe MangroveAI server tools and server-owned records. Discover current tools and input schemas through MCP before calling them; report unavailable capabilities without substituting a local implementation. When a remote Oracle experiment/result reader is unavailable, the authenticated local agent_list_oracle_experiments and agent_list_oracle_results tools can discover experiment summaries and read bounded result pages only. They do not provide sweep-specific filtering, ranking, or mutation; never present them as equivalent to a missing remote tool. Local execution workflows use agent_ tools and local strategy IDs. Do not pass IDs between those stores.
+
+Catalog snapshot note (observed deployed tools only): this skill references tools absent from the recorded catalog snapshot: `list_market_conditions`, `preview_condition_study`, `run_condition_study`, `get_condition_study`. Do not call or replace these by assumption. Check the active MCP `tools/list`; use a capability only when that live catalog exposes its schema.
 
 # The strategy does not change; only the market does
 
@@ -22,6 +28,18 @@ A condition study takes one saved strategy and runs it on each of several histor
 carry the same market label. The rules, the parameters and the execution config are identical on
 every window. Nothing is fitted, nothing is searched, and the windows are chosen by their label
 before any backtest runs.
+
+## Check the deployed capability first
+
+`uses-tools` describes the source capability set; a deployment may advertise fewer tools.
+Read the current MCP catalog and input schemas before calling condition-study tools. If
+`list_market_conditions`, `preview_condition_study`, `run_condition_study` or
+`get_condition_study` is missing, do not call it or substitute an invented SDK/REST path.
+When advertised locally, `agent_list_oracle_experiments` and
+`agent_list_oracle_results` can discover experiment summaries and read bounded result
+pages only; they do not select market conditions, preview cost, run a study or poll its
+status. Report the specific unavailable step instead of presenting a generic result read
+as a condition study.
 
 That is the whole reason the answer is worth anything, and it is worth saying out loud when you
 report one. A backtest that has been tuned until it looked good says nothing about the future. A

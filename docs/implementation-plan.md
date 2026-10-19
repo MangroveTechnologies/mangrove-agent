@@ -565,7 +565,6 @@ Goal: every spec endpoint and MCP tool is wired up. After this phase, the agent 
   - `GET /market/global`
 - [ ] **Step 2:** on-chain routes — delegate to `mangrove_ai_client().on_chain.*`:
   - `GET /on-chain/smart-money?symbol&chain`
-  - `GET /on-chain/whale-activity?symbol&hours_back`
   - `GET /on-chain/token-holders/{symbol}`
 - [ ] **Step 3:** signals routes — delegate to `mangrove_ai_client().signals.*`:
   - `GET /signals?category&search&limit`

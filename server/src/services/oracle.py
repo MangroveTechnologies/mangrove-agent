@@ -414,12 +414,13 @@ def pause_experiment(experiment_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def list_results(
-    experiment_id: str, *, limit: int = 100, offset: int = 0,
+    experiment_id: str | None = None, *, limit: int = 100, offset: int = 0,
 ) -> dict[str, Any]:
-    """Read backtest results materializing under an experiment, paginated.
+    """Read backtest results for one experiment or the visible corpus.
 
-    ``experiment_id`` is required — Oracle rejects unfiltered reads at
-    the proxy layer to prevent cross-tenant fan-out.
+    When omitted, the Oracle proxy scopes results to experiments visible to
+    the authenticated caller. Callers can page through the complete result
+    set with ``limit`` and ``offset``.
     """
     client = mangrove_ai_client()
     result = client.oracle.list_results(

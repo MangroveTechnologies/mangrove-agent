@@ -17,18 +17,13 @@ router = APIRouter(
 
 
 # ---------------------------------------------------------------------------
-# Legacy GET routes (3 endpoints, ship since v0)
+# Legacy GET routes
 # ---------------------------------------------------------------------------
 
 
 @router.get("/smart-money", summary="Smart money sentiment for a token")
 async def smart_money(symbol: str, chain: str | None = None) -> Any:
     return await read('get_smart_money_sentiment', symbol, chain=chain)
-
-
-@router.get("/whale-activity", summary="Whale activity summary for a token")
-async def whale_activity(symbol: str, hours_back: int = 24) -> Any:
-    return await read('get_whale_activity', symbol, hours_back=hours_back)
 
 
 @router.get("/token-holders/{symbol}", summary="Holder distribution + concentration")

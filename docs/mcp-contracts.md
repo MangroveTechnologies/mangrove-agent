@@ -46,21 +46,40 @@ The collector is an accidental-side-effect guard, not a sandbox for hostile Pyth
 
 ## Reviewed artifacts
 
-All three files live under `scripts/contracts/`:
+All four files live under `scripts/contracts/`:
 
 | File | Purpose |
 | --- | --- |
 | `local.json` | Complete generated local input schemas, access labels and billing bindings; no amounts |
-| `upstream.json` | Public receiver input schemas and billing IDs, captured through anonymous MCP discovery; no amounts or descriptions |
+| `upstream.json` | Reviewed expected receiver input schemas and billing IDs; no amounts or descriptions |
+| `deployed.json` | Separate names-only observation of the deployed receiver's anonymous catalog at a recorded time |
 | `policy.json` | Reasons for non-upstream/unknown pricing and fingerprinted direct-SDK exceptions |
 
-The initial receiver capture contains 84 callable tools and 99 billing IDs.
-Its source URL and retrieval timestamp are recorded in the file. It is an
-observation of that running receiver, **not** an assertion that it loaded a
-particular Git commit or represents every hosted environment. Initial agent
-baseline: 106 tools, 69 pricing bindings (57 nonempty, 12 unknown), 37 explicitly
-excluded tools and 55 remaining direct-SDK adapters after the two market fixes.
-Counts describe this baseline; they are not hardcoded runtime limits.
+`upstream.json` is the reviewed 96-tool reference used for source-level
+contract and billing checks. Its provenance is an anonymous catalog from
+`http://127.0.0.1:15702/mcp/` on 2026-10-11, not a production baseline.
+It must not be overwritten just to hide a catalog difference.
+`deployed.json` records a separate anonymous
+`tools/list` observation; it does not assert which source commit the service runs
+or that another environment has the same capabilities. On 2026-10-17 the
+deployed catalog returned 72 tools and lacked 31 names in the reviewed snapshot,
+including `find_sweep_runs`, `get_sweep_run`, and the sweep/condition-study
+lifecycle. Of those, 30 distinct names appear in current generated skill
+`uses-tools` declarations; the extra missing source name is not advertised by
+those declarations. Counts describe observations, not runtime limits, and do
+not establish that production is running an older or broken implementation.
+
+MangroveAI's catalog mode matters. With `MCP_SSOT_MODE=false`, discovery combines
+public skills and billable REST tools. With both `MCP_SSOT_MODE=true` and
+`MCP_USES_MICHAEL_TOOLS=true`, discovery uses visible Michael tools and residual
+public skills, omitting the legacy billable REST catalog. The Michael flag is
+inert when SSOT mode is off. In source revision `27092af`, 30 absent reference
+names map to visible Michael core tools; `propose_action_for_confirmation` is
+intentionally hidden from MCP. The production image uses the legacy mode.
+Switching modes would also remove REST-only tools such as `managers_evaluate_by_object`;
+it is not a safe automatic repair for the name difference. Review consumer
+compatibility before changing the image's config. Continue checking actual
+discovery before following a Michael skill that requires unavailable tools.
 
 ## Live receiver comparison
 
@@ -84,6 +103,26 @@ receiver's schema to its **own** prior schema, not to the local wrapper schema:
 local argument names, authentication arguments and aggregation can intentionally
 be different. Added unrelated receiver tools do not fail. Missing billing IDs
 fail even when the corresponding REST route is intentionally hidden from MCP.
+
+The same check compares the declared `uses-tools` names in generated Michael
+skills with both the reviewed receiver snapshot and the live catalog. Diagnostics
+include every expected name absent from the observed deployment, even when the
+distributed skills use a filtered profile. The skills manifest records whether the
+bundle uses `source` or `deployed` mode and, for deployed mode, the snapshot timestamp,
+SHA-256, available names, and per-skill source/advertised/unavailable names. The
+optional deployed profile filters only frontmatter advertisement; skill instructions
+retain the upstream tool references and explain how to check live `tools/list`.
+The default sync mode remains `source`, so installations serving the full 96-tool
+contract can render it without masking those tools. Neither catalog snapshot changes
+runtime discovery or acts as a tool-call fallback.
+
+For read-only Oracle fallback, local authenticated MCP tools
+`agent_list_oracle_experiments` and `agent_list_oracle_results` call the shared
+Oracle services. They discover experiment summaries and return one result page
+of at most 500 rows. They do not provide sweep-specific filters or ranking and
+must not be presented as substitutes for missing sweep tools. Result search
+filters are limited to parameters supported by the published SDK/REST surface;
+unsupported filters must be rejected explicitly, never silently dropped.
 
 This guards catalog compatibility, not the semantic correctness of every SDK
 route mapping. Renamed, differently named or private/context-dependent receiver

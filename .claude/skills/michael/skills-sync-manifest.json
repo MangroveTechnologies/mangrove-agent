@@ -3,35 +3,434 @@
   "source": {
     "repo": "MangroveTechnologies/MangroveAI",
     "path": "src/MangroveAI/domains/agent/michael/skills",
-    "commit": "cfe6f009eb44f84eb169c15f244e5b9eca4d6169",
-    "ref": "cfe6f009eb44f84eb169c15f244e5b9eca4d6169"
+    "commit": "35d5aa098075ef15a8d9199effdc613f3bc9f445",
+    "ref": "35d5aa098075ef15a8d9199effdc613f3bc9f445"
   },
   "dropped_skills": [
     "conversation-memory",
     "knowledge-graph"
   ],
+  "catalog": {
+    "snapshot": "scripts/contracts/deployed.json",
+    "snapshot_sha256": "68f88ace1669b0c7858db4a5a2a873c678035a3653c58d517b232412bcdc4566",
+    "observed_at_utc": "2026-10-17T07:01:04+00:00",
+    "source": "https://api.mangrovedeveloper.ai/mcp/",
+    "tool_count": 72,
+    "mode": "deployed",
+    "available_tools": [
+      "build_strategy",
+      "classify_market_segment",
+      "delete_strategy",
+      "evaluate_multiple_signals_series",
+      "evaluate_signal",
+      "evaluate_strategy",
+      "get_asset",
+      "get_backtest",
+      "get_benchmark",
+      "get_chain_tvl",
+      "get_etf_flows",
+      "get_global_market",
+      "get_influence_score",
+      "get_lending_rates",
+      "get_market_data",
+      "get_market_regime",
+      "get_ohlcv",
+      "get_onchain_series",
+      "get_perp_funding_rates",
+      "get_playground_data",
+      "get_protocol_tvl",
+      "get_signal",
+      "get_smart_money_dex_trades",
+      "get_smart_money_flows",
+      "get_smart_money_historical_holdings",
+      "get_smart_money_holdings",
+      "get_smart_money_netflows",
+      "get_smart_money_perp_trades",
+      "get_smart_money_sentiment",
+      "get_social_mentions",
+      "get_social_sentiment",
+      "get_stablecoin_metrics",
+      "get_strategy",
+      "get_symbol_exchanges",
+      "get_token_dex_trades",
+      "get_token_flows",
+      "get_token_holders",
+      "get_token_unlocks",
+      "get_trade_history",
+      "get_trades_for_strategy",
+      "get_treasuries",
+      "get_trending",
+      "kb_get_document",
+      "kb_get_signal_quick_reference",
+      "kb_glossary_get",
+      "kb_list_documents",
+      "kb_search",
+      "list_approved_assets",
+      "list_evaluations",
+      "list_exchanges",
+      "list_playground_datasets",
+      "list_positions",
+      "list_recent_backtests",
+      "list_signal_labels",
+      "list_signals",
+      "list_strategies",
+      "managers_account_detail",
+      "managers_accounts_list_or_create_get",
+      "managers_accounts_list_or_create_post",
+      "managers_evaluate_bulk",
+      "managers_evaluate_by_object",
+      "managers_portfolio_read",
+      "match_signals",
+      "oracle_backtest_async",
+      "oracle_backtest_bulk",
+      "oracle_backtest_poll",
+      "query_knowledge",
+      "query_signal_behavior",
+      "screen_smart_money",
+      "search_signals",
+      "update_strategy_status",
+      "validate_signal_params"
+    ],
+    "advertised_tools": [
+      "build_strategy",
+      "classify_market_segment",
+      "delete_strategy",
+      "evaluate_multiple_signals_series",
+      "evaluate_signal",
+      "evaluate_strategy",
+      "get_asset",
+      "get_backtest",
+      "get_benchmark",
+      "get_chain_tvl",
+      "get_etf_flows",
+      "get_global_market",
+      "get_influence_score",
+      "get_lending_rates",
+      "get_market_data",
+      "get_market_regime",
+      "get_ohlcv",
+      "get_onchain_series",
+      "get_perp_funding_rates",
+      "get_playground_data",
+      "get_protocol_tvl",
+      "get_signal",
+      "get_smart_money_dex_trades",
+      "get_smart_money_flows",
+      "get_smart_money_historical_holdings",
+      "get_smart_money_holdings",
+      "get_smart_money_netflows",
+      "get_smart_money_perp_trades",
+      "get_smart_money_sentiment",
+      "get_social_mentions",
+      "get_social_sentiment",
+      "get_stablecoin_metrics",
+      "get_strategy",
+      "get_symbol_exchanges",
+      "get_token_dex_trades",
+      "get_token_flows",
+      "get_token_holders",
+      "get_token_unlocks",
+      "get_trade_history",
+      "get_trades_for_strategy",
+      "get_treasuries",
+      "get_trending",
+      "kb_get_document",
+      "kb_get_signal_quick_reference",
+      "kb_glossary_get",
+      "kb_list_documents",
+      "kb_search",
+      "list_approved_assets",
+      "list_evaluations",
+      "list_exchanges",
+      "list_playground_datasets",
+      "list_positions",
+      "list_recent_backtests",
+      "list_signal_labels",
+      "list_signals",
+      "list_strategies",
+      "match_signals",
+      "oracle_backtest_async",
+      "oracle_backtest_bulk",
+      "oracle_backtest_poll",
+      "query_signal_behavior",
+      "screen_smart_money",
+      "search_signals",
+      "update_strategy_status",
+      "validate_signal_params"
+    ],
+    "missing_expected_tools": [
+      "archive_strategy",
+      "build_market_window",
+      "create_sweep",
+      "find_sweep_runs",
+      "get_condition_study",
+      "get_marketplace_strategy",
+      "get_notification_settings",
+      "get_sweep",
+      "get_sweep_limits",
+      "get_sweep_run",
+      "launch_sweep",
+      "list_backtests",
+      "list_market_conditions",
+      "list_platform_strategies",
+      "list_run_filters",
+      "list_sweep_markets",
+      "list_sweeps",
+      "list_trades",
+      "pause_sweep",
+      "preview_condition_study",
+      "propose_action_for_confirmation",
+      "propose_adopt",
+      "propose_deploy",
+      "run_backtest",
+      "run_condition_study",
+      "save_strategy",
+      "screen_candidates",
+      "search_marketplace",
+      "size_sweep",
+      "update_strategy",
+      "verify_strategy"
+    ],
+    "unreviewed_observed_tools": [
+      "managers_account_detail",
+      "managers_accounts_list_or_create_get",
+      "managers_accounts_list_or_create_post",
+      "managers_evaluate_bulk",
+      "managers_evaluate_by_object",
+      "managers_portfolio_read",
+      "query_knowledge"
+    ]
+  },
+  "skill_tools": {
+    "backtesting": {
+      "source": [
+        "list_backtest_markets",
+        "run_backtest",
+        "screen_candidates",
+        "get_backtest",
+        "list_backtests",
+        "get_benchmark",
+        "get_execution_config_schema"
+      ],
+      "advertised": [
+        "get_backtest",
+        "get_benchmark"
+      ],
+      "unavailable": [
+        "list_backtest_markets",
+        "run_backtest",
+        "screen_candidates",
+        "list_backtests",
+        "get_execution_config_schema"
+      ],
+      "unreviewed": []
+    },
+    "condition-studies": {
+      "source": [
+        "list_market_conditions",
+        "preview_condition_study",
+        "run_condition_study",
+        "get_condition_study"
+      ],
+      "advertised": [],
+      "unavailable": [
+        "list_market_conditions",
+        "preview_condition_study",
+        "run_condition_study",
+        "get_condition_study"
+      ],
+      "unreviewed": []
+    },
+    "market-intelligence": {
+      "source": [
+        "get_market_data",
+        "get_market_regime",
+        "classify_market_segment",
+        "list_approved_assets"
+      ],
+      "advertised": [
+        "get_market_data",
+        "get_market_regime",
+        "classify_market_segment",
+        "list_approved_assets"
+      ],
+      "unavailable": [],
+      "unreviewed": []
+    },
+    "portfolio": {
+      "source": [
+        "list_positions",
+        "list_trades"
+      ],
+      "advertised": [
+        "list_positions"
+      ],
+      "unavailable": [
+        "list_trades"
+      ],
+      "unreviewed": []
+    },
+    "product-facts": {
+      "source": [
+        "query_product_facts",
+        "get_notification_settings"
+      ],
+      "advertised": [],
+      "unavailable": [
+        "query_product_facts",
+        "get_notification_settings"
+      ],
+      "unreviewed": []
+    },
+    "strategy-composition": {
+      "source": [
+        "list_backtest_markets",
+        "evaluate_signal",
+        "evaluate_multiple_signals_series",
+        "validate_signal_params",
+        "list_signal_labels",
+        "list_playground_datasets",
+        "get_playground_data",
+        "find_sweep_runs",
+        "get_sweep_run",
+        "run_backtest",
+        "search_marketplace",
+        "get_marketplace_strategy",
+        "propose_adopt",
+        "query_knowledge",
+        "query_signal_behavior",
+        "save_strategy",
+        "update_strategy",
+        "verify_strategy",
+        "list_strategies",
+        "get_strategy",
+        "get_market_regime",
+        "get_execution_config_schema"
+      ],
+      "advertised": [
+        "evaluate_signal",
+        "evaluate_multiple_signals_series",
+        "validate_signal_params",
+        "list_signal_labels",
+        "list_playground_datasets",
+        "get_playground_data",
+        "query_signal_behavior",
+        "list_strategies",
+        "get_strategy",
+        "get_market_regime"
+      ],
+      "unavailable": [
+        "list_backtest_markets",
+        "find_sweep_runs",
+        "get_sweep_run",
+        "run_backtest",
+        "search_marketplace",
+        "get_marketplace_strategy",
+        "propose_adopt",
+        "save_strategy",
+        "update_strategy",
+        "verify_strategy",
+        "get_execution_config_schema"
+      ],
+      "unreviewed": [
+        "query_knowledge"
+      ]
+    },
+    "strategy-management": {
+      "source": [
+        "list_strategies",
+        "list_platform_strategies",
+        "get_strategy",
+        "archive_strategy",
+        "propose_deploy",
+        "search_marketplace",
+        "get_marketplace_strategy",
+        "propose_adopt"
+      ],
+      "advertised": [
+        "list_strategies",
+        "get_strategy"
+      ],
+      "unavailable": [
+        "list_platform_strategies",
+        "archive_strategy",
+        "propose_deploy",
+        "search_marketplace",
+        "get_marketplace_strategy",
+        "propose_adopt"
+      ],
+      "unreviewed": []
+    },
+    "sweep-results": {
+      "source": [
+        "list_backtest_markets",
+        "list_sweeps",
+        "get_sweep",
+        "find_sweep_runs",
+        "list_run_filters",
+        "get_sweep_run"
+      ],
+      "advertised": [],
+      "unavailable": [
+        "list_backtest_markets",
+        "list_sweeps",
+        "get_sweep",
+        "find_sweep_runs",
+        "list_run_filters",
+        "get_sweep_run"
+      ],
+      "unreviewed": []
+    },
+    "sweeps": {
+      "source": [
+        "query_knowledge",
+        "list_sweep_markets",
+        "build_market_window",
+        "get_sweep_limits",
+        "size_sweep",
+        "create_sweep",
+        "launch_sweep",
+        "get_sweep",
+        "pause_sweep"
+      ],
+      "advertised": [],
+      "unavailable": [
+        "list_sweep_markets",
+        "build_market_window",
+        "get_sweep_limits",
+        "size_sweep",
+        "create_sweep",
+        "launch_sweep",
+        "get_sweep",
+        "pause_sweep"
+      ],
+      "unreviewed": [
+        "query_knowledge"
+      ]
+    }
+  },
   "source_files": {
-    "backtesting/SKILL.md": "a8322b3619ea592620916d9321021ab5c4f7419c8d2f1f8979cae543a3f23702",
-    "condition-studies/SKILL.md": "8fb3328aaaf3c17e5f8c57b66ec441c771876ea79449299ffe903717dc5a18f7",
+    "backtesting/SKILL.md": "e90fcbdab992e0d1e69c11165554156890f8ba9a7780d194deb8b4d271582ff0",
+    "condition-studies/SKILL.md": "6b0f3f959ae7bbb517555e8e292234ca82619255b9e05f219242863b28c252c9",
     "market-intelligence/SKILL.md": "d3317f9c09dc955a20b8b9acace16d72c379845d28bf4b75502cf9f0940e9c4a",
     "portfolio/SKILL.md": "68b02b141e0aa98b2efc58081f6b769eee079adb6f6c18af4faee922d8ba062c",
     "product-facts/SKILL.md": "2b037c1803424999b1bd35aa5f1ab79b7d7a67afef87e707535fff8dee0f4e3c",
-    "strategy-composition/SKILL.md": "44180b86578238028f85d7b9b05cd32ddab8df00f38ad3b54ebc5211c6741626",
+    "strategy-composition/SKILL.md": "43ea55b7f238b540482e236e887a05d55b2ce73d6ba90a0e1c83cd20660f7805",
     "strategy-composition/signal_archetype_map.yaml": "5b8f411abab3a53a6c418ba803ad0440c076f59d21ada2555f4d05214267cec4",
-    "strategy-management/SKILL.md": "820543373cfdf2c3c799b6dffc6e28e712e0be99658667a59cebd56eca0b99fc",
-    "sweep-results/SKILL.md": "9d64b6d8aaf566b3e13cd0c72af715eb1dcee85a624b681f8289ff8b36361f89",
-    "sweeps/SKILL.md": "2a01857df4bb2d9c53ab537299d584f4090347b077d154cd72744836f31122fa"
+    "strategy-management/SKILL.md": "909f2c4a7e75c3e58392798455e616cc1ffd1e201434ad7978cde64548a0dd09",
+    "sweep-results/SKILL.md": "51af8829b1880ad75a1819094dc3f293275431a27d25c88df5edc076d7f60c28",
+    "sweeps/SKILL.md": "fb449566c05371e0183eee765df44d067ddb9e5196f3955ccbd54b7bf8483351"
   },
   "files": {
-    "backtesting/SKILL.md": "c327c49d2bbfb20a7c819618cac75d8365730b3381fd8270404b20263220c430",
-    "condition-studies/SKILL.md": "69addda65e766aef43eb9921273c8a6e7a6f63a48531afb5f04e37451f89b0cc",
-    "market-intelligence/SKILL.md": "8b5caec21b557c58a4bb76d80c2ff2f4a75899e6566e926b6076b585d1518e61",
-    "portfolio/SKILL.md": "c43ea8c66379daace22d4e77ae801c84fdbf701425b9ea6366a7aa0b2026e567",
-    "product-facts/SKILL.md": "bc0e79c3e7d515c270e9390989d012cd43f8e5ca76baa4b70d60e1745e0fa219",
-    "strategy-composition/SKILL.md": "138fc48ba463d2de5ca69723191ac4787380ce91b9507237014817fab79bb3f7",
+    "backtesting/SKILL.md": "7477eed137fd000b3166bdd96fdeaab12ea2f0b9f4c689bd68ee0a0c0a095230",
+    "condition-studies/SKILL.md": "90798558f1cac09f020502e0e1cd24021b2633389ab871fd55b4d8c6ce1bade5",
+    "market-intelligence/SKILL.md": "37ec55d3ae7e69235b400b60274a725dbcb2ed14d3eb6709bb6cf82c81f2e01a",
+    "portfolio/SKILL.md": "291c5ea02ed3aa944833f0e1ca6b910032e7399303cfeb8c2ce85c65ca34e861",
+    "product-facts/SKILL.md": "8650acce1cfd173dfb1e9552e4fe55a79276d0771e9e140c53846b929020e5d0",
+    "strategy-composition/SKILL.md": "b9ea647651d75c74d0da93fdab31b05baa9b2c307b38ff6c3cb4b8c68d7299db",
     "strategy-composition/signal_archetype_map.yaml": "5b8f411abab3a53a6c418ba803ad0440c076f59d21ada2555f4d05214267cec4",
-    "strategy-management/SKILL.md": "46a281ca392296d8c747dccd14ed3ab44d63f67339b900aa9e7878af3eb8d38d",
-    "sweep-results/SKILL.md": "5ace53fd59f2e1087ffd0ca3684a2f5d238d62d37b703e8a0284634448de7b48",
-    "sweeps/SKILL.md": "4c3887965cfde1e1a311490cc98a941594e3eb3e58698372755d523efb7a993d"
+    "strategy-management/SKILL.md": "8d8c81431552f4231b171f1167c47c60db4fe7dba6657d381b592d22a77b5764",
+    "sweep-results/SKILL.md": "efe4798f62e010a5fea88ac42efb57cffed7694c412a48b57e1eb30d089627e8",
+    "sweeps/SKILL.md": "1b416bf75a8d2032fbc513ee47b7e78e68299a65431a53cda234c628d65eb407"
   }
 }
