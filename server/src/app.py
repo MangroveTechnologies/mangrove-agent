@@ -170,7 +170,13 @@ def create_app() -> FastAPI:
         tags=["discovery"],
     )
     async def health():
-        return health_payload()
+        from fastapi.responses import JSONResponse
+
+        payload = health_payload()
+        return JSONResponse(
+            content=payload,
+            status_code=200 if payload["status"] == "healthy" else 503,
+        )
 
     return application
 

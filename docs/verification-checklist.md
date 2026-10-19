@@ -36,9 +36,16 @@ git log --oneline -5
 curl -s http://127.0.0.1:9080/health
 ```
 
-**Expect:** `{"status":"healthy","timestamp":"..."}`
+**Expect:** HTTP 200 with `status: "healthy"` and `scheduler_running: true`.
+The response also reports the scheduler state, dispatch-thread liveness, and
+health reason.
 
-If not healthy, restart:
+If the response is unhealthy or HTTP 503, inspect the service logs and available
+disk space first. Resolve the underlying failure before restarting the server;
+for example, a SQLite disk-full failure can stop the scheduler thread while the
+process remains available to answer health checks.
+
+When the underlying cause is resolved, restart:
 ```bash
 kill $(cat agent-data/bare.pid) 2>/dev/null
 ./scripts/setup.sh --yes --no-mcp --no-verify

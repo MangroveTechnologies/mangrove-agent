@@ -39,7 +39,11 @@ All endpoints are JSON over HTTPS. Base path: `/api/v1/agent`. Every endpoint ha
 ### Discovery (free)
 
 #### `GET /health`
-Returns `{ status, service, version, timestamp }`.
+Returns `{ status, timestamp, scheduler_running, scheduler_state, scheduler_thread_alive, scheduler_health_reason }`.
+`status` is `healthy` with HTTP 200 only when APScheduler is in its running
+state and its dispatch thread is alive. A stopped, paused, or thread-dead
+scheduler returns `unhealthy` with HTTP 503; the response includes the state
+and reason for diagnosis.
 
 #### `GET /api/v1/agent/tools`
 Returns the full MCP tool catalog (tool names, descriptions, parameters, access tier).
