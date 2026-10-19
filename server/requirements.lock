@@ -245,7 +245,7 @@ jsonschema-specifications==2025.9.1
     # via jsonschema
 keyring==25.7.0
     # via -r requirements.txt
-mangroveai==1.19.0
+mangroveai==2.0.0
     # via -r requirements.txt
 mangrovemarkets==1.1.0
     # via -r requirements.txt

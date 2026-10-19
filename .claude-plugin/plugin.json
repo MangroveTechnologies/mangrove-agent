@@ -1,7 +1,7 @@
 {
   "name": "mangrove-agent",
   "version": "0.2.0",
-  "description": "Local AI trading agent on the Mangrove API: author strategies, backtest, paper-trade, and go live on DEX (1inch) or Kraken. Keys and wallets stay on your machine.",
+  "description": "Local AI trading agent on the Mangrove API: author strategies, backtest, paper-trade, and go live on DEX (1inch), Kraken, or Robinhood. Keys and wallets stay on your machine.",
   "author": {
     "name": "Mangrove Technologies",
     "url": "https://github.com/MangroveTechnologies"
@@ -14,6 +14,7 @@
     "backtesting",
     "defi",
     "kraken",
+    "robinhood",
     "mcp"
   ],
   "userConfig": {
@@ -28,7 +29,8 @@
   "skills": [
     "./.claude/skills/trading-bot",
     "./.claude/skills/setup-kraken",
-    "./.claude/skills/connect-kraken"
+    "./.claude/skills/connect-kraken",
+    "./.claude/skills/setup-robinhood"
   ],
   "hooks": "./.claude-plugin/hooks.json",
   "mcpServers": {

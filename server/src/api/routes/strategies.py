@@ -1,13 +1,13 @@
 """Strategy routes — auth-gated. All thin wrappers over strategy_service."""
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, Depends, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from src.services import strategy_service
 from src.services.strategy_service import (
     StrategyDetailResponse,
+    StrategyMarketContext,
     StrategyStatusUpdate,
 )
 from src.shared.auth.dependency import require_api_key
@@ -51,6 +51,11 @@ async def get_strategy(strategy_id: str) -> StrategyDetailResponse:
     return strategy_service.get_strategy(strategy_id)
 
 
+@router.patch("/{strategy_id}/market", response_model=StrategyDetailResponse)
+async def configure_market(strategy_id: str, req: StrategyMarketContext) -> StrategyDetailResponse:
+    return await run_in_threadpool(strategy_service.configure_market, strategy_id, req)
+
+
 @router.patch(
     "/{strategy_id}/status",
     response_model=StrategyDetailResponse,
@@ -63,7 +68,7 @@ async def get_strategy(strategy_id: str) -> StrategyDetailResponse:
     ),
 )
 async def update_status(strategy_id: str, req: StrategyStatusUpdate) -> StrategyDetailResponse:
-    return strategy_service.update_status(strategy_id, req)
+    return await run_in_threadpool(strategy_service.update_status, strategy_id, req)
 
 
 @router.post(
@@ -75,7 +80,7 @@ async def evaluate(strategy_id: str) -> dict:
     # Make sure the strategy exists; strategy_service.get_strategy raises
     # StrategyNotFound otherwise.
     strategy_service.get_strategy(strategy_id)
-    strategy_service.tick(strategy_id)
+    await run_in_threadpool(strategy_service.tick, strategy_id)
     # Return the latest evaluation row for this strategy.
     from src.services.trade_log import list_evaluations
     evs = list_evaluations(strategy_id, limit=1)

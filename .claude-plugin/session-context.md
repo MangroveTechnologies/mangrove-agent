@@ -15,4 +15,4 @@ Do not copy, cache to disk, or regenerate server skill files inside this client.
 Wallet custody, credential handling and local execution monitoring remain client
 responsibilities; follow wallet-presentation.md and risk-management.md for those.
 
-Client-only skills: `trading-bot`, `setup-kraken`, `connect-kraken`.
+Client-only skills: `trading-bot`, `setup-kraken`, `connect-kraken`, `setup-robinhood`.

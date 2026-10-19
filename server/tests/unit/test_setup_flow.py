@@ -393,8 +393,58 @@ def test_shell_fresh_no_key_rerun_and_mode_switch(checkout):
     assert 'prod_synthetic' not in switched.stdout + switched.stderr
     assert 'Marketplace ownership discovery verified' in switched.stdout
     requests = [json.loads(line)['path'] for line in (repo / 'requests.jsonl').read_text().splitlines()]
+    # The signals read is the upstream API-key check: setup presents the key to the
+    # platform once rather than reporting success without ever having used it.
     assert set(requests) == {'/api/v1/agent/wallet/list', '/api/v1/agent/tools', '/health',
-                             '/api/v1/agent/marketplace/readiness'}
+                             '/api/v1/agent/marketplace/readiness',
+                             '/api/v1/agent/signals?limit=1'}
+
+
+# -- upstream API-key check -------------------------------------------------
+#
+# Setup used to print "validity/quota have not been checked" and exit 0 with a
+# key the platform would reject, so the first sign of trouble was an opaque
+# upstream 401 mid-conversation. These pin all three outcomes.
+
+UPSTREAM_PROBE = '/api/v1/agent/signals?limit=1'
+
+
+def _cfg(mode='api-key'):
+    return {'MANGROVE_ACCESS_MODE': mode, 'MANGROVE_API_KEY': 'prod_' + 'a' * 48}
+
+
+def test_check_upstream_reports_a_working_key(monkeypatch, capsys):
+    seen = []
+    monkeypatch.setattr(setup, 'request', lambda cfg, path: seen.append(path) or [])
+    assert setup.check_upstream(_cfg()) is True
+    assert seen == [UPSTREAM_PROBE]
+    assert 'verified' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('code', [401, 403])
+def test_check_upstream_fails_loudly_on_a_rejected_key(monkeypatch, code):
+    def reject(cfg, path):
+        raise setup.SetupError(f'Agent returned HTTP {code}; check local authentication and server logs.')
+    monkeypatch.setattr(setup, 'request', reject)
+    with pytest.raises(setup.SetupError) as exc:
+        setup.check_upstream(_cfg())
+    # The message has to name the platform and the way out, not the local agent.
+    assert 'rejected by the platform' in str(exc.value)
+    assert 'mangrovedeveloper.ai' in str(exc.value)
+
+
+def test_check_upstream_skips_when_the_platform_is_unreachable(monkeypatch, capsys):
+    def unreachable(cfg, path):
+        raise setup.SetupError('No valid response from the local agent.')
+    monkeypatch.setattr(setup, 'request', unreachable)
+    # A condition the user cannot act on must not fail the install.
+    assert setup.check_upstream(_cfg()) is False
+    assert 'NOT verified' in capsys.readouterr().out
+
+
+def test_check_upstream_has_nothing_to_check_in_wallet_mode(monkeypatch):
+    monkeypatch.setattr(setup, 'request', lambda cfg, path: pytest.fail('wallet mode must not probe'))
+    assert setup.check_upstream(_cfg('x402')) is True
 
 
 def test_shell_verification_failure_is_failure(checkout):

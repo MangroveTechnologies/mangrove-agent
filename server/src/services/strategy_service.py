@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.config import app_config
 from src.models.domain import Evaluation, OrderIntent
@@ -166,6 +166,7 @@ def _map_engine_order(o: dict) -> dict | None:
         "reason": f"engine {o.get('order_type', 'market')} order {o.get('order_id', '')}".strip(),
         "ref_price": o.get("price"),
         "engine_position_id": o.get("position_id"),
+        "engine_order_id": o.get("order_id"),
         "stop_loss": o.get("stop_loss_price"),
         "take_profit": o.get("take_profit_price"),
     }
@@ -215,6 +216,14 @@ def _get_live_allocation(
 # -- Pydantic request/response models ---------------------------------------
 
 
+class StrategyMarketContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    base_token: str = Field(min_length=1, pattern=r"^[A-Z0-9._-]+$")
+    quote_token: str = Field(min_length=1, pattern=r"^[A-Z0-9._-]+$")
+    market_data_venue: str = Field(min_length=1, pattern=r"^[A-Z0-9._-]+$")
+
+
 class StrategyManualRequest(BaseModel):
     name: str
     asset: str
@@ -222,6 +231,7 @@ class StrategyManualRequest(BaseModel):
     entry: list[dict[str, Any]]
     exit: list[dict[str, Any]] = Field(default_factory=list)
     execution_config: dict[str, Any] | None = None
+    market_context: StrategyMarketContext | None = None
     # Which MangroveAI evaluation lane this strategy's ticks use (#151):
     #   'server'    — by-id evaluation; the engine's DB is authoritative for
     #                 engine position state (default).
@@ -255,6 +265,16 @@ class StrategyStatusUpdate(BaseModel):
     allocation: StrategyAllocationInput | None = None
 
 
+class ExecutionVenueResponse(BaseModel):
+    """Public broker mandate; never includes raw account IDs or credentials."""
+
+    venue: str
+    asset_class: str
+    capital: str
+    max_order_usd: str
+    slippage_pct: str
+
+
 class StrategyDetailResponse(BaseModel):
     id: str
     mangrove_id: str
@@ -265,6 +285,8 @@ class StrategyDetailResponse(BaseModel):
     entry: list[dict[str, Any]]
     exit: list[dict[str, Any]]
     execution_config: dict[str, Any]
+    market_context: StrategyMarketContext | None = None
+    execution_venue: ExecutionVenueResponse | None = None
     generation_report: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
@@ -280,6 +302,7 @@ def _insert_cache(
     execution_config: dict[str, Any],
     generation_report: dict[str, Any] | None,
     evaluation_lane: str | None = None,
+    market_context: StrategyMarketContext | None = None,
 ) -> str:
     """Insert a row into local strategies cache. Returns our local UUID.
 
@@ -302,8 +325,8 @@ def _insert_cache(
         """INSERT INTO strategies
            (id, mangrove_id, name, asset, timeframe, status,
             entry_json, exit_json, execution_config_json,
-            generation_report_json, evaluation_lane, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            generation_report_json, evaluation_lane, created_at, updated_at, market_context_json)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             local_id, mangrove_id,
             getattr(mangrove_detail, "name", "unnamed"),
@@ -316,6 +339,7 @@ def _insert_cache(
             json.dumps(generation_report) if generation_report else None,
             evaluation_lane,
             now, now,
+            market_context.model_dump_json() if market_context else None,
         ),
     )
     get_connection().commit()
@@ -380,10 +404,42 @@ def _stateless_strategy_dict(row: Any) -> dict[str, Any]:
         "execution_config": execution_config,
         "execution_state": execution_state or dict(_FRESH_EXECUTION_STATE),
         "position_size_calc": execution_config.get("position_size_calc", "v2"),
+        **_market_context(row),
     }
 
 
+def _market_context(row: Any) -> dict[str, str]:
+    raw = row["market_context_json"] if "market_context_json" in row.keys() else None
+    return StrategyMarketContext.model_validate_json(raw).model_dump() if raw else {}
+
+
+def configure_market(strategy_id: str, market: StrategyMarketContext) -> StrategyDetailResponse:
+    """Set the market for a fresh inactive, caller-owned strategy. No evaluation or activation."""
+    from src.services.broker_execution import _lock
+
+    with _lock:
+        row = _get_row(strategy_id)
+        if row["status"] not in {"draft", "inactive"} or _resolve_evaluation_lane(row) != "stateless":
+            raise StrategyInvalidStatusTransition("Market configuration requires an inactive stateless strategy.")
+        if market.base_token != row["asset"]:
+            raise SdkError("Market base token must match the strategy asset.")
+        conn = get_connection()
+        for table in ("trades", "broker_orders", "positions"):
+            if conn.execute(f"SELECT 1 FROM {table} WHERE strategy_id=? LIMIT 1", (strategy_id,)).fetchone():
+                raise SdkError("A strategy with execution history cannot change markets; create a new strategy.")
+        conn.execute(
+            "UPDATE strategies SET market_context_json=?, updated_at=? WHERE id=?",
+            (market.model_dump_json(), datetime.now(timezone.utc).isoformat(), strategy_id),
+        )
+        conn.commit()
+        return get_strategy(strategy_id)
+
+
 def _row_to_response(row: Any) -> StrategyDetailResponse:
+    route = get_connection().execute(
+        "SELECT venue,asset_class,capital,max_order_usd,slippage_pct FROM broker_routes WHERE strategy_id=?",
+        (row["id"],),
+    ).fetchone()
     return StrategyDetailResponse(
         id=row["id"],
         mangrove_id=row["mangrove_id"],
@@ -394,6 +450,8 @@ def _row_to_response(row: Any) -> StrategyDetailResponse:
         entry=json.loads(row["entry_json"] or "[]"),
         exit=json.loads(row["exit_json"] or "[]"),
         execution_config=json.loads(row["execution_config_json"] or "{}"),
+        market_context=_market_context(row) or None,
+        execution_venue=ExecutionVenueResponse(**dict(route)) if route else None,
         generation_report=json.loads(row["generation_report_json"]) if row["generation_report_json"] else None,
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
@@ -447,6 +505,12 @@ def get_strategy(strategy_id: str) -> StrategyDetailResponse:
 
 def update_status(strategy_id: str, update: StrategyStatusUpdate) -> StrategyDetailResponse:
     """Single source of truth for strategy lifecycle transitions."""
+    from src.services.broker_execution import _lock
+    with _lock:
+        return _update_status(strategy_id, update)
+
+
+def _update_status(strategy_id, update):
     row = _get_row(strategy_id)
     current = row["status"]
     target = update.status
@@ -456,6 +520,9 @@ def update_status(strategy_id: str, update: StrategyStatusUpdate) -> StrategyDet
     if target == current:
         return _row_to_response(row)  # no-op
     _validate_status_transition(current, target)
+    from src.services.broker_store import route as broker_route
+    if target == 'paper' and broker_route(strategy_id):
+        raise StrategyInvalidStatusTransition('Broker-bound strategies use live execution; test with a separate paper strategy before binding.')
 
     # Gate transitions that move real money or stop live execution.
     needs_confirm = (
@@ -470,52 +537,55 @@ def update_status(strategy_id: str, update: StrategyStatusUpdate) -> StrategyDet
         )
 
     if target == "live":
-        if not update.allocation:
-            raise StrategyInvalidStatusTransition(
-                "Transition to live requires an allocation block.",
-                suggestion="Include allocation: {wallet_address, token, token_address, amount} in the request.",
-            )
-        # Backup gate: the wallet that will be funding live trades must
-        # have been confirmed-backed-up by the user. Paper→live is the
-        # last chance to catch "user deposited money but never saved
-        # their recovery secret" before real funds move.
-        from src.services.wallet_manager import require_backup_confirmed
-        require_backup_confirmed(update.allocation.wallet_address)
-        allocation_service.record_allocation(
-            strategy_id=strategy_id,
-            wallet_address=update.allocation.wallet_address,
-            token_address=update.allocation.token_address,
-            token_symbol=update.allocation.token,
-            amount=update.allocation.amount,
-            slippage_pct=update.allocation.slippage_pct,
-        )
+        venue_route = broker_route(strategy_id)
+        if venue_route:
+            if update.allocation:
+                raise StrategyInvalidStatusTransition("Robinhood uses its configured venue allocation, not a wallet allocation.")
+            # Broker routes use caller-owned evaluation and confirmed fills.
+            # Activation does not modify Robinhood's approval preference.
+            from src.services import broker_execution
+            broker_execution.run(broker_execution.preflight, venue_route)
+        else:
+            _record_dex_allocation(strategy_id, update)
 
     # Sync status upstream.
     try:
         mangrove_ai_client().strategies.update_status(row["mangrove_id"], target)
     except Exception as e:  # noqa: BLE001
-        # If we already recorded an allocation, roll it back.
         if target == "live":
             allocation_service.release_allocation(strategy_id)
         raise SdkError(f"strategies.update_status failed: {e}") from e
 
     _apply_scheduler_effects(strategy_id, row, target, current)
     _set_status(strategy_id, target)
-
-    # Portfolio kill switch (#146): the live-book composition just changed
-    # (a strategy entered or left 'live'), so committed capital / realized P&L
-    # in the aggregate shifted for a deliberate reason -- re-baseline the
-    # high-water mark so it is not mistaken for drawdown. No-op while latched.
     if "live" in (target, current):
         from src.services import portfolio_risk_service
         portfolio_risk_service.rebaseline(reason=f"status_{current}_to_{target}")
-
-    new_row = _get_row(strategy_id)
-    _log.info("strategy.status_changed",
-              strategy_id=strategy_id, from_status=current, to_status=target,
+    _log.info("strategy.status_changed", strategy_id=strategy_id, from_status=current, to_status=target,
               allocation=bool(update.allocation))
-    return _row_to_response(new_row)
+    return _row_to_response(_get_row(strategy_id))
 
+
+def _record_dex_allocation(strategy_id, update):
+    if not update.allocation:
+        raise StrategyInvalidStatusTransition(
+            "Transition to live requires an allocation block.",
+            suggestion="Include allocation: {wallet_address, token, token_address, amount} in the request.",
+        )
+    # Backup gate: the wallet that will be funding live trades must
+    # have been confirmed-backed-up by the user. Paper→live is the
+    # last chance to catch "user deposited money but never saved
+    # their recovery secret" before real funds move.
+    from src.services.wallet_manager import require_backup_confirmed
+    require_backup_confirmed(update.allocation.wallet_address)
+    allocation_service.record_allocation(
+        strategy_id=strategy_id,
+        wallet_address=update.allocation.wallet_address,
+        token_address=update.allocation.token_address,
+        token_symbol=update.allocation.token,
+        amount=update.allocation.amount,
+        slippage_pct=update.allocation.slippage_pct,
+    )
 
 # -- Cron tick ---------------------------------------------------------------
 
@@ -534,6 +604,10 @@ def tick(strategy_id: str) -> None:
     5. On any exception: log evaluation status=error with error_msg.
        Never let the exception escape.
     """
+    from src.services import broker_execution, broker_store
+    if broker_store.route(strategy_id):
+        broker_execution.tick(strategy_id)
+        return
     tick_id = str(uuid.uuid4())
     start_ns = time.monotonic()
     with with_correlation_id(tick_id):

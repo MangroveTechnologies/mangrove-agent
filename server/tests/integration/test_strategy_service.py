@@ -122,6 +122,51 @@ def mock_ai_sdk(monkeypatch):
 
 
 
+def test_explicit_market_survives_saving_and_stateless_evaluation(temp_db, mock_ai_sdk):
+    from src.services import strategy_service as service
+
+    market = {"base_token": "XLM", "quote_token": "USD", "market_data_venue": "KRAKEN"}
+    detail = create_manual(service.StrategyManualRequest(
+        name="Explicit market", asset="XLM", timeframe="1h",
+        entry=[{"name": "mom_cross_up", "signal_type": "TRIGGER", "timeframe": "1h"}],
+        execution_config={"initial_balance": 200}, evaluation_lane="stateless",
+        market_context=market,
+    ))
+    assert service.get_strategy(detail.id).market_context.model_dump() == market
+    payload = service._stateless_strategy_dict(service._get_row(detail.id))
+    assert all(payload[k] == v for k, v in market.items())
+    assert payload["execution_config"] == {"initial_balance": 200}
+
+
+def test_market_configuration_preserves_rules_and_requires_inactive_stateless(temp_db, mock_ai_sdk):
+    from src.services import strategy_service as service
+    from src.shared.db.sqlite import get_connection
+    from src.shared.errors import SdkError, StrategyInvalidStatusTransition
+
+    detail = create_manual(service.StrategyManualRequest(
+        name="Staged market", asset="XLM", timeframe="1h",
+        entry=[{"name": "mom_cross_up", "signal_type": "TRIGGER", "timeframe": "1h"}],
+        execution_config={"initial_balance": 200}, evaluation_lane="stateless",
+    ))
+    market = service.StrategyMarketContext(base_token="XLM", quote_token="USD", market_data_venue="KRAKEN")
+    before = service.get_strategy(detail.id)
+    after = service.configure_market(detail.id, market)
+    assert after.status == "inactive"
+    assert after.entry == before.entry and after.execution_config == before.execution_config
+    assert after.market_context == market
+    with pytest.raises(SdkError, match="base token"):
+        service.configure_market(detail.id, market.model_copy(update={"base_token": "ETH"}))
+    conn = get_connection()
+    conn.execute("UPDATE strategies SET status='live' WHERE id=?", (detail.id,))
+    conn.commit()
+    with pytest.raises(StrategyInvalidStatusTransition):
+        service.configure_market(detail.id, market)
+    conn.execute("UPDATE strategies SET status='inactive', evaluation_lane='server' WHERE id=?", (detail.id,))
+    conn.commit()
+    with pytest.raises(StrategyInvalidStatusTransition):
+        service.configure_market(detail.id, market)
+
+
 
 
 

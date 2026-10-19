@@ -9,7 +9,7 @@ def existing_strategy(req):
     local_id = service._insert_cache(
         detail, entry=req.entry, exit_rules=req.exit,
         execution_config=req.execution_config or {}, generation_report=None,
-        evaluation_lane=req.evaluation_lane,
+        evaluation_lane=req.evaluation_lane, market_context=req.market_context,
     )
     return service.get_strategy(local_id)
 

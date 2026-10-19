@@ -107,6 +107,8 @@ def register(server: FastMCP):
     register_marketplace(server)
     _register_dex(server)
     _register_strategy(server)
+    from src.mcp.broker_tools import register as register_brokers
+    register_brokers(server)
     _register_logs(server)
     _register_x402_spend(server)
     _register_hello_mangrove(server)
@@ -1042,7 +1044,7 @@ def _register_strategy(server: FastMCP) -> None:
         allocation: dict | None = None, api_key: str = "",
     ) -> str:
         """Transition strategy status. live + live→inactive require confirm=true;
-        live requires an allocation block."""
+        live requires a wallet allocation or configured broker venue."""
         if not _require(api_key):
             return _auth_error()
         try:
@@ -1052,7 +1054,8 @@ def _register_strategy(server: FastMCP) -> None:
                 update_status,
             )
             alloc = StrategyAllocationInput(**allocation) if allocation else None
-            detail = update_status(strategy_id, StrategyStatusUpdate(
+            from starlette.concurrency import run_in_threadpool
+            detail = await run_in_threadpool(update_status, strategy_id, StrategyStatusUpdate(
                 status=status, confirm=confirm, allocation=alloc,
             ))
             return json.dumps(detail.model_dump(mode="json"))

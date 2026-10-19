@@ -209,3 +209,4 @@ def test_evaluate_manual_tick(client):
 
 def test_auth_required(client):
     assert client.get("/api/v1/agent/strategies").status_code == 401
+
