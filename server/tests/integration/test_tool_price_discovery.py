@@ -68,7 +68,7 @@ def test_rest_tool_and_mcp_protocol_share_prices_and_cache(client):
     assert len(calls) == 1
     again = rpc(session, "tools/list")["tools"]
     assert protocol == again  # hints do not accumulate on cached tool objects
-    local = next(t for t in protocol if t["name"] == "agent_build_strategy_from_reference")
+    local = next(t for t in protocol if t["name"] == "agent_list_strategies")
     assert "mangrove/pricing" not in (local.get("_meta") or {})
 
 

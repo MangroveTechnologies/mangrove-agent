@@ -1,10 +1,9 @@
 """Integration tests for strategy_service — CRUD + lifecycle + tick.
 
 These exercise the full stack against the real SQLite, with mocked
-Mangrove + DEX SDKs. The autonomous path and tick path touch enough
-collaborators (candidate_generator, backtest_service, order_executor,
-allocation_service, scheduler_service) that this lives in integration
-rather than unit.
+Mangrove + DEX SDKs. The tick path touches enough collaborators
+(order_executor, allocation_service, scheduler_service) that this lives in
+integration rather than unit.
 """
 from __future__ import annotations
 
@@ -56,7 +55,7 @@ def temp_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def mock_ai_sdk(monkeypatch):
-    """Stub mangrove_ai_client used by strategy_service + candidate_generator + backtest_service."""
+    """Stub mangrove_ai_client used by strategy_service."""
 
     client = MagicMock()
 
@@ -111,7 +110,6 @@ def mock_ai_sdk(monkeypatch):
     client.execution.evaluate.return_value = eval_resp
 
     for path in (
-        "src.services.backtest_service.mangrove_ai_client",
         "src.services.strategy_service.mangrove_ai_client",
     ):
         monkeypatch.setattr(path, lambda c=client: c)

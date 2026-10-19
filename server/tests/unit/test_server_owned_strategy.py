@@ -23,3 +23,12 @@ def test_no_local_authoring_implementations_or_advertisements():
                  'agent_search_reference_strategies', 'agent_build_strategy_from_reference'):
         assert f'@server.tool(name="{name}")' not in tools
     assert not (ROOT / 'server/src/services/data/reference_strategies.json').exists()
+
+
+def test_no_local_copies_of_server_rules_or_data():
+    """MangroveAI owns timeframes, strategy schemas, trading defaults and backtest
+    thresholds. A file mirroring them here drifts from the server unnoticed."""
+    for path in ('server/src/shared/timeframes.py',
+                 'server/src/services/trading_defaults.py',
+                 'server/src/services/data'):
+        assert not (ROOT / path).exists(), path

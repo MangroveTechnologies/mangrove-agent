@@ -1,13 +1,5 @@
 {
   "bindings": {
-    "agent_backtest_strategy": {
-      "meters": [
-        "rest:backtest_async_submit",
-        "rest:backtest_async_status",
-        "skill:crypto_ohlcv"
-      ],
-      "variable": true
-    },
     "agent_evaluate_strategy": {
       "meters": [
         "rest:managers_evaluate_by_id",
@@ -23,99 +15,6 @@
     }
   },
   "tools": {
-    "agent_backtest_strategy": {
-      "access": "auth",
-      "inputSchema": {
-        "properties": {
-          "api_key": {
-            "default": "",
-            "type": "string"
-          },
-          "config": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "include_benchmark": {
-            "default": true,
-            "type": "boolean"
-          },
-          "lookback_days": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "lookback_hours": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "lookback_months": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "mode": {
-            "default": "full",
-            "type": "string"
-          },
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "strategy_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "strategy_id"
-        ],
-        "type": "object"
-      }
-    },
     "agent_evaluate_strategy": {
       "access": "auth",
       "inputSchema": {

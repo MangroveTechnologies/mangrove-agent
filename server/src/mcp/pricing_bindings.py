@@ -18,5 +18,4 @@ class PriceBinding:
 TOOL_PRICING: dict[str, PriceBinding] = {
     "agent_update_strategy_status": PriceBinding(("rest:strategy_status_update",), variable=True),
     "agent_evaluate_strategy": PriceBinding(("rest:managers_evaluate_by_id", "rest:managers_evaluate_by_object"), variable=True),
-    "agent_backtest_strategy": PriceBinding(("rest:backtest_async_submit", "rest:backtest_async_status", "skill:crypto_ohlcv"), variable=True),
 }

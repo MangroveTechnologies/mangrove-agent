@@ -158,18 +158,10 @@ def client(tmp_path, monkeypatch):
 
     sdk = _stub_sdk()
     for path in (
-        "src.api.routes.market.mangrove_ai_client",
-        "src.services.on_chain.mangrove_ai_client",
-        "src.api.routes.signals.mangrove_ai_client",
-        "src.services.signals.mangrove_ai_client",
-        "src.api.routes.kb.mangrove_ai_client",
         "src.api.routes.wallet.mangrove_markets_client",
         "src.api.routes.dex.mangrove_markets_client",
         "src.services.dex_service.mangrove_markets_client",
-        "src.services.candidate_generator.mangrove_ai_client",
-        "src.services.backtest_service.mangrove_ai_client",
         "src.services.strategy_service.mangrove_ai_client",
-        "src.services.benchmark_service.mangrove_ai_client",
         "src.services.order_executor.mangrove_markets_client",
         "src.services.order_executor.mangrove_ai_client",
     ):
@@ -201,17 +193,6 @@ _SMOKE_ENDPOINTS = [
     ("GET", "/api/v1/agent/status", None, None, True),
     ("GET", "/api/v1/agent/tools", None, None, True),
     # Market / on-chain / signals / kb (auth-gated pass-through)
-    ("GET", "/api/v1/agent/market/ohlcv", None, {"symbol": "BTC"}, False),
-    ("GET", "/api/v1/agent/market/data", None, {"symbol": "BTC"}, False),
-    ("GET", "/api/v1/agent/market/trending", None, None, False),
-    ("GET", "/api/v1/agent/market/global", None, None, False),
-    ("GET", "/api/v1/agent/on-chain/smart-money", None, {"symbol": "ETH"}, False),
-    ("GET", "/api/v1/agent/on-chain/whale-activity", None, {"symbol": "ETH"}, False),
-    ("GET", "/api/v1/agent/on-chain/token-holders/ETH", None, None, False),
-    ("GET", "/api/v1/agent/signals", None, None, False),
-    ("GET", "/api/v1/agent/signals/rsi_oversold", None, None, False),
-    ("GET", "/api/v1/agent/kb/search", None, {"q": "x"}, False),
-    ("GET", "/api/v1/agent/kb/glossary/rsi", None, None, False),
     # Wallet (auth-gated)
     ("GET", "/api/v1/agent/wallet/list", None, None, False),
     # DEX read-only (auth-gated)
@@ -340,9 +321,8 @@ def test_mcp_tool_count_matches_rest_catalog(client, monkeypatch, upstream_avail
     required_local = {
         "status", "list_tools", "create_wallet", "list_wallets", "get_balances",
         "list_dex_venues", "get_swap_quote", "execute_swap", "hello_mangrove",
-        "agent_create_strategy_autonomous", "agent_create_strategy_manual",
         "agent_list_strategies", "agent_get_strategy", "agent_update_strategy_status",
-        "agent_backtest_strategy", "agent_evaluate_strategy",
+        "agent_evaluate_strategy",
         "agent_list_evaluations", "agent_list_trades", "agent_list_all_trades",
     }
     assert required_local <= catalog.keys()

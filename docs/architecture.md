@@ -44,7 +44,7 @@ graph TB
     end
 
     subgraph "Mangrove APIs"
-        MangroveAI[mangroveai SDK<br/>strategies, backtest,<br/>evaluate, signals,<br/>market, KB]
+        MangroveAI[MangroveAI MCP + mangroveai SDK<br/>every MangroveAI tool: strategies,<br/>backtests, signals, market, KB;<br/>strategy evaluation]
         MangroveMkts[mangrovemarkets SDK<br/>DEX, wallet, portfolio]
     end
 
@@ -123,47 +123,15 @@ The agent DOES fetch market data for a separate purpose: getting a mark price to
 
 ---
 
-## Sequence — Autonomous Strategy Creation
+## Strategy creation and backtesting
 
-```mermaid
-sequenceDiagram
-    participant U as User / Caller
-    participant API as REST or MCP
-    participant SS as strategy_service
-    participant CG as candidate_generator
-    participant SDK as mangroveai SDK
-    participant DB as SQLite
-
-    U->>API: POST /strategies/autonomous<br/>{goal, asset, timeframe}
-    API->>SS: create_autonomous(req)
-    SS->>CG: generate_candidates(goal, asset, timeframe)
-    CG->>SDK: signals.list(category filters)
-    SDK-->>CG: signal catalog
-    CG-->>SS: 5-10 candidate strategies
-
-    loop for each candidate
-        SS->>SDK: backtesting.run(mode=quick, ...)
-        SDK-->>SS: metrics
-    end
-
-    SS->>SS: filter (win_rate >= threshold_spec min_win_rate, trades >= BACKTEST_MIN_TRADES)
-    SS->>SS: rank by IRR
-
-    alt no survivors
-        SS-->>API: 422 STRATEGY_NO_VIABLE_CANDIDATES
-        API-->>U: error + suggestion
-    else has survivors
-        SS->>SDK: backtesting.run(mode=full, winner)
-        SDK-->>SS: full metrics + trade history
-        SS->>SDK: strategies.create(winner)
-        SDK-->>SS: mangrove_id
-        SS->>DB: INSERT strategies cache + generation_report
-        SS-->>API: StrategyDetail + report
-        API-->>U: 201 Created
-    end
-```
-
-Candidate generation uses **deterministic heuristics** — a rules table mapping goal keywords (momentum, mean_reversion, breakout, trend) to signal categories, with random sampling within each category for diversity. No LLM call from the server. Intelligence lives in the mapping + the user's choice of goal language.
+The agent does not create strategies or run backtests itself. Both are
+MangroveAI tools, which the agent forwards over MCP: it loads MangroveAI's
+`strategy-composition` or `backtesting` skill with `load_skill`, then calls
+MangroveAI's tools (`build_strategy_for_regime`, `save_strategy`,
+`run_backtest`, `get_backtest`, ...). The local
+`POST /strategies/autonomous` and `/strategies/manual` routes return 410 and
+point callers to MangroveAI.
 
 ---
 
@@ -345,12 +313,8 @@ graph TB
             subgraph "routes/"
                 RWallet[wallet.py]
                 RDex[dex.py]
-                RMarket[market.py]
-                ROnChain[on_chain.py]
-                RSignals[signals.py]
                 RStrat[strategies.py]
                 RLogs[logs.py]
-                RKb[kb.py]
                 RDiscovery[discovery.py]
             end
         end
@@ -364,8 +328,6 @@ graph TB
         subgraph "services/"
             SWallet[wallet_manager.py]
             SStrat[strategy_service.py<br/>cron-tick orchestrator]
-            SCG[candidate_generator.py]
-            SBT[backtest_service.py]
             SExec[order_executor.py<br/>single DEX execution path<br/>paper or live]
             SSched[scheduler_service.py]
             SLog[trade_log.py]
@@ -392,7 +354,7 @@ graph TB
     App --> MCPServer
     App --> SSched
     App --> X402
-    Router --> RWallet & RDex & RMarket & ROnChain & RSignals & RStrat & RLogs & RKb & RDiscovery
+    Router --> RWallet & RDex & RStrat & RLogs & RDiscovery
     MCPServer --> MCPTools
     MCPTools --> MCPReg
 
@@ -400,15 +362,12 @@ graph TB
     RWallet -.portfolio,balances.-> Clients
     RDex -.venues,pairs,quote.-> Clients
     RDex -->|user-initiated swap| SExec
-    RMarket -.OHLCV, market data.-> Clients
-    ROnChain -.smart money, whale.-> Clients
-    RSignals -.list, get.-> Clients
-    RKb -.search, glossary.-> Clients
     RStrat --> SStrat
     RLogs --> SLog
     MCPTools -.same services and clients.-> SWallet & SStrat & SExec & Clients
+    MCPServer -.every MangroveAI tool, forwarded over MCP.-> Clients
 
-    SStrat --> SCG & SBT & SSched & SAlloc
+    SStrat --> SSched & SAlloc
     SStrat --> Clients
     SSched --> SStrat
     SStrat --> SExec
@@ -419,7 +378,6 @@ graph TB
     SWallet --> Crypto
     SWallet --> DB
     SLog & SAlloc --> DB
-    SCG & SBT --> Clients
 ```
 
 Key properties:
@@ -456,9 +414,6 @@ Replace the template's `configuration-keys.json` with:
     "DB_PATH",
     "KEYRING_SERVICE_NAME",
     "MASTER_KEY_ENV_FALLBACK",
-    "BACKTEST_CANDIDATE_COUNT",
-    "BACKTEST_MIN_TRADES",
-    "BACKTEST_DEFAULT_LOOKBACK_MONTHS",
     "LOG_RETENTION_DAYS"
   ],
   "full_app_keys": []
@@ -476,9 +431,6 @@ Replace the template's `configuration-keys.json` with:
   "DB_PATH": "./agent.db",
   "KEYRING_SERVICE_NAME": "mangrove-agent",
   "MASTER_KEY_ENV_FALLBACK": "",
-  "BACKTEST_CANDIDATE_COUNT": 7,
-  "BACKTEST_MIN_TRADES": 10,
-  "BACKTEST_DEFAULT_LOOKBACK_MONTHS": 3,
   "LOG_RETENTION_DAYS": 90
 }
 ```
@@ -528,12 +480,8 @@ mangrove-agent/
 │   │   │       ├── discovery.py                # health, status, tool catalog
 │   │   │       ├── wallet.py                   # create, list, balances, portfolio, history
 │   │   │       ├── dex.py                      # venues, pairs, quote, swap
-│   │   │       ├── market.py                   # ohlcv, data, trending, global
-│   │   │       ├── on_chain.py                 # smart_money, whale, holders
-│   │   │       ├── signals.py                  # list, get
-│   │   │       ├── strategies.py               # create, list, get, patch status, backtest, evaluate
+│   │   │       ├── strategies.py               # list, get, patch status, evaluate (local records)
 │   │   │       ├── logs.py                     # evaluations, trades
-│   │   │       ├── kb.py                       # search, glossary
 │   │   │       └── hello_mangrove.py           # x402 demo route (renamed from template's easter_egg.py)
 │   │   ├── mcp/
 │   │   │   ├── server.py                       # FastMCP setup
@@ -542,8 +490,6 @@ mangrove-agent/
 │   │   ├── services/                           # Only services that ADD orchestration
 │   │   │   ├── wallet_manager.py               # Key gen, Fernet encrypt, local signing
 │   │   │   ├── strategy_service.py             # Cron orchestrator: data → SDK evaluate → executor
-│   │   │   ├── candidate_generator.py          # Goal → 5-10 signal combos
-│   │   │   ├── backtest_service.py             # Quick + full, filter + IRR rank
 │   │   │   ├── order_executor.py               # SINGLE swap path: cron-driven OR user-initiated
 │   │   │   ├── scheduler_service.py            # APScheduler wrapper
 │   │   │   ├── trade_log.py                    # SQLite writes

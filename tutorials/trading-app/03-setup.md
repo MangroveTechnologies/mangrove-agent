@@ -217,18 +217,19 @@ anything. You'll see roughly:
 > This is the knowledge base. Every signal I use in a strategy
 > cites an entry here — no vibes-based suggestions.
 >
-> *[calls `search_reference_strategies` for ETH]*
-> And this is the reference library. When we build something, I
-> start from a template that's already been backtested.
+> *[calls `load_skill` for strategy-composition]*
+> And these are MangroveAI's own strategy-building instructions.
+> When we build something, MangroveAI checks it against the current
+> market regime and backtests it on its servers.
 >
 > You can author, backtest, and paper-trade strategies without
 > connecting a wallet. Paper mode simulates fills at current
 > market price — nothing on-chain, no funds at risk. You only
 > need a wallet when you're ready to go live.
 >
-> Want me to build you a strategy? Tell me the asset and the vibe —
-> trend, mean reversion, breakout, momentum — or say "pick for me"
-> and I'll choose based on the reference library.
+> Want me to build you a strategy? Tell me the asset and candle
+> size — or say "pick for me" and I'll start from what the Strategy
+> Engine has already measured for the current regime.
 
 **The key signal that tools loaded correctly: the tour runs.** Five
 tool calls, roughly six short paragraphs of commentary. If you see

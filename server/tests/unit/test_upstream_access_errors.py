@@ -159,35 +159,6 @@ async def test_unexpected_cex_error_remains_sanitized(monkeypatch):
     assert 'secret-body' not in json.dumps(result)
 
 
-@pytest.mark.parametrize('status', [401, 403, 500])
-@pytest.mark.parametrize('path,method', [
-    ('/ohlcv?symbol=BTC', 'get_ohlcv'), ('/data?symbol=BTC', 'get_market_data'),
-    ('/trending', 'get_trending'), ('/global', 'get_global_market'),
-])
-def test_market_rest_denial_status_and_unknown_error_safety(monkeypatch, status, path, method):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-    from src.api.routes import market
-    from src.shared.auth.dependency import require_api_key
-
-    upstream = Mock(side_effect=failure(AIAPIError, status))
-    sdk = SimpleNamespace(crypto_assets=SimpleNamespace(**{method: upstream}))
-    monkeypatch.setattr(market, 'mangrove_ai_client', lambda: sdk)
-    app = FastAPI()
-    app.include_router(market.router)
-    app.dependency_overrides[require_api_key] = lambda: 'test-local-identity'
-    app.add_exception_handler(AgentError, agent_error_handler)
-    with TestClient(app) as client:
-        response = client.get('/market' + path)
-    assert response.status_code == (status if status in (401, 403) else 502)
-    if status in (401, 403):
-        assert response.json()['upstream_status'] == status
-    else:
-        assert response.json()['code'] == 'SDK_ERROR'
-    assert 'secret' not in response.text
-    upstream.assert_called_once()
-
-
 @pytest.mark.parametrize('path,body', [
     ('/balances', None),
     ('/validate-order', {'pair': 'XBTUSD', 'side': 'buy', 'volume': 0.01}),

@@ -215,18 +215,6 @@ def _get_live_allocation(
 # -- Pydantic request/response models ---------------------------------------
 
 
-class StrategyAutonomousRequest(BaseModel):
-    goal: str
-    asset: str
-    timeframe: str
-    candidate_count: int = Field(7, ge=5, le=10)
-    # None = auto-pick from timeframes.recommended_lookback_months(timeframe):
-    #   5m/15m/30m/1h → 3 months; 4h → 6 months; 1d → 12 months.
-    # Explicit value overrides the recommendation.
-    backtest_lookback_months: int | None = None
-    seed: int | None = None  # reproducibility
-
-
 class StrategyManualRequest(BaseModel):
     name: str
     asset: str

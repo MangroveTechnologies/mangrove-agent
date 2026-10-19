@@ -94,33 +94,6 @@ def test_existing_inactive_record_can_promote_to_paper(temp_db, mock_ai_sdk):  #
 # -- Findings 5 + 3 via REST ---------------------------------------------------
 
 
-def test_backtest_route_returns_verdict(client):  # noqa: F811
-    r = existing_response("/api/v1/agent/strategies/manual", headers=_auth(), json={
-        "name": "v", "asset": "ETH", "timeframe": "1h",
-        "entry": [{"name": "rsi_oversold", "signal_type": "TRIGGER", "timeframe": "1h", "params": {}}],
-    })
-    sid = r.json()["id"]
-    body = client.post(f"/api/v1/agent/strategies/{sid}/backtest", headers=_auth(),
-                       json={"mode": "full", "lookback_months": 6}).json()
-    v = body["verdict"]
-    assert v["verdict"] in {"PASS", "MARGINAL", "FAIL", "INSUFFICIENT_TRADES"}
-    assert v["total_checks"] == 6 and len(v["checks"]) == 6
-    wr = next(c for c in v["checks"] if c["metric"] == "win_rate")
-    assert wr["raw"] == 60.0 and wr["actual"] == 0.6 and wr["passed"] is True
-    assert body["verdict_note"] is None
-
-
-def test_backtest_route_quick_mode_has_no_verdict(client):  # noqa: F811
-    sid = existing_response("/api/v1/agent/strategies/manual", headers=_auth(), json={
-        "name": "q", "asset": "ETH", "timeframe": "1h",
-        "entry": [{"name": "rsi_oversold", "signal_type": "TRIGGER", "timeframe": "1h", "params": {}}],
-    }).json()["id"]
-    body = client.post(f"/api/v1/agent/strategies/{sid}/backtest", headers=_auth(),
-                       json={"mode": "quick"}).json()
-    assert body["verdict"] is None
-    assert "quick mode" in body["verdict_note"]
-
-
 def test_retired_authoring_routes_do_not_create_records(client):  # noqa: F811
     before = client.get("/api/v1/agent/strategies", headers=_auth()).json()
     for method, path, payload in (

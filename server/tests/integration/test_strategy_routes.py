@@ -76,9 +76,7 @@ def client(tmp_path, monkeypatch):
     sdk.execution.evaluate.return_value = eval_resp
 
     for path in (
-        "src.services.backtest_service.mangrove_ai_client",
         "src.services.strategy_service.mangrove_ai_client",
-        "src.services.benchmark_service.mangrove_ai_client",
     ):
         monkeypatch.setattr(path, lambda s=sdk: s)
 
@@ -178,49 +176,12 @@ def test_patch_status_requires_confirm_for_live(client):
     assert r.json()["code"] == "CONFIRMATION_REQUIRED"
 
 
-def test_backtest_full(client):
-    created = existing_response(
-        "/api/v1/agent/strategies/manual",
-        headers=_auth(),
-        json={"name": "s", "asset": "ETH", "timeframe": "1h",
-              "entry": [{"name": "rsi_oversold", "signal_type": "TRIGGER",
-                         "timeframe": "1h"}]},
-    ).json()
-    r = client.post(
-        f"/api/v1/agent/strategies/{created['id']}/backtest",
-        headers=_auth(),
-        json={"mode": "full", "lookback_months": 3},
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["success"] is True
-    assert body["metrics"]["irr_annualized"] == 0.4
-    assert body["trade_history"] == [{"entry": "2026-01-01", "pnl": 10}]
-    # New top-level keys; the existing response shape is unchanged.
-    assert body["backtest_id"] == "bt-1"
-    assert body["metric_units"]["total_return"] == "percent_0_100"
-    bench = body["benchmark"]
-    assert bench["available"] is True
-    assert bench["asset"] == "ETH"
-    assert bench["buy_and_hold_return_pct"] == 10.0
-    assert bench["strategy_minus_benchmark_pct"] == -5.0
-
-
-def test_backtest_full_can_skip_benchmark(client):
-    created = existing_response(
-        "/api/v1/agent/strategies/manual",
-        headers=_auth(),
-        json={"name": "s", "asset": "ETH", "timeframe": "1h",
-              "entry": [{"name": "rsi_oversold", "signal_type": "TRIGGER",
-                         "timeframe": "1h"}]},
-    ).json()
-    r = client.post(
-        f"/api/v1/agent/strategies/{created['id']}/backtest",
-        headers=_auth(),
-        json={"mode": "full", "lookback_months": 3, "include_benchmark": False},
-    )
-    assert r.status_code == 200
-    assert "benchmark" not in r.json()
+def test_backtests_are_not_run_by_this_client(client):
+    """Backtests are MangroveAI's: run_backtest / get_backtest over MCP. This client has
+    no backtest route of its own to drift from them."""
+    r = client.post("/api/v1/agent/strategies/any-id/backtest", headers=_auth(),
+                    json={"mode": "full", "lookback_months": 3})
+    assert r.status_code in (404, 405)
 
 
 def test_evaluate_manual_tick(client):

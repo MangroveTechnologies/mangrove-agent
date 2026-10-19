@@ -524,7 +524,7 @@ Create a new trading strategy with entry/exit signal rules.
 | `reward_factor` | number | Risk/reward ratio (default: 2.0) |
 | `strategy_type` | string | One of: `trend_following`, `momentum`, `volatility`, `breakout`, `mean_reversion` |
 | `description` | string | Human-readable description |
-| `execution_config` | object | Execution parameters (defaults from `trading_defaults.json`) |
+| `execution_config` | object | Execution parameters (defaults from MangroveAI's trading defaults) |
 
 **Strategy Rules Format:**
 
@@ -601,7 +601,7 @@ Delete a strategy. Only the owner can delete.
 
 ### Execution Config Reference
 
-Every strategy carries an `execution_config` with these fields (defaults from `trading_defaults.json`):
+Every strategy carries an `execution_config` with these fields (defaults from MangroveAI's trading defaults):
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -674,7 +674,7 @@ Run a synchronous backtest against historical market data.
 |-----------|------|-------------|
 | `slippage_pct` | number | Max slippage per leg (default: 0.004 = 0.4%) |
 | `fee_pct` | number | Max fee rate (default: 0.0085 = 0.85%) |
-| `execution_config` | object | Stop params (`atr_period`, `volatility_tolerance`). Defaults from `trading_defaults.json`. |
+| `execution_config` | object | Stop params (`atr_period`, `volatility_tolerance`). Defaults come from MangroveAI's trading defaults. |
 
 **Important:** `atr_period` and `volatility_tolerance` belong in `execution_config`, NOT in `strategy_json`.
 

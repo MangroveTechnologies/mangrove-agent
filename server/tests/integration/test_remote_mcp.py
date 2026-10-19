@@ -212,6 +212,10 @@ async def test_mangrove_proxy_discovers_then_pays_through_official_mcp(receiver,
     assert result.structuredContent == {'signals': [{'name': 'example'}]}
     assert result.meta['x402/payment-response']['transaction'] == '0x' + 'ab' * 32
     assert len(receiver['calls']) == 2
+    # The session stays open for the next call (one session per destination, as the MCP
+    # specification has it) and closes with the application.
+    assert not receiver['closed']
+    await mangrove_proxy.close_sessions()
     assert receiver['closed']
 
 
@@ -247,6 +251,10 @@ async def test_dynamic_proxy_preserves_real_wallet_boundaries(receiver, wallet, 
         assert len(receiver['calls']) == 2
         assert len(spend_service.list_payments()) == 1
         assert 'SYNTHETIC_PRIVATE' not in result.model_dump_json()
+    if outcome != 'lost':
+        # A session that worked is kept for the next call; one that failed is dropped.
+        assert not receiver['closed']
+        await mangrove_proxy.close_sessions()
     assert receiver['closed']
 
 

@@ -222,12 +222,16 @@ server/src/api/routes/
 ├── strategies.py   ← /api/v1/agent/strategies/*
 ├── wallet.py       ← /api/v1/agent/wallet/*
 ├── dex.py          ← /api/v1/agent/dex/* (swaps, quotes, tx-status)
-├── market.py       ← /api/v1/agent/market/*
-└── ... a dozen others
+└── ... a few others (cex, portfolio, marketplace, x402 spend, logs)
 ```
 
 Each route file is thin — parse request, call a service, return a
 response. No business logic.
+
+There are no local routes for MangroveAI's tools (market data, signals,
+knowledge base, on-chain data, backtests, the Strategy Engine). Those
+are MangroveAI's: the agent forwards them to MangroveAI over MCP and
+keeps no copy.
 
 ### MCP tools
 
@@ -243,21 +247,22 @@ bottom of the file.
 
 ```
 .claude/
-├── skills/create-strategy/SKILL.md  ← strategy authoring workflow
-├── skills/backtest/SKILL.md         ← bar-window sizing + verdict
-├── skills/custom-signal/SKILL.md    ← compose entry/exit signal stacks
+├── skills/trading-bot/SKILL.md      ← the agent's operating loop
+├── skills/setup-kraken/SKILL.md     ← connect Kraken with your own key
+├── skills/connect-kraken/SKILL.md   ← connect Kraken with OAuth
 ├── skills/audit-security/SKILL.md   ← wallet/EIP-7702 security audit
 ├── skills/check-alignment/SKILL.md  ← read-only "does this fit" check
 ├── skills/tool-spec/SKILL.md        ← draft new MCP tool specs
-├── rules/trading-bot-workflow.md    ← Stage 0-6 of the agent's loop
+├── rules/trading-bot-workflow.md    ← load MangroveAI's skills before building or backtesting
 ├── rules/wallet-presentation.md     ← how to present wallet output
-├── rules/git-workflow.md            ← branch / PR conventions
+├── rules/risk-management.md         ← engine gates, kill switch, x402 budget
 ├── hooks/block-wallet-secrets.sh    ← regex key-paste block
 ├── hooks/block-main-commits.sh      ← refuse direct commits to main
 └── hooks/preflight-swap.sh          ← refuse swap if input_token balance is 0
 ```
 
-These are all Markdown and shell — no build step. Edit in place,
+Strategy building and backtesting instructions are not here: the agent loads
+them live from MangroveAI with `load_skill`. These are all Markdown and shell — no build step. Edit in place,
 restart Claude Code, changes take effect.
 
 ### Config
@@ -274,24 +279,11 @@ server/src/config/
 All keys have docstrings in `server/src/config.py` if you want to
 see what they do.
 
-### The data files you might care about
+### Data files
 
-```
-server/src/services/data/
-├── trading_defaults.json     ← execution config defaults (copied from upstream)
-├── strategy_schema.json      ← validates create_strategy_manual payloads
-├── reference_strategies.json ← the curated library for Phase B / ref-first
-├── threshold_spec.json       ← PASS/FAIL thresholds for backtest verdicts
-└── example_bundle.txt        ← bundled example strategy for KB cite-first tests
-```
-
-To add a reference strategy, edit `reference_strategies.json` —
-append an entry with the same schema as the existing ones. The file
-loads at server start.
-
-To change backtest thresholds (e.g., tighten Sharpe to 1.5 from
-1.2), edit `threshold_spec.json`. Applies to all subsequent
-backtests.
+The agent ships no strategy data files. Trading defaults, timeframes,
+strategy schemas, backtest thresholds and the reference strategy library
+all live in MangroveAI, not in the agent.
 
 ## Where to go next
 
@@ -300,10 +292,9 @@ If you finished the tutorial and want to keep going:
 1. **Let your strategy run for a week.** Check back with
    `list_trades`, `portfolio_pnl`. See how backtest expectations
    hold up against real market data.
-2. **Try autonomous mode.** In Chapter 04 we used reference-first
-   because it's beginner-friendly. Try `"Generate 7 autonomous
-   candidates for ETH on 4h optimized for Sortino, backtest all."`
-   Compare the winner against your reference-first strategy.
+2. **Screen several ideas.** Ask for a few variations and have them
+   ranked with `screen_candidates` before spending backtests on them
+   (Chapter 09).
 3. **Build a mean-reversion strategy alongside the momentum one.**
    Two strategies can run in parallel on the same wallet if you
    allocate carefully (don't over-commit).

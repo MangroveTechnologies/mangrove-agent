@@ -139,17 +139,16 @@ The new strategy should be there with `status: "draft"`.
 > "Backtest it."
 
 **Expect:**
-- Agent calls `backtest_strategy(strategy_id=..., mode="full")` with no
-  lookback fields
-- Service auto-picks `lookback_months: 3` for 1h timeframe (matches
-  `timeframes.recommended_lookback_months`)
-- Response includes `resolved_window: {lookback_months: 3, ...}` and a
-  full `metrics` dict (20+ fields: sortino, calmar, sharpe, irr,
-  max_drawdown, win_rate, total_trades, etc.)
+- Agent loads MangroveAI's `backtesting` skill (`load_skill`), then calls
+  MangroveAI's `run_backtest` over MCP with the server strategy id
+- `run_backtest` returns a `backtest_id`; the agent reads the result with
+  `get_backtest(backtest_id)` -- each read is a paid call in x402 mode, so it
+  does not poll in a tight loop
+- The result carries the server's metrics (sortino, calmar, sharpe, irr,
+  max_drawdown, win_rate, total_trades, ...) and verdict
 
-**Verify:** The agent presents a PASS/MARGINAL/FAIL verdict per the
-`/create-strategy` skill's Phase F decision rule. It shows per-threshold
-breakdown against `threshold_spec.json` values.
+**Verify:** The agent reports MangroveAI's verdict and metrics as returned;
+this agent has no local backtest or verdict code.
 
 ---
 

@@ -27,6 +27,7 @@ Chain support (v1): EVM only. XRPL returns ChainNotSupportedInV1.
 """
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Literal
@@ -1187,6 +1188,90 @@ def sign_marketplace_proof(challenge: dict, *, operation: str, arguments: dict,
 
 def sign_marketplace_authorization(challenge: dict, **kwargs) -> str:
     return sign_marketplace_proof(challenge, **kwargs)["signature"]
+
+
+_SIWX_CHAINS = {"eip155:8453": 8453, "eip155:84532": 84532}
+_SIWX_NONCE = re.compile(r"^[A-Za-z0-9]{8,64}$")
+_SIWX_MAX_WINDOW_SECONDS = 600
+_SIWX_CLOCK_SKEW_SECONDS = 60
+
+
+def _validate_siwx(*, wallet_address: str, domain: str, uri: str, chain: str, nonce: str,
+                   issued_at: str, expiration_time: str) -> int:
+    """Refuse any Sign-In-With-X request but a short proof for the configured MangroveAI.
+
+    Runs before the key is decrypted. Returns the numeric chain id.
+    """
+    import httpx
+
+    from src.config import app_config
+    from src.shared.clients.mangrove import _payment_destination
+
+    expected = httpx.URL(_payment_destination(app_config)["base_url"])
+    expected_origin = f"{expected.scheme}://{expected.netloc.decode('ascii')}"
+    target = httpx.URL(uri)
+    if (domain != expected.netloc.decode("ascii")
+            or f"{target.scheme}://{target.netloc.decode('ascii')}" != expected_origin):
+        raise SigningError("Refused to sign: a Sign-In-With-X proof is only signed for the "
+                           "configured MangroveAI service.")
+    chain_id = _SIWX_CHAINS.get(chain)
+    row = _get_wallet_row(wallet_address)
+    if chain_id is None or not row or row["chain"] != "evm" or row["chain_id"] != chain_id:
+        raise SigningError("Refused to sign: Sign-In-With-X needs the selected Base wallet on "
+                           "the configured network.")
+    if not _SIWX_NONCE.match(nonce or ""):
+        raise SigningError("Refused to sign: malformed Sign-In-With-X nonce.")
+    try:
+        issued = datetime.fromisoformat(issued_at.replace("Z", "+00:00"))
+        expires = datetime.fromisoformat(expiration_time.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        raise SigningError("Refused to sign: malformed Sign-In-With-X time.") from None
+    if issued.tzinfo is None or expires.tzinfo is None:
+        # A time with no zone cannot be compared with now, and a signer must not guess it.
+        raise SigningError("Refused to sign: Sign-In-With-X times must carry a time zone.")
+    now = datetime.now(timezone.utc)
+    window = (expires - issued).total_seconds()
+    if (abs((now - issued).total_seconds()) > _SIWX_CLOCK_SKEW_SECONDS
+            or not 0 < window <= _SIWX_MAX_WINDOW_SECONDS):
+        raise SigningError("Refused to sign: a Sign-In-With-X proof must start now and last "
+                           "at most ten minutes.")
+    return chain_id
+
+
+def sign_siwx_message(*, wallet_address: str, domain: str, uri: str, chain: str, nonce: str,
+                      issued_at: str, expiration_time: str) -> str:
+    """Sign a Sign-In-With-X (EIP-4361) proof of this wallet for MangroveAI.
+
+    The narrow typed helper ``sign_message`` calls for, not a reopening of it: the caller
+    supplies fields, never text. The message is built here, with a fixed statement, after
+    ``_validate_siwx`` has confirmed the configured MangroveAI origin, the wallet's own
+    Base network, a well-formed nonce and a window of at most ten minutes starting now.
+    The signature proves identity only -- it authorizes no transfer and no transaction.
+    Backup confirmation is not required, for the same reason.
+    """
+    from eth_account.messages import encode_defunct
+
+    from src.shared.x402.siwx import STATEMENT, VERSION, format_eip4361
+
+    chain_id = _validate_siwx(wallet_address=wallet_address, domain=domain, uri=uri,
+                              chain=chain, nonce=nonce, issued_at=issued_at,
+                              expiration_time=expiration_time)
+    message = format_eip4361(domain=domain, address=wallet_address, uri=uri, version=VERSION,
+                             chain_id=chain_id, nonce=nonce, issued_at=issued_at,
+                             statement=STATEMENT, expiration_time=expiration_time)
+    secret = _load_secret(wallet_address)
+    try:
+        account = _account_from_secret(secret)
+        if account.address.lower() != wallet_address.lower():
+            raise ValueError
+        signature = account.sign_message(encode_defunct(text=message)).signature.hex()
+    except Exception:  # noqa: BLE001
+        raise SigningError("Failed to sign the Sign-In-With-X proof with the stored wallet.") from None
+    finally:
+        del secret
+    _log.info("wallet.signed_siwx", wallet_address=wallet_address, domain=domain,
+              chain_id=chain_id)
+    return "0x" + signature.removeprefix("0x")
 
 
 def sign_message(message: str | bytes, wallet_address: str) -> str:
