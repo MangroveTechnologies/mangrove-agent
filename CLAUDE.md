@@ -73,7 +73,9 @@ is a client. Discover the live MangroveAI tools through the MCP proxy, then call
 `load_skill` with `skill="strategy-composition"` before a strategy build, or
 `skill="backtesting"` before a backtest. Follow the returned server instructions
 and load any named resources through that same tool. Check the returned required
-capabilities against the advertised catalog. If a required tool or the skill cannot
+capabilities against the advertised catalog. Tools listed in `optional_tools` are
+not prerequisites: use them only when advertised, and follow the server instructions
+for their alternatives. If a required tool or the skill cannot
 be loaded, report the unavailable capability; do not substitute local templates,
 remembered instructions, reference seeds, or an autonomous candidate generator.
 
