@@ -9,7 +9,7 @@ argument-hint: "<tool name and purpose>"
 
 Parse `$ARGUMENTS` as a natural-language description of the tool you want to add (no project prefix — this skill is scoped to mangrove-agent).
 
-Produce a complete MCP tool specification following the conventions already in `server/src/mcp/tools.py` and the service-layer pattern documented in `docs/contributing.md` and `CLAUDE.md`.
+Produce a complete MCP tool specification following the conventions already in `server/src/mcp/tools.py` and the service-layer pattern documented in `docs/contributing.md` and `SAGE.md`.
 
 ## Output sections
 
@@ -67,5 +67,5 @@ Do NOT create any files. Output the spec as markdown with a JSON schema block fo
 [ ] Route registered in server/src/api/router.py
 [ ] MCP tool registered in server/src/mcp/tools.py via register_tool()
 [ ] Tests added in server/tests/unit/ and/or server/tests/integration/
-[ ] Documentation updated (CLAUDE.md if user-facing, docs/contributing.md if dev-facing)
+[ ] Documentation updated (SAGE.md if user-facing, docs/contributing.md if dev-facing)
 ```

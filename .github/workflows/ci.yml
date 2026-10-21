@@ -26,6 +26,11 @@ jobs:
       - name: Lint with ruff
         run: ruff check server/src/
 
+      - name: Verify shared Sage instructions and client launchers
+        run: |
+          python scripts/agent_context.py --check
+          ruff check --config server/pyproject.toml scripts/agent_context.py scripts/client_session.py server/tests/unit/test_agent_clients.py server/tests/unit/test_chat_launcher.py
+
       - name: Lint payment demos and their tests
         run: >-
           ruff check --config server/pyproject.toml

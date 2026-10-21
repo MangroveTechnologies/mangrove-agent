@@ -2,11 +2,11 @@
 import importlib.util
 import json
 import os
-from pathlib import Path
-import shutil
 import shlex
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +25,8 @@ def installation(tmp_path):
     root = tmp_path / "User B's agent with spaces"
     for name in ['scripts', '.claude/hooks']:
         shutil.copytree(ROOT / name, root / name)
+    (root / 'SAGE.md').write_text((ROOT / 'SAGE.md').read_text())
+    shutil.copytree(ROOT / '.claude/rules', root / '.claude/rules')
     (root / 'server/src/config').mkdir(parents=True)
     (root / 'server/src/config/local-config.json').write_text(json.dumps({
         'AUTH_ENABLED': True, 'API_KEYS': 'synthetic-local-key',
@@ -42,8 +44,10 @@ def test_chat_launch_is_restricted_and_has_no_credentials_in_arguments(installat
 import json, os, pathlib, sys
 args = sys.argv[1:]
 profile = json.loads(pathlib.Path(args[args.index('--settings') + 1]).read_text())
+context = pathlib.Path(args[args.index('--append-system-prompt-file') + 1]).read_text()
 pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps({
     'args': args, 'cwd': os.getcwd(), 'profile': profile,
+    'context': context,
     'search': os.environ.get('ENABLE_TOOL_SEARCH'),
 }))
 ''')
@@ -68,6 +72,12 @@ pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps({
     assert str(installation / 'scripts/setup_support.py') in shlex.split(mcp['mangrove-agent']['headersHelper'])
     assert data['cwd'] == str(installation / 'agent-data/chat')
     assert data['search'] == 'false'
+    assert '**Name:** Sage' in data['context']
+    assert 'Never request, echo, or save private keys' in data['context']
+    assert 'SOURCE: .claude/rules/trading-bot-workflow.md' in data['context']
+    assert 'SOURCE: .claude/rules/wallet-presentation.md' in data['context']
+    assert 'SOURCE: .claude/rules/risk-management.md' in data['context']
+    assert not Path(args[args.index('--append-system-prompt-file') + 1]).exists()
     assert not Path(args[args.index('--settings') + 1]).exists()
 
 
@@ -103,3 +113,20 @@ def test_missing_hook_prevents_launch(installation, monkeypatch):
     monkeypatch.setattr(chat, 'ROOT', installation)
     with pytest.raises(chat.SetupError):
         chat.chat_settings()
+
+
+def test_missing_policy_prevents_model_launch(installation, tmp_path):
+    binary = tmp_path / 'bin'
+    binary.mkdir()
+    sentinel = tmp_path / 'model-was-launched'
+    cli = binary / 'claude'
+    cli.write_text('#!' + sys.executable + '\nfrom pathlib import Path\n'
+                   f'Path({str(sentinel)!r}).touch()\n')
+    cli.chmod(0o700)
+    (installation / '.claude/rules/risk-management.md').unlink()
+    result = subprocess.run(['bash', str(installation / 'scripts/chat.sh')],
+                            env=dict(os.environ, PATH=f'{binary}{os.pathsep}{os.environ["PATH"]}'),
+                            capture_output=True, text=True)
+    assert result.returncode != 0
+    assert 'Required Sage instructions are missing' in result.stderr
+    assert not sentinel.exists()

@@ -47,6 +47,15 @@ Full platform documentation and the trading knowledge base live at **https://man
 
 ---
 
+## Use Sage with your AI client
+
+Sage's shared identity and operating instructions live in [`SAGE.md`](SAGE.md).
+`AGENTS.md` points Codex and compatible clients there; `CLAUDE.md` imports it for
+Claude Code. Codex and Grok Build launch helpers, MCP configuration templates,
+and the complete Perplexity/web instruction bundle are documented in
+[AI client setup](docs/clients.md). Tool access is configured and verified
+separately for each client.
+
 ## Install with setup.sh (API key or x402)
 
 Clone the repository and run `./scripts/setup.sh`. Choose an existing MangroveAI
@@ -343,7 +352,7 @@ mangrove-agent/
 ├── scripts/verify_quickstart.sh
 ├── docker-compose.yml
 ├── .mcp.json.example         # Drop-in Claude Code MCP config
-└── CLAUDE.md                 # Project context
+└── SAGE.md                   # Shared identity and operating instructions
 ```
 
 ## License

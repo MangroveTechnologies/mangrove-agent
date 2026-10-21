@@ -790,7 +790,7 @@ def chat_settings() -> dict:
     }
 
 
-def chat_command(claude: str, cfg: dict, settings_path: Path) -> list[str]:
+def chat_command(claude: str, cfg: dict, settings_path: Path, context_path: Path) -> list[str]:
     require_auth(cfg)
     connection = {
         'type': 'http', 'url': origin(cfg.get('LOCAL_AGENT_URL', '')) + '/mcp/',
@@ -801,6 +801,7 @@ def chat_command(claude: str, cfg: dict, settings_path: Path) -> list[str]:
         '--mcp-config', json.dumps({'mcpServers': {'mangrove-agent': connection}}),
         '--setting-sources', '', '--settings', str(settings_path),
         '--permission-mode', 'default', '--no-chrome',
+        '--append-system-prompt-file', str(context_path),
     ]
     return args
 
@@ -811,6 +812,11 @@ def launch_chat(cfg: dict) -> int:
         raise SetupError('Install Claude Code before starting chat.')
     profile = chat_settings()
     require_auth(cfg)
+    try:
+        from agent_context import render_context
+        context = render_context(ROOT)
+    except (ImportError, OSError, UnicodeError):
+        raise SetupError('Required Sage instructions are missing; repair the installation.') from None
     workspace = ROOT / 'agent-data/chat'
     workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
     env = dict(os.environ, ENABLE_TOOL_SEARCH='false',
@@ -819,7 +825,10 @@ def launch_chat(cfg: dict) -> int:
         path = Path(directory) / 'settings.json'
         path.write_text(json.dumps(profile))
         os.chmod(path, 0o600)
-        return subprocess.run(chat_command(claude, cfg, path),
+        context_path = Path(directory) / 'sage-instructions.md'
+        context_path.write_text(context)
+        os.chmod(context_path, 0o600)
+        return subprocess.run(chat_command(claude, cfg, path, context_path),
                               cwd=workspace, env=env, check=False).returncode
 
 

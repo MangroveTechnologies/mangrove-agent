@@ -7,6 +7,12 @@ preserves the selected configuration and port. Each installation has its own
 chat working directory under `agent-data/chat`; keys and databases are not copied
 between users. `--foreground` remains available for server diagnostics.
 
+Sage's shared policy comes from `SAGE.md` and the three mandatory local rule
+documents. The launcher injects their complete rendered contents through a
+private temporary `--append-system-prompt-file`, because assistant file-reading
+tools are disabled. Missing policy prevents launch. See [other AI clients and
+the shared instruction source](clients.md).
+
 The launcher removes all built-in Claude tools with `--tools ""`, disables browser integration, loads only the agent MCP server with
 `--strict-mcp-config`, and excludes user/project/local settings with
 `--setting-sources ""`. Its explicit settings deny file, shell, search, skill and

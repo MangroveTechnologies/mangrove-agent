@@ -53,6 +53,11 @@ docker-compose.override.yml
 # the repo root. Per-user state — never committed.
 .mcp.json
 
+# Per-install native client configuration (templates are public; credentials
+# are supplied only to the launched child process).
+.codex/config.toml
+.grok/config.toml
+
 # Internal docs (not for public repo)
 TEMPLATE-REVIEW.md
 ROADMAP.md

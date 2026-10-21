@@ -1,18 +1,14 @@
-# Server-owned strategy workflows
+# Claude Code plugin paths
 
-MangroveAI is the source of truth for strategy authoring and backtesting. This agent
-is a client. Discover the live MangroveAI tools through the MCP proxy, then call
-`load_skill` with `skill="strategy-composition"` before a strategy build, or
-`skill="backtesting"` before a backtest. Follow the returned server instructions
-and load any named resources through that same tool. Check the returned required
-capabilities against the advertised catalog. If a required tool or the skill cannot
-be loaded, report the unavailable capability; do not substitute local templates,
-remembered instructions, reference seeds, or an autonomous candidate generator.
+The SessionStart hook injects the complete shared Sage instructions above. This
+section only adapts paths and namespaces for the installed Claude Code plugin.
 
-Use the server's strategy ids with its tools. Local `agent_*` strategy ids belong
-to existing execution records and are not interchangeable with server draft ids.
-Do not copy, cache to disk, or regenerate server skill files inside this client.
-Wallet custody, credential handling and local execution monitoring remain client
-responsibilities; follow wallet-presentation.md and risk-management.md for those.
+- Repository-relative instruction and terminal-script paths are rooted at
+  `${CLAUDE_PLUGIN_ROOT}`. The user runs secret-handling scripts in their private
+  terminal; do not run them through the assistant.
+- Durable config and wallet state live at `${MANGROVE_AGENT_HOME}`, outside the
+  versioned plugin. Do not rewrite or delete that state during plugin updates.
+- Discover tools in the `mcp__plugin_mangrove-agent_mangrove-agent__` namespace;
+  use the exact names advertised by the active host.
 
 Client-only skills: `trading-bot`, `setup-kraken`, `connect-kraken`, `setup-robinhood`.

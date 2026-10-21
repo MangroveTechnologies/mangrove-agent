@@ -26,6 +26,14 @@ for cmd in python3.13 python3.12 python3.11 python3; do
 done
 
 # -- 1. operating context -------------------------------------------------------
+# Inject the same complete local policy as repository and restricted clients.
+# A pointer is insufficient when the host has no file-reading tool.
+if [ -n "$PY" ]; then
+  if ! "$PY" "$ROOT/scripts/agent_context.py" --stdout; then
+    printf '\nSage instructions could not be loaded; repair the plugin installation.\n'
+    exit 0
+  fi
+fi
 CONTEXT="$ROOT/.claude-plugin/session-context.md"
 if [ -f "$CONTEXT" ]; then
   if [ -n "$PY" ]; then
