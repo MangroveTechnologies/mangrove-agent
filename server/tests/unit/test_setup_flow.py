@@ -48,7 +48,9 @@ def test_fresh_keyless_setup_preserves_security(config):
     assert len(cfg['API_KEYS']) >= 32
     assert cfg['AUTH_ENABLED'] is True
     assert cfg['X402_PAYER_WALLET'] == ''
-    assert cfg['X402_NETWORK'] == 'eip155:84532'
+    assert cfg['X402_NETWORK'] == 'eip155:8453'
+    assert cfg['X402_USDC_CONTRACT'] == '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+    assert cfg['X402_RECONCILIATION_RPC_URLS']['eip155:8453'] == 'https://mainnet.base.org'
     assert config.stat().st_mode & 0o777 == 0o600
 
 
@@ -960,6 +962,7 @@ def test_keyless_setup_checks_public_ownership_discovery(monkeypatch, capsys):
 
 def test_x402_setup_configures_recovery_without_changing_custom_rpc(config):
     cfg = setup.read_config(setup.EXAMPLE)
+    cfg['X402_NETWORK'] = 'eip155:84532'
     cfg['X402_RECONCILIATION_RPC_URLS'] = {'eip155:8453': 'https://operator.example/rpc'}
     setup.atomic_config(cfg)
     args = arguments()
@@ -1139,3 +1142,44 @@ def test_arrow_menu_interrupt_restores_terminal():
     output = _drive_menu(b'\x03')
     assert 'RESULT=' not in output
     assert '\x1b[?25h' in output
+
+
+@pytest.mark.parametrize('target', ['eip155:8453', 'eip155:84532'])
+def test_select_existing_evm_wallet_on_configured_network(interactive, monkeypatch, target):
+    item = dict(address=ADDR, chain='evm', chain_id=84532,
+                network='testnet', backup_confirmed_at='2026-09-18')
+    monkeypatch.setattr(setup, 'check', lambda cfg: [item])
+    monkeypatch.setattr(setup, 'choose', lambda *args: '1')
+    replies = iter(['', 'SELECT'])
+    monkeypatch.setattr('builtins.input', lambda _: next(replies))
+    wire = Mock(return_value={'cap_usd': 2, 'cap_source': 'authorized'})
+    monkeypatch.setattr(setup, 'request', wire)
+    write = Mock()
+    monkeypatch.setattr(setup, 'atomic_config', write)
+    cfg = wallet_config()
+    cfg['X402_NETWORK'] = target
+    setup.wallet_action('select', cfg)
+    assert cfg['X402_NETWORK'] == target
+    assert cfg['X402_PAYER_WALLET'] == ADDR
+    assert cfg['X402_SPEND_CAP_USD'] == 2
+    assert item['chain_id'] == 84532
+    assert wire.call_count == 1
+    assert wire.call_args.args[1] == '/api/v1/agent/x402/spend'
+    write.assert_called_once()
+
+
+@pytest.mark.parametrize('selected', ['eip155:84532', 'eip155:8453'])
+def test_setup_rerun_preserves_explicit_network_and_backend(config, selected):
+    cfg = setup.read_config(setup.EXAMPLE)
+    cfg.update(X402_NETWORK=selected, X402_MANGROVE_BASE_URL='http://127.0.0.1:5002/api/v1',
+               X402_PAYER_WALLET=ADDR, X402_SPEND_CAP_USD=3,
+               X402_FACILITATOR_URL='https://operator.example/facilitator')
+    setup.atomic_config(cfg)
+    args = arguments()
+    args.auth = 'x402'
+    setup.configure(args)
+    saved = json.loads(config.read_text())
+    for key in ['X402_NETWORK', 'X402_MANGROVE_BASE_URL', 'X402_PAYER_WALLET',
+                'X402_SPEND_CAP_USD', 'X402_FACILITATOR_URL']:
+        assert saved[key] == cfg[key]
+    assert selected in saved['X402_RECONCILIATION_RPC_URLS']

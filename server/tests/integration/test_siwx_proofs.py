@@ -138,3 +138,15 @@ def test_a_proof_is_stamped_slightly_in_the_past_for_clock_skew(mangrove):
     age = (datetime.now(timezone.utc)
            - datetime.fromisoformat(issued.replace("Z", "+00:00"))).total_seconds()
     assert siwx.CLOCK_SKEW_SECONDS - 5 <= age <= siwx.CLOCK_SKEW_SECONDS + 5
+
+
+def test_existing_testnet_wallet_signs_only_active_mainnet(mangrove, monkeypatch):
+    monkeypatch.setattr(app_config, 'X402_NETWORK', 'eip155:8453')
+    signature, fields = _sign(mangrove, chain='eip155:8453')
+    message = siwx.format_eip4361(
+        domain=fields['domain'], address=mangrove, uri=fields['uri'], version='1',
+        chain_id=8453, nonce=fields['nonce'], issued_at=fields['issued_at'],
+        statement=siwx.STATEMENT, expiration_time=fields['expiration_time'])
+    assert Account.recover_message(encode_defunct(text=message), signature=signature) == mangrove
+    with pytest.raises(SigningError, match='configured network'):
+        _sign(mangrove, chain='eip155:84532')

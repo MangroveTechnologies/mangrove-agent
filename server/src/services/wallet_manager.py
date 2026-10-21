@@ -747,12 +747,23 @@ def import_wallet(
 
     conn = get_connection()
     existing = conn.execute(
-        "SELECT 1 FROM wallets WHERE address = ?", (address,),
+        "SELECT * FROM wallets WHERE address = ?", (address,),
     ).fetchone()
     if existing:
-        raise WalletAlreadyExists(
-            f"Wallet with address {address} is already stored.",
-            suggestion="Use GET /wallet/list to see stored wallets.",
+        del secret
+        if existing["chain"] != chain_normalized or (
+            chain_normalized == "xrpl" and existing["network"] != network
+        ):
+            raise WalletAlreadyExists(
+                "This wallet is already stored for a different chain or XRPL network.",
+            )
+        return WalletImportResponse(
+            address=existing["address"], chain=existing["chain"],
+            network=existing["network"], chain_id=existing["chain_id"],
+            label=existing["label"], created_at=existing["created_at"],
+            master_key_source=get_master_key_source(),
+            backup_required=not bool(existing["backup_confirmed_at"]),
+            next_step="Wallet already saved. Confirm its backup if needed, then select it as payer for the configured payment network.",
         )
 
     encrypted = encrypt(secret.encode())
@@ -1216,7 +1227,8 @@ def _validate_siwx(*, wallet_address: str, domain: str, uri: str, chain: str, no
                            "configured MangroveAI service.")
     chain_id = _SIWX_CHAINS.get(chain)
     row = _get_wallet_row(wallet_address)
-    if chain_id is None or not row or row["chain"] != "evm" or row["chain_id"] != chain_id:
+    if (chain_id is None or not row or row["chain"] != "evm"
+            or chain != str(app_config.X402_NETWORK)):
         raise SigningError("Refused to sign: Sign-In-With-X needs the selected Base wallet on "
                            "the configured network.")
     if not _SIWX_NONCE.match(nonce or ""):

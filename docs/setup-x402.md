@@ -86,7 +86,10 @@ has expired. Do not delete wallet state or regenerate an encryption key to recov
 Review the network, type `IMPORT`, and confirm `BACKED UP` only if you have already
 saved its secret outside the agent. Enter the private key/mnemonic at the hidden
 prompt. The CLI passes it to the existing local secret vault and immediately
-imports the single-use vault token in memory. Neither secret nor token is printed
+imports the single-use vault token in memory. If the address is already saved,
+import returns the existing wallet without replacing its key, original network
+metadata, or backup status. Complete any outstanding backup confirmation before
+selecting it. Neither secret nor token is printed
 or put in command arguments. The existing import service confirms backup on
 import; this is why the explicit backup acknowledgement comes first.
 
@@ -96,7 +99,9 @@ import; this is why the explicit backup acknowledgement comes first.
 ./scripts/setup.sh --wallet list
 ```
 
-This lists public addresses and backup status for the configured payment network.
+This lists saved EVM public addresses and backup status. An existing EVM wallet can
+be selected for either Base network without importing its secret again. Selection
+uses the configured payment network; balances remain separate on each network.
 If necessary, complete the reveal/backup commands above before selecting a payer.
 It is local custody, not a MetaMask/WalletConnect browser connection.
 
@@ -106,7 +111,7 @@ It is local custody, not a MetaMask/WalletConnect browser connection.
 ./scripts/setup.sh --wallet select
 ```
 
-Choose a saved, backup-confirmed wallet on the configured network, review the cap,
+Choose a saved, backup-confirmed EVM wallet for the configured network, review the cap,
 and type `SELECT` to save the public payer address and configured cap. This does
 not reset spending history, release uncertain payments or clear an exhausted
 budget. Selection reads and displays the effective budget. A previously human-authorized
@@ -124,12 +129,36 @@ For Docker installations, add `--docker` to setup/rerun commands. Existing Docke
 port mapping uses 9080. Bare-metal custom ports use `BARE_PORT=9082` on the first
 run and are retained on later runs. All setup traffic stays on loopback.
 
-Fund the selected public address with USDC on the configured network **after
-checking that the receiver accepts that network**. The shipped local default is
-Base Sepolia (`eip155:84532`), which uses test USDC. Test USDC cannot pay a Base
-mainnet service. Setup does not change network implicitly, verify funding or
-certify receiver/mainnet compatibility. Do not send real USDC to follow a testnet
-example. Funding alone does not select the payer or apply its configuration.
+Fresh installs default to Base mainnet (`eip155:8453`) and the hosted production
+API. Fund the selected public address with real USDC on Base mainnet only after
+checking the displayed network and receiver availability. Setup prints the selected
+network; it never funds a wallet or makes a paid test call. Existing configurations
+keep their selected network, backend URL, payer and spending history on reruns.
+
+For local testing, edit `server/src/config/local-config.json` explicitly. Use
+`X402_MANGROVE_BASE_URL` to point to your local backend's `/api/v1` URL and choose
+the same payment network in both applications:
+
+| Agent setting | Base mainnet | Base Sepolia |
+| --- | --- | --- |
+| `X402_NETWORK` | `eip155:8453` | `eip155:84532` |
+| `X402_USDC_CONTRACT` | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+| Funding | Real USDC on Base | Test USDC on Base Sepolia |
+
+Rerun `./scripts/setup.sh --yes` after editing to apply configuration and configure
+reconciliation for the selected network. This does not switch the remote backend.
+Your local MangroveAI backend needs its matching `V402_NETWORK`, receiving address
+and facilitator settings too. Test USDC cannot pay a mainnet service. Switching
+networks does not move funds; the same saved EVM wallet uses its separate balance
+on the selected network. Confirm backup and select a payer before paid use.
+
+CDP merchant credentials belong to the receiving backend. End users paying
+MangroveAI do not need them. The agent's `X402_FACILITATOR_URL`, `X402_PAY_TO` and
+CDP credential settings configure its separate receiving/demo endpoint, not the
+remote MangroveAI receiver. Its mainnet demo requires its own valid receiving
+configuration; ordinary outbound payments use the backend's payment challenge.
+Setup does not certify receiver availability or funding. Funding alone does not
+select the payer or apply configuration.
 
 Once configured, ordinary paid tools may pay automatically within the existing
 signing and spend controls. Paper trading simulates trades, but data, signals and
