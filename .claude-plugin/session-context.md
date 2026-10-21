@@ -1,6 +1,6 @@
 # Claude Code plugin paths
 
-The SessionStart hook injects the complete shared Sage instructions above. This
+The SessionStart hook injects the complete shared agent instructions above. This
 section only adapts paths and namespaces for the installed Claude Code plugin.
 
 - Repository-relative instruction and terminal-script paths are rooted at

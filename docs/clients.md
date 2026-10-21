@@ -44,6 +44,9 @@ from the same request: "Install https://github.com/MangroveTechnologies/mangrove
 Follow these steps in the installing agent's own execution environment. Reuse an
 existing checkout and configuration when present; do not create a second agent
 or restart an existing live trading installation as part of client setup.
+If the configured agent is already running, skip the setup command and proceed
+with instruction loading and tool verification. Setup can restart an agent when
+code or configuration changed; an upgrade or restart needs a separate request.
 
 1. Clone the repository if needed and enter its root.
 2. Run `./scripts/setup.sh --yes --no-mcp`. A fresh install uses keyless x402
@@ -91,13 +94,13 @@ Run `./scripts/setup.sh` first using the existing setup flow. It starts the
 local agent; setup alone does not connect every AI client. From this checkout:
 
 ```bash
-python3 scripts/client_session.py codex
+.venv/bin/python3 scripts/client_session.py codex
 ```
 
 Or:
 
 ```bash
-python3 scripts/client_session.py grok
+.venv/bin/python3 scripts/client_session.py grok
 ```
 
 The helper uses the existing installation's loopback URL and local `API_KEYS`
@@ -179,6 +182,21 @@ Verify each client separately; passing in one does not prove another is ready.
 The offline test suite verifies exported policy, credential handling, config
 preservation, and instructions passed to fake client processes. It does not
 claim a paid model session, web account setup, or cross-client behavioral proof.
+
+### Requirements review and verification limits
+
+| Requirement | Evidence | Remaining verification |
+| --- | --- | --- |
+| One shared instruction source | Native entry files point to `SAGE.md`; bundle and launcher tests verify all four sources | Actual fresh-session behavior in each provider |
+| Install without Claude | Setup and command-client tests pass without an AI CLI; the setup fixture simulates dependency installation and the HTTP server | Fresh installation inside each provider's real execution environment |
+| Working tools and saved name | A real isolated server passed MCP discovery, free status, naming, and name persistence after a process restart | The provider model discovers and uses those tools correctly |
+| User chooses the name | No default; shared first-run instructions and authenticated persistence tests | Actual first greeting and rename conversation in each provider |
+| Failures are not reported as success | Command client recognizes MCP, structured, and local JSON tool errors and exits nonzero without retry | Provider-specific presentation of those errors |
+
+The isolated real-server check uses a fresh database, synthetic local credentials,
+and blocked external networking. It verifies the local server and command path,
+not provider account behavior or a fresh dependency download. Passing CI alone
+does not establish end-to-end compatibility with all four providers.
 
 ## Official client references
 

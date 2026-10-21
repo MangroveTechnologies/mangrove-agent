@@ -44,7 +44,9 @@ def local_agent():
                 result = {'tools': [{'name': 'status', 'description': 'Free status',
                                      'inputSchema': {'type': 'object'}}]}
             else:
-                result = {'content': [{'type': 'text', 'text': '{"ready":true}'}], 'isError': False}
+                result = behavior.get('tool_result', {
+                    'content': [{'type': 'text', 'text': '{"ready":true}'}], 'isError': False,
+                })
             body = json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'result': result}).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
@@ -159,6 +161,31 @@ def test_command_client_accepts_stdin_json(tmp_path, local_agent):
                         input_text='{"detail":true}')
     assert result.returncode == 0, result.stderr
     assert requests[-1][2]['params']['arguments'] == {'detail': True}
+
+
+@pytest.mark.parametrize('tool_result', [
+    {'isError': True, 'content': [{'type': 'text', 'text': 'Tool failed.'}]},
+    {'isError': False, 'content': [{'type': 'text', 'text': json.dumps({
+        'error': True, 'code': 'VALIDATION_ERROR', 'message': 'Invalid name.',
+    })}]},
+    {'isError': False, 'structuredContent': {'error': True}, 'content': []},
+])
+def test_failed_tool_call_has_failure_exit_without_retry(tmp_path, local_agent, tool_result):
+    url, requests, behavior = local_agent
+    behavior['tool_result'] = tool_result
+    result = run_bridge(tmp_path, url, [], options=['--call', 'set_agent_name'])
+    assert result.returncode == 1
+    assert json.loads(result.stdout)['result'] == tool_result
+    assert [r[2]['method'] for r in requests].count('tools/call') == 1
+
+
+def test_status_with_nested_unavailable_catalog_is_still_success(tmp_path, local_agent):
+    url, _, behavior = local_agent
+    behavior['tool_result'] = {'structuredContent': None, 'content': [{'type': 'text', 'text': json.dumps({
+        'agent_name': None, 'catalog': {'error': 'unavailable'},
+    })}]}
+    result = run_bridge(tmp_path, url, [], options=['--call', 'status'])
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize('body', ['[]', 'not-json'])

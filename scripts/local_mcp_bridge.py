@@ -116,7 +116,28 @@ def command(bridge: Bridge, tool: str | None, arguments_file: str | None) -> int
             request.update(method='tools/call', params={'name': tool, 'arguments': arguments})
         response = bridge.forward(request)
     print(json.dumps(response, ensure_ascii=True))
-    return 1 if 'error' in response or response.get('result', {}).get('isError') else 0
+    return 1 if failed(response) else 0
+
+
+def failed(response: dict) -> bool:
+    if 'error' in response:
+        return True
+    result = response.get('result', {})
+    structured = result.get('structuredContent')
+    if result.get('isError') or (isinstance(structured, dict) and structured.get('error') is True):
+        return True
+    # Local tools return the shared AgentError JSON as text. FastMCP regards a
+    # returned string as a successful invocation even when that JSON is an error.
+    for item in result.get('content', []):
+        if item.get('type') != 'text':
+            continue
+        try:
+            body = json.loads(item['text'])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if isinstance(body, dict) and body.get('error') is True:
+            return True
+    return False
 
 
 def main() -> int:
