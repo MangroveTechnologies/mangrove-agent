@@ -103,6 +103,38 @@ Use the same complete bundle in Grok web's project/custom instructions where
 supported by the active interface; a repository path on its own is insufficient.
 
 Configure Mangrove's MCP connection separately using that host's connector UI.
+The destination for this project is the **mangrove-agent** server. Connecting
+directly to the hosted MangroveAI API is a different integration: it does not
+provide this agent's local status, wallet custody, scheduler, or execution tools.
+
+### Perplexity Mac app: connect to the local agent
+
+Use the Mac app's local MCP connector and PerplexityXPC helper, following
+[Perplexity's local setup](https://www.perplexity.ai/help-center/en/articles/11502712-local-and-remote-mcps-for-perplexity).
+The local connector launches a command, while this agent exposes HTTP. The
+included adapter joins those two transports:
+
+```text
+"/absolute/path/to/mangrove-agent/.venv/bin/python" "/absolute/path/to/mangrove-agent/scripts/local_mcp_bridge.py"
+```
+
+Enter that command as a local MCP connector named `mangrove-agent`. The adapter
+reads `server/src/config/local-config.json` locally and adds the local `API_KEYS`
+credential only to HTTP requests to the loopback agent. Do not paste
+`MANGROVE_API_KEY` into Perplexity. No key belongs in the command or its arguments.
+For a separate existing agent installation, append `--config` followed by the
+quoted absolute path to that installation's local configuration file.
+
+The adapter requires the agent's stateless JSON HTTP transport. It refuses
+non-loopback URLs, redirects, and disabled authentication; it never starts or
+restarts the agent. Start the intended agent separately only after checking its
+existing strategies and scheduler state. Enabling the connector grants
+Perplexity access to the agent's tools; apply the host's access confirmation
+rules before activation. Reuse the Sage project and complete the fresh-session
+acceptance check below.
+
+### Perplexity browser: a remote agent connection
+
 Perplexity's custom remote MCP connectors require Pro, Max, or Enterprise; a
 Free account can save the project instructions and file but cannot complete the
 custom connector setup. Open Plugins (or Customize -> Connectors), then Add
@@ -112,10 +144,8 @@ credentials as project files or put them in chat. See
 [Perplexity's connector setup](https://www.perplexity.ai/help-center/en/articles/13915507-adding-custom-remote-connectors)
 and [plan availability](https://www.perplexity.ai/en-GB/changelog/what-we-shipped---march-13-2026).
 
-Perplexity also documents local MCP through its Mac app. The Mac local setup is
-command-based, so the HTTP-only local agent
-may need a separately configured compatible bridge. Grok web requires a
-publicly reachable MCP URL. This change does not deploy a remote endpoint or
+The browser cannot reach the Mac's loopback agent through a remote connector.
+Grok web also requires a publicly reachable MCP URL. This change does not deploy a remote endpoint or
 expose the local wallet service through a tunnel. Such a connection needs its
 own authenticated deployment/bridge and explicit configuration. Instructions
 are ready to import even when the tool connection is not yet available.
