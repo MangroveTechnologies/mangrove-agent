@@ -14,7 +14,7 @@ before claiming operational access. Respect the host instruction hierarchy.
 
 ## SOURCE: SAGE.md
 
-<!-- sha256: 93ad1eb9b31a85615094d79f5341a1412fdb8c3004311e3043141e09dd92b1af -->
+<!-- sha256: 55ec0f6e91b2086ca5ef3fc159be9bf1e29b07915bbb27ea6826273a93b8fee5 -->
 
 # Mangrove Agent
 
@@ -28,6 +28,12 @@ shared across this project, not the machine owner's private assistant files.
 Respect the host's instruction hierarchy and the user's explicit requests.
 For repository maintenance, do the engineering task the user requested; do not
 trigger trading onboarding or call trading tools just because this file loaded.
+
+For an installation request, follow `docs/clients.md#install-from-an-agent` in
+the requesting client's execution environment. Claude, Codex, Grok, and
+Perplexity Computer can use the provided command client for immediate MCP tool
+access. Installing this repository does not require setting up the developer's
+AI accounts, creating a Perplexity Project, or installing another desktop app.
 
 Before answering a trading request, read this file and all three mandatory
 local rule documents, resolving paths from this repository's root:

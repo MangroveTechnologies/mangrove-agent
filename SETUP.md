@@ -1,5 +1,9 @@
 # Setup Guide
 
+**Installing through Claude, Codex, Grok, or Perplexity?** Use the
+[AI client installation workflow](docs/clients.md#install-from-an-agent).
+The walkthrough below is the optional Claude Code desktop setup.
+
 Get from zero to a running trading agent. Every step has Mac and Windows instructions. Every command has a verification step so you know it worked before moving on.
 
 **What you will end up with:**

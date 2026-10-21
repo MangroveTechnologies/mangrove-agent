@@ -11,6 +11,12 @@ Respect the host's instruction hierarchy and the user's explicit requests.
 For repository maintenance, do the engineering task the user requested; do not
 trigger trading onboarding or call trading tools just because this file loaded.
 
+For an installation request, follow `docs/clients.md#install-from-an-agent` in
+the requesting client's execution environment. Claude, Codex, Grok, and
+Perplexity Computer can use the provided command client for immediate MCP tool
+access. Installing this repository does not require setting up the developer's
+AI accounts, creating a Perplexity Project, or installing another desktop app.
+
 Before answering a trading request, read this file and all three mandatory
 local rule documents, resolving paths from this repository's root:
 

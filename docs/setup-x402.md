@@ -5,7 +5,7 @@ access methods. Plugin installation is a separate, unchanged API-key path.
 
 On every interactive setup run, choose an API key or x402. Enter keeps the current
 mode (x402 is the default for a fresh install). API-key input is hidden.
-The script always creates or preserves a separate local credential for Claude's
+The script always creates or preserves a separate local credential for the AI client's
 access to the agent. Omitting an upstream key never disables local authentication.
 Select either mode from this menu, or use `--auth api-key` / `--auth x402` to
 choose explicitly without the menu. Invalid API keys never fall back to payment.
@@ -13,7 +13,7 @@ The choice is saved as `MANGROVE_ACCESS_MODE` (`api-key` or `x402`). Switching t
 x402 preserves a previously saved upstream key but does not send it to MangroveAI
 or Markets for these calls. Switching back can reuse it. Existing configurations
 without this setting continue to select API-key mode when a key is present.
-Local wallets, approvals, payment history and Claude's local credential are not
+Local wallets, approvals, payment history and the AI client's local credential are not
 reset by changing access mode.
 
 `--yes` preserves existing settings; on a fresh install it selects x402 and defers

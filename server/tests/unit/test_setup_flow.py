@@ -272,8 +272,14 @@ def checkout(tmp_path):
     (repo / 'scripts').mkdir(parents=True)
     (repo / 'server/src/config').mkdir(parents=True)
     (repo / '.claude').mkdir()
-    for name in ['setup.sh', 'setup_support.py', 'verify_quickstart.sh', 'setup-mcp.sh']:
+    for name in ['setup.sh', 'setup_support.py', 'verify_quickstart.sh', 'setup-mcp.sh',
+                 'agent_context.py', 'local_mcp_bridge.py']:
         shutil.copy2(ROOT / 'scripts' / name, repo / 'scripts' / name)
+    for name in ['SAGE.md', '.claude/rules/trading-bot-workflow.md',
+                 '.claude/rules/wallet-presentation.md', '.claude/rules/risk-management.md']:
+        destination = repo / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, destination)
     for name in ('local-example-config.json', 'mangrove-endpoints.json'):
         shutil.copy2(ROOT / 'server/src/config' / name, repo / 'server/src/config' / name)
     (repo / 'server/requirements.lock').write_text('# synthetic lockfile\n')
@@ -290,6 +296,24 @@ from pathlib import Path
 cfg = json.loads(Path('server/src/config/local-config.json').read_text())
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
+    def do_POST(self):
+        message = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        with open('requests.jsonl', 'a') as f:
+            f.write(json.dumps({'path': self.path, 'method': message['method'],
+                               'tool': message.get('params', {}).get('name')})+'\\n')
+        if self.headers.get('X-API-Key') != cfg['API_KEYS'].split(',')[0]:
+            self.send_response(401); self.end_headers(); return
+        if 'id' not in message:
+            self.send_response(202); self.end_headers(); return
+        if message['method'] == 'initialize':
+            result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}},
+                      'serverInfo': {'name': 'mangrove-agent', 'version': 'synthetic'}}
+        elif message['method'] == 'tools/list':
+            result = {'tools': [{'name': 'status', 'inputSchema': {'type': 'object'}}]}
+        else:
+            result = {'content': [{'type': 'text', 'text': '{"ready":true}'}], 'isError': False}
+        self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+        self.wfile.write(json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'result': result}).encode())
     def do_GET(self):
         with open('requests.jsonl', 'a') as f: f.write(json.dumps({'path':self.path})+'\\n')
         valid = self.headers.get('X-API-Key') == cfg['API_KEYS'].split(',')[0]
@@ -323,6 +347,40 @@ def run_setup(checkout, *args, input=None):
     repo, env = checkout
     return subprocess.run(['bash', str(repo / 'scripts/setup.sh'), *args], cwd=repo, env=env,
                           capture_output=True, text=True, timeout=25, input=input)
+
+
+def test_agent_install_loads_sage_and_calls_status_without_claude(checkout):
+    repo, env = checkout
+    binary = repo / 'no-client-bin'
+    binary.mkdir()
+    (binary / 'python3.13').symlink_to(sys.executable)
+    env = dict(env, PATH=f'{binary}:/usr/bin:/bin')
+    installed = run_setup((repo, env), '--yes', '--no-mcp')
+    assert installed.returncode == 0, installed.stderr + installed.stdout
+    assert 'Install Claude CLI' not in installed.stdout
+    assert 'scripts/local_mcp_bridge.py --call status' in installed.stdout
+    python = str(repo / '.venv/bin/python3')
+    policy = subprocess.run([python, str(repo / 'scripts/agent_context.py'), '--stdout'],
+                            cwd=repo.parent, capture_output=True, text=True, timeout=10)
+    assert policy.returncode == 0, policy.stderr
+    assert policy.stdout.count('## SOURCE: ') == 4
+    assert '**Name:** Sage' in policy.stdout
+    outputs = policy.stdout + installed.stdout + installed.stderr
+    for options in [['--list-tools'], ['--call', 'status']]:
+        result = subprocess.run([python, str(repo / 'scripts/local_mcp_bridge.py'), *options],
+                                cwd=repo.parent, capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+        response = json.loads(result.stdout)['result']
+        if options[0] == '--list-tools':
+            assert response['tools'][0]['name'] == 'status'
+        else:
+            assert json.loads(response['content'][0]['text']) == {'ready': True}
+        outputs += result.stdout + result.stderr
+    records = [json.loads(line) for line in (repo / 'requests.jsonl').read_text().splitlines()]
+    assert [r['tool'] for r in records if r.get('method') == 'tools/call'] == ['status']
+    cfg = json.loads((repo / 'server/src/config/local-config.json').read_text())
+    assert cfg['MANGROVE_API_KEY'] == ''
+    assert cfg['API_KEYS'] not in outputs
 
 
 @pytest.mark.parametrize('option', [None, '--yes'])

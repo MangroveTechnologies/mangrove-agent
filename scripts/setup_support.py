@@ -714,7 +714,7 @@ def wallet_action(action, cfg):
                              'to change it, or rerun selection keeping the displayed active cap. Nothing was saved.')
         print(f'Payer: {addr}\nNetwork: {label}\nConfigured cap: {cap} USD. Existing spend and latches are preserved.')
         print('A previously authorized period cap takes precedence over this config value.\n'
-              'Check x402_spend_status in Claude before paid use; setup never resets the budget.')
+              'Check x402_spend_status with your AI client before paid use; setup never resets the budget.')
         if input('Type SELECT to save this payment configuration: ').strip() != 'SELECT':
             raise SetupError('Selection cancelled; configuration unchanged.')
         cfg['X402_PAYER_WALLET'] = addr

@@ -61,12 +61,12 @@ def local_agent():
     thread.join(timeout=2)
 
 
-def run_bridge(tmp_path, url, messages):
+def run_bridge(tmp_path, url, messages, *, options=(), input_text=None):
     config = tmp_path / 'local-config.json'
     config.write_text(json.dumps({'AUTH_ENABLED': True, 'API_KEYS': LOCAL_KEY,
                                   'MANGROVE_API_KEY': UPSTREAM_KEY, 'LOCAL_AGENT_URL': url}))
-    return subprocess.run([sys.executable, str(BRIDGE), '--config', str(config)],
-                          input=''.join(json.dumps(m) + '\n' for m in messages),
+    return subprocess.run([sys.executable, str(BRIDGE), '--config', str(config), *options],
+                          input=input_text if input_text is not None else ''.join(json.dumps(m) + '\n' for m in messages),
                           text=True, capture_output=True, timeout=15,
                           env=dict(os.environ, HTTP_PROXY='http://must-not-be-contacted.invalid',
                                    NO_PROXY=''))
@@ -129,3 +129,44 @@ def test_bridge_refuses_non_loopback_or_credential_bearing_destination(tmp_path,
     assert 'password' not in result.stderr
     assert LOCAL_KEY not in result.stderr
     assert UPSTREAM_KEY not in result.stderr
+
+
+@pytest.mark.parametrize('tool', [None, 'status'])
+def test_command_client_discovers_and_calls_the_same_mcp_tools(tmp_path, local_agent, tool):
+    url, requests, _ = local_agent
+    arguments = {'symbols': ['ETH', 'BTC'], 'limit': 2}
+    path = tmp_path / 'arguments with spaces.json'
+    path.write_text(json.dumps(arguments))
+    options = ['--call', tool, '--arguments-file', str(path)] if tool else ['--list-tools']
+    result = run_bridge(tmp_path, url, [], options=options)
+    assert result.returncode == 0, result.stderr
+    response = json.loads(result.stdout)['result']
+    assert [r[2]['method'] for r in requests] == ['initialize', 'notifications/initialized',
+                                                'tools/call' if tool else 'tools/list']
+    if tool:
+        assert requests[-1][2]['params'] == {'name': tool, 'arguments': arguments}
+        assert response['content'][0]['text'] == '{"ready":true}'
+    else:
+        assert response['tools'][0]['name'] == 'status'
+    assert all(r[1]['X-Api-Key'] == LOCAL_KEY for r in requests)
+    assert LOCAL_KEY not in result.stdout + result.stderr
+    assert UPSTREAM_KEY not in result.stdout + result.stderr
+
+
+def test_command_client_accepts_stdin_json(tmp_path, local_agent):
+    url, requests, _ = local_agent
+    result = run_bridge(tmp_path, url, [], options=['--call', 'status', '--arguments-file', '-'],
+                        input_text='{"detail":true}')
+    assert result.returncode == 0, result.stderr
+    assert requests[-1][2]['params']['arguments'] == {'detail': True}
+
+
+@pytest.mark.parametrize('body', ['[]', 'not-json'])
+def test_invalid_command_arguments_fail_before_sending_a_request(tmp_path, local_agent, body):
+    url, requests, _ = local_agent
+    result = run_bridge(tmp_path, url, [], options=['--call', 'status', '--arguments-file', '-'],
+                        input_text=body)
+    assert result.returncode == 1
+    assert requests == []
+    assert 'JSON object' in result.stderr
+    assert result.stdout == ''

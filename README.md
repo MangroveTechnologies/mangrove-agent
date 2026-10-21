@@ -49,6 +49,17 @@ Full platform documentation and the trading knowledge base live at **https://man
 
 ## Use Sage with your AI client
 
+Tell **Claude Code, Codex, Grok Build, or Perplexity Computer**:
+
+> Install https://github.com/MangroveTechnologies/mangrove-agent and follow its AI client installation instructions.
+
+**For the installing agent:** follow [AI client setup](docs/clients.md#install-from-an-agent).
+Install the server in your execution environment, load the complete Sage
+instructions, discover its tools, and call the free `status` tool before
+reporting success. Perplexity Computer can use the provided command client;
+this installation does not require creating a Perplexity Project, configuring a
+custom cloud connector, or installing another desktop app.
+
 Sage's shared identity and operating instructions live in [`SAGE.md`](SAGE.md).
 `AGENTS.md` points Codex and compatible clients there; `CLAUDE.md` imports it for
 Claude Code. Codex and Grok Build launch helpers, MCP configuration templates,
@@ -124,7 +135,7 @@ Base or XRPL wallet. Payment settlement is a separate integration.
 | **VSCode** | https://code.visualstudio.com/download | Universal editor + integrated terminal that works the same on macOS / Linux / Windows. Every instruction below assumes you open the repo in VSCode and use its built-in terminal (``Ctrl/Cmd+` ``). |
 | **Python 3.11+** | https://www.python.org/downloads/ | The agent is a Python FastAPI process. 3.11 is the minimum. |
 | **Git for Windows** (Windows only) | https://git-scm.com/download/win | Gives you Git Bash, so the `*.sh` scripts in this repo work identically to macOS / Linux. Set VSCode's default terminal to `Git Bash` via the command palette. |
-| **Claude Code** | `npm install -g @anthropic-ai/claude-code` | The chat UX. Optional if you only want the REST API. |
+| **AI client** | [Claude, Codex, Grok, or Perplexity setup](docs/clients.md) | A client with command execution or MCP access. Claude Code is optional. |
 | **MangroveAI API key** | Free at https://mangrovedeveloper.ai | Optional for setup.sh: choose API-key access or x402 wallet payments. |
 
 Docker is **optional** — see the alternate install path below. Bare-metal is the primary path because the `keyring` library can reach your OS keychain directly when the agent runs natively.

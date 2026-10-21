@@ -379,7 +379,13 @@ echo
 if [ "$DO_MCP" = "yes" ]; then
   echo "Claude MCP registration saved. Start ./scripts/chat.sh when ready."
 else
-  echo "Claude MCP is not registered. Install Claude CLI and rerun setup when ready."
+  echo "Local agent ready. Claude MCP registration was skipped."
+  echo "Any command-capable AI client can load Sage and use the agent in this session:"
+  CLIENT_PY="$PY"
+  if [ "$MODE" = "bare" ]; then CLIENT_PY=".venv/bin/python3"; fi
+  printf '  %q scripts/agent_context.py --stdout\n' "$CLIENT_PY"
+  printf '  %q scripts/local_mcp_bridge.py --list-tools\n' "$CLIENT_PY"
+  printf '  %q scripts/local_mcp_bridge.py --call status\n' "$CLIENT_PY"
 fi
 GUIDE_ARGS=(guide)
 [ "$ASSUME_YES" = "no" ] || GUIDE_ARGS+=(--yes)

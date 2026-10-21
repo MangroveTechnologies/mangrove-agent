@@ -1,7 +1,7 @@
-"""Expose an existing loopback mangrove-agent to a local stdio MCP client.
+"""Use a loopback mangrove-agent from a command-capable AI client or stdio MCP.
 
-Perplexity's Mac app launches command-based MCP servers. This adapter forwards
-its JSON-RPC messages to the agent's stateless JSON HTTP transport. Credentials
+Use --list-tools and --call from Claude, Codex, Grok, or Perplexity Computer.
+Without these options, forward stdio JSON-RPC to the same agent. Credentials
 are read locally and sent only to the configured loopback agent. This script
 never starts the agent, changes its database, or contacts MangroveAI directly.
 """
@@ -90,14 +90,52 @@ def serve(bridge: Bridge, source, target) -> int:
     return 0
 
 
+def command(bridge: Bridge, tool: str | None, arguments_file: str | None) -> int:
+    arguments = {}
+    if arguments_file:
+        if arguments_file == '-':
+            body = sys.stdin.buffer.read(MAX_BYTES + 1)
+        else:
+            with Path(arguments_file).open('rb') as stream:
+                body = stream.read(MAX_BYTES + 1)
+        if len(body) > MAX_BYTES:
+            raise SetupError('Tool arguments exceeded the client limit.')
+        try:
+            arguments = json.loads(body)
+        except (ValueError, UnicodeError):
+            raise SetupError('Tool arguments must be a JSON object.') from None
+        if not isinstance(arguments, dict):
+            raise SetupError('Tool arguments must be a JSON object.')
+    response = bridge.forward({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize',
+                               'params': {'protocolVersion': '2025-06-18', 'capabilities': {},
+                                          'clientInfo': {'name': 'mangrove-agent-client', 'version': '1'}}})
+    if 'error' not in response:
+        bridge.forward({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+        request = {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list', 'params': {}}
+        if tool:
+            request.update(method='tools/call', params={'name': tool, 'arguments': arguments})
+        response = bridge.forward(request)
+    print(json.dumps(response, ensure_ascii=True))
+    return 1 if 'error' in response or response.get('result', {}).get('isError') else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, default=ROOT / 'server/src/config/local-config.json',
                         help='Local agent configuration file; never pass a key as an argument.')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--list-tools', action='store_true', help='Print the live MCP tool catalog as JSON.')
+    mode.add_argument('--call', metavar='TOOL', help='Call an advertised MCP tool and print its JSON response.')
+    parser.add_argument('--arguments-file', metavar='PATH',
+                        help='JSON object for --call; use - to read from stdin. Defaults to {}.')
     args = parser.parse_args()
+    if args.arguments_file and not args.call:
+        parser.error('--arguments-file requires --call')
     try:
         render_context(ROOT)
         bridge = Bridge(read_config(args.config))
+        if args.list_tools or args.call:
+            return command(bridge, args.call, args.arguments_file)
         return serve(bridge, sys.stdin.buffer, sys.stdout)
     except SetupError as exc:
         print(str(exc), file=sys.stderr)
