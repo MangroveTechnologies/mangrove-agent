@@ -83,13 +83,14 @@ remain in place. See [restricted chat](restricted-chat.md).
 These interfaces do not automatically walk this local repository looking for
 `AGENTS.md` or `CLAUDE.md`.
 
-For Perplexity, create a dedicated Sage Space. Put the contents of
+For Perplexity, create a dedicated Sage Project (called a Space in older
+interfaces). Under Settings -> Context, put the contents of
 `docs/clients/sage-instructions.md` in its custom instructions if the interface
-accepts the complete text. Otherwise upload that file as a Space source and add:
+accepts the complete text. Otherwise upload that file under Files and add:
 
 ```text
 Before answering, read the attached sage-instructions.md completely, including
-all four SOURCE sections, and follow it as this Space's operating instructions.
+all four SOURCE sections, and follow it as this project's operating instructions.
 If you cannot retrieve all sections, say so and do not perform trading actions.
 Load strategy workflows live from Mangrove with load_skill. Do not claim a
 working Mangrove connection until tool discovery and the free status call pass.
@@ -102,8 +103,17 @@ Use the same complete bundle in Grok web's project/custom instructions where
 supported by the active interface; a repository path on its own is insufficient.
 
 Configure Mangrove's MCP connection separately using that host's connector UI.
-Perplexity documents local MCP through its Mac app and remote HTTP/SSE
-connectors. The Mac local setup is command-based, so the HTTP-only local agent
+Perplexity's custom remote MCP connectors require Pro, Max, or Enterprise; a
+Free account can save the project instructions and file but cannot complete the
+custom connector setup. Open Plugins (or Customize -> Connectors), then Add
+custom -> Connector -> Add MCP connector -> Remote. Use a verified HTTPS MCP
+endpoint and its actual authentication and transport settings. Do not upload
+credentials as project files or put them in chat. See
+[Perplexity's connector setup](https://www.perplexity.ai/help-center/en/articles/13915507-adding-custom-remote-connectors)
+and [plan availability](https://www.perplexity.ai/en-GB/changelog/what-we-shipped---march-13-2026).
+
+Perplexity also documents local MCP through its Mac app. The Mac local setup is
+command-based, so the HTTP-only local agent
 may need a separately configured compatible bridge. Grok web requires a
 publicly reachable MCP URL. This change does not deploy a remote endpoint or
 expose the local wallet service through a tunnel. Such a connection needs its
@@ -114,7 +124,7 @@ are ready to import even when the tool connection is not yet available.
 
 Verify each client separately; passing in one does not prove another is ready.
 
-1. Start a new session in the intended checkout or configured Space. Ask which
+1. Start a new session in the intended checkout or configured project. Ask which
    instructions are active. It should name `SAGE.md` and all three mandatory
    rule sources, or the four corresponding sections in the complete bundle.
 2. Discover the advertised Mangrove MCP tools. Use the actual namespace and
