@@ -1066,3 +1066,23 @@ def test_import_xrpl_seed_retains_algorithm(temp_db, stub_keyring, algorithm):
     assert result.chain_id is None
     wm.require_backup_confirmed(result.address)
     assert wallet.seed not in result.model_dump_json()
+
+
+@pytest.mark.parametrize('target_chain', [8453, 84532])
+def test_reimport_evm_preserves_existing_wallet(temp_db, stub_keyring, target_chain):
+    from src.services.wallet_manager import import_wallet, stash_external_secret
+    from src.shared.db.sqlite import get_connection
+
+    import_wallet(stash_external_secret(_TEST_PRIVKEY), network='testnet', chain_id=84532)
+    conn = get_connection()
+    conn.execute('UPDATE wallets SET backup_confirmed_at = NULL WHERE address = ?', (_TEST_ADDRESS,))
+    conn.commit()
+    before = dict(conn.execute('SELECT * FROM wallets WHERE address = ?', (_TEST_ADDRESS,)).fetchone())
+    result = import_wallet(stash_external_secret(_TEST_PRIVKEY),
+                           network='mainnet' if target_chain == 8453 else 'testnet',
+                           chain_id=target_chain)
+    after = dict(conn.execute('SELECT * FROM wallets WHERE address = ?', (_TEST_ADDRESS,)).fetchone())
+    assert after == before
+    assert result.address == _TEST_ADDRESS
+    assert result.backup_required is True
+    assert conn.execute('SELECT count(*) FROM wallets').fetchone()[0] == 1

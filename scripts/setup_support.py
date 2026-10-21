@@ -589,6 +589,7 @@ def configure(args):
     if mode == 'api-key':
         print('Upstream API-key validity is checked by the verify step below. Failed keys never trigger wallet payments.')
     else:
+        print(f'Payment network: {network(cfg)[2]}. Existing network selections are preserved on reruns.')
         print('Automatic payment reconciliation configured for the selected network; RPC availability is checked during recovery.')
         print('Setup will not create/import a wallet, confirm a backup, or make a payment.')
 
@@ -671,11 +672,12 @@ def wallet_action(action, cfg):
     wallets = check(cfg)
     chain, net, label = network(cfg)
     print(f'Payment network: {label} (chain {chain}).')
+    print('Saved EVM wallets can be selected on either Base network; balances are network-specific.')
     if action in {'list', 'select'}:
         eligible = []
         for item in wallets:
             addr = address(item.get('address'))
-            if item.get('chain') == 'evm' and item.get('chain_id') == chain and item.get('network') == net:
+            if item.get('chain') == 'evm':
                 eligible.append(item)
                 print(f'{len(eligible)}. {addr} | backup {"confirmed" if item.get("backup_confirmed_at") else "needed"}')
         if action == 'list':
@@ -749,6 +751,9 @@ def wallet_action(action, cfg):
     print(f'Wallet {action} completed. Public address: {addr}')
     if action == 'import':
         print('Step 4. Check the address above - it should match the wallet you intended to import.')
+        if result.get('backup_required'):
+            print('This saved wallet still needs backup confirmation. After saving its secret securely:')
+            print(f'  ./scripts/confirm-backup.sh {addr}')
     if action == 'create':
         print('Save your backup yourself in a private terminal:')
         print(f'  ./scripts/reveal-secret.sh --address {addr}')
