@@ -115,23 +115,45 @@ def register(server: FastMCP):
 
 
 # ---------------------------------------------------------------------------
-# Discovery (free)
+# Discovery (free reads, authenticated naming)
 # ---------------------------------------------------------------------------
 
 
 def _register_discovery(server: FastMCP) -> None:
     @server.tool()
     async def status() -> str:
-        """Return agent status: version, wallets count, strategies by status,
+        """Return agent status: user-chosen name, version, wallets count, strategies by status,
         active cron jobs, db path, uptime. Free, no auth required."""
         from src.api.routes.discovery import status as route
         return json.dumps(await route())
 
     register_tool(ToolEntry(
         name="status",
-        description="Agent status + counts + uptime. Free, no auth.",
+        description="Agent name, status + counts + uptime. Free, no auth.",
         access="free",
         parameters=[],
+    ))
+
+    @server.tool()
+    async def set_agent_name(name: str, api_key: str = "") -> str:
+        """Save the name the user chose for this agent, shared across AI clients.
+        Use only after the user chooses or requests a new name. Local, no cost.
+        The current name is returned by status; null means no name chosen yet."""
+        if not _require(api_key):
+            return _auth_error()
+        from src.services import agent_identity
+        try:
+            return json.dumps(agent_identity.set_name(name))
+        except AgentError as exc:
+            return _handle_agent_error(exc)
+
+    register_tool(ToolEntry(
+        name="set_agent_name",
+        description="Save the user-chosen agent name for all clients. Local, no cost; auth required.",
+        access="auth",
+        parameters=[ToolParam(name="name", type="string", required=True,
+                              description="The user's chosen agent name, 1 to 64 printable characters."),
+                    _APIKEY],
     ))
 
     @server.tool()

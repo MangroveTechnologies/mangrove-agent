@@ -49,13 +49,13 @@ def prepare_config(client: str, root: Path, url: str) -> Path:
 def launch(client: str) -> int:
     executable = shutil.which(client)
     if executable is None:
-        raise SetupError(f'Install {client} before starting its Sage session.')
+        raise SetupError(f'Install {client} before starting its agent session.')
     cfg = read_config(ROOT / 'server/src/config/local-config.json')
     require_auth(cfg)
     try:
         render_context(ROOT)
     except (OSError, UnicodeError):
-        raise SetupError('Required Sage instructions are missing; repair the installation.') from None
+        raise SetupError('Required agent instructions are missing; repair the installation.') from None
     url = origin(cfg.get('LOCAL_AGENT_URL', '')) + '/mcp/'
     prepare_config(client, ROOT, url)
     env = dict(os.environ, MANGROVE_LOCAL_API_KEY=local_key(cfg), MANGROVE_AGENT_MCP_URL=url)

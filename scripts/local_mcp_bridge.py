@@ -140,7 +140,7 @@ def main() -> int:
     except SetupError as exc:
         print(str(exc), file=sys.stderr)
     except (OSError, ValueError, TypeError, AttributeError):
-        print('Cannot load the local Sage configuration or policy. No server was started.', file=sys.stderr)
+        print('Cannot load the local agent configuration or policy. No server was started.', file=sys.stderr)
     return 1
 
 

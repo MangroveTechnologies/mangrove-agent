@@ -7,7 +7,7 @@ preserves the selected configuration and port. Each installation has its own
 chat working directory under `agent-data/chat`; keys and databases are not copied
 between users. `--foreground` remains available for server diagnostics.
 
-Sage's shared policy comes from `SAGE.md` and the three mandatory local rule
+The agent's shared policy comes from `SAGE.md` and the three mandatory local rule
 documents. The launcher injects their complete rendered contents through a
 private temporary `--append-system-prompt-file`, because assistant file-reading
 tools are disabled. Missing policy prevents launch. See [other AI clients and

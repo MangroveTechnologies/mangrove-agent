@@ -99,6 +99,7 @@
     "portfolio_pnl": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
     "portfolio_tokens": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
     "portfolio_value": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
+    "set_agent_name": "User-chosen name stored in the local agent database; no upstream request or charge.",
     "status": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
     "x402_spend_reset": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
     "x402_spend_status": "Local agent state, custody, discovery or audit operation; no upstream price binding."

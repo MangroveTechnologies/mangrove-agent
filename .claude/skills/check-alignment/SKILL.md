@@ -16,7 +16,7 @@ Review the proposal against each of these documents. For every one that exists, 
 ### 1. `SAGE.md` — project identity + persona
 - "What This Is" section: does the proposal still describe a local trading bot? Any scope drift toward cloud / hosted / multi-tenant breaks the v1 framing.
 - "Architecture" section: dual-protocol (REST + MCP), three-tier access (free / auth / x402), service-layer pattern. Does the proposal respect these layers, or does it duplicate logic?
-- "Project Context" + "Agent Identity": does the proposal change Tim's persona or the Sage agent? Flag if yes — persona is set in `SAGE.md` and changes there are explicit, deliberate edits, not side effects of feature work.
+- "Project Context" + "Agent Identity": does the proposal change the user's project context or agent persona? Flag if yes — shared persona rules live in `SAGE.md`; the user chooses the agent's name, saved locally through `set_agent_name`. Identity changes are explicit, deliberate edits, not side effects of feature work.
 
 ### 2. `.claude/rules/trading-bot-workflow.md` — the 9 operating principles
 Check each principle if relevant:

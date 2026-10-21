@@ -124,7 +124,7 @@ def test_missing_policy_prevents_native_client_launch(installation, tmp_path, cl
                             capture_output=True, text=True,
                             env=dict(os.environ, PATH=f'{binary}{os.pathsep}{os.environ["PATH"]}'))
     assert result.returncode != 0
-    assert 'Required Sage instructions are missing' in result.stderr
+    assert 'Required agent instructions are missing' in result.stderr
     assert not sentinel.exists()
     assert not (installation / f'.{client}/config.toml').exists()
 
@@ -138,6 +138,6 @@ def test_plugin_injects_shared_policy_before_unconfigured_status(tmp_path):
                                      CLAUDE_PLUGIN_OPTION_MANGROVE_API_KEY=''))
     assert result.returncode == 0, result.stderr
     assert result.stdout.startswith(context.render_context(ROOT))
-    assert '**Name:** Sage' in result.stdout
+    assert '**Name:** Unset' in result.stdout
     assert 'Client-only skills:' in result.stdout
     assert 'NOT CONFIGURED:' in result.stdout

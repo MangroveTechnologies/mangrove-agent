@@ -30,7 +30,7 @@ done
 # A pointer is insufficient when the host has no file-reading tool.
 if [ -n "$PY" ]; then
   if ! "$PY" "$ROOT/scripts/agent_context.py" --stdout; then
-    printf '\nSage instructions could not be loaded; repair the plugin installation.\n'
+    printf '\nAgent instructions could not be loaded; repair the plugin installation.\n'
     exit 0
   fi
 fi

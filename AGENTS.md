@@ -2,7 +2,7 @@
 
 Before responding, read `SAGE.md` in this repository and follow its startup
 contract, including the three mandatory rule documents. Resolve their paths
-from the repository root. `SAGE.md` is the single shared source for the Sage
+from the repository root. `SAGE.md` is the single shared source for the agent
 persona, project context, and operating instructions; do not maintain a separate
 copy here. Grok Build and other clients that discover `AGENTS.md` use this same
 entry point. If another native entry point already loaded these sources, do not

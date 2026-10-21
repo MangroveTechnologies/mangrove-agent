@@ -364,7 +364,7 @@ def test_agent_install_loads_sage_and_calls_status_without_claude(checkout):
                             cwd=repo.parent, capture_output=True, text=True, timeout=10)
     assert policy.returncode == 0, policy.stderr
     assert policy.stdout.count('## SOURCE: ') == 4
-    assert '**Name:** Sage' in policy.stdout
+    assert '**Name:** Unset' in policy.stdout
     outputs = policy.stdout + installed.stdout + installed.stderr
     for options in [['--list-tools'], ['--call', 'status']]:
         result = subprocess.run([python, str(repo / 'scripts/local_mcp_bridge.py'), *options],

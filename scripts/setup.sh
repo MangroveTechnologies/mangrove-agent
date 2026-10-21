@@ -380,7 +380,7 @@ if [ "$DO_MCP" = "yes" ]; then
   echo "Claude MCP registration saved. Start ./scripts/chat.sh when ready."
 else
   echo "Local agent ready. Claude MCP registration was skipped."
-  echo "Any command-capable AI client can load Sage and use the agent in this session:"
+  echo "Any command-capable AI client can load the shared instructions and use the agent in this session:"
   CLIENT_PY="$PY"
   if [ "$MODE" = "bare" ]; then CLIENT_PY=".venv/bin/python3"; fi
   printf '  %q scripts/agent_context.py --stdout\n' "$CLIENT_PY"

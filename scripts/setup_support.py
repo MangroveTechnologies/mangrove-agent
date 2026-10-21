@@ -816,7 +816,7 @@ def launch_chat(cfg: dict) -> int:
         from agent_context import render_context
         context = render_context(ROOT)
     except (ImportError, OSError, UnicodeError):
-        raise SetupError('Required Sage instructions are missing; repair the installation.') from None
+        raise SetupError('Required agent instructions are missing; repair the installation.') from None
     workspace = ROOT / 'agent-data/chat'
     workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
     env = dict(os.environ, ENABLE_TOOL_SEARCH='false',

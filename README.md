@@ -47,20 +47,22 @@ Full platform documentation and the trading knowledge base live at **https://man
 
 ---
 
-## Use Sage with your AI client
+## Use Mangrove agent with your AI client
 
 Tell **Claude Code, Codex, Grok Build, or Perplexity Computer**:
 
 > Install https://github.com/MangroveTechnologies/mangrove-agent and follow its AI client installation instructions.
 
 **For the installing agent:** follow [AI client setup](docs/clients.md#install-from-an-agent).
-Install the server in your execution environment, load the complete Sage
+Install the server in your execution environment, load the complete agent
 instructions, discover its tools, and call the free `status` tool before
 reporting success. Perplexity Computer can use the provided command client;
 this installation does not require creating a Perplexity Project, configuring a
 custom cloud connector, or installing another desktop app.
 
-Sage's shared identity and operating instructions live in [`SAGE.md`](SAGE.md).
+The agent's shared identity and operating instructions live in [`SAGE.md`](SAGE.md).
+First run asks what to name the agent. That choice is saved locally and reused
+across clients; there is no default personal name.
 `AGENTS.md` points Codex and compatible clients there; `CLAUDE.md` imports it for
 Claude Code. Codex and Grok Build launch helpers, MCP configuration templates,
 and the complete Perplexity/web instruction bundle are documented in

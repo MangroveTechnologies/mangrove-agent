@@ -72,7 +72,7 @@ pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps({
     assert str(installation / 'scripts/setup_support.py') in shlex.split(mcp['mangrove-agent']['headersHelper'])
     assert data['cwd'] == str(installation / 'agent-data/chat')
     assert data['search'] == 'false'
-    assert '**Name:** Sage' in data['context']
+    assert '**Name:** Unset' in data['context']
     assert 'Never request, echo, or save private keys' in data['context']
     assert 'SOURCE: .claude/rules/trading-bot-workflow.md' in data['context']
     assert 'SOURCE: .claude/rules/wallet-presentation.md' in data['context']
@@ -128,5 +128,5 @@ def test_missing_policy_prevents_model_launch(installation, tmp_path):
                             env=dict(os.environ, PATH=f'{binary}{os.pathsep}{os.environ["PATH"]}'),
                             capture_output=True, text=True)
     assert result.returncode != 0
-    assert 'Required Sage instructions are missing' in result.stderr
+    assert 'Required agent instructions are missing' in result.stderr
     assert not sentinel.exists()
