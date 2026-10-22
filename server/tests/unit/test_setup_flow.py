@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import Mock
@@ -263,6 +264,47 @@ def test_redirect_not_followed_or_remote_error_printed(wire_server):
     with pytest.raises(setup.SetupError, match='HTTP 302'):
         setup.request(cfg, '/redirect')
     assert len(events) == 1
+
+
+def test_verify_waits_for_a_cold_catalog_without_retrying(monkeypatch):
+    events = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            events.append(self.path)
+            authenticated = self.headers.get('X-API-Key') == 'synthetic-local-key'
+            if self.path == '/api/v1/agent/wallet/list':
+                code, body = (200, []) if authenticated else (401, {})
+            elif self.path == '/health':
+                code, body = 200, {'scheduler_running': True}
+            else:
+                assert self.path == '/api/v1/agent/tools'
+                # Reproduce a healthy discovery exceeding the old 10s deadline.
+                time.sleep(10.2)
+                code, body = 200, {'tools': [{'name': name} for name in (
+                    'create_wallet', 'import_wallet', 'list_wallets', 'list_signals')]}
+            self.send_response(code)
+            self.end_headers()
+            self.wfile.write(json.dumps(body).encode())
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    cfg = dict(wallet_config(), MANGROVE_ACCESS_MODE='x402',
+               LOCAL_AGENT_URL=f'http://127.0.0.1:{server.server_port}')
+    monkeypatch.setattr(setup, 'read_config', lambda: cfg)
+    monkeypatch.setattr(sys, 'argv', ['setup_support.py', 'verify'])
+    try:
+        assert setup.main() == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+    assert events == ['/api/v1/agent/wallet/list', '/api/v1/agent/wallet/list',
+                      '/health', '/api/v1/agent/tools']
 
 
 @pytest.fixture

@@ -116,7 +116,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def request(cfg, path, payload=None, *, authenticated=True):
+def request(cfg, path, payload=None, *, authenticated=True, timeout=10):
     url = origin(cfg.get('LOCAL_AGENT_URL', '')) + path
     headers = {'Content-Type': 'application/json'}
     if authenticated:
@@ -126,7 +126,7 @@ def request(cfg, path, payload=None, *, authenticated=True):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     # Do not retry mutations: a lost response is not evidence of a failed operation.
     try:
-        with opener.open(req, timeout=10) as response:
+        with opener.open(req, timeout=timeout) as response:
             data = response.read(1024 * 1024 + 1)
             if len(data) > 1024 * 1024:
                 raise SetupError('Agent response exceeded the setup limit.')
@@ -896,7 +896,10 @@ def main():
                     # "onboarding tools are missing" is a symptom of that outage rather
                     # than a diagnosis. Checking first means the user is told which it is.
                     upstream_reachable = check_upstream(cfg)
-                    catalog = request(cfg, '/api/v1/agent/tools')
+                    # Cold discovery can spend 8s on prices, 8s on Markets,
+                    # then 15s on MangroveAI. Let those bounded reads finish;
+                    # wallet mutations keep the short timeout and no retries.
+                    catalog = request(cfg, '/api/v1/agent/tools', timeout=45)
                     names = {item['name'] for item in catalog['tools']}
                     required = {'create_wallet', 'import_wallet', 'list_wallets'}
                     if upstream_reachable:
