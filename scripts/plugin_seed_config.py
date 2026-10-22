@@ -8,7 +8,12 @@ import os
 import sys
 
 example, cfg_path, key, port, markets_default = sys.argv[1:6]
-cfg = json.load(open(cfg_path)) if os.path.exists(cfg_path) else json.load(open(example))
+if os.path.exists(cfg_path):
+    with open(cfg_path, "r") as f:
+        cfg = json.load(f)
+else:
+    with open(example, "r") as f:
+        cfg = json.load(f)
 cfg["MANGROVE_API_KEY"] = key
 # The plugin's MCP entry authenticates with the MangroveAI key, and this agent
 # binds 127.0.0.1 only. Never keep the example's shared default key.
