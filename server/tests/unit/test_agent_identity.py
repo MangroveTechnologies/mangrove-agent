@@ -38,7 +38,12 @@ def mcp_client():
 
 
 async def call(server, tool_name, **arguments):
-    return json.loads(await server._tool_manager._tools[tool_name].run(arguments))
+    result = await server._tool_manager._tools[tool_name].run(arguments)
+    if hasattr(result, "content"):
+        body = json.loads(result.content[0].text)
+        assert result.isError is bool(body.get("error"))
+        return body
+    return json.loads(result)
 
 
 @pytest.mark.asyncio

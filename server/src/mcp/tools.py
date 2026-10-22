@@ -20,6 +20,7 @@ from httpx import HTTPStatusError
 from mangrove_ai.exceptions import APIError as AIAPIError
 from mangrove_markets.exceptions import APIError as MarketsAPIError
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, TextContent
 
 from src.mcp.registry import ToolEntry, ToolParam, clear_tools, register_tool
 from src.shared.auth.middleware import get_request_api_key, has_valid_api_key
@@ -135,17 +136,20 @@ def _register_discovery(server: FastMCP) -> None:
     ))
 
     @server.tool()
-    async def set_agent_name(name: str, api_key: str = "") -> str:
+    async def set_agent_name(name: str, api_key: str = "") -> CallToolResult:
         """Save the name the user chose for this agent, shared across AI clients.
         Use only after the user chooses or requests a new name. Local, no cost.
         The current name is returned by status; null means no name chosen yet."""
+        failed = False
         if not _require(api_key):
-            return _auth_error()
-        from src.services import agent_identity
-        try:
-            return json.dumps(agent_identity.set_name(name))
-        except AgentError as exc:
-            return _handle_agent_error(exc)
+            response, failed = _auth_error(), True
+        else:
+            from src.services import agent_identity
+            try:
+                response = json.dumps(agent_identity.set_name(name))
+            except AgentError as exc:
+                response, failed = _handle_agent_error(exc), True
+        return CallToolResult(content=[TextContent(type="text", text=response)], isError=failed)
 
     register_tool(ToolEntry(
         name="set_agent_name",
