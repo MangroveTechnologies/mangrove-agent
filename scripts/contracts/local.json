@@ -1036,6 +1036,24 @@
         "type": "object"
       }
     },
+    "set_agent_name": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
     "status": {
       "access": "free",
       "inputSchema": {

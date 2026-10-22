@@ -27,7 +27,7 @@ A strategy has:
 
 ## 1. Ask for a strategy
 
-In your Claude Code session from Chapter 03, say:
+In your chosen AI client session from Chapter 03, say:
 
 > "Build me a BTC 1h strategy."
 

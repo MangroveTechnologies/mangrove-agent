@@ -1,21 +1,22 @@
 # Chapter 05 — Paper mode
 
-*15 minutes. No funds required. The first chapter where the bot is
-actually running on a schedule.*
+*15 minutes. No live trading capital required. Upstream API access can
+still cost money. The first chapter where the bot runs on a schedule.*
 
 You ended Chapter 04 with a strategy in `inactive` status — saved but
 dormant. In this chapter you promote it to `paper`, which schedules
 it to evaluate on a cron and simulates fills at current market price.
-No wallet, no funds, no on-chain activity.
+No real trading orders are placed. In x402 mode, data and evaluation calls
+still require a funded payment wallet; API-key usage follows your allowance.
 
-This is the last fund-free chapter. If you want to stop here, you
+This completes the path without live trading capital. If you want to stop here, you
 will still have accomplished the full author → backtest → paper →
 evaluate loop. Everything from Chapter 06 onward is for when you
 want to move real money.
 
 ## Promote to paper
 
-In Claude Code:
+In your chosen AI client:
 
 > "Promote it to paper."
 

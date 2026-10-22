@@ -145,9 +145,17 @@ agent registrations, price bindings, SDK adapters or fallback definitions for
 these remote MCP tools. The local contract snapshot covers only agent-owned and
 MangroveMarkets tools; it is not a copy used to serve the remote catalogue.
 
+Progressive discovery is the upstream `discover_tools` tool, implemented in
+`MangroveAI/src/MangroveAI/mcp/`. Area taxonomy, name/area selection, compact
+summaries and full-schema selection belong to that managed service. The agent
+forwards its live schema, arguments and result without implementing a second
+selector. Native `tools/list` remains the full catalog for MCP registration.
+
 The destination is derived from the configured MangroveAI API origin, replacing
-`/api/v1` with `/mcp/`. Discovery is anonymous and never signs or pays. Each call
-validates its arguments against the freshly discovered server schema before
+`/api/v1` with `/mcp/`. Native `tools/list` retrieval is anonymous and never signs
+or pays. Calls can use the existing upstream identity, including optional
+Sign-In-With-X authentication in wallet mode. Public free discovery never
+authorizes payment. Each call validates its arguments against the freshly discovered server schema before
 using either the configured upstream API key or the existing MCP wallet payer.
 API-key failures never switch to wallet mode. Wallet selection, signing, spend
 limits, payment receipts and uncertain-payment recovery remain agent-owned.

@@ -24,7 +24,10 @@ After phase-2 security rework, wallet secrets flow out-of-band:
 - `import_wallet` accepts a `vault_token` (from `./scripts/stash-secret.sh`). Never accepts a raw key.
 - Reveal-on-demand: `./scripts/reveal-secret.sh --address <addr>`.
 
-If a user pastes a private key or mnemonic, `.claude/hooks/block-wallet-secrets.sh` intercepts and refuses. Don't work around it.
+Configured Claude Code sessions use `.claude/hooks/block-wallet-secrets.sh` to
+block private keys and mnemonics. Other clients do not automatically inherit
+that hook. Never request or repeat plaintext secrets in any client, and never
+work around a host's secret protection.
 
 ## Defaults -- testnet-first; mainnet only on explicit ask
 
@@ -131,8 +134,7 @@ Run get_balances to verify it's the wallet you expected.
 ## When user wants to import (without pasting yet)
 
 ```
-I can't accept private keys or mnemonics in chat -- the hook will refuse,
-and they'd end up in your transcript file regardless.
+Never paste private keys or mnemonics in chat; they would enter the transcript.
 
 To import safely, open a terminal (VSCode integrated terminal works --
 Cmd+` / Ctrl+`) and run:

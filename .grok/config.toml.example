@@ -1,0 +1,5 @@
+# Merge this table into .grok/config.toml. The launcher environment supplies
+# the local agent credential. Do not put an upstream MangroveAI key here.
+[mcp_servers.mangrove-agent]
+url = "${MANGROVE_AGENT_MCP_URL:-http://127.0.0.1:9080/mcp/}"
+headers = { "X-API-Key" = "${MANGROVE_LOCAL_API_KEY}" }

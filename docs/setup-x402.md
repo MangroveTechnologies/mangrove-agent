@@ -1,11 +1,12 @@
 # Setup with an API key or x402
 
 Run `./scripts/setup.sh` from your clone. This is the setup entry point for both
-access methods. Plugin installation is a separate, unchanged API-key path.
+access methods. Plugin installation is a separate API-key path. For a client-neutral
+walkthrough, start with the [user guide](user-guide.md).
 
 On every interactive setup run, choose an API key or x402. Enter keeps the current
 mode (x402 is the default for a fresh install). API-key input is hidden.
-The script always creates or preserves a separate local credential for Claude's
+The script always creates or preserves a separate local credential for the AI client's
 access to the agent. Omitting an upstream key never disables local authentication.
 Select either mode from this menu, or use `--auth api-key` / `--auth x402` to
 choose explicitly without the menu. Invalid API keys never fall back to payment.
@@ -13,7 +14,7 @@ The choice is saved as `MANGROVE_ACCESS_MODE` (`api-key` or `x402`). Switching t
 x402 preserves a previously saved upstream key but does not send it to MangroveAI
 or Markets for these calls. Switching back can reuse it. Existing configurations
 without this setting continue to select API-key mode when a key is present.
-Local wallets, approvals, payment history and Claude's local credential are not
+Local wallets, approvals, payment history and the AI client's local credential are not
 reset by changing access mode.
 
 `--yes` preserves existing settings; on a fresh install it selects x402 and defers
@@ -38,15 +39,16 @@ See [Claude's dynamic-header documentation](https://code.claude.com/docs/en/mcp#
 
 The explicit reveal command only writes secrets to a terminal; redirecting its
 output is refused. Use a private terminal and clear scrollback after backing up.
-Verification checks local authentication, required tools and scheduler readiness;
-it does not call upstream services or verify payment readiness.
+Verification checks local authentication, required tools and scheduler readiness.
+It can read upstream discovery and, in API-key mode, verify the configured key.
+It does not sign payments or establish wallet/payment readiness.
 
 ## The x402 wallet menu prints instructions
 
 After the server is authenticated and MCP registration is saved (if Claude is
 installed), select **create**, **import**, **use saved wallet**, or **finish later**.
 Selecting a menu item only prints instructions. Execute the commands yourself in
-a private terminal in this checkout. Never give Claude a private key or mnemonic.
+a private terminal in this checkout. Never give any AI client a private key or mnemonic.
 
 The following explicit commands are separate from the normal setup run. They
 call existing local wallet services and do not install packages or restart the
@@ -116,7 +118,7 @@ and type `SELECT` to save the public payer address and configured cap. This does
 not reset spending history, release uncertain payments or clear an exhausted
 budget. Selection reads and displays the effective budget. A previously human-authorized
 period cap overrides configuration, so selection refuses a different cap rather
-than saving an ineffective limit. Inspect `x402_spend_status` in Claude before paid use. Budget reset is a separate,
+than saving an ineffective limit. Inspect `x402_spend_status` with your AI client before paid use. Budget reset is a separate,
 explicit human authorization, not part of setup.
 
 Apply the saved configuration:

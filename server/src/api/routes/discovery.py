@@ -1,9 +1,10 @@
-"""Discovery endpoints — free, no auth.
+"""Agent discovery (free) and naming (auth-gated).
 
 - GET /api/v1/agent/status: server + SDK versions, catalog counts, wallet
   count, strategies grouped by status, active cron jobs, db path, uptime.
 - GET /api/v1/agent/tools: MCP tool catalog (auto-populated by
   src/mcp/tools.py at registration time).
+- PUT /api/v1/agent/identity: save the user-chosen agent name.
 
 /health lives in src/app.py (template-provided).
 """
@@ -14,11 +15,13 @@ import time
 from collections import Counter
 from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from src import __version__
 from src.config import app_config
+from src.services import agent_identity
 from src.services.scheduler_service import active_job_count
+from src.shared.auth.dependency import require_api_key
 from src.shared.db.sqlite import get_connection
 
 router = APIRouter()
@@ -118,6 +121,7 @@ async def status() -> dict:
     server_version = __version__
 
     return {
+        "agent_name": agent_identity.get_name(),
         "version": server_version,
         "server_version": server_version,
         "sdk_versions": {
@@ -139,6 +143,13 @@ async def status() -> dict:
         "db_path": str(app_config.DB_PATH),
         "uptime_seconds": int(time.monotonic() - _STARTUP_MONOTONIC),
     }
+
+
+@router.put("/identity", summary="Save the user-chosen agent name",
+            dependencies=[Depends(require_api_key)])
+async def set_agent_name(body: agent_identity.AgentNameRequest) -> dict:
+    """Name or rename this installation. Local only; no payment or trading."""
+    return agent_identity.set_name(body.name)
 
 
 def _portfolio_risk_status() -> dict:

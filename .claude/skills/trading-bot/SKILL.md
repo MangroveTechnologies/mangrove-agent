@@ -10,8 +10,10 @@ description: >-
 
 # Operating the Mangrove trading agent
 
-Read these three documents in full and follow them. They are the contract for every trading
-action this agent takes.
+Follow these three documents. If their complete contents are already loaded by
+the native rules loader or shared bundle, do not read them again. Otherwise read
+the missing documents in full before trading. They are the contract for every
+trading action this agent takes.
 
 1. `${CLAUDE_PLUGIN_ROOT}/.claude/rules/trading-bot-workflow.md` — how to load live server workflow instructions over MCP.
 2. `${CLAUDE_PLUGIN_ROOT}/.claude/rules/wallet-presentation.md` — creating, importing and presenting
@@ -25,7 +27,8 @@ action this agent takes.
 Those documents were written for a git clone of the repo. When running as the installed plugin:
 
 - Tool names are `mcp__plugin_mangrove-agent_mangrove-agent__<tool>`, not `mcp__mangrove-agent__<tool>`.
-  Load them with one ToolSearch call (query `+mangrove-agent`, max_results 100).
+  Search for the tools needed for this task; load their actual schemas without
+  importing the entire catalog into context.
 - Scripts written as `./scripts/<name>.sh` are at `${CLAUDE_PLUGIN_ROOT}/scripts/<name>.sh`. The user
   runs them in their own terminal, never through you.
 - `./agent-data/` and `server/src/config/local-config.json` live under `~/.mangrove-agent/`

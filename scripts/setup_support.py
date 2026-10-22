@@ -116,7 +116,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def request(cfg, path, payload=None, *, authenticated=True):
+def request(cfg, path, payload=None, *, authenticated=True, timeout=10):
     url = origin(cfg.get('LOCAL_AGENT_URL', '')) + path
     headers = {'Content-Type': 'application/json'}
     if authenticated:
@@ -126,7 +126,7 @@ def request(cfg, path, payload=None, *, authenticated=True):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     # Do not retry mutations: a lost response is not evidence of a failed operation.
     try:
-        with opener.open(req, timeout=10) as response:
+        with opener.open(req, timeout=timeout) as response:
             data = response.read(1024 * 1024 + 1)
             if len(data) > 1024 * 1024:
                 raise SetupError('Agent response exceeded the setup limit.')
@@ -714,7 +714,7 @@ def wallet_action(action, cfg):
                              'to change it, or rerun selection keeping the displayed active cap. Nothing was saved.')
         print(f'Payer: {addr}\nNetwork: {label}\nConfigured cap: {cap} USD. Existing spend and latches are preserved.')
         print('A previously authorized period cap takes precedence over this config value.\n'
-              'Check x402_spend_status in Claude before paid use; setup never resets the budget.')
+              'Check x402_spend_status with your AI client before paid use; setup never resets the budget.')
         if input('Type SELECT to save this payment configuration: ').strip() != 'SELECT':
             raise SetupError('Selection cancelled; configuration unchanged.')
         cfg['X402_PAYER_WALLET'] = addr
@@ -790,7 +790,7 @@ def chat_settings() -> dict:
     }
 
 
-def chat_command(claude: str, cfg: dict, settings_path: Path) -> list[str]:
+def chat_command(claude: str, cfg: dict, settings_path: Path, context_path: Path) -> list[str]:
     require_auth(cfg)
     connection = {
         'type': 'http', 'url': origin(cfg.get('LOCAL_AGENT_URL', '')) + '/mcp/',
@@ -801,6 +801,7 @@ def chat_command(claude: str, cfg: dict, settings_path: Path) -> list[str]:
         '--mcp-config', json.dumps({'mcpServers': {'mangrove-agent': connection}}),
         '--setting-sources', '', '--settings', str(settings_path),
         '--permission-mode', 'default', '--no-chrome',
+        '--append-system-prompt-file', str(context_path),
     ]
     return args
 
@@ -811,6 +812,11 @@ def launch_chat(cfg: dict) -> int:
         raise SetupError('Install Claude Code before starting chat.')
     profile = chat_settings()
     require_auth(cfg)
+    try:
+        from agent_context import render_context
+        context = render_context(ROOT)
+    except (ImportError, OSError, UnicodeError):
+        raise SetupError('Required agent instructions are missing; repair the installation.') from None
     workspace = ROOT / 'agent-data/chat'
     workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
     env = dict(os.environ, ENABLE_TOOL_SEARCH='false',
@@ -819,7 +825,10 @@ def launch_chat(cfg: dict) -> int:
         path = Path(directory) / 'settings.json'
         path.write_text(json.dumps(profile))
         os.chmod(path, 0o600)
-        return subprocess.run(chat_command(claude, cfg, path),
+        context_path = Path(directory) / 'sage-instructions.md'
+        context_path.write_text(context)
+        os.chmod(context_path, 0o600)
+        return subprocess.run(chat_command(claude, cfg, path, context_path),
                               cwd=workspace, env=env, check=False).returncode
 
 
@@ -887,14 +896,18 @@ def main():
                     # "onboarding tools are missing" is a symptom of that outage rather
                     # than a diagnosis. Checking first means the user is told which it is.
                     upstream_reachable = check_upstream(cfg)
-                    catalog = request(cfg, '/api/v1/agent/tools')
+                    # Cold discovery can spend 8s on prices, 8s on Markets,
+                    # then 15s on MangroveAI. Let those bounded reads finish;
+                    # wallet mutations keep the short timeout and no retries.
+                    catalog = request(cfg, '/api/v1/agent/tools', timeout=45)
                     names = {item['name'] for item in catalog['tools']}
                     required = {'create_wallet', 'import_wallet', 'list_wallets'}
-                    if upstream_reachable:
+                    if upstream_reachable and catalog.get('mangroveai_status') != 'unavailable':
                         # list_signals is served by the platform, not locally.
                         required.add('list_signals')
                     else:
-                        print('Skipping the platform tool checks while it is unreachable; '
+                        print('MangroveAI tools are unavailable; platform tool access is NOT verified. '
+                              'Skipping the platform tool checks while it is unreachable; '
                               'local wallet tools are verified below.')
                     if not required <= names:
                         raise SetupError(

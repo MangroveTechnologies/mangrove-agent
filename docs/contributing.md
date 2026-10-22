@@ -42,7 +42,7 @@ Test runs set `MASTER_KEY_PATH` to a test-scoped path; the resulting `agent-data
 Claude Code skills that help while extending the scaffold:
 
 - **`/tool-spec <purpose>`** — drafts a complete MCP tool specification (name, access tier, parameters, service-layer binding, response shape, error envelope) ready to paste into `server/src/mcp/tools.py`.
-- **`/check-alignment <change>`** — read-only review of a proposed change against `CLAUDE.md`, `trading-bot-workflow.md` (the 9 operating principles), `wallet-presentation.md`, `git-workflow.md`, and this file.
+- **`/check-alignment <change>`** — read-only review of a proposed change against `SAGE.md`, `trading-bot-workflow.md` (the 9 operating principles), `wallet-presentation.md`, `git-workflow.md`, and this file.
 - **`/audit-security`** — focused security audit covering wallet + signing surfaces, MCP tool layer, REST routes, dependency CVEs, and git-history secret leaks. Read-only, writes a report to `docs/audits/`.
 - **`/custom-signal <rule>`** — composes a custom entry/exit signal stack from atomic signals when a reference-strategy match isn't available.
 

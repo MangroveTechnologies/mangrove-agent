@@ -1,0 +1,5 @@
+# Copy the mangrove-agent table into .codex/config.toml in a trusted checkout.
+# Match the URL to this installation's setup output. Keep secrets out of this file.
+[mcp_servers.mangrove-agent]
+url = "http://127.0.0.1:9080/mcp/"
+env_http_headers = { "X-API-Key" = "MANGROVE_LOCAL_API_KEY" }

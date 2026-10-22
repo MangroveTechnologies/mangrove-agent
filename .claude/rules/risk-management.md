@@ -1,7 +1,7 @@
 # Risk Management — What Happens Behind the Scenes
 
 This agent does **not** implement most risk controls itself — they are enforced
-in two places, and you (Sage) must understand both so you can explain to the
+in two places, and you must understand both so you can explain to the
 user what the system is doing, cite the right reason when a trade is blocked,
 and **never rebuild a control that already exists.**
 
