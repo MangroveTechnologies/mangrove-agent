@@ -902,11 +902,12 @@ def main():
                     catalog = request(cfg, '/api/v1/agent/tools', timeout=45)
                     names = {item['name'] for item in catalog['tools']}
                     required = {'create_wallet', 'import_wallet', 'list_wallets'}
-                    if upstream_reachable:
+                    if upstream_reachable and catalog.get('mangroveai_status') != 'unavailable':
                         # list_signals is served by the platform, not locally.
                         required.add('list_signals')
                     else:
-                        print('Skipping the platform tool checks while it is unreachable; '
+                        print('MangroveAI tools are unavailable; platform tool access is NOT verified. '
+                              'Skipping the platform tool checks while it is unreachable; '
                               'local wallet tools are verified below.')
                     if not required <= names:
                         raise SetupError(

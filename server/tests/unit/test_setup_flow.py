@@ -361,6 +361,7 @@ class Handler(BaseHTTPRequestHandler):
         valid = self.headers.get('X-API-Key') == cfg['API_KEYS'].split(',')[0]
         if self.path.endswith('/tools'):
             body = {'tools':[{'name':n} for n in ['create_wallet','import_wallet','list_wallets','list_signals']]}
+            if Path('catalog.json').exists(): body = json.loads(Path('catalog.json').read_text())
             code = 200
         elif self.path == '/health': body, code = {'scheduler_running': True}, 200
         elif self.path.endswith('/marketplace/readiness'):
@@ -565,6 +566,28 @@ def test_check_upstream_skips_when_the_platform_is_unreachable(monkeypatch, caps
 def test_check_upstream_has_nothing_to_check_in_wallet_mode(monkeypatch):
     monkeypatch.setattr(setup, 'request', lambda cfg, path: pytest.fail('wallet mode must not probe'))
     assert setup.check_upstream(_cfg('x402')) is True
+
+
+@pytest.mark.parametrize('missing_local_tool', [False, True])
+def test_wallet_mode_reports_unavailable_platform_but_requires_local_tools(checkout, missing_local_tool):
+    repo, _ = checkout
+    names = ['create_wallet', 'list_wallets']
+    if not missing_local_tool:
+        names.append('import_wallet')
+    (repo / 'catalog.json').write_text(json.dumps({
+        'tools': [{'name': name} for name in names], 'mangroveai_status': 'unavailable',
+    }))
+    result = run_setup(checkout, '--yes', '--no-mcp')
+    assert 'MangroveAI tools are unavailable; platform tool access is NOT verified.' in result.stdout
+    if missing_local_tool:
+        assert result.returncode != 0
+        assert 'Required onboarding tools are missing from discovery: import_wallet' in result.stdout
+        assert 'Done.' not in result.stdout
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert 'Done.' in result.stdout
+    requests = [json.loads(line)['path'] for line in (repo / 'requests.jsonl').read_text().splitlines()]
+    assert '/api/v1/agent/signals?limit=1' not in requests
 
 
 def test_shell_verification_failure_is_failure(checkout):

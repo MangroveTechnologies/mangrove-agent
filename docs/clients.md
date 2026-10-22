@@ -212,7 +212,7 @@ They did not execute those workflows. Final status showed no wallets, strategies
 user jobs, or payments, with $0 spent. Only the owned disposable servers were
 stopped after testing; their files and databases were preserved.
 
-Acceptance found and corrected three defects before review:
+Acceptance found and corrected installation and error-handling defects before review:
 
 - A server started with `nohup` alone died when an installing agent cleaned up
   its command process group. Setup now creates a separate process session.
@@ -225,9 +225,14 @@ Acceptance found and corrected three defects before review:
   before bounded remote tool discovery finished. Catalog verification now has
   a 45-second timeout; wallet mutations retain their existing timeout and no
   retries. A regression test serves a healthy catalog after more than 10 seconds.
+- During the next cold start, upstream MCP discovery was temporarily unavailable
+  while the local server was healthy. Setup now reports platform tool access as
+  NOT verified instead of diagnosing the absent remote `list_signals` tool as a
+  broken local installation. It still fails for missing local onboarding tools;
+  regression tests cover both outcomes. A later separate discovery returned the
+  full 120-tool catalog again.
 
-The relevant runtime fixes are `efe3f84`, `db0e6ba`, and `3e9e84a`. Provider logs
-and private installation configs stay outside the public repository. Automated
+Provider logs and private installation configs stay outside the public repository. Automated
 checks additionally cover policy export consistency, native launcher arguments,
 credential handling, existing-config preservation, authentication, persistent
 identity, stdio transport, and command failure semantics.
