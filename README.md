@@ -6,8 +6,8 @@
   <h1>mangrove-agent</h1>
 
   <p>
-    <strong>An AI trading agent built on the Mangrove API.</strong><br>
-    FastAPI + MCP. Autonomous strategy generation, cron-driven execution, full audit trail.<br>
+    <strong>A local MCP server (Model Context Protocol) and Claude Code plugin for AI trading agents.</strong><br>
+    Built on the Mangrove API, with a REST API alongside. FastAPI + MCP. Autonomous strategy generation, cron-driven execution, full audit trail.<br>
     CEX trade execution on <strong>Kraken</strong> &nbsp;·&nbsp; DEX execution via <strong>1inch</strong> across 10 EVM chains
   </p>
 
@@ -40,6 +40,19 @@ A local AI trading agent that:
 - Executes live DEX swaps through [MangroveMarkets](https://github.com/MangroveTechnologies/MangroveMarkets) — 1inch routing across 10 EVM chains (Ethereum, Base, Arbitrum, Polygon, Optimism, BNB, Avalanche, zkSync Era, Gnosis, Linea; the agent defaults to Base). Client-side signing; the routing server never touches your keys.
 - Trades on **Kraken** too, with two connection modes: **bring-your-own-key** (`/setup-kraken` — a least-privilege API key that stays on your machine and talks to Kraken directly) or **keyless OAuth** (`/connect-kraken` — consent once in a browser, no key to manage).
 - Logs every evaluation and trade — DEX and CEX — to local SQLite for a full audit trail.
+
+### What you get
+
+- **119 tools** (as of October 2026; `/mcp` in Claude Code showed 119 on 2026-10-20). That is the hosted MangroveAI catalog forwarded by the agent plus local tools. Run `list_tools` against the endpoint for the live catalog.
+- **7 agent skills** in `.claude/skills`: `audit-security`, `check-alignment`, `connect-kraken`, `setup-kraken`, `setup-robinhood`, `tool-spec`, `trading-bot`. The Claude Code plugin wires in four of them.
+- **REST API** (FastAPI) next to the MCP server, same agent.
+- **Claude Code plugin** install, see [Install as a Claude Code plugin](#install-as-a-claude-code-plugin-api-key-required).
+- **Works with Codex and any MCP client.** The local MCP endpoint is `http://127.0.0.1:9080/mcp/`. See [Use it from Codex](#use-it-from-codex).
+- **Hosted MangroveAI MCP server** at `https://api.mangrovedeveloper.ai/mcp/` (streamable HTTP, answers `initialize` without auth).
+- **Pricing:** a free API key at https://mangrovedeveloper.ai, or x402 pay-per-call in USDC.
+- **Non-custodial:** execution on Kraken (bring-your-own-key or OAuth), Robinhood, and 1inch across 10 EVM chains. Keys and wallets stay on your machine.
+
+More for agent builders: https://mangrove.ai/agents/ and https://mangrove.ai/llms.txt
 
 Full platform documentation and the trading knowledge base live at **https://mangrove.io/docs** (KB: https://mangrove.io/knowledge-base) — the agent's `kb_search` tool queries the same corpus.
 
@@ -99,6 +112,23 @@ Start a new session. On first start the plugin installs its Python dependencies 
 - **Logs:** `~/.mangrove-agent/agent-data/agent.log` (server) and `bootstrap.log` (install/start).
 
 Want to change the code? Clone the repo instead (below). Both paths run the same agent.
+
+### Use it from Codex
+
+The repo ships a Codex marketplace file at `.agents/plugins/marketplace.json`. Add the marketplace from a terminal:
+
+```bash
+codex plugin marketplace add MangroveTechnologies/mangrove-agent
+```
+
+Per OpenAI's [Codex plugin docs](https://developers.openai.com/codex/plugins/build), the plugin is then installed from the Plugins Directory in the ChatGPT desktop app (restart the app, open the Plugins Directory, choose the `mangrove` marketplace, install `mangrove-agent`). The docs list no CLI install command. To enable it for one project, add this to that repo's `.codex/config.toml`:
+
+```toml
+[plugins."mangrove-agent@mangrove"]
+enabled = true
+```
+
+You can also skip the marketplace and point Codex at the local MCP server (`http://127.0.0.1:9080/mcp/`) with the template in `.codex/config.toml.example`. See [AI client setup](docs/clients.md#codex-and-grok-build).
 
 ## Get started (git clone)
 

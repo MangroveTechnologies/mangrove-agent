@@ -15,7 +15,14 @@
     "defi",
     "kraken",
     "robinhood",
-    "mcp"
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "claude-code-plugin",
+    "codex",
+    "paper-trading",
+    "x402",
+    "ai-trading-agent"
   ],
   "userConfig": {
     "mangrove_api_key": {
