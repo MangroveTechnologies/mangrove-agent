@@ -317,11 +317,32 @@ PYPORT
     fi
     # Start first, then authenticate/register/verify in both modes. Foreground
     # attaches below, so it does not skip the rest of setup.
-    nohup env ENVIRONMENT=local PYTHONPATH="$PYTHONPATH" python3 -m uvicorn src.app:app \
-      --app-dir "$REPO_ROOT/server" --host "$HOST" --port "$PORT" --workers 1 --timeout-keep-alive 120 \
-      >> "$REPO_ROOT/$LOG_FILE" 2>&1 < /dev/null &
-    CHILD_PID=$!
-    echo "$CHILD_PID" > "$PID_FILE"
+    if [ "$FOREGROUND" = "yes" ]; then
+      nohup env ENVIRONMENT=local PYTHONPATH="$PYTHONPATH" python3 -m uvicorn src.app:app \
+        --app-dir "$REPO_ROOT/server" --host "$HOST" --port "$PORT" --workers 1 --timeout-keep-alive 120 \
+        >> "$REPO_ROOT/$LOG_FILE" 2>&1 < /dev/null &
+      CHILD_PID=$!
+      echo "$CHILD_PID" > "$PID_FILE"
+    else
+      # Agent hosts can clean up a command's process group after it returns.
+      # A separate session survives that cleanup; nohup alone does not.
+      CHILD_PID="$(python3 - "$REPO_ROOT" "$HOST" "$PORT" "$LOG_FILE" "$PID_FILE" <<'PYSTART'
+import os, subprocess, sys
+from pathlib import Path
+root, host, port, log_file, pid_file = sys.argv[1:]
+with open(Path(root) / log_file, 'ab') as log:
+    child = subprocess.Popen(
+        [sys.executable, '-m', 'uvicorn', 'src.app:app', '--app-dir', str(Path(root) / 'server'),
+         '--host', host, '--port', port, '--workers', '1', '--timeout-keep-alive', '120'],
+        cwd=root, env=dict(os.environ, ENVIRONMENT='local'),
+        stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+Path(pid_file).write_text(str(child.pid) + '\n')
+print(child.pid)
+PYSTART
+)"
+    fi
     info "agent started (pid $CHILD_PID); logs: $LOG_FILE"
     if [ "$FOREGROUND" = "yes" ]; then
       cleanup() {

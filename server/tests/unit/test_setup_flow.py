@@ -383,6 +383,24 @@ def test_agent_install_loads_sage_and_calls_status_without_claude(checkout):
     assert cfg['API_KEYS'] not in outputs
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX command-group cleanup')
+def test_agent_survives_installing_command_process_group_cleanup(checkout):
+    repo, env = checkout
+    proc = subprocess.Popen(['bash', str(repo / 'scripts/setup.sh'), '--yes', '--no-mcp'],
+                            cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, start_new_session=True)
+    stdout, stderr = proc.communicate(timeout=25)
+    assert proc.returncode == 0, stdout + stderr
+    pid = int((repo / 'agent-data/bare.pid').read_text())
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    assert os.getsid(pid) == pid
+    cfg = json.loads((repo / 'server/src/config/local-config.json').read_text())
+    assert setup.check(cfg) == []  # Still reachable from a later command.
+
+
 @pytest.mark.parametrize('option', [None, '--yes'])
 def test_setup_does_not_open_chat_even_when_interactive(checkout, option):
     import pty
