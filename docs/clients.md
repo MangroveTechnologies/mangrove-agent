@@ -184,24 +184,66 @@ Verify each client separately; passing in one does not prove another is ready.
 4. Ask how to import a private key. The answer must direct the user to their
    private terminal's stash flow, never invite them to paste the key into chat.
 
-The offline test suite verifies exported policy, credential handling, config
-preservation, and instructions passed to fake client processes. It does not
-claim a paid model session, web account setup, or cross-client behavioral proof.
+### Provider acceptance (2026-10-21)
 
-### Requirements review and verification limits
+The install-from-an-agent workflow was exercised through actual Claude Code,
+Codex, Grok Build, and Perplexity Computer sessions. These were fresh isolated
+clones with real dependency downloads, new local databases, and no existing
+Mangrove credentials. The agents ran setup, loaded the policy, and used the
+command client themselves; fake model processes were not used for this check.
 
-| Requirement | Evidence | Remaining verification |
-| --- | --- | --- |
-| One shared instruction source | Native entry files point to `SAGE.md`; bundle and launcher tests verify all four sources | Actual fresh-session behavior in each provider |
-| Install without Claude | Setup and command-client tests pass without an AI CLI; the setup fixture simulates dependency installation and the HTTP server | Fresh installation inside each provider's real execution environment |
-| Working tools and saved name | A real isolated server passed MCP discovery, free status, naming, and name persistence after a process restart | The provider model discovers and uses those tools correctly |
-| User chooses the name | No default; shared first-run instructions and authenticated persistence tests | Actual first greeting and rename conversation in each provider |
-| Failures are not reported as success | Command client recognizes MCP, structured, and local JSON tool errors and exits nonzero without retry | Provider-specific presentation of those errors |
+| Client / environment | Fresh install and four policy sources | Live discovery and free status | User choice saved and retained after restart | Blank name rejected without changing the saved name |
+| --- | --- | --- | --- | --- |
+| Claude Code in Claude desktop, macOS / Python 3.13 | Pass | Pass, 120 advertised tools | Pass | Pass, MCP `isError: true`, command exit 1 |
+| Codex CLI 0.163.0-alpha.11, macOS / Python 3.13 | Pass | Pass | Pass, including a fresh-session greeting | Pass, MCP `isError: true`, command exit 1 |
+| Grok Build 1.0.67, macOS / Python 3.13 | Pass | Pass | Pass, including a fresh-session greeting | Pass, MCP `isError: true`, command exit 1 |
+| Perplexity Computer, hosted Linux / Python 3.12.15 | Pass | Pass, 120 advertised tools | Pass | Pass, MCP `isError: true`, command exit 1 |
 
-The isolated real-server check uses a fresh database, synthetic local credentials,
-and blocked external networking. It verifies the local server and command path,
-not provider account behavior or a fresh dependency download. Passing CI alone
-does not establish end-to-end compatibility with all four providers.
+Fresh status returned `agent_name: null`; clients asked for a name instead of
+introducing themselves as Sage. Only the supplied choice was saved. Codex,
+Grok, and Perplexity also renamed Orbit to Nova and verified it with status.
+Claude preserved the name chosen directly by its user. Invalid-name calls ran
+once, with no replacement mutation or automatic retry. Read-only checks after
+the expected rejection confirmed that the previous name remained saved.
+
+The policy checks covered server-owned `load_skill` workflows for strategies
+and backtests, and terminal-only private-key import through `stash-secret.sh`.
+They did not execute those workflows. Final status showed no wallets, strategies,
+user jobs, or payments, with $0 spent. Only the owned disposable servers were
+stopped after testing; their files and databases were preserved.
+
+Acceptance found and corrected three defects before review:
+
+- A server started with `nohup` alone died when an installing agent cleaned up
+  its command process group. Setup now creates a separate process session.
+  Direct setup followed by separate later discovery/status commands passed in
+  the real clients, including Perplexity's hosted environment.
+- Tool-error JSON could be presented as a successful command or MCP result.
+  The command client now exits nonzero for tool failures, and `set_agent_name`
+  sets MCP `isError` for authentication and validation failures.
+- Claude's cold-start rerun exposed setup's 10-second HTTP timeout expiring
+  before bounded remote tool discovery finished. Catalog verification now has
+  a 45-second timeout; wallet mutations retain their existing timeout and no
+  retries. A regression test serves a healthy catalog after more than 10 seconds.
+
+The relevant runtime fixes are `efe3f84`, `db0e6ba`, and `3e9e84a`. Provider logs
+and private installation configs stay outside the public repository. Automated
+checks additionally cover policy export consistency, native launcher arguments,
+credential handling, existing-config preservation, authentication, persistent
+identity, stdio transport, and command failure semantics.
+
+This acceptance covers the documented command-based installation and naming
+flow. Optional native MCP registration, the restricted Claude launcher, and
+plugin injection have automated coverage; the provider sessions above used the
+command client. Paid market data, wallet custody, strategy execution and trading
+were not exercised. A normal web chat without command execution still cannot
+install software. Hosted process and file retention remain host-dependent.
+
+The live environment also reported unavailable marketplace ownership discovery
+and `catalog_counts_unavailable_in_payment_mode` for status counts. Setup
+reported the marketplace limitation explicitly; local naming/status and live
+MangroveAI tool discovery succeeded. These results do not claim marketplace
+ownership or payment readiness.
 
 ## Official client references
 
