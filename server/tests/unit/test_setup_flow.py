@@ -438,6 +438,7 @@ def test_agent_survives_installing_command_process_group_cleanup(checkout):
     try:
         os.killpg(proc.pid, signal.SIGTERM)
     except ProcessLookupError:
+        # The installing command's group may already be gone after it exits.
         pass
     assert os.getsid(pid) == pid
     cfg = json.loads((repo / 'server/src/config/local-config.json').read_text())
