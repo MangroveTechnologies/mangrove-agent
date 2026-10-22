@@ -9,6 +9,8 @@
   "homepage": "https://mangrovedeveloper.ai",
   "repository": "https://github.com/MangroveTechnologies/mangrove-agent",
   "license": "MIT",
+  "privacyPolicyUrl": "https://mangrove.ai/privacy-policy/",
+  "termsOfServiceUrl": "https://mangrove.ai/terms-of-service/",
   "keywords": [
     "trading",
     "backtesting",

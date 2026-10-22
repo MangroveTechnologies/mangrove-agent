@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# preflight-swap.sh — PreToolUse hook for mcp__mangrove-agent__execute_swap.
+# preflight-swap.sh — PreToolUse hook for execute_swap. Matches the plugin-scoped
+# tool name (mcp__plugin_mangrove-agent_mangrove-agent__execute_swap) and the
+# bare name used by a git clone's project-scoped MCP server.
 #
 # Refuses the swap if the wallet holds zero of the input token on the target
 # chain. Catches the "did my deposit actually land?" case cleanly BEFORE
@@ -80,11 +82,16 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # shellcheck source=../../scripts/_agent_home.sh
 source "$REPO_ROOT/scripts/_agent_home.sh" 2>/dev/null || CONFIG_FILE="$REPO_ROOT/server/src/config/local-config.json"
 
-if [ ! -f "$CONFIG_FILE" ]; then
-    exit 0  # can't authenticate without config — fall through
-fi
+# Plugin install: Claude Code exports the user's mangrove_api_key option to hook
+# processes as CLAUDE_PLUGIN_OPTION_MANGROVE_API_KEY. Use it when present. The
+# config file is only the fallback for a git clone, which has no plugin options.
+API_KEY="${CLAUDE_PLUGIN_OPTION_MANGROVE_API_KEY:-}"
 
-API_KEY=$(python3 -c "
+if [ -z "$API_KEY" ]; then
+    if [ ! -f "${CONFIG_FILE:-}" ]; then
+        exit 0  # can't authenticate without config — fall through
+    fi
+    API_KEY=$(python3 -c "
 import json, sys
 try:
     raw = json.load(open(sys.argv[1])).get('API_KEYS', '')
@@ -92,6 +99,7 @@ except Exception:
     raw = ''
 print(next((k.strip() for k in raw.split(',') if k.strip()), ''))
 " "$CONFIG_FILE")
+fi
 
 if [ -z "$API_KEY" ]; then
     exit 0

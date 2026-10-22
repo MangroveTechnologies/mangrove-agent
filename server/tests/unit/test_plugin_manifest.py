@@ -100,3 +100,21 @@ def test_session_context_names_every_shipped_skill():
     text = (PLUGIN_DIR / 'session-context.md').read_text()
     for rel in _load('plugin.json')['skills']:
         assert f"`{Path(rel).name}`" in text
+
+
+def test_directory_listing_urls_are_https():
+    plugin = _load("plugin.json")
+    for key in ("privacyPolicyUrl", "termsOfServiceUrl"):
+        assert plugin[key].startswith("https://"), key
+
+
+def test_preflight_swap_hook_recognizes_the_bare_tool_name_too():
+    text = (ROOT / ".claude" / "hooks" / "preflight-swap.sh").read_text()
+    assert "mcp__mangrove-agent__execute_swap|" in text
+
+
+def test_plugin_launch_scripts_use_no_here_documents_or_npx():
+    for name in ("plugin-bootstrap.sh", "plugin-start-agent.sh"):
+        text = (ROOT / "scripts" / name).read_text()
+        assert "<<" not in text, name
+        assert "npx" not in text, name

@@ -37,11 +37,7 @@ fi
 CONTEXT="$ROOT/.claude-plugin/session-context.md"
 if [ -f "$CONTEXT" ]; then
   if [ -n "$PY" ]; then
-    "$PY" - "$CONTEXT" "$ROOT" "$AGENT_HOME" <<'PYEOF'
-import sys
-text = open(sys.argv[1]).read()
-print(text.replace("${CLAUDE_PLUGIN_ROOT}", sys.argv[2]).replace("${MANGROVE_AGENT_HOME}", sys.argv[3]))
-PYEOF
+    "$PY" "$ROOT/scripts/plugin_render_context.py" "$CONTEXT" "$ROOT" "$AGENT_HOME"
   else
     cat "$CONTEXT"
   fi
@@ -60,18 +56,7 @@ export CLAUDE_PLUGIN_OPTION_MANGROVE_API_KEY="$KEY"
 
 # /strategies requires the key (unlike /health, /status, /tools), so a 200 means
 # this agent accepts the plugin's key, not just that something holds the port.
-code="$("$PY" - "http://127.0.0.1:$PORT/api/v1/agent/strategies" "$KEY" <<'PYEOF'
-import sys, urllib.request, urllib.error
-req = urllib.request.Request(sys.argv[1], headers={"X-API-Key": sys.argv[2]})
-try:
-    with urllib.request.urlopen(req, timeout=3) as r:
-        print(r.status)
-except urllib.error.HTTPError as e:
-    print(e.code)
-except Exception:
-    print(0)
-PYEOF
-)"
+code="$("$PY" "$ROOT/scripts/plugin_http_status.py" "http://127.0.0.1:$PORT/api/v1/agent/strategies" "$KEY")"
 
 if [ "$code" = "200" ] && [ "$(cat "$STATE/agent.root" 2>/dev/null)" = "$ROOT" ]; then
   status "RUNNING at http://127.0.0.1:$PORT (state in $AGENT_HOME). MCP tools are available."
