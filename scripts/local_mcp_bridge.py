@@ -90,7 +90,8 @@ def serve(bridge: Bridge, source, target) -> int:
     return 0
 
 
-def command(bridge: Bridge, tool: str | None, arguments_file: str | None) -> int:
+def command(bridge: Bridge, tool: str | None, arguments_file: str | None, *,
+            names_only: bool = False, describe_tool: str | None = None) -> int:
     arguments = {}
     if arguments_file:
         if arguments_file == '-':
@@ -115,6 +116,25 @@ def command(bridge: Bridge, tool: str | None, arguments_file: str | None) -> int
         if tool:
             request.update(method='tools/call', params={'name': tool, 'arguments': arguments})
         response = bridge.forward(request)
+    if not failed(response) and (names_only or describe_tool is not None):
+        result = response.get('result', {})
+        catalog = result.get('tools')
+        if (not isinstance(catalog, list)
+                or any(not isinstance(item, dict) or not isinstance(item.get('name'), str)
+                       for item in catalog)):
+            raise SetupError('Agent returned an invalid MCP tool catalog.')
+        if describe_tool is not None:
+            tools = [item for item in catalog if item['name'] == describe_tool]
+            if not tools:
+                raise SetupError('That tool is not advertised by this agent. No tool was called.')
+        else:
+            tools = [{'name': item['name']} for item in catalog]
+        # Full schemas can dwarf the shared policy. Keep only requested context,
+        # retaining pagination metadata rather than pretending a page is complete.
+        selected = {'tools': tools}
+        if result.get('nextCursor') is not None:
+            selected['nextCursor'] = result['nextCursor']
+        response = dict(response, result=selected)
     print(json.dumps(response, ensure_ascii=True))
     return 1 if failed(response) else 0
 
@@ -146,17 +166,23 @@ def main() -> int:
                         help='Local agent configuration file; never pass a key as an argument.')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--list-tools', action='store_true', help='Print the live MCP tool catalog as JSON.')
+    mode.add_argument('--describe-tool', metavar='TOOL', help='Print one advertised tool with its full live schema.')
     mode.add_argument('--call', metavar='TOOL', help='Call an advertised MCP tool and print its JSON response.')
+    parser.add_argument('--names-only', action='store_true',
+                        help='With --list-tools, omit descriptions and schemas to conserve context.')
     parser.add_argument('--arguments-file', metavar='PATH',
                         help='JSON object for --call; use - to read from stdin. Defaults to {}.')
     args = parser.parse_args()
     if args.arguments_file and not args.call:
         parser.error('--arguments-file requires --call')
+    if args.names_only and not args.list_tools:
+        parser.error('--names-only requires --list-tools')
     try:
         render_context(ROOT)
         bridge = Bridge(read_config(args.config))
-        if args.list_tools or args.call:
-            return command(bridge, args.call, args.arguments_file)
+        if args.list_tools or args.describe_tool is not None or args.call:
+            return command(bridge, args.call, args.arguments_file,
+                           names_only=args.names_only, describe_tool=args.describe_tool)
         return serve(bridge, sys.stdin.buffer, sys.stdout)
     except SetupError as exc:
         print(str(exc), file=sys.stderr)

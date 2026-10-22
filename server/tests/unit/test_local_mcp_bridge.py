@@ -41,8 +41,10 @@ def local_agent():
                 result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}},
                           'serverInfo': {'name': 'mangrove-agent', 'version': 'synthetic'}}
             elif message['method'] == 'tools/list':
-                result = {'tools': [{'name': 'status', 'description': 'Free status',
-                                     'inputSchema': {'type': 'object'}}]}
+                result = behavior.get('catalog_result', {
+                    'tools': [{'name': 'status', 'description': 'Free status',
+                               'inputSchema': {'type': 'object'}}],
+                })
             else:
                 result = behavior.get('tool_result', {
                     'content': [{'type': 'text', 'text': '{"ready":true}'}], 'isError': False,
@@ -161,6 +163,42 @@ def test_command_client_accepts_stdin_json(tmp_path, local_agent):
                         input_text='{"detail":true}')
     assert result.returncode == 0, result.stderr
     assert requests[-1][2]['params']['arguments'] == {'detail': True}
+
+
+@pytest.mark.parametrize('describe', [False, True])
+def test_discovery_only_returns_the_context_requested(tmp_path, local_agent, describe):
+    url, requests, behavior = local_agent
+    tools = [{'name': f'tool_{index}', 'description': 'Detailed policy. ' * 100,
+              'inputSchema': {'type': 'object', 'properties': {'name': {'type': 'string'}}},
+              'annotations': {'readOnlyHint': True}} for index in range(100)]
+    behavior['catalog_result'] = {'tools': tools, 'nextCursor': 'next-page'}
+    options = ['--describe-tool', 'tool_42'] if describe else ['--list-tools', '--names-only']
+    result = run_bridge(tmp_path, url, [], options=options)
+    assert result.returncode == 0, result.stderr
+    catalog = json.loads(result.stdout)['result']
+    assert catalog['nextCursor'] == 'next-page'
+    assert catalog['tools'] == ([tools[42]] if describe else [{'name': t['name']} for t in tools])
+    assert len(result.stdout) < len(json.dumps(tools)) / 10
+    assert [r[2]['method'] for r in requests] == ['initialize', 'notifications/initialized', 'tools/list']
+    assert LOCAL_KEY not in result.stdout + result.stderr
+    assert UPSTREAM_KEY not in result.stdout + result.stderr
+
+
+def test_describing_an_unadvertised_tool_never_invokes_it(tmp_path, local_agent):
+    url, requests, _ = local_agent
+    result = run_bridge(tmp_path, url, [], options=['--describe-tool', 'missing'])
+    assert result.returncode == 1
+    assert 'not advertised' in result.stderr
+    assert result.stdout == ''
+    assert [r[2]['method'] for r in requests] == ['initialize', 'notifications/initialized', 'tools/list']
+
+
+def test_names_only_requires_discovery_before_network_access(tmp_path, local_agent):
+    url, requests, _ = local_agent
+    result = run_bridge(tmp_path, url, [], options=['--names-only'])
+    assert result.returncode != 0
+    assert '--names-only requires --list-tools' in result.stderr
+    assert requests == []
 
 
 @pytest.mark.parametrize('tool_result', [

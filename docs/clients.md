@@ -1,5 +1,8 @@
 # Mangrove agent across AI clients
 
+For human installation and everyday use, start with the [user guide](user-guide.md).
+This page describes the client adapters, instruction loading and verification.
+
 Every supported client receives the same project-wide agent instructions. The
 entry file varies by client; the shared policy does not. This setup does not
 change the machine owner's global assistant settings or copy personal identity
@@ -37,6 +40,52 @@ must follow `AGENTS.md` and read the referenced files. Hosts without filesystem
 access need the complete bundle injected or uploaded. A client that cannot load
 all mandatory sources must report that limitation before operating.
 
+## Context at session start
+
+The shared baseline is `SAGE.md` plus the three rule documents, kept complete
+and loaded once. Its generated export is about 30 KB of UTF-8 text. CI limits
+that baseline to 32 KiB to catch accidental growth; that is our repository
+budget, not a claim about a provider's token limit. Host prompts, global
+instructions, tool schemas, other plugins and chat history add their own cost.
+
+| Client path | Startup loading | Avoid duplicate context |
+| --- | --- | --- |
+| Claude Code repository session | `CLAUDE.md` imports `SAGE.md`; native `.claude/rules/` loading supplies the three rules | Read only missing sources; do not also load the generated bundle |
+| Claude installed plugin | SessionStart injects the complete generated policy plus plugin path/namespace adaptations | Do not reread rule files when the trading-bot skill is invoked; use one installation path |
+| Claude restricted chat | Launcher passes the complete policy with `--append-system-prompt-file`; built-in file tools are disabled | Do not request repository reads to load policy already injected |
+| Codex repository session | Native `AGENTS.md` discovery supplies the short pointer; the agent must read `SAGE.md` and any missing rules | A Markdown pointer is not an automatic import; a launcher file-existence check is not evidence that the model read it |
+| Grok Build repository session | Grok discovers both AGENTS/CLAUDE instruction families and compatible `.claude/rules/` files | Reuse sources already loaded by the host; read `SAGE.md` if missing; do not add a second private persona |
+| Perplexity Computer | The installing agent explicitly reads the complete `agent_context.py --stdout` output in its execution environment | Do not assume an AGENTS file, a Project attachment or a web link automatically injected the policy |
+
+The provider mechanisms above follow the official
+[Codex instruction guide](https://learn.chatgpt.com/docs/agent-configuration/agents-md),
+[Claude memory/import guide](https://code.claude.com/docs/en/memory), and
+[Grok project-rule guide](https://docs.x.ai/build/features/project-rules).
+Perplexity's explicit export step is this repository's tested workflow;
+[Computer guidance](https://enterprise-prod.perplexity.ai/enterprise/videos/computer-query-best-practices)
+also calls for supplying the relevant context. We do not rely on an undocumented
+universal file-import convention.
+
+Load task-specific local skills only when needed. Strategy and backtest skills
+remain server-owned and load through `load_skill` for that requested task.
+Keep the human README/tutorials, complete tool schemas, large datasets, logs
+and historical tool output out of the startup baseline. Native clients should
+use targeted tool search where supported; the command client has compact
+discovery and individual schema lookup below. Host tool systems can still
+advertise additional metadata; this repository cannot suppress it universally.
+
+After compaction, reconnecting, or starting a fresh client, restore any missing
+policy, refresh discovery and read free status. Recover names/state from the
+same installation; do not rely on a chat summary to establish current positions,
+approval or an uncertain mutation's outcome. Do not repeat a wallet, payment or
+trade action merely because its earlier result is no longer in context.
+Different provider accounts and independent clones do not synchronize databases.
+
+The instructions ask for deduplication; they cannot remove text a host already
+injected twice or control its compaction. Verify the active sources in the
+actual session. If a host truncates a bundle, it must load the missing source
+sections before operating rather than claim complete policy from a partial read.
+
 ## Install from an agent
 
 Claude Code, Codex, Grok Build, and Perplexity Computer can install this repository
@@ -64,7 +113,8 @@ code or configuration changed; an upgrade or restart needs a separate request.
 4. Discover and call the actual agent through the command client:
 
    ```bash
-   .venv/bin/python3 scripts/local_mcp_bridge.py --list-tools
+   .venv/bin/python3 scripts/local_mcp_bridge.py --list-tools --names-only
+   .venv/bin/python3 scripts/local_mcp_bridge.py --describe-tool status
    .venv/bin/python3 scripts/local_mcp_bridge.py --call status
    ```
 
@@ -76,7 +126,12 @@ Then use the saved `agent_name`, or ask the user to choose one if it is null.
 Save only the user's choice with `set_agent_name`; never assign a default.
 
 The command client uses the same MCP endpoint and tool schemas as native MCP
-clients. To supply tool arguments, write a JSON object to a local file and run:
+clients. `--names-only` returns advertised names without every full schema;
+`--describe-tool TOOL` returns that tool's full live description and schema
+before use. Bare `--list-tools` still returns the full catalog for diagnostics,
+but should not be dumped into the model on every request. These discovery
+options perform no tool mutation and preserve any pagination cursor.
+To supply tool arguments, write a JSON object to a local file and run:
 
 ```bash
 .venv/bin/python3 scripts/local_mcp_bridge.py --call TOOL --arguments-file arguments.json

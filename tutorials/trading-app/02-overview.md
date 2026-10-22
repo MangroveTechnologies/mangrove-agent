@@ -3,11 +3,11 @@
 *10 minutes. No funds required. Still no commands — this chapter is a
 map.*
 
-Now that you've got the Claude Code mental model, let's zoom out to
+Now that you've got the AI client mental model, let's zoom out to
 the bot itself. What's running, where, and who it talks to.
 
 The short version: most of it is on your laptop. What isn't lives at
-Mangrove (behind an API key), and on the public blockchain.
+Mangrove (through API-key access or x402 wallet payments), and on the public blockchain.
 
 ## The picture
 
@@ -15,7 +15,7 @@ Mangrove (behind an API key), and on the public blockchain.
 ┌────────────────────────────────────────────────────────────────────┐
 │  YOUR LAPTOP                                                       │
 │                                                                    │
-│  Claude Code ──┐                                                   │
+│  AI client   ──┐                                                   │
 │   (terminal)   │                                                   │
 │                │  MCP over HTTP (localhost:9080/mcp/)              │
 │                ▼                                                   │
@@ -28,7 +28,7 @@ Mangrove (behind an API key), and on the public blockchain.
 │  └────────────┬──────────────────────┬─────────────┘               │
 │               │                      │                             │
 │               │ API calls            │ signed tx                   │
-│               │ (with API key)       │                             │
+│               │ (API key/x402)       │                             │
 └───────────────┼──────────────────────┼─────────────────────────────┘
                 │                      │
                 ▼                      ▼
@@ -42,8 +42,9 @@ Mangrove (behind an API key), and on the public blockchain.
 └───────────────────────────┘   └──────────────────────────────────┘
 ```
 
-Everything below the laptop box is someone else's infrastructure.
-Everything inside the laptop box is yours.
+The diagram shows a laptop installation. In a hosted execution environment,
+the agent process and its files live on that host instead. Your AI provider
+account does not automatically share a database between installations.
 
 ## What runs on your laptop
 
@@ -56,7 +57,7 @@ four things:
 1. **Serves REST endpoints** under `/api/v1/agent/*` — you can curl
    these directly from a terminal if you want. There's also a free
    `/health` endpoint for "is it up?"
-2. **Serves MCP endpoints** under `/mcp/` — this is what Claude Code
+2. **Serves MCP endpoints** under `/mcp/` — this is what your AI client
    talks to for the trading tools (100+ as of 2026-07; run
    `list_tools` for the live catalog). Everything the REST API
    exposes, the MCP tools expose too, and vice versa. They share
@@ -241,18 +242,11 @@ Things this bot can do now:
 - Paper and live trading modes.
 - Up to a few strategies running simultaneously (start with one).
 
-Things this bot **cannot** do in v1:
-
-- Trade on centralized exchanges (Binance, Coinbase, etc.).
-- Trade XRPL, Solana, or other non-EVM chains.
-- Sub-5m timeframes.
-- Limit orders, stop-losses, or any order type beyond market swaps.
-- Cross-strategy portfolio rebalancing.
-- Run headless in the cloud (it's local-first; Claude Code needs to
-  be able to talk to the MCP server).
-
-These are scope decisions for v1, not permanent limits. The roadmap
-evolves.
+Capabilities change with the live catalog. Current venue setup includes Kraken
+and Robinhood as well as DEX execution; follow the relevant client skill.
+Do not use an old static tool count or capability list as proof of access.
+Hosted execution is possible, but unattended schedules need a persistent server
+and durable storage, not just an open chat.
 
 ## What to take away
 

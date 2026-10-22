@@ -96,7 +96,7 @@ characters prefixed with `0x`. **Save it now**:
 
 **DO NOT**:
 
-- Paste it into Claude Code chat (the hook will block you anyway).
+- Paste it into any AI chat. Claude's configured hook is an extra check, not a guarantee in every client.
 - Email it to yourself.
 - Save it in a note on the same laptop without encryption.
 - Screenshot it.

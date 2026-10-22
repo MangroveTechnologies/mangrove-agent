@@ -7,15 +7,16 @@ paper-trading, and (if you choose) executing real swaps with real funds
 on Base.
 
 The whole path is designed so you can stop at any chapter and still
-have something useful. Chapters 01–05 are **fund-free** — you never
-have to put real money on the line. Chapters 06–08 add wallet setup,
+have something useful. Chapters 01-05 avoid live trading capital. API calls
+can still consume your API-key allowance or require x402 wallet payments,
+including during backtests and paper mode. Chapters 06–08 add wallet setup,
 funding, and live trading, and are entirely optional.
 
 ## What you'll end up with
 
 ```
 A trading bot that:
-  - Runs locally on your machine (not in the cloud)
+  - Runs in your chosen local or persistent hosted environment
   - Holds its own keys, encrypted with a local master key
   - Authors strategies using Mangrove's knowledge base of signals
   - Backtests them against historical data
@@ -24,34 +25,35 @@ A trading bot that:
   - Logs every evaluation + trade for audit
 ```
 
-You drive it by chatting with Claude Code in your terminal. Under the
-hood, Claude Code talks to a local FastAPI server (the "mangrove-agent")
-via MCP. The agent talks to Mangrove's hosted API for signals,
+You drive it through Claude Code, Codex, Grok Build or Perplexity Computer.
+Start with the [user guide](../../docs/user-guide.md) for installation and naming.
+Your client talks to a FastAPI server (the "mangrove-agent") via MCP, either
+through a native connection or the provided command client. The agent talks to Mangrove's hosted API for signals,
 strategy logic, and market data.
 
 ## Chapters
 
 | # | Title | Funds needed? | Reading time |
 |---|---|---|---|
-| 01 | [Claude Code + AI safety](01-claude-code-and-ai-safety.md) | no | 15 min |
+| 01 | [AI clients + safety](01-claude-code-and-ai-safety.md) | no | 15 min |
 | 02 | [What you have](02-overview.md) | no | 10 min |
 | 03 | [Setup](03-setup.md) | no | 10 min |
-| 04 | [Your first strategy](04-your-first-strategy.md) | no | 25 min |
-| 05 | [Paper mode](05-paper-mode.md) | no | 15 min |
+| 04 | [Your first strategy](04-your-first-strategy.md) | API access; no live capital | 25 min |
+| 05 | [Paper mode](05-paper-mode.md) | API access; no live capital | 15 min |
 | 06 | [Wallet setup](06-wallet-setup.md) | yes (~$5 USDC) | 15 min |
 | 07 | [Going live](07-going-live.md) | yes | 20 min |
 | 08 | [Monitor, troubleshoot, extend](08-monitor-troubleshoot-extend.md) | no | 20 min |
-| 09 | [Score strategies with SIEVE before backtesting](09-oracle-strategies.md) | no | 20 min |
+| 09 | [Score strategies with SIEVE before backtesting](09-oracle-strategies.md) | API access; no live capital | 20 min |
 
 This is self-paced — take it in whatever chunks work for you.
 Chapters 01–05 fit comfortably in an afternoon.
 
 ## Before you start
 
-See [`SETUP.md`](../../SETUP.md) for the prerequisites: VSCode,
-Python 3.11, Claude Code CLI, a Mangrove API key (free at
-https://mangrovedeveloper.ai), and (if you're on Windows) Git Bash.
-If you set up with SETUP.md, everything on that list is already done.
+Use a command-capable AI client, or install Git, Python 3.11+ and a
+bash-compatible shell for manual setup. Claude, an editor and a MangroveAI
+API key are optional. The [user guide](../../docs/user-guide.md) explains the
+choices; [`SETUP.md`](../../SETUP.md) has manual prerequisite instructions.
 
 ## A note on safety
 

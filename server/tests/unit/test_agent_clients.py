@@ -24,6 +24,9 @@ def test_bundle_is_current_and_contains_only_reviewed_policy_sources():
     assert text.count('## SOURCE: ') == len(context.SOURCES)
     assert '/Users/' not in text
     assert text.isascii()
+    # Budget for our complete baseline only, excluding host prompts/tool schemas.
+    # Keep safety sources complete; move task references out of startup context.
+    assert len(text.encode('utf-8')) <= 32 * 1024
 
 
 def test_bundle_check_detects_policy_drift(tmp_path):

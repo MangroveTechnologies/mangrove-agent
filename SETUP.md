@@ -1,26 +1,32 @@
 # Setup Guide
 
-**Installing through Claude, Codex, Grok, or Perplexity?** Use the
-[AI client installation workflow](docs/clients.md#install-from-an-agent).
-The walkthrough below is the optional Claude Code desktop setup.
+**Start with the [human user guide](docs/user-guide.md)** for Claude Code,
+Codex, Grok Build or Perplexity Computer. It covers installation, naming,
+returning sessions and switching clients. The [AI client workflow](docs/clients.md#install-from-an-agent)
+is the technical reference for the installing agent.
+
+The longer walkthrough below uses **optional Claude Code terminal setup** as
+its example. Claude, Node.js and a Claude subscription are not prerequisites
+for the Python agent when using a different client. A MangroveAI API key is
+optional with setup.sh; a fresh `--yes` installation defers wallet payments.
 
 Get from zero to a running trading agent. Every step has Mac and Windows instructions. Every command has a verification step so you know it worked before moving on.
 
 **What you will end up with:**
 - A local trading agent running at `http://localhost:9080`
-- Claude Code connected to it with 100+ trading tools (run `list_tools` for the live catalog)
+- Your selected client connected to the live tool catalog (availability varies with upstream services)
 - Local tools ready for onboarding; paid data/backtests require an API key or completed payment setup
 
 ---
 
 **Jump to:**
-- [Quick Install](#quick-install-recommended) — fresh machine, installs everything in one command
+- [Optional Claude installer](#optional-claude-machine-installer) - installs the Claude-specific toolchain
 - [Coming back](#already-set-up-and-coming-back) — already installed, just need to re-run setup
 - [Manual steps](#before-you-start--what-you-need) — step-by-step if the script fails or you prefer doing it yourself
 
 ---
 
-## Quick Install (recommended)
+## Optional Claude machine installer
 
 For the API-key/x402 choice described here, install the prerequisites below, clone
 the repository, and run `./scripts/setup.sh` (Step 8). The older machine installers
@@ -46,7 +52,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/Man
 
 ## Already set up and coming back?
 
-Everything is already installed — you just need to restart the agent server. This happens after a reboot, waking your laptop, or coming back the next day.
+First check whether the existing server is still running. Switching clients or returning the next day does not itself require a restart. If the server stopped after a reboot, start it from the existing checkout:
 
 Open your terminal (Mac) or Git Bash (Windows) and run:
 
@@ -57,7 +63,7 @@ cd ~/Desktop/mangrove-agent
 
 > If you cloned the repo somewhere other than the Desktop, replace `~/Desktop/mangrove-agent` with the correct path.
 
-Once it finishes, run `claude` from the same folder to start a session.
+Once it finishes, follow [returning or switching clients](docs/user-guide.md#come-back-or-switch-clients). The saved name and records come from the same installation. Claude users can start `./scripts/chat.sh`.
 
 ---
 
@@ -69,9 +75,9 @@ Here is how all the pieces fit together: **Claude Code** is an AI assistant that
 |---|---|---|
 | **Git** | Downloads the repo. On Windows it also installs Git Bash, the terminal you will use. | Yes |
 | **Python 3.11+** | The trading agent is built in Python. Versions older than 3.11 will not work. | Yes |
-| **Node.js 18+** | Required by the Claude Code CLI to run. | Yes |
-| **Claude Code CLI** | The AI chat interface you use to talk to the agent. | Yes |
-| **Claude Pro subscription** | Claude Code requires a paid Claude plan (Pro, Max, Team, or Enterprise). | Yes |
+| **Node.js** | Needed for the npm-based Claude installation shown below. Use the version supported by that client. | Only for this installation method |
+| **Claude Code CLI** | The AI chat interface used in this optional walkthrough. Other supported clients work too. | Only for the Claude path |
+| **AI provider access** | Sign in using your chosen client's supported account or credential flow. | For your chosen client |
 | **VS Code** | Recommended editor with a built-in terminal. Not strictly required but makes everything easier. | Recommended |
 | **Mangrove API key** | Alternative to x402 wallet payments for MangroveAI access. | Optional with setup.sh |
 
@@ -467,21 +473,28 @@ Expected:
 mangrove-agent: http://localhost:9080/mcp/ (HTTP) - ✓ Connected
 ```
 
-### Start a Claude Code session
+### Start your chosen AI client
+
+Follow the [user guide](docs/user-guide.md#come-back-or-switch-clients).
+For the optional restricted Claude session:
 
 ```bash
-claude
+./scripts/chat.sh
 ```
 
-Wait 10–20 seconds. The agent should run a **platform tour automatically** — five live tool calls (status, list_tools, market data, KB search, reference strategies) followed by an offer to build a strategy. This is your signal that everything is wired correctly.
+The client loads shared instructions, discovers tools and calls free status.
+If `agent_name` is unset, it asks what you want to name your agent and saves
+only your choice. Returning sessions use the saved name. Startup does not
+require a paid market-data tour, a wallet, a backtest or a scheduled strategy.
 
-**If you see the tour → setup is complete. You are ready.**
+**Success means a real status call passed, with all shared policy loaded.**
+Saved connection settings or an automatic greeting alone are not proof.
 
 ---
 
 ## You are all set
 
-If you made it this far and the tour fired, everything is working — the server is running, Claude Code is connected, and all the trading tools are loaded (run `list_tools` for the live catalog).
+If free status succeeded, the local connection works. Remote capabilities depend on the tools actually advertised; an upstream outage must be reported separately. Your agent should use the name you chose.
 
 Here is what you can do right now:
 
@@ -490,7 +503,7 @@ Here is what you can do right now:
 - **Explore the tools** — ask "What tools do you have?" and the agent will walk you through everything available.
 - **Go live when ready** — when you want to trade with real funds, follow `tutorials/trading-app/06-wallet-setup.md` for the wallet setup flow.
 
-The full step-by-step tutorial lives in `tutorials/trading-app/` — 8 chapters from orientation through live trading. Start with `00-index.md` for an overview.
+The full step-by-step tutorial lives in `tutorials/trading-app/` - chapters from orientation through live trading. Start with `00-index.md` for an overview.
 
 ---
 
@@ -571,26 +584,25 @@ taskkill /PID <pid> /F
 
 Then rerun `./scripts/setup.sh`
 
-### `claude mcp list` shows "Failed to connect"
+### Claude's saved connection fails
 
-The agent's address is registered incorrectly with Claude Code. These commands remove the bad registration and add the correct one:
+From the existing checkout, verify local authentication and refresh the saved
+Claude registration without copying a credential into commands:
 
 ```bash
-claude mcp remove mangrove-agent
-KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
-claude mcp add -s local -t http mangrove-agent http://localhost:9080/mcp/ \
-  --header "X-API-Key: $KEY"
+./scripts/setup-mcp.sh
 ```
 
-Then close and reopen Claude Code.
+Reconnect Claude from `/mcp`. This does not start a stopped server. Other clients
+use [their connection instructions](docs/clients.md); do not add a second server
+or delete data to repair a client connection.
 
-### The tour didn't fire when I ran `claude`
+### The first greeting did not check status or ask for a name
 
-Three possible causes:
-
-1. **MCP not connected** — run `claude mcp list`. If it shows "Failed to connect", fix the registration (see above).
-2. **Already onboarded** — the tour only runs once. If you have run `claude` here before, it is suppressed. To reset it, run `rm .claude/.onboarded` then restart Claude Code.
-3. **Wrong directory** — Claude Code only connects to the agent when you are inside the `mangrove-agent` folder. Make sure you ran `cd ~/Desktop/mangrove-agent` first.
+Ask the client to load the shared instructions and read free status. An unset
+name should prompt for your choice; a saved name should be reused. There is no
+onboarding marker to delete and no paid tour required. If status fails, inspect
+the connection rather than treating a greeting as proof that tools work.
 
 ### Setup fails: "agent-data/ exists but is not writable"
 
@@ -617,21 +629,10 @@ A `.pth` file runs code on *every* Python startup, so AppMap auto-initializes fo
 mv "$(python3 -c "import site,glob,os;print(next(p for sp in site.getsitepackages() for p in glob.glob(os.path.join(sp,'appmap.pth'))))")"{,.disabled}
 ```
 
-### Nuclear reset — wipe everything and start over
+### Keep state while troubleshooting
 
-Use this only if nothing else works. It deletes all your strategies and trades and returns the agent to a clean state. Run these commands one at a time:
-
-```bash
-# 1. Stop the running agent
-kill $(cat agent-data/bare.pid) 2>/dev/null
-
-# 2. Delete the local data folder (strategies, trades, logs — this cannot be undone)
-rm -rf agent-data/
-
-# 3. Remove the Claude Code registration
-claude mcp remove mangrove-agent 2>/dev/null
-
-# 4. Run setup again from scratch
-./scripts/setup.sh
-```
-
+Do not delete `agent-data/` to fix setup or a chat connection. It contains the
+saved name, trading history and potentially wallet material. Preserve the
+config, database and key storage before any explicitly requested recovery.
+Use the server log and the exact failing check to diagnose the problem. A
+missing upstream tool is different from a stopped local server.

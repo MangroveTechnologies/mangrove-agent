@@ -405,7 +405,8 @@ else
   CLIENT_PY="$PY"
   if [ "$MODE" = "bare" ]; then CLIENT_PY=".venv/bin/python3"; fi
   printf '  %q scripts/agent_context.py --stdout\n' "$CLIENT_PY"
-  printf '  %q scripts/local_mcp_bridge.py --list-tools\n' "$CLIENT_PY"
+  printf '  %q scripts/local_mcp_bridge.py --list-tools --names-only\n' "$CLIENT_PY"
+  printf '  %q scripts/local_mcp_bridge.py --describe-tool status\n' "$CLIENT_PY"
   printf '  %q scripts/local_mcp_bridge.py --call status\n' "$CLIENT_PY"
 fi
 GUIDE_ARGS=(guide)

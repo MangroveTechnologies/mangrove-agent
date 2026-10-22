@@ -49,6 +49,9 @@ Full platform documentation and the trading knowledge base live at **https://man
 
 ## Use Mangrove agent with your AI client
 
+Start with the [user guide](docs/user-guide.md) for installation, choosing a name,
+coming back later, and switching clients.
+
 Tell **Claude Code, Codex, Grok Build, or Perplexity Computer**:
 
 > Install https://github.com/MangroveTechnologies/mangrove-agent and follow its AI client installation instructions.
@@ -73,7 +76,7 @@ separately for each client.
 
 Clone the repository and run `./scripts/setup.sh`. Choose an existing MangroveAI
 API key or wallet payments (x402, no signup). The script protects local access,
-starts the agent and registers Claude. For x402, a final menu prints wallet steps
+starts the agent and registers Claude when its CLI is available. For x402, a final menu prints wallet steps
 for you to run yourself; it never automatically creates/imports a wallet or pays.
 See [the complete setup and wallet flow](docs/setup-x402.md).
 
@@ -101,11 +104,11 @@ Want to change the code? Clone the repo instead (below). Both paths run the same
 
 This repo is **your own trading agent**: you run it on your machine, your keys never leave it, and it's the reference consumer of the [Mangrove API](https://mangrovedeveloper.ai) — clone it, make it yours, extend it into your own trading system.
 
-1. **Get a Mangrove API key** — free at https://mangrovedeveloper.ai.
-2. **Follow [`SETUP.md`](SETUP.md)** — installs Git, Python, Node.js, and Claude Code in order (Mac and Windows), clones the repo, and gets the agent running. The setup script prompts for your API key.
-3. **Take the guided walkthrough** at [`tutorials/trading-app/`](tutorials/trading-app/00-index.md) — 8 self-paced chapters from "I just cloned this" to "I have a paper strategy running" to (optionally) "I made a live swap."
+1. **Choose your AI client** in the [user guide](docs/user-guide.md). Claude Code, Codex, Grok Build and Perplexity Computer support installation. A MangroveAI API key is optional; a fresh unattended setup defers wallet payments until you configure them.
+2. **Follow [`SETUP.md`](SETUP.md)** for manual prerequisites and setup. Its longer Claude walkthrough is optional; other clients do not need Claude or Node.js for the Python agent.
+3. **Take the guided walkthrough** at [`tutorials/trading-app/`](tutorials/trading-app/00-index.md) - self-paced chapters from "I just cloned this" to "I have a paper strategy running" to (optionally) "I made a live swap."
 
-Chapters 01–05 are **fund-free** — author, backtest, and paper-trade with zero on-chain exposure. Chapters 06–08 are optional and need a small amount of USDC.
+Chapters 01-05 avoid live trading capital. Paid API calls can still consume an API-key allowance or require x402 payments, including in paper mode. Chapters 06-08 cover optional live trading.
 
 Already know your way around? Keep reading — the rest of this README is a reference.
 
@@ -134,7 +137,7 @@ Base or XRPL wallet. Payment settlement is a separate integration.
 
 | Tool | Install | Why |
 |---|---|---|
-| **VSCode** | https://code.visualstudio.com/download | Universal editor + integrated terminal that works the same on macOS / Linux / Windows. Every instruction below assumes you open the repo in VSCode and use its built-in terminal (``Ctrl/Cmd+` ``). |
+| **VSCode** (optional) | https://code.visualstudio.com/download | Editor with an integrated terminal. Your existing terminal or AI client's execution environment also works. |
 | **Python 3.11+** | https://www.python.org/downloads/ | The agent is a Python FastAPI process. 3.11 is the minimum. |
 | **Git for Windows** (Windows only) | https://git-scm.com/download/win | Gives you Git Bash, so the `*.sh` scripts in this repo work identically to macOS / Linux. Set VSCode's default terminal to `Git Bash` via the command palette. |
 | **AI client** | [Claude, Codex, Grok, or Perplexity setup](docs/clients.md) | A client with command execution or MCP access. Claude Code is optional. |
@@ -154,14 +157,14 @@ cd mangrove-agent
 ./scripts/setup.sh
 ```
 
-First run takes ~60s (pip install + health wait). Re-runs are idempotent — it detects what's already done and skips.
+First run can take a few minutes for dependencies and network discovery. Re-runs preserve configuration and local state; they can restart the server after code or configuration changes. Connecting another client to an already running agent does not require rerunning setup.
 
 When it's finished:
 - Agent runs at `http://localhost:9080` (pid in `agent-data/bare.pid`, logs in `agent-data/bare.log`). We bind 9080 externally because `:8080` is commonly squatted by VSCode Helper and other dev tools.
-- `./scripts/verify_quickstart.sh --bare` passed → the tool catalog returned the expected set.
-- Claude Code's MCP registration now knows about `mangrove-agent`.
+- `./scripts/verify_quickstart.sh --bare` passed: local authentication and required local tools were checked. Unavailable remote tools are reported separately.
+- Claude registration is saved when available and not skipped; other clients use the command client or their own MCP connection.
 
-**After setup, start Claude separately with `./scripts/chat.sh`.** The session has shell/file tools disabled and uses only Mangrove MCP. See [restricted chat](docs/restricted-chat.md); bare `claude` remains available for development. In x402 mode, complete the printed payment-wallet instructions before requesting paid data or backtests. API-key users can paper-trade without a payment wallet. Simulated trades do not make upstream API calls free.
+**After setup, continue with your chosen client** using the [user guide](docs/user-guide.md#come-back-or-switch-clients). Claude users can start `./scripts/chat.sh` for a session with shell/file tools disabled and only Mangrove MCP; see [restricted chat](docs/restricted-chat.md). In x402 mode, complete the printed payment-wallet instructions before requesting paid data or backtests. API-key users can paper-trade without a payment wallet. Simulated trades do not make upstream API calls free.
 
 ### Useful `./scripts/setup.sh` flags
 
@@ -198,7 +201,7 @@ State is persisted in the `./agent-data/` directory (bind-mounted into the conta
 
 This section is a fast tour. The full walkthrough is in [`tutorials/trading-app/`](tutorials/trading-app/00-index.md); come back here if you want the shorter reference.
 
-**Stage 0 — platform tour.** Start Claude Code in the repo directory. The agent runs status, list_tools, get_market_data and kb_search, and offers to help you build a strategy. No wallet needed yet.
+**First connection.** Your chosen client loads the shared policy, discovers tools and calls free status. If the installation has no saved name, it asks you to choose one. Startup does not automatically fetch paid market data, run backtests or configure wallets. Ask for a tour when you want one; paid examples need the appropriate access first.
 
 **Paper trading (payment wallet needed for paid API calls in x402 mode).**
 
@@ -255,7 +258,9 @@ The agent has two kinds of tools. Run `list_tools` for the live, authoritative c
 
 | Category | Tools |
 |---|---|
-| Discovery (free) | `status`, `list_tools`, `hello_mangrove` (x402 demo) |
+| Discovery (free) | `status`, `list_tools` |
+| Naming (local, authenticated) | `set_agent_name` |
+| Payment demo | `hello_mangrove` (x402) |
 | Wallets & portfolio | `create_wallet`, `import_wallet`, `list_wallets`, `get_balances`, `portfolio_value`, `portfolio_pnl`, `portfolio_tokens`, `portfolio_defi`, `portfolio_history` |
 | Kraken (CEX) | `cex_status`, `cex_connect_kraken`, `cex_balances`, `cex_validate_order`, `cex_sync_fills` |
 | DEX (1inch) | `list_dex_venues`, `get_swap_quote`, `execute_swap`, `get_tx_status`, `get_spot_price`, `get_gas_price`, `get_token_search`, `get_allowances`, `get_token_info`, `get_dex_chart` |

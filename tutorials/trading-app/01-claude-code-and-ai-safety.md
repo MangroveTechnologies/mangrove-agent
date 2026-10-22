@@ -1,7 +1,12 @@
-# Chapter 01 — Claude Code + AI safety
+# Chapter 01 - AI clients + safety
 
 *15 minutes. No funds required. No commands to run — this chapter is
 orientation.*
+
+Claude Code, Codex, Grok Build and Perplexity Computer can drive this agent.
+The Claude terminal controls below are examples; other clients have their own
+interfaces and do not automatically inherit Claude hooks. Read the
+[user guide](../../docs/user-guide.md) for your client.
 
 Before you touch the trading bot, it's worth understanding two things:
 
@@ -37,15 +42,13 @@ you can refer back to anything.
 
 Open `.claude/` in this repo and you'll see three subdirectories:
 
-- **`skills/`** — step-by-step playbooks the agent can invoke. When
-  you say "I want to create a strategy," the agent loads
-  `.claude/skills/create-strategy/SKILL.md` and follows it. Skills
-  are deterministic recipes.
-- **`rules/`** — global guardrails the agent reads at session start.
-  `.claude/rules/trading-bot-workflow.md` is why the bot always
-  tries strategies first and treats manual swaps as a fallback.
-  `.claude/rules/wallet-presentation.md` is why it never echoes your
-  private key back at you.
+- **`skills/`** - local playbooks for custody and venue setup, loaded only
+  when relevant. Strategy and backtest workflows come from the live server's
+  `load_skill`, not a local create-strategy file or a remembered recipe.
+- **`rules/`** - shared guardrails loaded once with `SAGE.md` at session start.
+  They cover server workflow discovery, wallet handling and risk controls.
+  Codex and other clients read the same sources; the directory name does not
+  make them Claude-only policy.
 - **`hooks/`** — scripts that intercept Claude Code's inputs and
   outputs. `.claude/hooks/block-wallet-secrets.sh` scans every
   message you send for private-key patterns and blocks the submit
@@ -91,6 +94,11 @@ Two commands worth learning now:
   Use this when the session is getting long (thousands of lines) and
   the bot is starting to forget things.
 
+After compaction or a new conversation, restore any missing shared policy
+and check free status before operating. Avoid loading every full tool schema;
+use targeted tool search or compact command discovery as described in the
+[context reference](../../docs/clients.md#context-at-session-start).
+
 Neither affects your trading bot's state — strategies, trades, and
 wallets live in the local database, not the conversation. You can
 `/clear` and everything you've built is still there.
@@ -99,8 +107,8 @@ wallets live in the local database, not the conversation. You can
 
 New users repeatedly make the same three mistakes, and each one
 costs money or leaks secrets.
-We rebuilt the system so those mistakes are structurally impossible,
-not just "please don't" conventions. You should know what they are
+The server enforces signing and backup gates. Claude's configured hooks add
+client-side checks; other clients do not automatically enforce those hooks. You should know what they are
 because the bot's refusals will sometimes feel annoying, and the
 annoyance is the feature.
 
