@@ -71,19 +71,7 @@ fi
 [ -n "$KEY" ] || die "no MangroveAI API key configured (plugin option mangrove_api_key)"
 
 http_code() {  # http_code <url> [api-key]
-  "$PY" - "$@" <<'PYEOF'
-import sys, urllib.request, urllib.error
-req = urllib.request.Request(sys.argv[1])
-if len(sys.argv) > 2:
-    req.add_header("X-API-Key", sys.argv[2])
-try:
-    with urllib.request.urlopen(req, timeout=3) as r:
-        print(r.status)
-except urllib.error.HTTPError as e:
-    print(e.code)
-except Exception:
-    print(0)
-PYEOF
+  "$PY" "$ROOT/scripts/plugin_http_status.py" "$@"
 }
 # /health, /status and /tools are unauthenticated, so they can't tell our agent
 # from another one on the port. /strategies requires the key and reads only the
@@ -103,26 +91,7 @@ if [ ! -x "$VENV/bin/python" ] || [ "$(cat "$VENV/.lock-sha256" 2>/dev/null || t
 fi
 
 # -- 2. config -----------------------------------------------------------------
-"$VENV/bin/python" - "$ROOT/server/src/config/local-example-config.json" "$CFG" "$KEY" "$PORT" "$MARKETS_URL_DEFAULT" <<'PYEOF'
-import json, os, sys
-example, cfg_path, key, port, markets_default = sys.argv[1:6]
-cfg = json.load(open(cfg_path)) if os.path.exists(cfg_path) else json.load(open(example))
-cfg["MANGROVE_API_KEY"] = key
-# The plugin's MCP entry authenticates with the MangroveAI key, and this agent
-# binds 127.0.0.1 only. Never keep the example's shared default key.
-cfg["API_KEYS"] = key
-if cfg.get("MANGROVEMARKETS_BASE_URL") in (None, "", "http://localhost:9081"):
-    cfg["MANGROVEMARKETS_BASE_URL"] = markets_default
-cfg["LOCAL_AGENT_URL"] = f"http://127.0.0.1:{port}"
-cfg["DB_PATH"] = "./agent-data/agent.db"
-cfg["MASTER_KEY_PATH"] = "./agent-data/master.key"
-tmp = cfg_path + ".tmp"
-fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, "w") as f:
-    json.dump(cfg, f, indent=2)
-    f.write("\n")
-os.replace(tmp, cfg_path)
-PYEOF
+"$VENV/bin/python" "$ROOT/scripts/plugin_seed_config.py" "$ROOT/server/src/config/local-example-config.json" "$CFG" "$KEY" "$PORT" "$MARKETS_URL_DEFAULT"
 chmod 600 "$CFG"
 
 # -- 3. (re)start ----------------------------------------------------------------
