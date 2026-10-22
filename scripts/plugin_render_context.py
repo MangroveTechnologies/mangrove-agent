@@ -5,5 +5,6 @@ Called by plugin-bootstrap.sh (SessionStart hook).
 """
 import sys
 
-text = open(sys.argv[1]).read()
+with open(sys.argv[1]) as f:
+    text = f.read()
 print(text.replace("${CLAUDE_PLUGIN_ROOT}", sys.argv[2]).replace("${MANGROVE_AGENT_HOME}", sys.argv[3]))
