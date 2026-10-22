@@ -112,6 +112,14 @@ reconnect, it must restore any missing policy and check current status before
 operating. Your name and trading records come from the installation, not from
 an old chat summary. See [what each client loads](clients.md#context-at-session-start).
 
+For managed tools, ask for names and descriptions across all services or one
+functional area, then request full schemas for the areas or individual tools you
+need. You can select one tool or any number. MangroveAI provides this progressive
+discovery through `discover_tools`; the agent forwards the request. See the
+[discovery examples](clients.md#progressive-discovery-of-managed-services).
+If that service is not yet available on your configured server, the client must
+report the limitation and use the host's available tool search.
+
 ## If something is unavailable
 
 - **Local status fails:** the connection is not verified. Keep the checkout and
