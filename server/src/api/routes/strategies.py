@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
 from src.services import strategy_service
