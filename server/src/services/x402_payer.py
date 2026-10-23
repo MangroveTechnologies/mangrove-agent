@@ -372,10 +372,11 @@ class _PaymentSession:
 
     async def call_tool(self, *, name, arguments, meta=None):
         if meta is not None:
-            import secrets
             oid = payment_operations.current_operation.get()
+            identity = payment_operations.identity_headers(oid)
             meta = {**meta, "mangrove/payment": {
-                "operation_id": oid, "recovery_token": secrets.token_urlsafe(32),
+                "operation_id": oid, "action_id": identity['X-Payment-Action-Id'],
+                "recovery_token": identity['X-Payment-Recovery-Token'],
             }}
             payment_operations.save_headers(oid, {
                 "transport": "mcp", "idempotency": self.idempotency, "meta": meta,
@@ -387,6 +388,8 @@ class _PaymentSession:
                 },
             })
         result = await self.session.call_tool(name=name, arguments=arguments, **({"meta": meta} if meta else {}))
+        if meta is not None:
+            payment_operations.record_replacement_permission(oid, (result.meta or {}).get('mangrove/payment', {}).get('replacement_allowed') is True)
         if meta is None:
             recovery = (result.meta or {}).get("mangrove/payment", {})
             self.idempotency = recovery.get("idempotency") if isinstance(recovery, dict) else None

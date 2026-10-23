@@ -167,9 +167,18 @@ available and `/api/v1/agent/tools` reports `mangroveai_status: unavailable`.
 Remote calls fail explicitly, without a stale catalogue or SDK fallback. After
 server changes, reconnect the MCP client to refresh its own cached tool list.
 
-Local strategy orchestration and execution-history tools use the `agent_` prefix
-(e.g. `agent_list_strategies`). Their IDs and state belong to the local agent.
+Local execution-history tools use the `agent_` prefix
+(e.g. paper schedule controls). Schedule IDs belong to the local agent; strategy, trade and evaluation history comes from MangroveAI.
 MangroveAI's names remain unchanged, avoiding ambiguity between local and server
 strategy IDs. Existing REST execution routes and the scheduler remain intact.
 Some previously exposed wrappers may not have a counterpart in the configured
 server's current catalogue; the agent no longer invents those capabilities.
+
+Saved strategies are listed and read through MangroveAI MCP `list_strategies` and
+`get_strategy`. Local strategy list/get tools and REST routes are not exposed.
+Local execution, scheduling and history remain separate from saved-strategy reads.
+
+Local status/evaluation MCP tools are removed, including direct invocation and
+pricing bindings. Server strategy tools are discovered and forwarded unchanged.
+Local execution REST endpoints, scheduler callbacks and risk controls remain for
+existing execution records; local paper deployment is deferred, not newly enabled.

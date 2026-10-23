@@ -107,10 +107,10 @@ def register(server: FastMCP):
     from src.mcp.marketplace_tools import register_marketplace
     register_marketplace(server)
     _register_dex(server)
-    _register_strategy(server)
     from src.mcp.broker_tools import register as register_brokers
     register_brokers(server)
-    _register_logs(server)
+    from src.mcp.paper_tools import register as register_paper
+    register_paper(server)
     _register_x402_spend(server)
     _register_hello_mangrove(server)
 
@@ -443,8 +443,8 @@ def _register_wallet(server: FastMCP) -> None:
     ) -> str:
         """On-chain transaction history for a SINGLE wallet (not comma-separated).
 
-        Different from our local `agent_list_trades` (which covers strategy-
-        executed swaps only). This tool covers EVERY on-chain tx for
+        Separate from server strategy evaluation and trade history.
+        This tool covers EVERY on-chain tx for
         the wallet — deposits, withdrawals, external swaps, etc.
         """
         if not _require(api_key):
@@ -1014,196 +1014,8 @@ def _register_dex(server: FastMCP) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Strategy (auth)
-# ---------------------------------------------------------------------------
-
-
-def _register_strategy(server: FastMCP) -> None:
-    # Authoring is provided exclusively by the dynamic MangroveAI MCP proxy.
-    # Local ids below identify existing execution records, not server draft ids.
-    @server.tool(name="agent_list_strategies")
-    async def list_strategies(status: str | None = None, limit: int = 50,
-                              offset: int = 0, api_key: str = "") -> str:
-        """List strategies, optionally filtered by status."""
-        if not _require(api_key):
-            return _auth_error()
-        from src.services.strategy_service import list_strategies as svc
-        items = svc(status=status, limit=limit, offset=offset)
-        return json.dumps([s.model_dump(mode="json") for s in items])
-
-    register_tool(ToolEntry(
-        name="agent_list_strategies",
-        description="List strategies.",
-        access="auth",
-        parameters=[
-            ToolParam(name="status", type="string", required=False, description="Filter: draft|inactive|paper|live|archived"),
-            ToolParam(name="limit", type="integer", required=False, description="Page size"),
-            ToolParam(name="offset", type="integer", required=False, description="Page offset"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool(name="agent_get_strategy")
-    async def get_strategy(strategy_id: str, api_key: str = "") -> str:
-        """Get a strategy by ID."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.strategy_service import get_strategy as svc
-            return json.dumps(svc(strategy_id).model_dump(mode="json"))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="agent_get_strategy",
-        description="Get a strategy by ID.",
-        access="auth",
-        parameters=[
-            ToolParam(name="strategy_id", type="string", required=True, description="Agent strategy UUID"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool(name="agent_update_strategy_status")
-    async def update_strategy_status(
-        strategy_id: str, status: str, confirm: bool = False,
-        allocation: dict | None = None, api_key: str = "",
-    ) -> str:
-        """Transition strategy status. live + live→inactive require confirm=true;
-        live requires a wallet allocation or configured broker venue."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.services.strategy_service import (
-                StrategyAllocationInput,
-                StrategyStatusUpdate,
-                update_status,
-            )
-            alloc = StrategyAllocationInput(**allocation) if allocation else None
-            from starlette.concurrency import run_in_threadpool
-            detail = await run_in_threadpool(update_status, strategy_id, StrategyStatusUpdate(
-                status=status, confirm=confirm, allocation=alloc,
-            ))
-            return json.dumps(detail.model_dump(mode="json"))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="agent_update_strategy_status",
-        description="Transition strategy lifecycle status.",
-        access="auth",
-        parameters=[
-            ToolParam(name="strategy_id", type="string", required=True, description="Agent strategy UUID"),
-            ToolParam(name="status", type="string", required=True, description="Target status"),
-            ToolParam(name="confirm", type="boolean", required=False, description="Required for live + live→inactive"),
-            ToolParam(name="allocation", type="object", required=False, description="Required for live"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool(name="agent_evaluate_strategy")
-    async def evaluate_strategy(strategy_id: str, api_key: str = "") -> str:
-        """Manually trigger a single evaluation tick."""
-        if not _require(api_key):
-            return _auth_error()
-        try:
-            from src.api.routes.strategies import evaluate
-            return json.dumps(await evaluate(strategy_id))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
-
-    register_tool(ToolEntry(
-        name="agent_evaluate_strategy",
-        description="Manually trigger one evaluation tick.",
-        access="auth",
-        parameters=[
-            ToolParam(name="strategy_id", type="string", required=True, description="Agent strategy UUID"),
-            _APIKEY,
-        ],
-    ))
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
 # Logs (auth)
 # ---------------------------------------------------------------------------
-
-
-def _register_logs(server: FastMCP) -> None:
-    @server.tool(name="agent_list_evaluations")
-    async def list_evaluations(strategy_id: str, limit: int = 50,
-                                offset: int = 0, api_key: str = "") -> str:
-        """Evaluation log for a strategy."""
-        if not _require(api_key):
-            return _auth_error()
-        from src.services.trade_log import list_evaluations as svc
-        return json.dumps([e.model_dump(mode="json") for e in
-                           svc(strategy_id, limit=limit, offset=offset)])
-
-    register_tool(ToolEntry(
-        name="agent_list_evaluations",
-        description="Evaluation log for a strategy.",
-        access="auth",
-        parameters=[
-            ToolParam(name="strategy_id", type="string", required=True, description="Strategy UUID"),
-            ToolParam(name="limit", type="integer", required=False, description="Page size"),
-            ToolParam(name="offset", type="integer", required=False, description="Page offset"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool(name="agent_list_trades")
-    async def list_trades(strategy_id: str, limit: int = 50,
-                          offset: int = 0, api_key: str = "") -> str:
-        """Trades for a strategy."""
-        if not _require(api_key):
-            return _auth_error()
-        from src.services.trade_log import list_trades as svc
-        return json.dumps([t.model_dump(mode="json") for t in
-                           svc(strategy_id, limit=limit, offset=offset)])
-
-    register_tool(ToolEntry(
-        name="agent_list_trades",
-        description="Trades for a strategy.",
-        access="auth",
-        parameters=[
-            ToolParam(name="strategy_id", type="string", required=True, description="Strategy UUID"),
-            ToolParam(name="limit", type="integer", required=False, description="Page size"),
-            ToolParam(name="offset", type="integer", required=False, description="Page offset"),
-            _APIKEY,
-        ],
-    ))
-
-    @server.tool(name="agent_list_all_trades")
-    async def list_all_trades(limit: int = 50,
-                               strategy_id: str | None = None,
-                               mode: str | None = None,
-                               api_key: str = "") -> str:
-        """All trades across strategies."""
-        if not _require(api_key):
-            return _auth_error()
-        from src.services.trade_log import list_all_trades as svc
-        return json.dumps([t.model_dump(mode="json") for t in
-                           svc(limit=limit, strategy_id=strategy_id, mode=mode)])  # type: ignore[arg-type]
-
-    register_tool(ToolEntry(
-        name="agent_list_all_trades",
-        description="All trades across strategies (optional filters).",
-        access="auth",
-        parameters=[
-            ToolParam(name="limit", type="integer", required=False, description="Max results"),
-            ToolParam(name="strategy_id", type="string", required=False, description="Filter"),
-            ToolParam(name="mode", type="string", required=False, description="live | paper"),
-            _APIKEY,
-        ],
-    ))
 
 
 # ---------------------------------------------------------------------------

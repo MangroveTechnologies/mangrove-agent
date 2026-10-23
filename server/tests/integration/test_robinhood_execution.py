@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from src.config import app_config
 from src.models.domain import Evaluation, OrderIntent
 from src.services import broker_execution as execution
@@ -331,10 +332,10 @@ async def test_mcp_status_dispatches_without_nested_event_loop(ledger, monkeypat
     assert result == {"connected": True}
 
 
-async def test_mcp_activation_runs_on_worker_thread(ledger, monkeypatch):
+async def test_rest_activation_runs_on_worker_thread(ledger, monkeypatch):
     import asyncio
 
-    from src.mcp.server import create_mcp_server
+    from src.api.routes import strategies
 
     def update(*args):
         with pytest.raises(RuntimeError):
@@ -342,17 +343,16 @@ async def test_mcp_activation_runs_on_worker_thread(ledger, monkeypatch):
         return SimpleNamespace(model_dump=lambda **kw: {"status": "live"})
 
     monkeypatch.setattr(strategy_service, "update_status", update)
-    tool = create_mcp_server()._tool_manager._tools["agent_update_strategy_status"]
-    result = json.loads(
-        await tool.run({"strategy_id": "s1", "status": "live", "confirm": True, "api_key": "test-key-1"})
+    result = await strategies.update_status(
+        "s1", strategy_service.StrategyStatusUpdate(status="live", confirm=True),
     )
-    assert result == {"status": "live"}
+    assert result.model_dump() == {"status": "live"}
 
 
-async def test_mcp_evaluation_runs_broker_tick_on_worker_thread(ledger, monkeypatch):
+async def test_rest_evaluation_runs_broker_tick_on_worker_thread(ledger, monkeypatch):
     import asyncio
 
-    from src.mcp.server import create_mcp_server
+    from src.api.routes import strategies
 
     def tick(strategy_id):
         with pytest.raises(RuntimeError):
@@ -362,27 +362,18 @@ async def test_mcp_evaluation_runs_broker_tick_on_worker_thread(ledger, monkeypa
     monkeypatch.setattr(strategy_service, "get_strategy", lambda _: None)
     monkeypatch.setattr(strategy_service, "tick", tick)
     monkeypatch.setattr(trade_log, "list_evaluations", lambda *args, **kwargs: [])
-    tool = create_mcp_server()._tool_manager._tools["agent_evaluate_strategy"]
-    result = json.loads(await tool.run({"strategy_id": "s1", "api_key": "test-key-1"}))
+    result = await strategies.evaluate("s1")
     assert result["status"] == "no_evaluation_recorded"
 
 
-async def test_strategy_reads_expose_broker_mandate_without_account_ids(ledger):
-    from src.mcp.server import create_mcp_server
-
-    expected = {
+async def test_execution_record_preserves_broker_mandate_without_account_ids(ledger):
+    result = strategy_service.get_strategy("s1").model_dump(mode="json")
+    assert result["execution_venue"] == {
         "venue": "robinhood", "asset_class": "crypto", "capital": "1000",
         "max_order_usd": "500", "slippage_pct": "0.0025",
     }
-    assert strategy_service.get_strategy("s1").execution_venue.model_dump() == expected
-    assert next(s for s in strategy_service.list_strategies() if s.id == "s1").execution_venue.model_dump() == expected
-    server = create_mcp_server()
-    for name, args in [("agent_get_strategy", {"strategy_id": "s1"}), ("agent_list_strategies", {})]:
-        response = json.loads(await server._tool_manager._tools[name].run({**args, "api_key": "test-key-1"}))
-        result = response if name == "agent_get_strategy" else next(s for s in response if s["id"] == "s1")
-        assert result["execution_venue"] == expected
-        assert "eligible" not in json.dumps(result)
-        assert "numeric" not in json.dumps(result)
+    assert "eligible" not in json.dumps(result)
+    assert "numeric" not in json.dumps(result)
 
 
 @pytest.mark.parametrize("cancel_state,cancel_qty", [("canceled", "1"), ("filled", "2"), ("partially_filled", "1")])

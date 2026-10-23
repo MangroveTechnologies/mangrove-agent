@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import secrets
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -69,18 +70,48 @@ def begin(digest: str, operation_id: str | None = None) -> tuple[dict, bool]:
             operation_id = str(uuid.UUID(operation_id))
         except (ValueError, TypeError, AttributeError):
             raise ValidationError('Payment operation identity must be a UUID.') from None
+        with spend_service._budget_transaction() as conn:
+            for _ in range(64):
+                link = conn.execute('SELECT next_id FROM x402_recovery_state WHERE operation_id=?', (operation_id,)).fetchone()
+                if not link or not link['next_id']:
+                    break
+                operation_id = link['next_id']
+            else:
+                raise ValidationError('Payment recovery history limit reached.')
     _recover_pending(digest, operation_id)
     with spend_service._budget_transaction() as conn:
         row = conn.execute('SELECT * FROM x402_operations WHERE id = ?', (operation_id,)).fetchone() if operation_id else None
+        for _ in range(64):
+            link = conn.execute('SELECT next_id FROM x402_recovery_state WHERE operation_id=?', (row['id'],)).fetchone() if row else None
+            if not link or not link['next_id']:
+                break
+            row = conn.execute('SELECT * FROM x402_operations WHERE id=?', (link['next_id'],)).fetchone()
+        else:
+            raise ValidationError('Payment recovery history limit reached.')
         if row is not None:
             if row['fingerprint'] != digest:
                 raise ValidationError('Payment operation identity was reused with different request parameters.')
             if row['state'] == 'unsigned_failed':
                 previous = conn.execute('SELECT 1 FROM x402_payments WHERE operation_id = ? LIMIT 1', (row['id'],)).fetchone()
                 if previous:
-                    # A previously signed, reconciled attempt is closed. New
-                    # attempts require a new identity at the receiver too.
-                    raise ValidationError('This payment attempt is closed; use a new operation identity.')
+                    if not _proven_unpaid(conn, row['id']):
+                        raise ValidationError('This payment attempt is closed; use a new operation identity.')
+                    recovery = conn.execute('SELECT * FROM x402_recovery_state WHERE operation_id=?', (row['id'],)).fetchone()
+                    if recovery and recovery['replacement_allowed']:
+                        oid, now = str(uuid.uuid4()), spend_service._now()
+                        conn.execute("INSERT INTO x402_operations(id,fingerprint,state,created_at,updated_at) VALUES (?,?,'pending',?,?)", (oid,digest,now,now))
+                        conn.execute('INSERT INTO x402_recovery_state(operation_id,action_id,token) VALUES (?,?,?)', (oid,recovery['action_id'],recovery['token']))
+                        conn.execute('UPDATE x402_recovery_state SET next_id=? WHERE operation_id=?', (oid,row['id']))
+                        return {'id': oid, 'state': 'pending', 'payment_headers': None, 'response': None}, True
+                    if not row['payment_headers']:
+                        error = X402PaymentUncertain(
+                            operation_id=row['id'],
+                            reservation_ids=[p[0] for p in conn.execute('SELECT id FROM x402_payments WHERE operation_id=?', (row['id'],))],
+                            upstream_error='legacy_recovery_proof_missing',
+                        )
+                        error.payment_state = 'released'
+                        raise error
+                    return dict(row), False
                 # A failure before any reservation is safe to reclaim.
                 conn.execute("UPDATE x402_operations SET state = 'pending', updated_at = ? WHERE id = ?",
                              (spend_service._now(), row['id']))
@@ -109,6 +140,67 @@ def require_unsigned(conn, operation_id: str) -> None:
 def reservation_ids(operation_id: str) -> list[str]:
     with spend_service._budget_transaction() as conn:
         return [r[0] for r in conn.execute('SELECT id FROM x402_payments WHERE operation_id = ?', (operation_id,))]
+
+
+def proven_unpaid(operation_id: str) -> bool:
+    """Allow explicit replacement only after every reservation is finalized unused."""
+    with spend_service._budget_transaction() as conn:
+        return _proven_unpaid(conn, operation_id)
+
+
+def _proven_unpaid(conn, operation_id):
+    operation = conn.execute('SELECT state FROM x402_operations WHERE id = ?', (operation_id,)).fetchone()
+    if operation is None or operation['state'] != 'unsigned_failed':
+        return False
+    payments = conn.execute(
+        "SELECT p.state, p.release_reason, p.transaction_hash, EXISTS ("
+        "SELECT 1 FROM x402_reconciliation_evidence e WHERE e.reservation_id = p.id "
+        "AND e.outcome = p.release_reason) AS has_evidence "
+        "FROM x402_payments p WHERE p.operation_id = ?", (operation_id,),
+    ).fetchall()
+    return bool(payments) and all(
+        p['state'] == 'released' and not p['transaction_hash'] and p['has_evidence']
+        and p['release_reason'] in {'expired_unused_at_finalized_block', 'cancelled_at_finalized_block'}
+        for p in payments
+    )
+
+
+def recovery_headers(operation_id: str) -> dict:
+    with spend_service._budget_transaction() as conn:
+        rows = conn.execute("SELECT transaction_hash FROM x402_payments WHERE operation_id = ? AND state = 'settled'",
+                            (operation_id,)).fetchall()
+        if len(rows) == 1 and rows[0]['transaction_hash']:
+            return {'X-Payment-Recovery-Transaction': rows[0]['transaction_hash']}
+        cancelled = conn.execute("SELECT e.evidence_json FROM x402_reconciliation_evidence e JOIN x402_payments p ON p.id=e.reservation_id "
+                                 "WHERE p.operation_id=? AND p.state='released' AND e.outcome='cancelled_at_finalized_block'",
+                                 (operation_id,)).fetchall()
+        if len(cancelled) == 1:
+            transaction = json.loads(cancelled[0]['evidence_json']).get('evidence', {}).get('transaction')
+            if transaction:
+                return {'X-Payment-Recovery-Transaction': transaction}
+    return {}
+
+
+def identity_headers(operation_id: str) -> dict:
+    with spend_service._budget_transaction() as conn:
+        row = conn.execute('SELECT * FROM x402_recovery_state WHERE operation_id=?', (operation_id,)).fetchone()
+        if not row or not row['token']:
+            original = conn.execute('SELECT payment_headers FROM x402_operations WHERE id=?', (operation_id,)).fetchone()
+            saved = unseal(original['payment_headers']) if original and original['payment_headers'] else {}
+            token = saved.get('headers', {}).get('X-Payment-Recovery-Token') or secrets.token_urlsafe(32)
+            conn.execute('INSERT INTO x402_recovery_state(operation_id,action_id,token) VALUES (?,?,?) '
+                         'ON CONFLICT(operation_id) DO UPDATE SET token=excluded.token',
+                         (operation_id, operation_id, seal({'token': token})))
+            row = conn.execute('SELECT * FROM x402_recovery_state WHERE operation_id=?', (operation_id,)).fetchone()
+        return {'X-Payment-Action-Id': row['action_id'], 'X-Payment-Recovery-Token': unseal(row['token'])['token']}
+
+
+def record_replacement_permission(operation_id: str, allowed: bool) -> None:
+    if allowed is not True:
+        return
+    identity_headers(operation_id)
+    with spend_service._budget_transaction() as conn:
+        conn.execute('UPDATE x402_recovery_state SET replacement_allowed=1 WHERE operation_id=?', (operation_id,))
 
 
 def seal(value: dict) -> bytes:
@@ -225,7 +317,13 @@ def tracked_payment(function):
                     try:
                         session = values['session']
                         await session.initialize()
-                        raw = await session.call_tool(name=values['name'], arguments=values['arguments'], meta=recovery['meta'])
+                        identity = identity_headers(oid)
+                        payment_meta = {**recovery['meta'].get('mangrove/payment', {}), 'action_id': identity['X-Payment-Action-Id']}
+                        hint = recovery_headers(oid).get('X-Payment-Recovery-Transaction')
+                        if hint:
+                            payment_meta['transaction'] = hint
+                        raw = await session.call_tool(name=values['name'], arguments=values['arguments'], meta={**recovery['meta'], 'mangrove/payment': payment_meta})
+                        record_replacement_permission(oid, (raw.meta or {}).get('mangrove/payment', {}).get('replacement_allowed') is True)
                         result = x402_payer.mcp_payment_result(raw, payer=payer, reservations=reservation_ids(oid), resource=resource)
                         encoded = json.loads(json.dumps(asdict(result), default=lambda value: value.model_dump(by_alias=True)))
                         if len(json.dumps(encoded).encode()) <= MAX_RESULT_BYTES:
@@ -242,10 +340,13 @@ def tracked_payment(function):
                     try:
                         outgoing = httpx.Headers(headers)
                         outgoing.update(recovery['headers'])
+                        outgoing.update(identity_headers(oid))
+                        outgoing.update(recovery_headers(oid))
                         outgoing['X-Payment-Operation-Id'] = oid
                         async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(trust_env=False),
                                                      timeout=values['timeout'], trust_env=False, follow_redirects=False) as client:
                             response = await client.request(method, resource, headers=outgoing, content=content)
+                        record_replacement_permission(oid, response.headers.get('X-Payment-Replacement-Allowed') == 'true')
                         ids = reservation_ids(oid)
                         settlement = x402_payer.decode_settlement(response, payer=payer, network=network)
                         if settlement is None:

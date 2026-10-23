@@ -18,7 +18,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(app_config, "MANGROVE_API_KEY", None)
     monkeypatch.setattr(tool_pricing, "_cache", tool_pricing.PriceCache())
     from unittest.mock import AsyncMock
+
     from mcp.types import Tool
+
     from src.mcp import mangrove_proxy, marketplace_proxy
     remote = Tool(name="get_signal", description="Server price: 0.007 USDC", inputSchema={"type": "object"},
                   _meta={"mangrove/pricing": {"price_usd": "0.007"}})
@@ -68,7 +70,7 @@ def test_rest_tool_and_mcp_protocol_share_prices_and_cache(client):
     assert len(calls) == 1
     again = rpc(session, "tools/list")["tools"]
     assert protocol == again  # hints do not accumulate on cached tool objects
-    local = next(t for t in protocol if t["name"] == "agent_list_strategies")
+    local = next(t for t in protocol if t["name"] == "list_wallets")
     assert "mangrove/pricing" not in (local.get("_meta") or {})
 
 
@@ -99,7 +101,9 @@ def test_price_failure_keeps_both_catalogs_available(client, monkeypatch):
 
 def test_remote_call_result_survives_agent_mcp_wire(client, monkeypatch):
     from unittest.mock import AsyncMock
+
     from mcp.types import CallToolResult, TextContent
+
     from src.mcp import mangrove_proxy
     expected = CallToolResult(isError=True,
         content=[TextContent(type='text', text='{"code":"NOT_FOUND"}')],

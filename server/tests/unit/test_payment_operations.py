@@ -84,6 +84,84 @@ def test_worker_releases_proven_nonpayment_and_restores_existing_budget(database
     assert not spend_service.get_status()['exhausted']
     assert sqlite.get_connection().execute('SELECT state FROM x402_payments WHERE id = ?', (rid,)).fetchone()[0] == 'released'
     assert worker.run_once(urls={NETWORK: 'synthetic'}, rpc_factory=lambda _: pytest.fail('already resolved'), now=2000) == 0
+    assert operations.proven_unpaid(row['id'])
+
+
+def test_replacement_requires_finalized_evidence(database):
+    row, _ = operations.begin('replacement')
+    assert not operations.proven_unpaid(row['id'])
+    rid = reserve(operation_id=row['id'])
+    assert not operations.proven_unpaid(row['id'])
+    conn = sqlite.get_connection()
+    conn.execute("UPDATE x402_operations SET state='unsigned_failed' WHERE id=?", (row['id'],))
+    conn.execute("UPDATE x402_payments SET state='released', release_reason='expired_unused_at_finalized_block' WHERE id=?", (rid,))
+    conn.commit()
+    assert not operations.proven_unpaid(row['id'])
+
+
+def test_legacy_released_payment_reports_missing_proof_without_new_attempt(database):
+    row, _ = operations.begin('legacy')
+    rid = reserve(operation_id=row['id'])
+    worker.run_once(urls={NETWORK: 'synthetic'}, rpc_factory=lambda _: RPC(), now=1000)
+    with pytest.raises(X402PaymentUncertain) as caught:
+        operations.begin('legacy', row['id'])
+    result = caught.value.to_dict()
+    assert result['payment_state'] == 'released'
+    assert result['upstream_error'] == 'legacy_recovery_proof_missing'
+    assert result['retry_payment'] is False
+    assert result['reservation_ids'] == [rid]
+    assert 'remains reserved' not in result['message']
+    conn = sqlite.get_connection()
+    assert conn.execute('SELECT count(*) FROM x402_operations').fetchone()[0] == 1
+    assert conn.execute('SELECT state FROM x402_payments WHERE id=?', (rid,)).fetchone()[0] == 'released'
+
+
+def test_unsigned_attempt_without_payment_is_not_a_replacement(database):
+    row, _ = operations.begin('unsigned')
+    operations.abandon_unsigned(row['id'])
+    assert not operations.proven_unpaid(row['id'])
+    assert not operations.proven_unpaid('missing')
+
+
+def test_settled_payment_never_allows_replacement(database):
+    row, _ = operations.begin('settled')
+    rid = reserve(operation_id=row['id'])
+    conn = sqlite.get_connection()
+    conn.execute("UPDATE x402_payments SET state='settled', transaction_hash=? WHERE id=?", (TX, rid))
+    conn.execute("UPDATE x402_operations SET state='unsigned_failed' WHERE id=?", (row['id'],))
+    conn.commit()
+    assert not operations.proven_unpaid(row['id'])
+    assert operations.recovery_headers(row['id']) == {'X-Payment-Recovery-Transaction': TX}
+
+
+def test_uncertain_payment_has_no_transaction_recovery_hint(database):
+    row, _ = operations.begin('uncertain')
+    reserve(operation_id=row['id'])
+    assert operations.recovery_headers(row['id']) == {}
+
+
+def test_shared_replacement_requires_server_and_chain_evidence(database):
+    row, _ = operations.begin('stable-command')
+    original_headers = operations.identity_headers(row['id'])
+    reserve(operation_id=row['id'])
+    operations.record_replacement_permission(row['id'], True)
+    assert operations.begin('stable-command', row['id'])[0]['id'] == row['id']
+    worker.run_once(urls={NETWORK: 'synthetic'}, rpc_factory=lambda _: RPC(), now=1000)
+    replacement, created = operations.begin('stable-command', row['id'])
+    assert created and replacement['id'] != row['id']
+    assert operations.identity_headers(replacement['id']) == original_headers
+    sqlite.reset_connection()
+    repeated, created = operations.begin('stable-command', row['id'])
+    assert not created and repeated['id'] == replacement['id']
+
+
+def test_chain_expiry_alone_does_not_replace_explicit_request(database):
+    row, _ = operations.begin('stable-command')
+    operations.save_headers(row['id'], {'idempotency': 'v1', 'headers': {}})
+    reserve(operation_id=row['id'])
+    worker.run_once(urls={NETWORK: 'synthetic'}, rpc_factory=lambda _: RPC(), now=1000)
+    repeated, created = operations.begin('stable-command', row['id'])
+    assert not created and repeated['id'] == row['id']
 
 
 def test_worker_unknown_retains_amount_and_backoff_survives_restart(database):

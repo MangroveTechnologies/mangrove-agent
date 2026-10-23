@@ -42,7 +42,10 @@ async def test_result_storage_failure_retains_recoverable_payment(wallet, sepoli
     recovered_session = _RecoverableMcpSession(receipt=_mcp_receipt())
     result = await x402_payer.pay_mcp(recovered_session, operation_id=caught.value.operation_id, **kwargs)
     assert result.paid
-    assert recovered_session.calls[0][2] == session.calls[-1][2]
+    recovered_meta = recovered_session.calls[0][2]
+    original_meta = session.calls[-1][2]
+    assert recovered_meta['x402/payment'] == original_meta['x402/payment']
+    assert {k: v for k, v in recovered_meta['mangrove/payment'].items() if k != 'transaction'} == original_meta['mangrove/payment']
     assert len(spend_service.list_payments()) == 1
 
 

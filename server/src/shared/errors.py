@@ -201,6 +201,7 @@ def upstream_access_error(error: Exception) -> UpstreamAccessError | None:
     from httpx import HTTPStatusError
     from mangrove_ai.exceptions import APIError as AIAPIError
     from mangrove_markets.exceptions import APIError as MarketsAPIError
+    from mcp.shared.exceptions import McpError
 
     correlation_id = getattr(error, "correlation_id", None)
     seen: set[int] = set()
@@ -216,6 +217,8 @@ def upstream_access_error(error: Exception) -> UpstreamAccessError | None:
             status = current.status_code
         elif isinstance(current, HTTPStatusError):
             status = current.response.status_code
+        elif isinstance(current, McpError) and current.error.code == -32010:
+            status = 401
         else:
             return None
         if status not in (401, 403):
@@ -279,12 +282,15 @@ class X402PaymentUncertain(X402PaymentError):
 
     @payment_state.setter
     def payment_state(self, value):
-        if value not in {"settled", "unresolved"}:
+        if value not in {"settled", "unresolved", "released"}:
             raise ValueError("Invalid payment state")
         self._payment_state = value
         if value == "settled":
             self.message = "Payment is confirmed, but this operation's result is not yet available."
             self.suggestion = "Recover the original operation using its operation ID. Do not authorize another payment for this request. Independent requests may proceed within the remaining budget."
+        elif value == "released":
+            self.message = "The old payment expired unused or was cancelled and its reservation was released, but the original recovery proof is missing."
+            self.suggestion = "Do not repeat this recovery attempt. Operator review must confirm the server did not execute the request before retiring it. Independent requests may proceed within the existing budget."
         else:
             self.message = "This operation's payment outcome is unresolved; its amount remains reserved."
         self.args = (self.message,)

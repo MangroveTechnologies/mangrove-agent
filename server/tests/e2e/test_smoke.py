@@ -203,7 +203,6 @@ _SMOKE_ENDPOINTS = [
       "output_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       "amount": 100.0, "chain_id": 8453}, None, False),
     # Strategies (auth-gated; autonomous + list + get via smoke)
-    ("GET", "/api/v1/agent/strategies", None, None, False),
     # Logs (auth-gated; tolerates empty)
     ("GET", "/api/v1/agent/trades", None, None, False),
 ]
@@ -286,6 +285,7 @@ def test_mcp_http_endpoint_is_reachable(client):
 def test_mcp_tool_count_matches_rest_catalog(client, monkeypatch, upstream_available):
     """Both discovery doors expose live server tools and distinct local tools."""
     from mcp.types import Tool
+
     from src.mcp.server import create_mcp_server
     from src.shared.errors import SdkError
 
@@ -321,9 +321,6 @@ def test_mcp_tool_count_matches_rest_catalog(client, monkeypatch, upstream_avail
     required_local = {
         "status", "list_tools", "create_wallet", "list_wallets", "get_balances",
         "list_dex_venues", "get_swap_quote", "execute_swap", "hello_mangrove",
-        "agent_list_strategies", "agent_get_strategy", "agent_update_strategy_status",
-        "agent_evaluate_strategy",
-        "agent_list_evaluations", "agent_list_trades", "agent_list_all_trades",
     }
     assert required_local <= catalog.keys()
     assert not {name.removeprefix("agent_") for name in required_local

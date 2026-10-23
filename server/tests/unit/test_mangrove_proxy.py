@@ -135,9 +135,9 @@ def test_external_schema_refs_rejected():
 
 @pytest.mark.asyncio
 async def test_server_and_discovery_use_same_dynamic_catalog(monkeypatch):
-    from src.mcp import server, marketplace_proxy
-    from src.services import tool_pricing
     from src.api.routes import discovery
+    from src.mcp import marketplace_proxy, server
+    from src.services import tool_pricing
     monkeypatch.setattr(proxy, 'catalog', AsyncMock(return_value=[tool()]))
     monkeypatch.setattr(marketplace_proxy, 'list_tools', AsyncMock(return_value=[]))
     monkeypatch.setattr(tool_pricing, 'enrich_tools', AsyncMock(side_effect=lambda rows: rows))
@@ -146,7 +146,8 @@ async def test_server_and_discovery_use_same_dynamic_catalog(monkeypatch):
     assert 'get_signal' not in mcp._tool_manager._tools
     assert 'evaluate_multiple_signals_series' not in mcp._tool_manager._tools
     assert 'list_wallets' in mcp._tool_manager._tools
-    assert 'agent_list_strategies' in mcp._tool_manager._tools
+    assert 'agent_list_strategies' not in mcp._tool_manager._tools
+    assert 'agent_get_strategy' not in mcp._tool_manager._tools
     assert (await mcp.list_tools())[-1] == tool()
     assert (await discovery.tools())['tools'][-1]['inputSchema'] == tool().inputSchema
     call = AsyncMock(return_value=CallToolResult(content=[]))
@@ -177,7 +178,9 @@ def test_wallet_endpoint_rejects_unsafe_destination(monkeypatch, base):
 @pytest.mark.parametrize('name', ['get_signal', 'search_signals', 'get_ohlcv', 'get_market_data', 'list_sweep_markets'])
 async def test_official_client_access_denial_never_pays(monkeypatch, status, http_denial, name):
     import json
+
     import httpx
+
     from src.mcp import tools
     from src.services import x402_payer
     from src.shared.errors import UpstreamAccessError
@@ -287,8 +290,10 @@ async def test_cached_output_schema_is_still_validated(transport):
 @pytest.mark.asyncio
 async def test_real_mcp_client_six_reads_fetch_catalog_once(monkeypatch):
     import json
-    import httpx
     from collections import Counter
+
+    import httpx
+
     from src.mcp import tools
     monkeypatch.setattr(tools, '_require', lambda _: True)
     monkeypatch.setattr(proxy, 'endpoint', lambda: 'https://receiver.test/mcp/')
@@ -546,3 +551,32 @@ async def test_a_cancelled_opener_does_not_leak_its_transport_task(monkeypatch):
         await opener
     await asyncio.sleep(0)
     assert shared._task.done() or shared._task.cancelled()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name,arguments', [
+    ('list_strategies', {}), ('get_strategy', {'strategy_id': 'server-strategy-id'}),
+    ('evaluate_strategy', {'strategy_id': 'server-strategy-id'}),
+    ('update_strategy_status', {'strategy_id': 'server-strategy-id', 'new_status': 'inactive'}),
+    ('save_strategy', {'strategy_name': 'Server-owned strategy'}),
+])
+async def test_strategy_operations_use_remote_mcp_without_local_storage(transport, monkeypatch, name, arguments):
+    from src.mcp.server import create_mcp_server, reset_mcp_server
+
+    client, _ = transport
+    remote = Tool(name=name, description='Server saved strategies', inputSchema={
+        'type': 'object', 'properties': {'strategy_id': {'type': 'string'}},
+    })
+    client.list_tools.return_value = SimpleNamespace(tools=[remote], nextCursor=None)
+    expected = CallToolResult(content=[], structuredContent={'source': 'server'})
+    client.send_request.return_value = expected
+    local_db = Mock(side_effect=AssertionError('Remote reads must not open local SQLite'))
+    monkeypatch.setattr('src.shared.db.sqlite.get_connection', local_db)
+    reset_mcp_server()
+    server = create_mcp_server()
+    assert name not in server._tool_manager._tools
+    assert await server.call_tool(name, arguments) == expected
+    params = client.send_request.call_args.args[0].root.params
+    assert params.name == name
+    assert params.arguments == arguments
+    local_db.assert_not_called()

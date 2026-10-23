@@ -61,10 +61,9 @@ multiple independent processes must not concurrently refresh the same OAuth gran
    bounds each order, and `slippage_pct` bounds its limit price relative to the
    Mangrove evaluation price (maximum 0.25%). The strategy must size exits within
    the same order cap. Configuration selects caller-owned stateless evaluation.
-4. Activate with `agent_update_strategy_status(strategy_id, status="live",
-   confirm=true)`. A configured broker strategy needs no wallet allocation.
-   Activation authorizes scheduled execution within the mandate; it does not
-   introduce a per-order human review step.
+4. The local activation MCP tool is retired. Existing execution REST endpoints
+   remain, but a supported saved-strategy-to-local-deployment flow is deferred.
+   Server `evaluate_strategy` checks signals; it does not activate this runner.
 
 The agent leaves Robinhood's approval preference unchanged. If approvals are off,
 orders can execute directly. If Robinhood requires approval for a particular
@@ -74,7 +73,7 @@ until its outcome is known. It never bypasses broker controls.
 
 ## Observe and stop
 
-- `agent_get_strategy` and `agent_list_strategies` report `execution_venue`
+- Local lifecycle responses report `execution_venue`
   separately from `market_context`, including the broker capital and order cap.
   These responses never include raw broker account identifiers.
 - `agent_list_venue_orders(strategy_id)` shows local order identity, broker order

@@ -181,3 +181,13 @@ def test_cex_rest_preserves_missing_connection(monkeypatch, path, body):
     assert response.status_code == 409
     assert response.json()['code'] == 'CEX_CREDENTIALS_MISSING'
     assert response.json()['message'] == 'No Kraken account is connected on this agent.'
+
+
+def test_mcp_authentication_error_is_not_a_payment_failure():
+    from mcp.shared.exceptions import McpError
+    from mcp.types import ErrorData
+    result = upstream_access_error(McpError(ErrorData(code=-32010, message='private upstream detail')))
+    assert result.to_dict()['code'] == 'UPSTREAM_AUTHENTICATION_FAILED'
+    assert result.to_dict()['retry_payment'] is False
+    assert 'private upstream detail' not in result.message
+    assert upstream_access_error(McpError(ErrorData(code=-32002, message='execution failed'))) is None

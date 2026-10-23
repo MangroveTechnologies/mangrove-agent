@@ -34,7 +34,8 @@ async def test_mcp_arguments_and_complete_result_survive(wallet, sepolia_network
     assert result.mcp_result['_meta']['x402/payment-response'] == _mcp_receipt()
     assert result.mcp_result['isError'] is False
     assert len(result.mcp_result['content']) == 1
-    assert set(session.calls[-1][2]['mangrove/payment']) == {'operation_id', 'recovery_token'}
+    assert set(session.calls[-1][2]['mangrove/payment']) == {'operation_id', 'action_id', 'recovery_token'}
+    assert session.calls[-1][2]['mangrove/payment']['action_id'] == session.calls[-1][2]['mangrove/payment']['operation_id']
 
 
 async def test_mcp_lost_response_recovers_exact_payment(wallet, sepolia_network):

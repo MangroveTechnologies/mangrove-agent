@@ -48,9 +48,8 @@ async def _call(server, name: str, args: dict | None = None) -> dict | list:
 
 CORE_TOOLS = {
     "status", "list_tools", "create_wallet", "list_wallets", "get_balances",
-    "list_dex_venues", "get_swap_quote", "execute_swap", "agent_list_strategies",
-    "agent_get_strategy", "agent_update_strategy_status",
-    "agent_evaluate_strategy", "x402_spend_status",
+    "list_dex_venues", "get_swap_quote", "execute_swap",
+    "x402_spend_status",
 }
 
 
@@ -77,7 +76,7 @@ async def test_list_tools_free_no_auth(mcp_server):
     assert "tools" in result
     names = {t["name"] for t in result["tools"]}
     # Subset check — mirrors the top-level REST tool catalog
-    for core in ("status", "create_wallet", "execute_swap", "agent_list_strategies"):
+    for core in ("status", "create_wallet", "execute_swap", "list_wallets"):
         assert core in names
 
 
@@ -95,10 +94,24 @@ async def test_list_wallets_accepts_valid_key(mcp_server):
 
 
 @pytest.mark.asyncio
-async def test_list_strategies_rejects_bad_key(mcp_server):
-    result = await _call(mcp_server, "agent_list_strategies", {"api_key": "wrong-key"})
-    assert result["error"] is True
-    assert result["code"] == "AUTH_INVALID_API_KEY"
+async def test_local_strategy_tools_are_not_discoverable_or_callable(mcp_server, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from src.mcp import mangrove_proxy
+
+    monkeypatch.setattr(mangrove_proxy, "catalog", AsyncMock(return_value=[]))
+    monkeypatch.setattr("src.mcp.tools._require", lambda _: True)
+    retired = {"agent_list_strategies", "agent_get_strategy",
+               "agent_update_strategy_status", "agent_evaluate_strategy",
+               "agent_list_trades", "agent_list_all_trades", "agent_list_evaluations"}
+    assert not retired.intersection(mcp_server._tool_manager._tools)
+    discovery = await _call(mcp_server, "list_tools")
+    assert not retired.intersection(t["name"] for t in discovery["tools"])
+    for name in retired:
+        result = await mcp_server.call_tool(name, {})
+        assert result.isError
+        assert result.structuredContent["code"] == "UNKNOWN_TOOL"
+
 
 
 

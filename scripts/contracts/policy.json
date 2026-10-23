@@ -41,8 +41,8 @@
       "sha256": "b8ef29c3d2e95b59ec0f1767813fefce899fcf273cf9cdb57af0da79f14f68d6"
     },
     "portfolio_history": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
-      "sha256": "945979d56c63eb882aea2384805dd397d974bc443d4b9b36faa8f631a7f699a4"
+      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged. F07: description updated to distinguish server strategy history; execution unchanged.",
+      "sha256": "d8a36aa8cee8c90ccf60ddcf9c6efa4d6dcda72007d8f20141f00ff4e76eab10"
     },
     "portfolio_pnl": {
       "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
@@ -63,11 +63,7 @@
     "agent_cancel_venue_order": "Local Robinhood venue coordination using broker OAuth; outside MangroveAI billing. Brokerage fees remain applicable.",
     "agent_configure_execution_venue": "Local Robinhood venue coordination using broker OAuth; outside MangroveAI billing. Brokerage fees remain applicable.",
     "agent_configure_strategy_market": "Local configuration of a fresh inactive stateless strategy; no upstream call or activation.",
-    "agent_get_strategy": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
-    "agent_list_all_trades": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
-    "agent_list_evaluations": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
-    "agent_list_strategies": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
-    "agent_list_trades": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
+    "agent_list_paper_schedules": "Local schedule metadata only; no upstream request or strategy definition copy.",
     "agent_list_venue_orders": "Local Robinhood venue coordination using broker OAuth; outside MangroveAI billing. Brokerage fees remain applicable.",
     "agent_reconcile_venue_orders": "Local Robinhood venue coordination using broker OAuth; outside MangroveAI billing. Brokerage fees remain applicable.",
     "agent_robinhood_status": "Local Robinhood venue coordination using broker OAuth; outside MangroveAI billing. Brokerage fees remain applicable.",

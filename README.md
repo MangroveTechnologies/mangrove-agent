@@ -294,8 +294,13 @@ The agent has two kinds of tools. Run `list_tools` for the live, authoritative c
 | Wallets & portfolio | `create_wallet`, `import_wallet`, `list_wallets`, `get_balances`, `portfolio_value`, `portfolio_pnl`, `portfolio_tokens`, `portfolio_defi`, `portfolio_history` |
 | Kraken (CEX) | `cex_status`, `cex_connect_kraken`, `cex_balances`, `cex_validate_order`, `cex_sync_fills` |
 | DEX (1inch) | `list_dex_venues`, `get_swap_quote`, `execute_swap`, `get_tx_status`, `get_spot_price`, `get_gas_price`, `get_token_search`, `get_allowances`, `get_token_info`, `get_dex_chart` |
-| Local execution records | `agent_list_strategies`, `agent_get_strategy`, `agent_update_strategy_status`, `agent_evaluate_strategy`, `agent_list_evaluations`, `agent_list_trades`, `agent_list_all_trades` |
+| Server execution history | Discovered MangroveAI trade and evaluation tools |
 | x402 spend budget | `x402_spend_status`, `x402_spend_reset` |
+
+Saved strategies are listed and read through MangroveAI MCP `list_strategies` and
+`get_strategy`. Local strategy list/get tools and REST routes are removed; local status/evaluation
+MCP tools are also removed. Use the server-advertised strategy tools.
+Local execution, scheduling and history remain separate from saved-strategy reads.
 
 Local tools also have REST endpoints at `/api/v1/agent/*`, calling the same service layer. MangroveAI tools have **no** local REST copy; call them over the agent's MCP endpoint, or call MangroveAI directly. Authenticated routes take `X-API-Key` set to the first entry of `API_KEYS` in `server/src/config/local-config.json` (a unique key `setup.sh` generates). That is the agent's own local key, **not** your MangroveAI API key. `/health`, `status` and `list_tools` need no key, so a wrong key looks fine until the first authenticated call returns 401.
 
@@ -411,3 +416,6 @@ MIT
 
 Mangrove strategies can use Robinhood as their broker execution venue through its
 official MCP service. See [connection, allocation, and recovery instructions](docs/robinhood-execution.md).
+
+Server-owned paper portfolios can be evaluated on an agent-owned clock. See
+[paper scheduling](docs/paper-scheduling.md) for controls, recovery, costs and rollout.
