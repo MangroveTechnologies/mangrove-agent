@@ -15,6 +15,7 @@ os.environ.setdefault("ENVIRONMENT", "test")
 
 import pytest  # noqa: E402
 
+from tests.existing_strategies import StrategyManualRequest
 from tests.existing_strategies import existing_strategy as create_manual
 
 
@@ -126,7 +127,7 @@ def test_explicit_market_survives_saving_and_stateless_evaluation(temp_db, mock_
     from src.services import strategy_service as service
 
     market = {"base_token": "XLM", "quote_token": "USD", "market_data_venue": "KRAKEN"}
-    detail = create_manual(service.StrategyManualRequest(
+    detail = create_manual(StrategyManualRequest(
         name="Explicit market", asset="XLM", timeframe="1h",
         entry=[{"name": "mom_cross_up", "signal_type": "TRIGGER", "timeframe": "1h"}],
         execution_config={"initial_balance": 200}, evaluation_lane="stateless",
@@ -143,7 +144,7 @@ def test_market_configuration_preserves_rules_and_requires_inactive_stateless(te
     from src.shared.db.sqlite import get_connection
     from src.shared.errors import SdkError, StrategyInvalidStatusTransition
 
-    detail = create_manual(service.StrategyManualRequest(
+    detail = create_manual(StrategyManualRequest(
         name="Staged market", asset="XLM", timeframe="1h",
         entry=[{"name": "mom_cross_up", "signal_type": "TRIGGER", "timeframe": "1h"}],
         execution_config={"initial_balance": 200}, evaluation_lane="stateless",
@@ -171,22 +172,13 @@ def test_market_configuration_preserves_rules_and_requires_inactive_stateless(te
 
 
 
-def test_list_and_get_strategy(temp_db, mock_ai_sdk):
-    from src.services.strategy_service import StrategyManualRequest, get_strategy, list_strategies
+def test_get_execution_record(temp_db, mock_ai_sdk):
+    from src.services.strategy_service import get_strategy
 
     a = create_manual(StrategyManualRequest(
         name="a", asset="ETH", timeframe="1h",
         entry=[{"name": "rsi_oversold", "signal_type": "TRIGGER", "timeframe": "1h"}],
     ))
-    b = create_manual(StrategyManualRequest(
-        name="b", asset="BTC", timeframe="4h",
-        entry=[{"name": "macd_cross_up", "signal_type": "TRIGGER", "timeframe": "4h"}],
-    ))
-    items = list_strategies()
-    ids = {s.id for s in items}
-    assert a.id in ids
-    assert b.id in ids
-
     fetched = get_strategy(a.id)
     assert fetched.asset == "ETH"
 
@@ -194,7 +186,6 @@ def test_list_and_get_strategy(temp_db, mock_ai_sdk):
 def test_status_paper_to_live_requires_confirm(temp_db, mock_ai_sdk):
     from src.services.strategy_service import (
         StrategyAllocationInput,
-        StrategyManualRequest,
         StrategyStatusUpdate,
         update_status,
     )
@@ -227,7 +218,6 @@ def test_status_to_live_registers_cron_and_allocation(temp_db, mock_ai_sdk):
     from src.services.scheduler_service import active_job_count
     from src.services.strategy_service import (
         StrategyAllocationInput,
-        StrategyManualRequest,
         StrategyStatusUpdate,
         update_status,
     )
@@ -261,7 +251,6 @@ def test_deactivating_live_releases_allocation_and_cancels_cron(temp_db, mock_ai
     from src.services.scheduler_service import active_job_count
     from src.services.strategy_service import (
         StrategyAllocationInput,
-        StrategyManualRequest,
         StrategyStatusUpdate,
         update_status,
     )
@@ -292,7 +281,6 @@ def test_deactivating_live_releases_allocation_and_cancels_cron(temp_db, mock_ai
 def test_tick_paper_mode_logs_simulated_trade(temp_db, mock_ai_sdk, monkeypatch):
     """tick fires evaluate, dispatches returned orders, logs everything."""
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         tick,
         update_status,
@@ -343,7 +331,6 @@ def test_tick_maps_engine_shaped_orders(temp_db, mock_ai_sdk, monkeypatch):
     strategies never traded. An engine-shaped order must produce a trade
     sized in ASSET units (position_size)."""
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         tick,
         update_status,
@@ -422,7 +409,6 @@ def test_tick_skips_resting_bracket_orders(temp_db, mock_ai_sdk, monkeypatch):
     entry may execute — running the pending brackets would exit the
     position the moment it entered."""
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         tick,
         update_status,
@@ -483,7 +469,6 @@ def test_tick_stateless_lane_round_trips_state(temp_db, mock_ai_sdk, monkeypatch
     import json as _json
 
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         tick,
         update_status,
@@ -562,7 +547,6 @@ def test_tick_default_lane_stays_server(temp_db, mock_ai_sdk, monkeypatch):
     """No evaluation_lane on the strategy and no config default -> the by-id
     server lane with persist=True, exactly as before Phase 3."""
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         tick,
         update_status,
@@ -592,7 +576,6 @@ def test_tick_default_lane_stays_server(temp_db, mock_ai_sdk, monkeypatch):
 def test_tick_catches_sdk_errors(temp_db, mock_ai_sdk):
     """SDK failure during tick logs evaluation with status=error, does NOT raise."""
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         tick,
         update_status,
@@ -618,7 +601,6 @@ def test_tick_catches_sdk_errors(temp_db, mock_ai_sdk):
 
 def test_invalid_transition_raises(temp_db, mock_ai_sdk):
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         update_status,
     )
@@ -664,7 +646,6 @@ def test_tick_logs_warning_when_order_intent_fails_validation(temp_db, mock_ai_s
               reason contains the Pydantic error, payload_keys lists fields present in dict
     """
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         tick,
         update_status,
@@ -698,7 +679,6 @@ def test_tick_warning_log_contains_only_keys_not_values(temp_db, mock_ai_sdk):
     import json as _json
 
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         tick,
         update_status,
@@ -739,7 +719,6 @@ def test_tick_warning_payload_keys_lists_field_names(temp_db, mock_ai_sdk):
               key names only, zero values
     """
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         tick,
         update_status,
@@ -767,7 +746,6 @@ def test_tick_mixed_valid_and_invalid_intents_processes_only_valid(temp_db, mock
               evaluation logged as ok
     """
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         tick,
         update_status,
@@ -806,7 +784,6 @@ def test_tick_all_malformed_intents_still_completes_with_ok_evaluation(temp_db, 
     expected: warning fired twice, zero trades, evaluation status=ok (tick didn't error out)
     """
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         tick,
         update_status,
@@ -840,7 +817,6 @@ def test_tick_warning_includes_strategy_id_for_correlation(temp_db, mock_ai_sdk)
     expected: strategy_id in warning kwargs matches the strategy — enables log correlation
     """
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         tick,
         update_status,

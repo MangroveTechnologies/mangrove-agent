@@ -802,6 +802,42 @@ def test_lost_response_recovers_same_authorization_after_agent_restart(wallet):
     assert spend_service.list_payments()[0]['state'] == 'settled'
 
 
+def test_explicit_replacement_keeps_action_and_changes_only_payment(wallet):
+    from src.services.x402_reconciliation import reconcile_authorization
+    from src.shared.db.sqlite import get_connection
+    oid = '11111111-2222-4333-8444-555555555555'
+    requests = []
+    def handle(request):
+        if 'PAYMENT-SIGNATURE' not in request.headers:
+            response = challenge()
+            response.headers['X-Payment-Idempotency'] = 'v1'
+            return response
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(409, headers={'X-Payment-Operation-State': 'pending', 'X-Payment-Replacement-Allowed': 'true'}, json={'error': 'payment_operation_pending'})
+        return httpx.Response(200, json={'result': 'done'}, headers={'payment-response': receipt(wallet)})
+    with client(handle, wallet) as http:
+        with pytest.raises(X402PaymentUncertain):
+            http.post(URL, json={'command': 'same'}, headers={'X-Payment-Operation-Id': oid})
+        row = dict(get_connection().execute('SELECT * FROM x402_payments WHERE operation_id=?', (oid,)).fetchone())
+        def rpc(method, params):
+            if method == 'eth_chainId':
+                return hex(84532)
+            if method == 'eth_getBlockByNumber':
+                return {'hash': '0x'+'ff'*32, 'number': '0x10', 'timestamp': hex(row['valid_before']+1)}
+            assert method == 'eth_call'
+            return '0x'+'00'*32
+        assert reconcile_authorization(row['id'], rpc)['ledger_state'] == 'released'
+        sqlite.reset_connection()
+        assert http.post(URL, json={'command': 'same'}, headers={'X-Payment-Operation-Id': oid}).status_code == 200
+    assert requests[0].content == requests[1].content
+    assert requests[0].headers['X-Payment-Action-Id'] == requests[1].headers['X-Payment-Action-Id'] == oid
+    assert requests[0].headers['X-Payment-Recovery-Token'] == requests[1].headers['X-Payment-Recovery-Token']
+    assert requests[0].headers['X-Payment-Operation-Id'] != requests[1].headers['X-Payment-Operation-Id']
+    assert requests[0].headers['PAYMENT-SIGNATURE'] != requests[1].headers['PAYMENT-SIGNATURE']
+    assert sorted(p['state'] for p in spend_service.list_payments()) == ['released', 'settled']
+
+
 def test_pending_with_confirmed_receipt_is_not_cached_as_final_result(wallet):
     attempts = []
     def handle(request):

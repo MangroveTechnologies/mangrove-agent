@@ -155,8 +155,7 @@ def test_paper_lifecycle_end_to_end(client):
     assert "retired" in r.json()["detail"]
 
     # The strategy enters as an existing execution record.
-    from src.services.strategy_service import StrategyManualRequest
-    from tests.existing_strategies import existing_strategy
+    from tests.existing_strategies import StrategyManualRequest, existing_strategy
     strat = existing_strategy(StrategyManualRequest(
         name="paper e2e", asset="ETH", timeframe="1h",
         entry=[{"name": "macd_cross_up", "signal_type": "TRIGGER", "timeframe": "1h"}],

@@ -91,7 +91,7 @@ def _record_evidence(original: dict, evidence: dict) -> dict:
                 and budget["exhausted"] and spend_service._spent_micro_usd(budget["period_id"], conn) < spend_service._cap_micro_usd(budget)):
             spend_service._update_state(conn=conn, exhausted=0, exhausted_at=None, exhausted_reason=None)
         if state == "released" and original.get("operation_id"):
-            conn.execute("UPDATE x402_operations SET state = 'unsigned_failed', payment_headers = NULL, updated_at = ? WHERE id = ? AND state = 'pending' "
+            conn.execute("UPDATE x402_operations SET state = 'unsigned_failed', updated_at = ? WHERE id = ? AND state = 'pending' "
                          "AND NOT EXISTS (SELECT 1 FROM x402_payments WHERE operation_id = ? AND state != 'released')",
                          (now, original["operation_id"], original["operation_id"]))
     return {**evidence, "ledger_state": state, "ledger_changed": True,

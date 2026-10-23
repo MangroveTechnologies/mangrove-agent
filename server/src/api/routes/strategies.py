@@ -1,6 +1,9 @@
 """Strategy routes — auth-gated. All thin wrappers over strategy_service."""
 from __future__ import annotations
 
+from uuid import UUID
+from pydantic import BaseModel, ConfigDict
+
 from fastapi import APIRouter, Depends, HTTPException
 from starlette.concurrency import run_in_threadpool
 
@@ -27,28 +30,6 @@ async def create_autonomous():
 @router.post("/manual", include_in_schema=False)
 async def create_manual():
     raise HTTPException(status_code=410, detail="Local strategy creation is retired. Use MangroveAI MCP save_strategy.")
-
-
-@router.get(
-    "",
-    response_model=list[StrategyDetailResponse],
-    summary="List strategies",
-)
-async def list_strategies(
-    status: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
-) -> list[StrategyDetailResponse]:
-    return strategy_service.list_strategies(status=status, limit=limit, offset=offset)
-
-
-@router.get(
-    "/{strategy_id}",
-    response_model=StrategyDetailResponse,
-    summary="Get a strategy by ID",
-)
-async def get_strategy(strategy_id: str) -> StrategyDetailResponse:
-    return strategy_service.get_strategy(strategy_id)
 
 
 @router.patch("/{strategy_id}/market", response_model=StrategyDetailResponse)
@@ -95,3 +76,41 @@ async def evaluate(strategy_id: str) -> dict:
         "duration_ms": e.duration_ms,
         "error_msg": e.error_msg,
     }
+
+
+class PaperScheduleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    strategy_id: UUID
+    interval_seconds: int
+    max_evaluations: int
+    confirm: bool = False
+
+
+@router.get('/paper-schedules')
+async def list_paper_schedules():
+    from src.services import paper_schedule_service as paper
+    return await run_in_threadpool(paper.list_schedules)
+
+
+@router.post('/paper-schedules')
+async def start_paper_schedule(req: PaperScheduleRequest):
+    from src.services import paper_schedule_service as paper
+    return await run_in_threadpool(paper.start, str(req.strategy_id), req.interval_seconds, req.max_evaluations, req.confirm)
+
+
+@router.post('/paper-schedules/{schedule_id}/pause')
+async def pause_paper_schedule(schedule_id: UUID):
+    from src.services import paper_schedule_service as paper
+    return await run_in_threadpool(paper.pause, str(schedule_id))
+
+
+@router.get('/paper-schedules/{schedule_id}')
+async def inspect_paper_schedule(schedule_id: UUID, refresh: bool = False):
+    from src.services import paper_schedule_service as paper
+    return await run_in_threadpool(paper.inspect, str(schedule_id), refresh)
+
+
+@router.post('/paper-schedules/{schedule_id}/reconcile')
+async def reconcile_paper_schedule(schedule_id: UUID):
+    from src.services import paper_schedule_service as paper
+    return await run_in_threadpool(paper.reconcile, str(schedule_id))

@@ -1,8 +1,8 @@
-"""strategy_service — CRUD, lifecycle, cron tick.
+"""Local execution records, lifecycle and cron ticks.
 
 Responsibilities:
 - Strategy authoring is owned by MangroveAI and accessed over MCP.
-- List + get + status transitions (single source of truth for lifecycle)
+- Internal execution-record reads and local status transitions
 - Cron tick: call mangroveai.execution.evaluate(strategy_id), dispatch
   returned OrderIntents to order_executor.
 
@@ -224,24 +224,6 @@ class StrategyMarketContext(BaseModel):
     market_data_venue: str = Field(min_length=1, pattern=r"^[A-Z0-9._-]+$")
 
 
-class StrategyManualRequest(BaseModel):
-    name: str
-    asset: str
-    timeframe: str
-    entry: list[dict[str, Any]]
-    exit: list[dict[str, Any]] = Field(default_factory=list)
-    execution_config: dict[str, Any] | None = None
-    market_context: StrategyMarketContext | None = None
-    # Which MangroveAI evaluation lane this strategy's ticks use (#151):
-    #   'server'    — by-id evaluation; the engine's DB is authoritative for
-    #                 engine position state (default).
-    #   'stateless' — object lane; THIS agent supplies and receives all
-    #                 state (execution_state + open_positions) from its own
-    #                 SQLite. Requires MangroveAI with #840/#848.
-    # None falls back to the config default (EVALUATION_LANE, 'server').
-    evaluation_lane: Literal["server", "stateless"] | None = None
-
-
 class StrategyAllocationInput(BaseModel):
     wallet_address: str
     token: str  # symbol like "USDC"
@@ -290,66 +272,6 @@ class StrategyDetailResponse(BaseModel):
     generation_report: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
-
-
-# -- Composition validation --------------------------------------------------
-
-
-def _insert_cache(
-    mangrove_detail: Any,
-    entry: list[dict],
-    exit_rules: list[dict],
-    execution_config: dict[str, Any],
-    generation_report: dict[str, Any] | None,
-    evaluation_lane: str | None = None,
-    market_context: StrategyMarketContext | None = None,
-) -> str:
-    """Insert a row into local strategies cache. Returns our local UUID.
-
-    Idempotent on mangrove_id: MangroveAI's strategies.create returns the
-    EXISTING strategy when the account already has one with the same rules,
-    and mangrove_id is UNIQUE locally, so a blind insert 500'd with
-    "UNIQUE constraint failed: strategies.mangrove_id". Return the existing
-    local row instead; its status/allocation stay untouched.
-    """
-    local_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
-    mangrove_id = str(getattr(mangrove_detail, "id", None) or getattr(mangrove_detail, "strategy_id", local_id))
-    existing = get_connection().execute(
-        "SELECT id FROM strategies WHERE mangrove_id = ?", (mangrove_id,),
-    ).fetchone()
-    if existing is not None:
-        _log.info("strategy.create_deduplicated", strategy_id=existing[0], mangrove_id=mangrove_id)
-        return existing[0]
-    get_connection().execute(
-        """INSERT INTO strategies
-           (id, mangrove_id, name, asset, timeframe, status,
-            entry_json, exit_json, execution_config_json,
-            generation_report_json, evaluation_lane, created_at, updated_at, market_context_json)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            local_id, mangrove_id,
-            getattr(mangrove_detail, "name", "unnamed"),
-            getattr(mangrove_detail, "asset", ""),
-            _extract_timeframe(entry),
-            getattr(mangrove_detail, "status", "draft"),
-            json.dumps(entry),
-            json.dumps(exit_rules),
-            json.dumps(execution_config or {}),
-            json.dumps(generation_report) if generation_report else None,
-            evaluation_lane,
-            now, now,
-            market_context.model_dump_json() if market_context else None,
-        ),
-    )
-    get_connection().commit()
-    return local_id
-
-
-def _extract_timeframe(entry: list[dict]) -> str:
-    if not entry:
-        return "1h"
-    return entry[0].get("timeframe") or "1h"
 
 
 # Fresh-strategy engine account defaults for the stateless lane, matching
@@ -465,7 +387,7 @@ def _get_row(strategy_id: str) -> Any:
     if not row:
         raise StrategyNotFound(
             f"Strategy {strategy_id} not found.",
-            suggestion="Use GET /api/v1/agent/strategies to list available strategies.",
+            suggestion="Use the local execution record ID, not a MangroveAI saved-strategy ID.",
         )
     return row
 
@@ -480,23 +402,6 @@ def _set_status(strategy_id: str, new_status: str) -> None:
 
 
 # -- Public API --------------------------------------------------------------
-
-
-def list_strategies(
-    status: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
-) -> list[StrategyDetailResponse]:
-    """List strategies from local cache."""
-    sql = "SELECT * FROM strategies"
-    params: list = []
-    if status:
-        sql += " WHERE status = ?"
-        params.append(status)
-    sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
-    rows = get_connection().execute(sql, params).fetchall()
-    return [_row_to_response(r) for r in rows]
 
 
 def get_strategy(strategy_id: str) -> StrategyDetailResponse:

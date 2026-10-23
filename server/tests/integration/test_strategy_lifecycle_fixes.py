@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from unittest.mock import MagicMock
 
-from tests.existing_strategies import existing_response
+from tests.existing_strategies import StrategyManualRequest
 from tests.existing_strategies import existing_strategy as create_manual
 
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -29,7 +29,6 @@ def _paper(create_manual, update_status, StrategyManualRequest, StrategyStatusUp
 
 def test_tick_populates_market_snapshot_from_engine_response(temp_db, mock_ai_sdk):  # noqa: F811
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         tick,
         update_status,
@@ -61,7 +60,6 @@ def test_tick_populates_market_snapshot_from_engine_response(temp_db, mock_ai_sd
 def test_market_snapshot_empty_when_engine_reports_nothing(temp_db, mock_ai_sdk):  # noqa: F811
     """No price/timestamp in the response → {} (never invented)."""
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         tick,
         update_status,
@@ -78,7 +76,6 @@ def test_market_snapshot_empty_when_engine_reports_nothing(temp_db, mock_ai_sdk)
 
 def test_existing_inactive_record_can_promote_to_paper(temp_db, mock_ai_sdk):  # noqa: F811
     from src.services.strategy_service import (
-        StrategyManualRequest,
         StrategyStatusUpdate,
         update_status,
     )

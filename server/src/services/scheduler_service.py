@@ -121,6 +121,8 @@ def _on_job_event(event: Any) -> None:
 def start() -> None:
     """Start the scheduler. Called from the FastAPI lifespan startup."""
     sched = get_scheduler()
+    sched.add_job('src.services.paper_schedule_service:dispatch', trigger='interval', seconds=5,
+                  id='paper-dispatch', replace_existing=True, coalesce=True, max_instances=1)
     sched.add_job('src.services.broker_execution:reconcile_pending', trigger='interval', seconds=15,
                   id='broker-reconciliation', replace_existing=True, coalesce=True, max_instances=1)
     from src.services.payment_reconciliation_worker import configured_urls

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import base64
 import math
-import secrets
 import uuid
 from collections.abc import Sequence
 from types import SimpleNamespace
@@ -140,6 +139,7 @@ class X402SyncTransport(httpx.BaseTransport):
                                                     str(request.url), request.content)
             operation, created = payment_operations.begin(digest, headers.get("X-Payment-Operation-Id"))
             headers["X-Payment-Operation-Id"] = operation["id"]
+            headers.update(payment_operations.identity_headers(operation['id']))
             if not created:
                 if operation["response"] is not None:
                     cached = payment_operations.unseal(operation["response"])
@@ -160,6 +160,7 @@ class X402SyncTransport(httpx.BaseTransport):
                 if recovery.get("idempotency") != "v1":
                     raise X402PaymentUncertain(operation_id=operation["id"], reservation_ids=ids)
                 headers.update(recovery["headers"])
+                headers.update(payment_operations.recovery_headers(operation['id']))
                 signer = SimpleNamespace(reservations=ids)
             else:
                 wallet_manager.require_backup_confirmed(payer)
@@ -172,7 +173,7 @@ class X402SyncTransport(httpx.BaseTransport):
                 payload = client.create_payment_payload(required)
                 headers["X-Wallet-Address"] = payer
                 payment_headers = dict(http_client.encode_payment_signature_header(payload))
-                payment_headers["X-Payment-Recovery-Token"] = secrets.token_urlsafe(32)
+                payment_headers.update(payment_operations.identity_headers(operation['id']))
                 headers.update(payment_headers)
                 # Persist before disclosure. A restart must reuse this signature,
                 # never manufacture a replacement for an uncertain operation.
@@ -211,6 +212,7 @@ class X402SyncTransport(httpx.BaseTransport):
             raise X402PaymentUncertain(reservation_ids=signer.reservations,
                                        operation_id=operation["id"] if operation else None) from None
         try:
+            payment_operations.record_replacement_permission(operation['id'], paid_response.headers.get('X-Payment-Replacement-Allowed') == 'true')
             settlement = x402_payer.decode_settlement(paid_response, payer=payer, network=x402_payer.get_network())
             spend_service.reconcile(
                 signer.reservations,

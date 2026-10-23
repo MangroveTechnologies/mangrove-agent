@@ -1,15 +1,27 @@
 {
   "bindings": {
-    "agent_evaluate_strategy": {
+    "agent_get_paper_schedule": {
       "meters": [
-        "rest:managers_evaluate_by_id",
-        "rest:managers_evaluate_by_object"
+        "rest:strategy_detail"
       ],
       "variable": true
     },
-    "agent_update_strategy_status": {
+    "agent_pause_paper_schedule": {
       "meters": [
         "rest:strategy_status_update"
+      ],
+      "variable": false
+    },
+    "agent_reconcile_paper_schedule": {
+      "meters": [
+        "rest:managers_evaluate_by_id"
+      ],
+      "variable": true
+    },
+    "agent_start_paper_schedule": {
+      "meters": [
+        "rest:strategy_status_update",
+        "rest:managers_evaluate_by_id"
       ],
       "variable": true
     }
@@ -79,7 +91,7 @@
         "type": "object"
       }
     },
-    "agent_evaluate_strategy": {
+    "agent_get_paper_schedule": {
       "access": "auth",
       "inputSchema": {
         "properties": {
@@ -87,152 +99,29 @@
             "default": "",
             "type": "string"
           },
-          "strategy_id": {
+          "refresh": {
+            "default": false,
+            "type": "boolean"
+          },
+          "schedule_id": {
             "type": "string"
           }
         },
         "required": [
-          "strategy_id"
+          "schedule_id"
         ],
         "type": "object"
       }
     },
-    "agent_get_strategy": {
+    "agent_list_paper_schedules": {
       "access": "auth",
       "inputSchema": {
         "properties": {
           "api_key": {
             "default": "",
             "type": "string"
-          },
-          "strategy_id": {
-            "type": "string"
           }
         },
-        "required": [
-          "strategy_id"
-        ],
-        "type": "object"
-      }
-    },
-    "agent_list_all_trades": {
-      "access": "auth",
-      "inputSchema": {
-        "properties": {
-          "api_key": {
-            "default": "",
-            "type": "string"
-          },
-          "limit": {
-            "default": 50,
-            "type": "integer"
-          },
-          "mode": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "strategy_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "agent_list_evaluations": {
-      "access": "auth",
-      "inputSchema": {
-        "properties": {
-          "api_key": {
-            "default": "",
-            "type": "string"
-          },
-          "limit": {
-            "default": 50,
-            "type": "integer"
-          },
-          "offset": {
-            "default": 0,
-            "type": "integer"
-          },
-          "strategy_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "strategy_id"
-        ],
-        "type": "object"
-      }
-    },
-    "agent_list_strategies": {
-      "access": "auth",
-      "inputSchema": {
-        "properties": {
-          "api_key": {
-            "default": "",
-            "type": "string"
-          },
-          "limit": {
-            "default": 50,
-            "type": "integer"
-          },
-          "offset": {
-            "default": 0,
-            "type": "integer"
-          },
-          "status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "agent_list_trades": {
-      "access": "auth",
-      "inputSchema": {
-        "properties": {
-          "api_key": {
-            "default": "",
-            "type": "string"
-          },
-          "limit": {
-            "default": 50,
-            "type": "integer"
-          },
-          "offset": {
-            "default": 0,
-            "type": "integer"
-          },
-          "strategy_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "strategy_id"
-        ],
         "type": "object"
       }
     },
@@ -250,6 +139,42 @@
         },
         "required": [
           "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
+    "agent_pause_paper_schedule": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "schedule_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ],
+        "type": "object"
+      }
+    },
+    "agent_reconcile_paper_schedule": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "schedule_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule_id"
         ],
         "type": "object"
       }
@@ -284,22 +209,10 @@
         "type": "object"
       }
     },
-    "agent_update_strategy_status": {
+    "agent_start_paper_schedule": {
       "access": "auth",
       "inputSchema": {
         "properties": {
-          "allocation": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
           "api_key": {
             "default": "",
             "type": "string"
@@ -308,15 +221,19 @@
             "default": false,
             "type": "boolean"
           },
-          "status": {
-            "type": "string"
+          "interval_seconds": {
+            "type": "integer"
+          },
+          "max_evaluations": {
+            "type": "integer"
           },
           "strategy_id": {
             "type": "string"
           }
         },
         "required": [
-          "status",
+          "interval_seconds",
+          "max_evaluations",
           "strategy_id"
         ],
         "type": "object"

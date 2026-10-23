@@ -1390,3 +1390,16 @@ def test_empty_validity_window_is_refused(wallet, before, after):
                      'validAfter': after, 'validBefore': before, 'nonce': b'\xab' * 32},
             wallet_address=wallet,
         )
+
+
+async def test_mcp_identity_denial_before_signing_preserves_auth_error(wallet, sepolia_network):
+    from mcp.shared.exceptions import McpError
+    from mcp.types import ErrorData
+    from src.services import spend_service, x402_payer
+    from src.shared.errors import UpstreamAccessError
+    session = _McpPaymentSession(free=True, failure=McpError(ErrorData(code=-32010, message='private detail')))
+    before = spend_service.list_payments()
+    with pytest.raises(UpstreamAccessError) as caught:
+        await x402_payer.pay_mcp(session, wallet_address=wallet, resource='http://localhost:9080/mcp/')
+    assert caught.value.upstream_status == 401
+    assert spend_service.list_payments() == before

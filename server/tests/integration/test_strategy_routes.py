@@ -129,28 +129,12 @@ def test_create_manual_bad_composition_returns_400(client):
     assert "retired" in r.json()["detail"]
 
 
-def test_list_and_get(client):
-    created = existing_response(
-        "/api/v1/agent/strategies/manual",
-        headers=_auth(),
-        json={"name": "s", "asset": "ETH", "timeframe": "1h",
-              "entry": [{"name": "rsi_oversold", "signal_type": "TRIGGER",
-                         "timeframe": "1h"}]},
-    ).json()
-
-    lst = client.get("/api/v1/agent/strategies", headers=_auth())
-    assert lst.status_code == 200
-    assert any(s["id"] == created["id"] for s in lst.json())
-
-    got = client.get(f"/api/v1/agent/strategies/{created['id']}", headers=_auth())
-    assert got.status_code == 200
-    assert got.json()["id"] == created["id"]
-
-
-def test_get_missing_returns_404(client):
-    r = client.get("/api/v1/agent/strategies/nope", headers=_auth())
-    assert r.status_code == 404
-    assert r.json()["code"] == "STRATEGY_NOT_FOUND"
+def test_local_strategy_reads_are_removed(client):
+    for path in ("/api/v1/agent/strategies", "/api/v1/agent/strategies/existing-id"):
+        assert client.get(path, headers=_auth()).status_code == 404
+    paths = client.get("/openapi.json").json()["paths"]
+    assert "get" not in paths.get("/api/v1/agent/strategies", {})
+    assert "get" not in paths.get("/api/v1/agent/strategies/{strategy_id}", {})
 
 
 def test_patch_status_requires_confirm_for_live(client):
@@ -208,5 +192,22 @@ def test_evaluate_manual_tick(client):
 
 
 def test_auth_required(client):
-    assert client.get("/api/v1/agent/strategies").status_code == 401
+    assert client.patch("/api/v1/agent/strategies/example/status", json={"status": "inactive"}).status_code == 401
 
+
+
+def test_paper_schedule_routes_auth_and_shared_service(client, monkeypatch):
+    from uuid import uuid4
+    from src.services import paper_schedule_service as paper
+    schedule_id, strategy_id = str(uuid4()), str(uuid4())
+    start = MagicMock(return_value={'id': schedule_id, 'state': 'active'})
+    monkeypatch.setattr(paper, 'start', start)
+    monkeypatch.setattr(paper, 'list_schedules', lambda: {'schedules': [{'id': schedule_id}]})
+    path = '/api/v1/agent/strategies/paper-schedules'
+    body = {'strategy_id': strategy_id, 'interval_seconds': 60, 'max_evaluations': 10, 'confirm': True}
+    assert client.post(path, json=body).status_code == 401
+    start.assert_not_called()
+    assert client.post(path, json=body, headers=_auth()).status_code == 200
+    start.assert_called_once_with(strategy_id, 60, 10, True)
+    assert client.get(path, headers=_auth()).json()['schedules'][0]['id'] == schedule_id
+    assert client.post(path, json={**body, 'cash_balance': 999}, headers=_auth()).status_code == 422
