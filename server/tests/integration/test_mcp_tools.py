@@ -47,8 +47,8 @@ async def _call(server, name: str, args: dict | None = None) -> dict | list:
 
 
 CORE_TOOLS = {
-    "status", "list_tools", "create_wallet", "list_wallets", "get_balances",
-    "list_dex_venues", "get_swap_quote", "execute_swap",
+    "status", "list_tools", "create_wallet", "list_wallets",
+    "execute_swap",
     "x402_spend_status",
 }
 

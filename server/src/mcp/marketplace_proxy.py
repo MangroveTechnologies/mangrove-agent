@@ -36,7 +36,9 @@ def exposed_tool(remote: Tool) -> Tool:
         properties.pop(name, None)
     required = [name for name in schema.get('required', []) if name not in hidden]
     options = copy.deepcopy(_OPTIONS)
-    suffix = '\nLocal _agent options are transport controls, not marketplace arguments.'
+    if meta.get('access') == 'api_key':
+        options['properties'] = {'api_key': options['properties']['api_key']}
+    suffix = '\nLocal _agent options are transport controls, not Markets arguments.'
     if meta['mode'] == 'ownership':
         required = [name for name in required if name != meta['actor_field']]
         options['required'] = ['wallet_address']

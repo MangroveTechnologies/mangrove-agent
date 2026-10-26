@@ -535,7 +535,7 @@ def _deposit_instructions(address: str, chain: str, network: str) -> str:
     return (
         f"Deposit to this {chain_label} address on {net_label}:\n"
         f"  {address}\n\n"
-        "Start with a SMALL TEST AMOUNT (1-5 USDC). Verify via `get_balances` "
+        "Start with a SMALL TEST AMOUNT (1-5 USDC). Verify via the discovered Markets balance tool "
         "before sending more. This wallet is dedicated to the agent — keep it "
         "separate from your personal holdings."
     )
@@ -808,7 +808,7 @@ def import_wallet(
         master_key_source=get_master_key_source(),
         backup_required=False,  # imported: user already has it
         next_step=(
-            "Verify balance with get_balances. The wallet is live — auto-"
+            "Verify balance with the discovered Markets balance tool. The wallet is live — auto-"
             "confirmed as backed-up because you typed the key into the CLI, "
             "which means you have it off-agent already."
         ),

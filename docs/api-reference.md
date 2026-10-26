@@ -146,49 +146,12 @@ Get all token balances for a wallet on an EVM chain.
 
 ## 2. DEX Activity
 
-### 2.1 List Supported Venues
+### 2.1 Venue and Pair Discovery
 
-**Source:** MangroveMarkets MCP Server
-**Tool:** `dex_supported_venues`
-**REST:** `POST /api/v1/tools/dex_supported_venues`
-**Access:** Free
-
-**Parameters:** None
-
-**Response:**
-```json
-{
-  "venues": [
-    {"id": "xpmarket", "name": "XPMarket", "chain": "xrpl-testnet", "status": "active", "supported_pairs_count": 2, "fee_percent": 0.001},
-    {"id": "jupiter", "name": "Jupiter", "chain": "solana-devnet", "status": "active", "supported_pairs_count": 3, "fee_percent": 0.002},
-    {"id": "1inch", "name": "1inch Aggregator", "chain": "multi", "status": "active", "supported_pairs_count": 3, "fee_percent": 0.0025}
-  ]
-}
-```
-
----
-
-### 2.2 List Supported Pairs
-
-**Source:** MangroveMarkets MCP Server
-**Tool:** `dex_supported_pairs`
-**REST:** `POST /api/v1/tools/dex_supported_pairs`
-**Access:** Free
-
-**Parameters:**
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `venue_id` | string | yes | Venue ID (e.g. `"1inch"`, `"xpmarket"`, `"jupiter"`) |
-
-**Response:**
-```json
-{
-  "pairs": [
-    {"venue_id": "1inch", "base_token": "ETH", "quote_token": "USDC", "is_active": true}
-  ]
-}
-```
+`dex_supported_venues` and `dex_supported_pairs` are unavailable and hidden from
+supported discovery because their data was placeholder-only. Legacy direct calls
+return `NOT_IMPLEMENTED` without charging. They must not be used to infer current
+venue availability or supported token pairs.
 
 ---
 
@@ -203,7 +166,7 @@ Get the best swap quote across all venues or from a specific venue.
 
 > **Units note.** This is the **raw backend tool**, whose `amount` is in the
 > token's **smallest units** (wei / base units), as shown below. The agent's
-> own `get_swap_quote` tool and `POST /api/v1/agent/dex/quote` route instead
+> `get_swap_quote` MCP wrapper is retired. The retained `POST /api/v1/agent/dex/quote` route and local swap execution instead
 > take `amount` in **human units** (e.g. `0.001` = 0.001 ETH) and convert to
 > base units for you — passing a human float (e.g. `0.001`) straight to the
 > raw tool reads as sub-wei dust and returns `INSUFFICIENT_LIQUIDITY`.

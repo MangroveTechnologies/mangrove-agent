@@ -13,7 +13,7 @@ class PricedFastMCP(FastMCP):
     async def list_tools(self):
         from src.services.tool_pricing import enrich_tools, price_hint
 
-        tools = await super().list_tools()
+        tools = [tool for tool in await super().list_tools() if tool.name != 'hello_mangrove']
         entries = await enrich_tools([{"name": tool.name} for tool in tools])
         result = []
         for tool, entry in zip(tools, entries, strict=True):
@@ -32,7 +32,9 @@ class PricedFastMCP(FastMCP):
         except AgentError:
             remote = []
         local_names = {tool.name for tool in result}
-        result += [tool for tool in remote if tool.name not in local_names]
+        if any(tool.name in local_names for tool in remote):
+            raise ValueError("Markets MCP name conflicts with a local tool")
+        result += remote
         try:
             upstream = await mangrove_proxy.catalog()
             self.mangroveai_available = True
@@ -46,10 +48,14 @@ class PricedFastMCP(FastMCP):
 
     async def call_tool(self, name, arguments):
         from src.mcp import mangrove_proxy, marketplace_proxy
-        from src.services.marketplace_catalog import LOCAL_TOOLS
+        from src.services.marketplace_catalog import RETIRED_READ_TOOLS, is_markets_tool
 
-        if name.startswith("marketplace_") and name not in LOCAL_TOOLS:
-            return await marketplace_proxy.call_tool(name, arguments)
+        if name in RETIRED_READ_TOOLS:
+            return mangrove_proxy.failure(
+                'RETIRED_TOOL', 'This agent wrapper is retired. Discover the current Markets tool and use its schema.',
+            )
+        if is_markets_tool(name):
+            return await marketplace_proxy.call_tool(name, arguments or {})
         if name in self._tool_manager._tools:
             return await super().call_tool(name, arguments)
         return await mangrove_proxy.call_tool(name, arguments or {})

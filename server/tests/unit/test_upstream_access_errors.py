@@ -1,6 +1,5 @@
 """Shared denial handling must preserve status without leaking upstream content."""
 import json
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import httpx
@@ -8,6 +7,7 @@ import pytest
 from mangrove_ai.exceptions import APIError as AIAPIError
 from mangrove_markets.exceptions import APIError as MarketsAPIError
 from mcp.server.fastmcp import FastMCP
+
 from src.mcp import tools
 from src.shared.errors import (
     AgentError,
@@ -83,26 +83,31 @@ def test_no_message_inference_or_cause_cycle():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('status', [401, 403])
-@pytest.mark.parametrize('name,args,path,register,client_name,kind', [
-    ('portfolio_value', {'addresses': '0x123'}, ('portfolio', 'value'), tools._register_wallet,
-     'mangrove_markets_client', MarketsAPIError),
-])
-async def test_registered_tools_preserve_denial_once(monkeypatch, status, name, args, path,
-                                                    register, client_name, kind):
-    from src.shared.clients import mangrove
+async def test_markets_proxy_preserves_denial_once(monkeypatch, status):
+    from unittest.mock import AsyncMock
 
-    upstream = Mock(side_effect=failure(kind, status))
-    client = SimpleNamespace(**{path[0]: SimpleNamespace(**{path[1]: upstream})})
-    monkeypatch.setattr(mangrove, client_name, lambda: client)
+    from mcp.types import Tool
+
+    from src.mcp import marketplace_proxy
+    from src.services import marketplace_catalog, marketplace_reads
+
+    remote = Tool(name='oneinch_portfolio_value', inputSchema={
+        'type': 'object', 'properties': {'addresses': {'type': 'string'}},
+    }, **{'_meta': {marketplace_catalog.READ_CONTRACT_META: {
+        'version': 1, 'mode': 'read', 'access': 'api_key',
+    }}})
     monkeypatch.setattr(tools, '_require', lambda _: True)
-    server = FastMCP('access-regression')
-    register(server)
-    result = json.loads(await server._tool_manager._tools[name].run(args))
+    monkeypatch.setattr(marketplace_catalog, 'get_tool', AsyncMock(return_value=remote))
+    upstream = AsyncMock(side_effect=failure(MarketsAPIError, status))
+    monkeypatch.setattr(marketplace_reads, 'read', upstream)
+    response = await marketplace_proxy.call_tool(remote.name, {'addresses': '0x123'})
+    result = response.structuredContent
+    assert response.isError
     assert result['upstream_status'] == status
     assert result['retryable'] is False
     assert result['retry_payment'] is False
     assert 'secret' not in json.dumps(result)
-    upstream.assert_called_once()
+    upstream.assert_awaited_once()
 
 
 @pytest.mark.parametrize('status', [401, 403])

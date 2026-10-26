@@ -9,8 +9,8 @@ port*, so ``/health`` never came up and the setup/verify scripts failed with
 
 The free + auth tiers must come up regardless of payment-facilitator reach. These
 tests force the facilitator init to fail and assert the app still starts, ``/health``
-answers, and the demo tool is still catalogued (degraded), never taking the agent
-down with it.
+answers, and direct demo diagnostics remain registered while excluded from business
+discovery.
 """
 import os
 
@@ -43,16 +43,18 @@ def test_unreachable_facilitator_does_not_block_startup(monkeypatch):
         assert resp.json()["status"] == "healthy"
 
 
-def test_hello_mangrove_still_catalogued_when_facilitator_down(monkeypatch):
-    """The demo tool stays in the discovery catalog (degraded), so discovery is
-    stable rather than the tool silently vanishing or 500-ing startup."""
+def test_hello_mangrove_remains_registered_but_hidden_when_facilitator_down(monkeypatch):
+    """Facilitator failure preserves direct diagnostics without advertising the demo."""
     monkeypatch.setattr(x402_server, "_ensure_initialized", _boom)
 
     app = create_app()
     with TestClient(app) as client:
         tools = client.get("/api/v1/agent/tools").json()["tools"]
         names = {t["name"] for t in tools}
-        assert "hello_mangrove" in names
+        assert "hello_mangrove" not in names
+        from src.mcp.server import create_mcp_server
+
+        assert "hello_mangrove" in create_mcp_server()._tool_manager._tools
 
 
 def test_run_bounded_returns_value_quickly():

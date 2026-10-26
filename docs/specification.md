@@ -405,9 +405,9 @@ Tool descriptions include parameters, return shapes, and access tier. All tools 
 | Discovery | `list_tools` | `GET /tools` |
 | Wallet | `create_wallet` | `POST /wallet/create` |
 | Wallet | `list_wallets` | `GET /wallet/list` |
-| Wallet | `get_balances` | `GET /wallet/{a}/balances` |
-| DEX | `list_dex_venues` | `GET /dex/venues` |
-| DEX | `get_swap_quote` | `POST /dex/quote` |
+| Markets read | `oneinch_balances` (discovered) | Existing local REST adapter retained |
+| Unavailable discovery | `dex_supported_venues` (hidden) | Placeholder discovery is not supported |
+| Markets read | `dex_get_quote` (native server units) | `POST /dex/quote` retains human units |
 | DEX | `execute_swap` | `POST /dex/swap` |
 | Market | `get_ohlcv` | `GET /market/ohlcv` |
 | Market | `get_market_data` | `GET /market/data` |

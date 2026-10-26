@@ -1,6 +1,6 @@
 # Wallet Presentation
 
-Rules for `create_wallet`, `import_wallet`, `get_balances`, and any future wallet tooling.
+Rules for `create_wallet`, `import_wallet`, the discovered Markets balance tool, and any future wallet tooling.
 
 ## Core invariant -- keys are generated, stored, and signed with LOCALLY
 
@@ -99,7 +99,7 @@ hardware wallet, or paper. After saving, unlock live trading with:
 
   ./scripts/confirm-backup.sh {ADDRESS}
 
-Deposit 1-5 USDC to start. I'll verify via get_balances before you send more.
+Deposit 1-5 USDC to start. I'll verify via the discovered Markets balance tool before you send more.
 ```
 
 `{PLAIN_ENGLISH_MASTER_KEY_SOURCE}` from tool's `master_key_source`:
@@ -128,7 +128,7 @@ Your secret is already backed up (you typed it into stash-secret.sh --
 that's what gave you the vault_token). Backup auto-confirmed; live
 trading is unlocked for this wallet.
 
-Run get_balances to verify it's the wallet you expected.
+Use the discovered Markets balance tool to verify it's the wallet you expected.
 ```
 
 ## When user wants to import (without pasting yet)

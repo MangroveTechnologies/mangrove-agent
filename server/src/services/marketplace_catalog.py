@@ -1,4 +1,4 @@
-"""Discover marketplace contracts only from the configured Markets MCP service."""
+"""Discover read and ownership contracts from the configured Markets MCP service."""
 from __future__ import annotations
 
 import json
@@ -18,27 +18,53 @@ from src.shared.errors import upstream_access_error
 from src.shared.x402.mcp_diagnostics import protect_mcp_diagnostics
 
 CONTRACT_META = 'mangrove/marketplace'
+READ_CONTRACT_META = 'mangrove/markets'
 LOCAL_TOOLS = frozenset({'marketplace_prepare', 'marketplace_submit'})
+RETIRED_READ_TOOLS = frozenset({
+    'get_balances', 'portfolio_value', 'portfolio_pnl', 'portfolio_tokens',
+    'portfolio_defi', 'portfolio_history', 'list_dex_venues', 'get_swap_quote',
+    'get_tx_status', 'get_token_info', 'get_spot_price', 'get_gas_price',
+    'get_token_search', 'get_dex_chart', 'get_allowances',
+})
+
+
+def is_markets_tool(name: str) -> bool:
+    return name.startswith(('marketplace_', 'dex_', 'oneinch_', 'wallet_')) and name not in LOCAL_TOOLS
 
 
 def contract(tool: Tool) -> dict:
-    meta = (tool.meta or {}).get(CONTRACT_META)
+    metadata = tool.meta or {}
+    if CONTRACT_META in metadata and READ_CONTRACT_META in metadata:
+        raise MarketplaceError('Markets returned conflicting tool contracts.')
+    meta = metadata.get(READ_CONTRACT_META, metadata.get(CONTRACT_META))
     if (not isinstance(meta, dict) or type(meta.get('version')) is not int
             or meta['version'] != 1 or meta.get('mode') not in {'read', 'ownership'}):
         raise MarketplaceError('Markets tool contract is unavailable or incompatible.')
     if meta['mode'] == 'ownership' and meta.get('protocol') != 'ownership-v1':
         raise MarketplaceError('Markets signing protocol is not supported.')
+    if READ_CONTRACT_META in metadata and (
+        meta['mode'] != 'read' or meta.get('access') not in {'api_key', 'api_key_or_x402'}
+        or not re.fullmatch(r'(?:dex|oneinch|wallet)_[a-z0-9_]{1,100}', tool.name)
+    ):
+        raise MarketplaceError('Markets read access contract is not supported.')
+    if READ_CONTRACT_META not in metadata and not tool.name.startswith('marketplace_'):
+        raise MarketplaceError('Markets returned an invalid marketplace name.')
     return meta
 
 
 def validate_tool(tool: Tool) -> None:
     meta = contract(tool)
     schema = tool.inputSchema
-    if (not re.fullmatch(r'marketplace_[a-z0-9_]{1,100}', tool.name)
+    if (not re.fullmatch(r'(?:marketplace|dex|oneinch|wallet)_[a-z0-9_]{1,100}', tool.name)
             or tool.name in LOCAL_TOOLS or schema.get('type') != 'object'
             or not isinstance(schema.get('properties'), dict)
             or '_agent' in schema['properties']):
         raise MarketplaceError('Markets returned an invalid tool contract.')
+    if READ_CONTRACT_META in (tool.meta or {}) and set(schema['properties']) & {
+        'api_key', 'private_key', 'seed', 'mnemonic', 'secret', 'signed_tx',
+        'signed_tx_blob', 'payment', 'ownership_proof',
+    }:
+        raise MarketplaceError('Markets read contract contains prohibited credentials or signing arguments.')
     if meta['mode'] == 'ownership' and (
         not isinstance(meta.get('actor_field'), str)
         or meta['actor_field'] not in schema['properties']
@@ -105,9 +131,11 @@ async def catalog() -> list[Tool]:
                             if len(page.tools) > 256:
                                 raise ValueError
                             for tool in page.tools:
-                                if CONTRACT_META not in (tool.meta or {}):
+                                if not {CONTRACT_META, READ_CONTRACT_META}.intersection(tool.meta or {}):
                                     continue
                                 validate_tool(tool)
+                                if contract(tool).get('access') == 'api_key' and key is None:
+                                    continue
                                 if tool.name in names:
                                     raise ValueError
                                 names.add(tool.name)
