@@ -36,7 +36,7 @@ the swap plus gas.
 
 > "Check my balance and the current gas on Base."
 
-The bot calls `get_balances` and `get_gas_price`. Expected:
+The bot calls `oneinch_balances` and `oneinch_gas_price`. Expected:
 
 ```
 Balance on 0x5ff2aAb12Cd34eF567890AbCdEf1234567890aBcD:

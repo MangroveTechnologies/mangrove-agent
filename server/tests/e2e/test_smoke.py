@@ -319,8 +319,8 @@ def test_mcp_tool_count_matches_rest_catalog(client, monkeypatch, upstream_avail
     assert discovery.await_count == 2
 
     required_local = {
-        "status", "list_tools", "create_wallet", "list_wallets", "get_balances",
-        "list_dex_venues", "get_swap_quote", "execute_swap", "hello_mangrove",
+        "status", "list_tools", "create_wallet", "list_wallets",
+        "execute_swap",
     }
     assert required_local <= catalog.keys()
     assert not {name.removeprefix("agent_") for name in required_local

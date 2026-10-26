@@ -1,62 +1,5 @@
 {
-  "direct_sdk_adapters": {
-    "get_allowances": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
-      "sha256": "a96c22ec94a34f4576665ea35864d5c6c485c7bfa857e906dd84ee36f69c45e0"
-    },
-    "get_balances": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
-      "sha256": "c61a5e5c9e04667cad0a7497a8ab0536f3ccec358d90de6c17143efae312e46b"
-    },
-    "get_dex_chart": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
-      "sha256": "b44e0bcd214b150f8c5885af17923ad00059100ba408cbef5c9f240a07f8fa65"
-    },
-    "get_gas_price": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
-      "sha256": "aa972e321110b3803f9b42fd0af0d5e385bf36797c21e8ab62fa3447131e0aa8"
-    },
-    "get_spot_price": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
-      "sha256": "23b8b9ce62ded456e5f9f5fb8926b224ed48a73974eb81aa4c1aefd50c30b68d"
-    },
-    "get_token_info": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
-      "sha256": "9350a82f6489f4fb9eb76369d738e8e280423a454ac0983c898ea88d198ec77b"
-    },
-    "get_token_search": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
-      "sha256": "8009e33c4649a549d62272117a9b59fb9e4385b455e58261d0770b49139eeb88"
-    },
-    "get_tx_status": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
-      "sha256": "36abfa3499a195fe28de2a7320a326b87e9ce37f636236bb4507bb2ca54507b3"
-    },
-    "list_dex_venues": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter.",
-      "sha256": "eed531564a48dd91f55608d20c21aec0d2a3a77ce5905a1f71a9a68ec962c4d8"
-    },
-    "portfolio_defi": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
-      "sha256": "b8ef29c3d2e95b59ec0f1767813fefce899fcf273cf9cdb57af0da79f14f68d6"
-    },
-    "portfolio_history": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged. F07: description updated to distinguish server strategy history; execution unchanged.",
-      "sha256": "d8a36aa8cee8c90ccf60ddcf9c6efa4d6dcda72007d8f20141f00ff4e76eab10"
-    },
-    "portfolio_pnl": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
-      "sha256": "a68c7d78a2b8795479bbeea2821ba6b517bbcbb766aefa21d5df6568c1338d43"
-    },
-    "portfolio_tokens": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
-      "sha256": "a810ef9242ceaf3ec8fdefa242fbbbc356f2fd6eec581e22ca59b00c6b65ff31"
-    },
-    "portfolio_value": {
-      "reason": "Existing MangroveMarkets adapter; outside MangroveAI consolidation. Share REST logic when changing this adapter. Access-denial review: preserve typed upstream 401/403 through the shared sanitized error handler; SDK arguments and business calls unchanged.",
-      "sha256": "6fbf8ee9e0d1f53bd09ef553161c65637dedcfa5332b97988e420edc7a937944"
-    }
-  },
+  "direct_sdk_adapters": {},
   "unknown_pricing": {},
   "version": 1,
   "without_upstream_pricing": {
@@ -74,27 +17,12 @@
     "cex_validate_order": "Kraken credentials/operations or MangroveMarkets telemetry, outside MangroveAI pricing.",
     "create_wallet": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
     "execute_swap": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
-    "get_allowances": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
-    "get_balances": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
-    "get_dex_chart": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
-    "get_gas_price": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
-    "get_spot_price": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
-    "get_swap_quote": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
-    "get_token_info": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
-    "get_token_search": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
-    "get_tx_status": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
     "hello_mangrove": "Local x402 receiver demo; local metadata is checked against configured network.",
     "import_wallet": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
-    "list_dex_venues": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
     "list_tools": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
     "list_wallets": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
     "marketplace_prepare": "Local wallet-approval coordination for MangroveMarkets; outside MangroveAI metering. No automatic payment authorization.",
     "marketplace_submit": "Local wallet-approval coordination for MangroveMarkets; outside MangroveAI metering. No automatic payment authorization.",
-    "portfolio_defi": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
-    "portfolio_history": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
-    "portfolio_pnl": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
-    "portfolio_tokens": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
-    "portfolio_value": "Local execution or MangroveMarkets request, not a MangroveAI billing resource.",
     "set_agent_name": "User-chosen name stored in the local agent database; no upstream request or charge.",
     "status": "Local agent state, custody, discovery or audit operation; no upstream price binding.",
     "x402_spend_reset": "Local agent state, custody, discovery or audit operation; no upstream price binding.",

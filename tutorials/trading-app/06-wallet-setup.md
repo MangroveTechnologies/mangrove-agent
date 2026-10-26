@@ -59,7 +59,7 @@ wallet with:
 
   ./scripts/confirm-backup.sh 0x5ff2aAb12Cd34eF567890AbCdEf1234567890aBcD
 
-Deposit 1-5 USDC to start. I'll verify via get_balances before you
+Deposit 1-5 USDC to start. I'll verify via oneinch_balances before you
 send more.
 ```
 
@@ -233,7 +233,7 @@ stash-secret.sh — that's what gave you the vault_token). The agent
 auto-confirmed the backup, so live trading is already unlocked for
 this wallet.
 
-Run get_balances to verify it's the wallet you expected.
+Run oneinch_balances to verify it's the wallet you expected.
 ```
 
 No backup-confirm step needed — importing is proof you already have
@@ -284,7 +284,7 @@ You now have:
    manager / paper backup from step A.1.
 3. **A backup flag** — `wallets.backup_confirmed_at` set to a
    timestamp, which unlocks live trading for this wallet.
-4. **Funds on-chain** — USDC visible to the bot via `get_balances`,
+4. **Funds on-chain** — USDC visible to the bot via `oneinch_balances`,
    ready to allocate.
 
 ## Where your master key actually lives

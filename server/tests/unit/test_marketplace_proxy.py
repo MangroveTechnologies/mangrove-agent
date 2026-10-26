@@ -72,6 +72,18 @@ async def test_catalog_ignores_unmarked_tools(receiver):
 
 
 @pytest.mark.asyncio
+async def test_catalog_accepts_server_owned_read_without_local_schema(receiver):
+    receiver['tools'] = [{'name': 'oneinch_portfolio_value',
+        'description': 'Value returned by Markets',
+        'inputSchema': {'type': 'object', 'properties': {'addresses': {'type': 'string'}}},
+        '_meta': {catalog.READ_CONTRACT_META: {'version': 1, 'mode': 'read', 'access': 'api_key'}}}]
+    published = await proxy.list_tools()
+    assert [tool.name for tool in published] == ['oneinch_portfolio_value']
+    assert published[0].inputSchema['properties']['addresses'] == {'type': 'string'}
+    assert set(published[0].inputSchema['properties']['_agent']['properties']) == {'api_key'}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('malformation', ['duplicate', 'cursor', 'version', 'reserved'])
 async def test_catalog_fails_closed(receiver, malformation):
     if malformation == 'duplicate':

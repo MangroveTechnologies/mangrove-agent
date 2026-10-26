@@ -18,9 +18,10 @@ ORIGIN = 'https://receiver.test/mcp'
 
 
 @pytest.fixture
-def receiver(monkeypatch, wallet):
+def receiver(monkeypatch, wallet, request):
     monkeypatch.setattr(app_config, 'MANGROVE_API_KEY', None)
     monkeypatch.setattr(app_config, 'MANGROVEMARKETS_BASE_URL', 'https://receiver.test')
+    operation = getattr(request, 'param', 'marketplace_search')
     state = {'calls': [], 'failure': None, 'closed': False, 'requests': []}
     original_client = httpx.AsyncClient
 
@@ -47,7 +48,7 @@ def receiver(monkeypatch, wallet):
             assert message['method'] == 'tools/call'
             params = message['params']
             state['calls'].append(params)
-            assert params['name'] == 'marketplace_search'
+            assert params['name'] == operation
             assert params['arguments']['limit'] == 10
             if state['failure'] == 'quota':
                 result = {'isError': True, 'structuredContent': {'code': 'QUOTA_EXCEEDED'},
@@ -58,7 +59,7 @@ def receiver(monkeypatch, wallet):
                           'content': [{'type': 'text', 'text': '{}'}]}
             elif 'x402/payment' not in params.get('_meta', {}):
                 quote = {'x402Version': 2, 'accepts': [{'scheme': 'exact', 'network': 'eip155:84532',
-                    'asset': '0x036CbD53842c5426634e7929541eC2318f3dCF7e', 'amount': '1000',
+                    'asset': '0x036CbD53842c5426634e7929541eC2318f3dCF7e', 'amount': '1000' if operation == 'marketplace_search' else '10000',
                     'payTo': '0xde991861bB3e7078015826Fad749de398F6ec1f6', 'maxTimeoutSeconds': 300,
                     'extra': {'name': 'USDC', 'version': '2'}}]}
                 result = {'isError': True, 'structuredContent': quote,
@@ -76,6 +77,11 @@ def receiver(monkeypatch, wallet):
                     'content': [{'type': 'text', 'text': '{"signals":[{"name":"example"}]}'}],
                     '_meta': {'x402/payment-response': {'success': True, 'transaction': '0x' + 'ab' * 32,
                               'payer': wallet, 'network': 'eip155:84532'}}}
+        if message['method'] == 'tools/list' and operation != 'marketplace_search':
+            result['tools'][0]['name'] = operation
+            result['tools'][0]['_meta'] = {'mangrove/markets': {
+                'version': 1, 'mode': 'read', 'access': 'api_key_or_x402',
+            }}
         return httpx.Response(200, json={'jsonrpc': '2.0', 'id': message['id'], 'result': result})
 
     class Transport(httpx.MockTransport):
@@ -305,3 +311,18 @@ async def test_fresh_search_can_pay_while_identical_old_search_is_uncertain(rece
     assert recovered.paid
     assert receiver['calls'][-1]['_meta']['x402/payment'] == old_proof
     assert len(spend_service.list_payments()) == 2
+
+
+@pytest.mark.parametrize('receiver', ['oneinch_history'], indirect=True)
+async def test_markets_read_uses_existing_payer_and_recovers(receiver, wallet):
+    receiver['failure'] = 'lost'
+    with pytest.raises(X402PaymentUncertain) as caught:
+        await marketplace_reads.read('oneinch_history', {'limit': 10}, wallet_address=wallet)
+    original = receiver['calls'][-1]['_meta']
+    receiver['failure'] = None
+    result = await marketplace_reads.read('oneinch_history', {'limit': 10}, wallet_address=wallet,
+                                         operation_id=caught.value.operation_id)
+    assert result.paid
+    assert receiver['calls'][-1]['_meta'] == original
+    assert len(receiver['calls']) == 3
+    assert len(spend_service.list_payments()) == 1

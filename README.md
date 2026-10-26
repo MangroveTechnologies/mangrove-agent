@@ -290,10 +290,11 @@ The agent has two kinds of tools. Run `list_tools` for the live, authoritative c
 |---|---|
 | Discovery (free) | `status`, `list_tools` |
 | Naming (local, authenticated) | `set_agent_name` |
-| Payment demo | `hello_mangrove` (x402) |
-| Wallets & portfolio | `create_wallet`, `import_wallet`, `list_wallets`, `get_balances`, `portfolio_value`, `portfolio_pnl`, `portfolio_tokens`, `portfolio_defi`, `portfolio_history` |
+| Payment diagnostics | `hello_mangrove` remains directly callable; hidden from normal discovery |
+| Wallet custody | `create_wallet`, `import_wallet`, `list_wallets` stay local; balance and portfolio reads are discovered from Markets |
 | Kraken (CEX) | `cex_status`, `cex_connect_kraken`, `cex_balances`, `cex_validate_order`, `cex_sync_fills` |
-| DEX (1inch) | `list_dex_venues`, `get_swap_quote`, `execute_swap`, `get_tx_status`, `get_spot_price`, `get_gas_price`, `get_token_search`, `get_allowances`, `get_token_info`, `get_dex_chart` |
+| Markets reads | Server-owned `dex_*`, `oneinch_*` and approved `wallet_*` reads; supports API-key access or $0.01 USDC x402 reads. See [migration and units](docs/markets-read-migration.md). |
+| Local DEX execution | `execute_swap` retains local approval, signing and human-unit conversion |
 | Server execution history | Discovered MangroveAI trade and evaluation tools |
 | x402 spend budget | `x402_spend_status`, `x402_spend_reset` |
 

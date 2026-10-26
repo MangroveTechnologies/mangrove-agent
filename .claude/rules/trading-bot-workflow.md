@@ -16,3 +16,11 @@ to existing execution records and are not interchangeable with server draft ids.
 Do not copy, cache to disk, or regenerate server skill files inside this client.
 Wallet custody, credential handling and local execution monitoring remain client
 responsibilities; follow wallet-presentation.md and risk-management.md for those.
+
+For a new sweep, load the server's `sweeps` skill. To find or inspect existing
+sweep results, load `sweep-results`. Sieve screening uses the discovered
+`screen_candidates` tool and the server's `backtesting` guidance. Use the live
+schemas and prices; do not build candidates, calculate sweep sizes, or duplicate
+screening logic locally. Show the server's estimated run count and obtain the
+user's agreement before launching compute. An uncertain launch must not become
+a new paid launch; preserve its original operation identity for recovery.

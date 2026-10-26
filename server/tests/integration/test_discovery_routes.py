@@ -161,9 +161,9 @@ def test_tools_returns_registered_catalog(client):
     body = r.json()
     assert "tools" in body
     assert isinstance(body["tools"], list)
-    # hello_mangrove is registered from Phase 1; should be here.
     names = {t["name"] for t in body["tools"]}
-    assert "hello_mangrove" in names
+    assert {"status", "list_tools", "create_wallet", "list_wallets"} <= names
+    assert "hello_mangrove" not in names
 
 
 def test_discovery_endpoints_do_not_require_api_key(client):

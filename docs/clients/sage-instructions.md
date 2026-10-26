@@ -200,7 +200,7 @@ and their experience level; these are separate from the agent's chosen name.
 
 ## SOURCE: .claude/rules/trading-bot-workflow.md
 
-<!-- sha256: ff481893d13d6318007dea41640d759c2a9ec54b25871a9ee8ac92d7f9bcc372 -->
+<!-- sha256: 95fbd5465e14d0617ccdca6c467d2b6c6e1b29499521331b195d4c5160a01d26 -->
 
 # Server-owned strategy workflows
 
@@ -221,15 +221,23 @@ Do not copy, cache to disk, or regenerate server skill files inside this client.
 Wallet custody, credential handling and local execution monitoring remain client
 responsibilities; follow wallet-presentation.md and risk-management.md for those.
 
+For a new sweep, load the server's `sweeps` skill. To find or inspect existing
+sweep results, load `sweep-results`. Sieve screening uses the discovered
+`screen_candidates` tool and the server's `backtesting` guidance. Use the live
+schemas and prices; do not build candidates, calculate sweep sizes, or duplicate
+screening logic locally. Show the server's estimated run count and obtain the
+user's agreement before launching compute. An uncertain launch must not become
+a new paid launch; preserve its original operation identity for recovery.
+
 ---
 
 ## SOURCE: .claude/rules/wallet-presentation.md
 
-<!-- sha256: dc3e16a458b5270a84aa61d381cf8b2c9a85b6521bec6abec46150d2359eb3bd -->
+<!-- sha256: 8b35f4c7f7f01402b31fc14c3711990508bc4b55aa402f43d4148d0bef7a59c0 -->
 
 # Wallet Presentation
 
-Rules for `create_wallet`, `import_wallet`, `get_balances`, and any future wallet tooling.
+Rules for `create_wallet`, `import_wallet`, the discovered Markets balance tool, and any future wallet tooling.
 
 ## Core invariant -- keys are generated, stored, and signed with LOCALLY
 
@@ -328,7 +336,7 @@ hardware wallet, or paper. After saving, unlock live trading with:
 
   ./scripts/confirm-backup.sh {ADDRESS}
 
-Deposit 1-5 USDC to start. I'll verify via get_balances before you send more.
+Deposit 1-5 USDC to start. I'll verify via the discovered Markets balance tool before you send more.
 ```
 
 `{PLAIN_ENGLISH_MASTER_KEY_SOURCE}` from tool's `master_key_source`:
@@ -357,7 +365,7 @@ Your secret is already backed up (you typed it into stash-secret.sh --
 that's what gave you the vault_token). Backup auto-confirmed; live
 trading is unlocked for this wallet.
 
-Run get_balances to verify it's the wallet you expected.
+Use the discovered Markets balance tool to verify it's the wallet you expected.
 ```
 
 ## When user wants to import (without pasting yet)
