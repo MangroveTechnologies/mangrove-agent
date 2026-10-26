@@ -6,10 +6,10 @@ import uuid
 
 import anyio
 import httpx
-from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import Tool
 
+from mcp import ClientSession
 from src.config import app_config
 from src.services import payment_operations, x402_payer
 from src.services.marketplace import MarketplaceError, _url
