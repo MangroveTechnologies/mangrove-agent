@@ -12,11 +12,11 @@ from contextlib import asynccontextmanager
 import anyio
 import httpx
 from jsonschema import Draft202012Validator
-from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest, TextContent, Tool
 from referencing import Registry
 
+from mcp import ClientSession
 from src.config import app_config
 from src.services import mangrove_oauth as oauth
 from src.shared.clients.mangrove import _api_key, _api_key_base_url, _payment_destination

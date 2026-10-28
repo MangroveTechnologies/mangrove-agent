@@ -21,8 +21,8 @@ class PricedFastMCP(FastMCP):
     """Attach current price hints without mutating registered tool definitions."""
 
     async def list_tools(self):
-        from src.services.tool_pricing import enrich_tools, price_hint
         from src.services import mangrove_oauth
+        from src.services.tool_pricing import enrich_tools, price_hint
 
         oauth_mode = mangrove_oauth.enabled()
         tools = [tool for tool in await super().list_tools()
@@ -62,8 +62,8 @@ class PricedFastMCP(FastMCP):
 
     async def call_tool(self, name, arguments):
         from src.mcp import mangrove_proxy, marketplace_proxy
-        from src.services.marketplace_catalog import RETIRED_READ_TOOLS, is_markets_tool
         from src.services import mangrove_oauth
+        from src.services.marketplace_catalog import RETIRED_READ_TOOLS, is_markets_tool
 
         # Guard stale catalogs and direct calls too, before any SDK or wallet
         # work. Never fall back to an API key or payment after OAuth selection.
