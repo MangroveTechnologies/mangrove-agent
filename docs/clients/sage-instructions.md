@@ -233,7 +233,7 @@ a new paid launch; preserve its original operation identity for recovery.
 
 ## SOURCE: .claude/rules/wallet-presentation.md
 
-<!-- sha256: 8b35f4c7f7f01402b31fc14c3711990508bc4b55aa402f43d4148d0bef7a59c0 -->
+<!-- sha256: 3c3457037f7a8c7ced7590b4f8630004432b0b1556c03d4bd3b0643e116f6b01 -->
 
 # Wallet Presentation
 
@@ -258,7 +258,7 @@ the agent process** -- the private key never crosses the network:
 After phase-2 security rework, wallet secrets flow out-of-band:
 
 - `create_wallet` returns a `vault_token` (opaque, TTL-bound, single-read). User runs `./scripts/reveal-secret.sh <vault_token>` in a terminal to see plaintext.
-- `import_wallet` accepts a `vault_token` (from `./scripts/stash-secret.sh`). Never accepts a raw key.
+- `import_wallet` accepts a `vault_token`, which `./scripts/stash-secret.sh` writes to a private handoff file and never prints. Never accepts a raw key.
 - Reveal-on-demand: `./scripts/reveal-secret.sh --address <addr>`.
 
 Configured Claude Code sessions use `.claude/hooks/block-wallet-secrets.sh` to
@@ -275,7 +275,7 @@ For `create_wallet`, default to **testnet** unless the user says "mainnet" / "re
 
 State: *"Creating your wallet on Base Sepolia (testnet). You can fund it from a free sepolia-ETH faucet and practice the signing + swap flow with zero real-money risk."*
 
-**Mainnet** (only when explicitly asked): chain `evm`, network `mainnet`, chain ID `8453` (Base). Always flag the switch: *"Switching to Base mainnet -- this wallet will transact real funds. Start with 1-5 USDC test deposit and use paper mode before any live allocation."*
+**Mainnet** (only when explicitly asked): chain `evm`, network `mainnet`, chain ID `8453` (Base). Always flag the switch: *"Switching to Base mainnet - this wallet will transact real funds. Start with 1-5 USDC test deposit and use paper mode before any live allocation."*
 
 **Why testnet-first:** new users learn the signing + swap mechanics safely. A compromised key on testnet is free to recover from; on mainnet it costs real USDC (see the 2026-04-24 EIP-7702 drain that prompted the hard signing guard).
 
@@ -378,9 +378,12 @@ Cmd+` / Ctrl+`) and run:
 
   ./scripts/stash-secret.sh
 
-It prompts with input hidden and prints a short vault_token. Come back
-here, say "import wallet vault_token <ID>", and I'll call import_wallet.
-Your key never touches this conversation.
+It prompts with input hidden, saves a private single-use handoff file,
+and prints that file's path. Come back here and give me the path. I'll
+read the vault_token from the file, call import_wallet, then delete the
+file and its folder. I won't display the token, and your key never
+touches this conversation. This needs a client that can read local
+files; the restricted ./scripts/chat.sh session cannot.
 ```
 
 ## Balances

@@ -1,8 +1,8 @@
 # Payment operations and reconciliation
 
-Payment uncertainty belongs to one operation. There is no wallet/network pause
-and no five-minute waiting period. New independent requests can proceed
-immediately if their price fits the remaining budget. Every uncertain signed
+Payment uncertainty belongs to one operation. It never pauses a wallet or network.
+New independent requests can proceed immediately if their price fits the remaining
+budget. Every uncertain signed
 amount remains counted; time passing, a timeout, HTTP rejection, restart, or a
 server replay-cache entry never releases money.
 
@@ -16,8 +16,8 @@ explicit ID are new operations on the next invocation. This fallback cannot infe
 whether differently worded/parameterized requests represent the same business
 intent; callers must carry the same operation ID through a logical retry.
 
-SQLite migration 012 adds durable operation records and links reservations to
-operations. Claiming an operation and reserving its payment use IMMEDIATE
+The agent keeps a durable SQLite record for each operation and links its
+reservations to it. Claiming an operation and reserving its payment use IMMEDIATE
 transactions. An operation can have only one outstanding authorization. Requests
 for different operations share only the existing atomic spending-cap check.
 
@@ -39,11 +39,12 @@ nonce, reserve more money, or repeat settlement. Receivers without that capabili
 leave the operation pending for reconciliation instead of receiving automatic
 replacement payments. No purchase retry is scheduled in the background.
 
-The synchronous Mangrove SDK transport and explicit async HTTP payer both use
-this policy. The local native MCP donation demo deduplicates pending operations
-but its SDK has no result-recovery contract; uncertain demo operations require
-reconciliation. Receiver-side MangroveAI SSOT MCP deduplicates exact signed tool
-calls and recovers stored results independently of JSON-RPC request IDs.
+The synchronous Mangrove SDK transport ([details](x402-sync-transport.md)), the
+explicit async HTTP payer and the MCP payer ([details](remote-mcp-payments.md)) all use
+this policy. The local `hello_mangrove` demo tool deduplicates pending operations but
+has no result-recovery contract; an uncertain demo operation requires reconciliation.
+The MangroveAI receiver deduplicates exact signed tool calls and recovers stored
+results independently of JSON-RPC request IDs.
 
 ## Payment versus fulfillment
 
@@ -82,10 +83,11 @@ from `eip155:8453` and/or `eip155:84532` to operator-approved RPC URLs. For exam
 ```
 
 No public RPC fallback is enabled. These queries disclose the public payer,
-token and authorization nonce to the configured provider. Configuration is an
-operator choice; the implementation's synthetic tests do not contact these URLs.
+token and authorization nonce to the configured provider, so choose a provider you
+trust with that metadata. The same URLs back the pre-purchase USDC balance check for
+approved marketplace purchases (see [marketplace wallets](marketplace-wallets.md)).
 
-The existing background scheduler polls every 15 seconds, claims up to five
+The background scheduler polls every 15 seconds, claims up to five
 reservations under a durable lease, and performs bounded read-only RPC requests.
 Per-row backoff with jitter and scan progress survive restarts. Calls have finite
 timeouts and response limits; HTTP redirects and ambient proxies are disabled.
@@ -113,42 +115,49 @@ and scan cursor, and `x402_reconciliation_evidence` for applied corrections. Ale
 on repeatedly unavailable evidence and aging pending operations. These are
 operational recovery cases, not reasons to stop unrelated user requests.
 
-The existing `server/scripts/inspect_x402_payment.py` remains available for
-explicit inspection and `--apply` reconciliation. Its public RPC destinations
-are separate from the worker's configured endpoints. Use it only with approval
-for that disclosure. It never signs or transfers funds.
+`server/scripts/inspect_x402_payment.py` provides explicit inspection and `--apply`
+reconciliation of one reservation. Run it from the repository root with
+`ENVIRONMENT=local` and `MANGROVE_AGENT_HOME` unset:
 
-## Rollout and limits
+```sh
+env -u MANGROVE_AGENT_HOME ENVIRONMENT=local \
+  .venv/bin/python server/scripts/inspect_x402_payment.py --reservation RESERVATION_ID
+```
 
-1. Apply MangroveAI migration 080 using its normal migration runner, then restart
-   receiver workers. The new recovery store is required before signed execution.
-2. Restart the local agent with `./scripts/setup.sh --yes`; startup applies
-   migrations 011/012 as needed. Restart every process sharing that ledger.
-3. Configure approved reconciliation RPC URLs and restart the agent to enable
-   background checks. Without this configuration, operation isolation/recovery
-   still works and uncertain amounts remain reserved.
+Add `--transaction HASH` to match a candidate transaction, or `--apply` to record a
+proven correction. It opens the database read-only for inspection and uses fixed
+public Base RPC endpoints (`https://mainnet.base.org` and `https://sepolia.base.org`),
+which are separate from the worker's configured endpoints, so use it only if you
+accept that disclosure. A used nonce can mean settlement or cancellation and is not by
+itself a payment receipt. An unavailable finalized-state RPC produces an unavailable
+result, never a release. It never signs or transfers funds.
 
-The receiver stores ordinary bounded responses before sending them. Streaming or
-responses above 8 MiB retain their operation/receipt but need application-specific
-result storage for replay. A crash during a mutating handler is not evidence that
-the mutation failed. Such operations remain unresolved or enter refund review;
-they are never blindly executed again. Generic exactly-once fulfillment across
-arbitrary external systems is not promised. Completed response recovery and
-payment reconciliation do not themselves implement refunds.
+## Limits
 
-Keep operation identity records as tombstones if response payloads are archived;
-deleting unresolved identities or resetting nonce caches must never become a
-payment retry mechanism. Historical reconciliation, remote CI and live release
-acceptance remain separate from local synthetic verification.
+Without configured reconciliation RPC URLs, operation isolation and recovery still
+work and uncertain amounts stay reserved.
+
+The receiver stores ordinary bounded responses before sending them. Streaming
+responses, and responses above 8 MiB, keep their operation and receipt but need
+application-specific result storage for replay. A crash during a mutating handler is
+not evidence that the mutation failed. Such operations remain unresolved or enter
+refund review; they are never blindly executed again. Generic exactly-once
+fulfillment across arbitrary external systems is not promised. Completed-response
+recovery and payment reconciliation do not themselves implement refunds.
+
+Keep operation identity records as tombstones if you archive response payloads.
+Deleting unresolved identities or resetting nonce caches must never become a payment
+retry mechanism. After upgrading the agent, restart every process that shares the
+ledger so they all apply the same accounting rules.
 
 ## Confirmed refunds
 
-Migration 013 adds a separate refund ledger. Completed paid failures retain their
+A separate refund ledger tracks refunds. Completed paid failures retain their
 encrypted recovery credentials for read-only refund-status polling on the
 configured Mangrove origin. When approved reconciliation RPCs are configured,
 the observer independently checks finalized exact USDC repayments before
 crediting the original budget period once. Original charges and limits remain
 intact; refunds cannot top up a newer period. `x402_spend_status` includes refund
 status. Uncertain authorizations still require payment reconciliation rather
-than a refund. Historical failures whose recovery credentials were already
-cleared are not automatically imported into this new observer.
+than a refund. Failures whose recovery credentials were already cleared are
+not imported into the observer.

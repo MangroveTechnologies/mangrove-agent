@@ -1,72 +1,119 @@
-# Contributing
+# Extending the Agent
 
-Guide for extending the scaffold — adding endpoints, services, and MCP tools on top of what ships.
+This guide explains how the agent's code is organized and how to add a route, an MCP tool, a
+database migration or a configuration key. For the pull request process, code style and
+local checks, see [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+## What belongs in the agent
+
+The agent keeps only what has to run on the user's machine: wallet custody and signing, the
+local database, the scheduler, venue connections and the approval and spending controls
+around them. Strategies, backtests, signals, market data, on-chain data and the knowledge
+base belong to MangroveAI, which the agent forwards over MCP. Do not add a local copy of a
+MangroveAI capability. See [MCP contracts](mcp-contracts.md) for the ownership split.
 
 ## Service layer pattern
 
-Routes (`server/src/api/routes/`) and MCP tools (`server/src/mcp/tools.py`) both call shared services in `server/src/services/`. Never duplicate business logic — if the same capability needs to be reachable from both REST and MCP, it lives in a service and both call in.
+REST routes (`server/src/api/routes/`) and MCP tools (`server/src/mcp/`) are thin adapters.
+Both call shared services in `server/src/services/`, so a capability reachable both ways has
+one implementation. For example, `POST /api/v1/agent/wallet/create` and the `create_wallet`
+tool both call `wallet_manager.create_wallet`.
 
-## Adding a free endpoint
+Some read-only routes (for example the DEX venue and gas-price routes) call the SDK client from
+`server/src/shared/clients/mangrove.py` directly. Create a service when the capability adds
+orchestration, state or safety checks the SDK does not provide.
 
-1. Create the route in `server/src/api/routes/{resource}.py`.
-2. Create the service in `server/src/services/{resource}.py`.
-3. Register the route in `server/src/api/router.py` under `api_router`.
-4. Register the MCP tool in `server/src/mcp/tools.py` via `register_tool()`.
-5. Write tests in `server/tests/test_{resource}.py`, mirroring the `src/` structure.
+## Adding a REST route
 
-## Adding an auth-gated endpoint
+1. Create `server/src/api/routes/{resource}.py` with an `APIRouter`. For an authenticated
+   route, set `dependencies=[Depends(require_api_key)]` on the router, as the existing route
+   files do.
+2. Put the logic in `server/src/services/{resource}.py` and call it from the handler.
+3. Register the router in `server/src/api/router.py`. Routes under `/api/v1/agent` are
+   included on `agent_router`.
+4. Write tests under `server/tests/`.
 
-Same five steps, plus:
+An x402 payment-gated route goes on `x402_router` instead, which serves `/api/x402`, and also
+needs an entry in the route table in `server/src/app.py`'s `_setup_x402`. See
+`server/src/api/routes/hello_mangrove.py` for the pattern.
 
-- Call `validate_api_key()` in the route handler.
-- Call `has_valid_api_key()` in the MCP tool before proceeding.
+## Adding an MCP tool
 
-## Adding an x402 payment-gated endpoint
+1. Write or reuse the service function.
+2. Register the tool in `server/src/mcp/tools.py`, or in a new module whose `register(server)`
+   function is called from `register()` there, as `broker_tools.py` and `paper_tools.py` are.
+   Use `@server.tool()`.
+3. Authenticate with `_require(api_key)` at the top of the tool and return `_auth_error()` on
+   failure. Accept `api_key` as an optional argument so a client can send the `X-API-Key`
+   header instead. Free discovery tools such as `status` skip this check.
+4. Describe the tool in the discovery registry with `register_tool(ToolEntry(...))`, listing
+   every parameter and an access tier of `free`, `auth` or `x402`.
+5. Return errors in the standard shape: `_handle_agent_error` turns an `AgentError` into the
+   JSON error body.
+6. Gate anything that moves money or changes live state behind an explicit `confirm`
+   argument that defaults to false.
+7. Update the contract artifacts. Every local tool must have a price binding in
+   `server/src/mcp/pricing_bindings.py` or an entry with a reason in
+   `without_upstream_pricing` in `scripts/contracts/policy.json`. Then regenerate
+   `scripts/contracts/local.json`. See [MCP contracts](mcp-contracts.md).
 
-Register the route under `x402_router` (not `api_router`). See `server/src/api/routes/hello_mangrove.py` for the canonical pattern.
+The `/tool-spec <purpose>` skill drafts a specification for a new tool before you write it.
+
+## Adding a database migration
+
+Schema changes are SQL files in `server/src/shared/db/migrations/`, named
+`NNN_description.sql`. `init_db()` applies unapplied files in filename order at startup and
+records each in the `_migrations` table. Use the next unused number, and never edit a
+migration that has shipped; add a new one.
+
+## Adding a configuration key
+
+Configuration lives in per-environment JSON files in `server/src/config/`. A key must be
+declared in `server/src/config/configuration-keys.json` as `required` (startup fails without
+it), `optional` (loaded when present) or `full_app_keys` (validated only when present). Add it
+to `local-example-config.json` and the other environment files as appropriate, and document it
+in the [configuration guide](configuration.md).
 
 ## Testing
 
-MCP changes must also pass `python -B scripts/mcp_contract.py` from the repo root.
-This offline guard checks registration, schemas, price bindings and existing
-direct-SDK adapter exceptions. See [MCP contracts](mcp-contracts.md) for intentional
-contract updates and opt-in live receiver comparison. Never refresh snapshots
-automatically to make an unexplained failure disappear.
-
-Tests live in `server/tests/` and mirror the `src/` layout. CI (`.github/workflows/ci.yml`) runs ruff + pytest on every PR — that's the authoritative invocation.
-
-Test runs set `MASTER_KEY_PATH` to a test-scoped path; the resulting `agent-data-test/` directory is gitignored.
-
-## Skills for extension work
-
-Claude Code skills that help while extending the scaffold:
-
-- **`/tool-spec <purpose>`** — drafts a complete MCP tool specification (name, access tier, parameters, service-layer binding, response shape, error envelope) ready to paste into `server/src/mcp/tools.py`.
-- **`/check-alignment <change>`** — read-only review of a proposed change against `SAGE.md`, `trading-bot-workflow.md` (the 9 operating principles), `wallet-presentation.md`, `git-workflow.md`, and this file.
-- **`/audit-security`** — focused security audit covering wallet + signing surfaces, MCP tool layer, REST routes, dependency CVEs, and git-history secret leaks. Read-only, writes a report to `docs/audits/`.
-- **`/custom-signal <rule>`** — composes a custom entry/exit signal stack from atomic signals when a reference-strategy match isn't available.
-
-## Synced MangroveAI copilot skills
-
-The judgement skills under `.claude/skills/michael/` (backtesting, strategy-composition,
-strategy-management, sweeps, sweep-results, market-intelligence, knowledge-graph, portfolio,
-condition-studies, product-facts)
-are generated from MangroveAI's copilot, which is their source of truth. Do not edit them
-here — CI (`--verify-manifest`) fails on a hand-edited copy. To pick up upstream changes:
+Tests live in `server/tests/`, split into `unit/`, `integration/` and `e2e/`, with a few
+top-level files for the auth, health, MCP and x402 paths. Run them from `server/`:
 
 ```bash
-python scripts/sync-michael-skills.py --source ~/mangrove-workspace/MangroveAI --ref origin/main
-python scripts/sync-michael-skills.py --source ~/mangrove-workspace/MangroveAI --ref origin/main --check
+cd server && ENVIRONMENT=test pytest tests/ -v
 ```
 
-The script preserves server tool names and adapts bundled file-resource references.
-It filters declared `uses-tools` against the reviewed upstream contract snapshot for
-generation only. Runtime discovery and calls always use the live MangroveAI MCP
-catalogue; the snapshot is never a fallback. Local execution uses separate `agent_`
-tools and local IDs. Refresh the reviewed snapshot and regenerate guidance when the
-server contract changes. The script's docstring also covers syncing from a `gh api`
-tarball when there is no local checkout.
+CI (`.github/workflows/ci.yml`) is the authoritative list of checks. It lints `server/src/`
+with ruff, verifies the shared agent instructions, runs the offline MCP contract check and
+runs the test suite. A change to an MCP tool must pass `python -B scripts/mcp_contract.py`
+from the repository root; never refresh a snapshot just to make an unexplained failure
+disappear.
+
+The test configuration (`server/src/config/test-config.json`) uses an in-memory database and
+writes a test master key under `agent-data-test/`, which is gitignored. The opt-in live swap
+tests in `server/tests/e2e/` are skipped unless the environment variables named in the
+[README](../README.md#tests) are set.
+
+## Contributor skills
+
+The repository ships Claude Code skills that help while changing the agent. Run them from a
+Claude Code session in the repository:
+
+- `/tool-spec <purpose>` drafts a complete MCP tool specification: name, access tier,
+  parameters, service-layer binding, response shape and error envelope.
+- `/check-alignment <change>` reviews a proposed change, read-only, against `SAGE.md`, the
+  rules in `.claude/rules/` (trading workflow, wallet presentation, risk management) and this
+  guide.
+- `/audit-security` runs a read-only security audit covering wallet and signing surfaces, the
+  MCP tool layer, REST routes and dependencies. It writes its report to
+  `agent-data/audits/`, which is local and gitignored.
+
+The other skills in `.claude/skills/` (`trading-bot`, `setup-kraken`, `connect-kraken`,
+`setup-robinhood`) guide users of the agent rather than contributors.
 
 ## Git workflow
 
-See `.claude/rules/git-workflow.md`. Feature branch off `main`, one concern per PR, CI must pass.
+Branch off `main`, make one change per pull request, and merge only after CI passes. Do not
+commit or push to `main` directly; in a Claude Code session in this repository, a hook blocks
+commits and pushes to `main`. When working in a git worktree, run git as `git -C <path>` so
+the hook can see the target branch.

@@ -1,27 +1,50 @@
 # Remote MCP payments
 
-Normal agent signal tools continue to use SDK -> REST. The remote MCP payer is
-an additional client entry point using the same vault, signer, budget and ledger.
-It does not create another payment implementation or move secrets to the server.
+The agent can pay for a tool call on a remote MCP server over x402. This page is for
+developers extending the agent. It explains the payer entry points, how a payment is
+identified and recovered, and where the agent uses them. The payer lives in
+`server/src/services/x402_payer.py` and reuses the same wallet vault, signer, spending
+budget and payment ledger as the REST payer. It adds no second payment implementation
+and moves no secrets to the server.
 
-## Client entry points
+## Where the agent uses it
 
-`pay_mcp(session, name=..., arguments=..., resource=..., wallet_address=...)`
-uses a caller-owned MCP session. Its owner must provide a trusted endpoint,
-deadline, authentication mode and cleanup. `resource` must identify that session's
-endpoint; a session supplied by arbitrary untrusted code is not a security boundary.
-Official MCP SDK wire dumps and exception bodies are filtered for both client
-entry points, including transport tasks started before `pay_mcp` is called.
-Ordinary SDK diagnostics remain available; custom sessions own their logging.
+The agent forwards MangroveAI tools over MCP (`server/src/mcp/mangrove_proxy.py`):
+
+- With an API key configured, or for a public free read, the call is authenticated or
+  free and no payment is made.
+- Otherwise the call goes through `pay_on_open_mcp_session` in wallet mode, over a
+  session the proxy keeps open across calls.
+
+Authentication failures never switch an API-key call to payment.
+
+Markets reads use the same payer: see [Markets read tools](markets-read-tools.md).
+
+## Entry points
+
+`pay_mcp(session, name=..., arguments=..., resource=..., wallet_address=...)` pays a
+tool call on a caller-owned MCP session. The caller provides a trusted endpoint, the
+deadline, the authentication mode and cleanup. `resource` must identify that session's
+endpoint, and it must be HTTPS (HTTP is allowed for loopback) without credentials,
+query strings or fragments. A session supplied by untrusted code is not a security
+boundary.
+
+`pay_on_open_mcp_session(session, endpoint, name=..., arguments=...,
+wallet_address=..., operation_id=..., timeout=...)` wraps `pay_mcp` for a session the
+caller has already initialized and keeps open. It applies the deadline and the same
+failure reporting as `pay_remote_mcp`. The caller owns the session's lifetime.
 
 `pay_remote_mcp(endpoint, name=..., arguments=..., wallet_address=...,
-operation_id=..., timeout=120)` owns the official MCP HTTP session and cleanup.
-It requires an explicitly selected HTTPS endpoint (HTTP is allowed for loopback),
-rejects URL credentials/query strings/fragments, disables redirects and ambient
-proxies, and bounds the whole exchange. It is wallet mode only: it supplies no
-API key and never switches from failed API-key authentication to payment.
-SDK diagnostics containing signed metadata are suppressed during this owned call;
-transport failure logs retain only the exception type.
+operation_id=..., timeout=...)` owns the whole exchange: it opens the official MCP
+HTTP session, pays, and cleans up. It requires an explicitly selected HTTPS endpoint
+(HTTP is allowed for loopback), rejects URL credentials, query strings and fragments,
+disables redirects and ambient proxies, and bounds the whole exchange with a finite,
+positive `timeout`. It runs in wallet mode only: it supplies no API key and never
+switches from a failed API-key authentication to payment.
+
+`pay_remote_mcp` and `pay_on_open_mcp_session` suppress SDK diagnostics that contain
+signed metadata while the call runs. With `pay_mcp`, a custom session owns its own
+logging.
 
 For example, inside an authorized application workflow:
 
@@ -35,60 +58,52 @@ result = await pay_remote_mcp(
 page = result.mcp_result["structuredContent"]
 ```
 
-This can authorize a real payment within the existing budget. The caller must
-select an approved endpoint and existing backed-up wallet. Tool arguments never
-carry API keys or wallet secrets. MCP endpoints from tool output must not be
-followed automatically.
+This can authorize a real payment within the existing budget. The caller must select
+an approved endpoint and an existing backed-up wallet. Tool arguments never carry API
+keys or wallet secrets. Never follow an MCP endpoint that appears in tool output.
 
-`PaymentResult.body` retains its existing content-block representation.
-`PaymentResult.mcp_result` additionally preserves the entire MCP result, including
-`structuredContent`, all content blocks, `isError` and `_meta`. Existing `paid`,
-`transaction`, `payer` and `network` fields retain validated receipt meanings.
-A receipt proves server-reported settlement, not independent chain confirmation.
-Cached results restore the same typed content blocks in `body` as fresh results,
-including older stored responses that predate `mcp_result`.
+## Results
 
-## Recovery
+`PaymentResult.body` holds the MCP content blocks. `PaymentResult.mcp_result` keeps the
+entire MCP result, including `structuredContent`, all content blocks, `isError` and
+`_meta`. The `paid`, `transaction`, `payer` and `network` fields carry validated receipt
+data. A receipt proves server-reported settlement, not independent chain confirmation.
+Cached results restore the same typed content blocks as fresh results.
 
-The tool name and canonical JSON arguments are part of operation identity.
-Different filters/pages are different work. Reusing an explicit operation UUID
-with different arguments is rejected before contacting the endpoint.
+## Identity and recovery
 
-For receivers advertising `mangrove/payment.idempotency=v1`, the existing
-operation ledger encrypts the exact signed MCP metadata and a random private
-recovery token before sending them. A lost response can be retried with the
-reported operation ID and identical endpoint/tool/arguments: this resends the
-original authorization, not a new payment. Completed responses are cached.
-If an identical pending request is selected automatically, a recovery timeout
-reports that original operation ID and its reservations, even when the caller
-omitted the ID or supplied a new one.
-Without advertised recovery support, uncertain signed operations remain pending;
-the client does not manufacture a replacement signature.
+The tool name and the canonical JSON of its arguments are part of the operation
+identity, along with the payer, network and endpoint. Different filters or pages are
+different work. Reusing an explicit operation UUID with different arguments is rejected
+before the endpoint is contacted.
 
-Payment confirmation and fulfillment are separate. A receipt with pending status
+For a receiver that advertises `mangrove/payment` idempotency `v1`, the operation
+ledger encrypts the exact signed MCP metadata and a random private recovery token
+before sending them. If the response is lost, retry with the reported operation ID and
+the identical endpoint, tool and arguments. That resends the original authorization
+rather than creating a new payment, and a completed response is cached. If an
+identical pending request is selected automatically, a recovery timeout reports the
+original operation ID and its reservations, even when the caller omitted the ID.
+
+Without advertised recovery support, an uncertain signed operation stays pending. The
+client never creates a replacement signature.
+
+Payment confirmation and fulfillment are separate. A receipt with a pending status
 records the charge but does not cache an unfinished response as complete.
-Cancellation, missing/invalid receipts and connection failures retain signed
-reservations. Consult existing payment status/reconciliation rather than resetting
-the budget. Paid failures retain the existing refund observer's recovery headers;
-refund eligibility and configuration are unchanged.
+Cancellation, a missing or invalid receipt and connection failures keep signed
+reservations counted. Use the payment status and reconciliation tools described in
+[payment operations](x402-payment-uncertainty.md) rather than resetting the budget.
 
-If payment succeeds but local result storage fails, the async payer returns
-`X402PaymentUncertain` with the original operation ID and reports the payment as
-settled when a valid receipt was received. The pending operation retains its
-encrypted recovery proof. Retry that same operation after storage is restored;
-do not authorize another payment. Failure of unsigned-operation cleanup cannot
-replace the original payment error or cancellation with a raw database error.
-The same result-storage protection applies to the explicit async REST payer.
+If payment succeeds but local result storage fails, the payer raises
+`X402PaymentUncertain` with the original operation ID. The pending operation keeps its
+encrypted recovery proof. Retry that same operation after storage is restored; do not
+authorize another payment.
 
-## Versions and verification
+## Dependencies and tests
 
-Verified client versions: MCP 1.30.0, x402 2.22.0, mangroveai 1.17.0. These match
-`requirements.lock`; dependency floors now require the tested MCP/payment APIs.
-MCP negotiates the receiver's supported revision, including MangroveAI's
-2025-06-18. The x402 v2 MCP specification is pinned to upstream commit
-`b74dd052155464ef8e1182646071bce47ba465ed` in `x402-foundation/x402`.
+The tested MCP and x402 client versions are pinned in `server/requirements.lock`. The
+MCP client negotiates the revision the receiver supports.
 
-Run the payment unit tests and `tests/integration/test_remote_mcp.py` under
-`ENVIRONMENT=test`. The latter exercises the official MCP HTTP client, real
-local signing and the ledger against synthetic responses. It sends no funds.
-Controlled testnet acceptance and deployed verification remain release gates.
+Run the payment unit tests and `server/tests/integration/test_remote_mcp.py` with
+`ENVIRONMENT=test`. The integration test exercises the official MCP HTTP client, real
+local signing and the ledger against synthetic responses, and sends no funds.

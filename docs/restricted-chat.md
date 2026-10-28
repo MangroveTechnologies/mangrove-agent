@@ -1,74 +1,55 @@
 # Restricted user chat
 
-Run `./scripts/setup.sh` to configure and start the agent. Setup finishes without
-opening Claude. Then run `./scripts/chat.sh` when you want a restricted session.
-Both scripts can be invoked by absolute path from any directory. Rerunning setup
-preserves the selected configuration and port. Each installation has its own
-chat working directory under `agent-data/chat`; keys and databases are not copied
-between users. `--foreground` remains available for server diagnostics.
+`./scripts/chat.sh` starts a Claude Code session that can talk to your Mangrove agent and nothing else. It is the user-facing way to use the agent with Claude: the session has no shell, file, web or subagent tools, so the assistant can act only through the agent's MCP tools.
 
-The agent's shared policy comes from `SAGE.md` and the three mandatory local rule
-documents. The launcher injects their complete rendered contents through a
-private temporary `--append-system-prompt-file`, because assistant file-reading
-tools are disabled. Missing policy prevents launch. See [other AI clients and
-the shared instruction source](clients.md).
+## Starting a session
 
-The launcher removes all built-in Claude tools with `--tools ""`, disables browser integration, loads only the agent MCP server with
-`--strict-mcp-config`, and excludes user/project/local settings with
-`--setting-sources ""`. Its explicit settings deny file, shell, search, skill and
-subagent tools, allow the Mangrove MCP namespace, and disable permission bypass.
-MCP tool search is disabled so Mangrove's tools are loaded directly. It accepts
-no arbitrary CLI flags that could re-enable tools. Model-invoked Skill tools
-remain denied; slash-command availability is separate from shell/file permissions. Managed administrator policy
-still applies.
+Run `./scripts/setup.sh` first to configure and start the agent. Setup finishes without opening Claude. Then run `./scripts/chat.sh` whenever you want a restricted session. Both scripts work when invoked by absolute path from any directory. Rerunning setup preserves the selected configuration and port. Each installation has its own chat working directory at `agent-data/chat`, and keys and databases are never copied between users. `./scripts/setup.sh --foreground` remains available for server diagnostics.
 
-The launcher uses Claude's default permission mode. `marketplace_submit` publishes
-`anthropic/requiresUserInteraction: true`, so confirmation is requested inline
-before signing or paying, including when the MCP namespace is allowed. Preparation
-is described as preview-only. Repository sessions also default to manual permission
-prompts; an explicit CLI mode or administrator policy can override that default.
-This does not bypass Claude's security checks or guarantee that every host policy
-will permit preparation. The agent still requires a valid, unexpired approval and
-`confirm=true`; purchase terms and spending limits remain enforced in code.
+`chat.sh` accepts no arguments, so no command-line flag can re-enable a tool it removed.
 
-The local MCP credential is supplied through the existing authenticated header
-helper, not command-line arguments or the generated profile. The temporary
-profile contains only policy and hook paths and is removed when chat exits.
-Wallet signing and approvals stay inside the local agent. Markets still owns
-marketplace schemas, offer records, status and authorization.
+## What the launcher sets up
 
-Project hooks now use the quoted `CLAUDE_PROJECT_DIR` path, so changing directories
-during a development session does not break them. Restricted chat uses absolute,
-shell-quoted hook paths derived from its installation and refuses to launch if a
-required hook is missing. UserPromptSubmit checks key pastes; PostToolUse is
-defense in depth after execution, not a replacement for tool permissions.
+The agent's shared policy comes from `SAGE.md` and the three mandatory local rule documents. Because the assistant's file-reading tools are disabled, the launcher renders their complete contents and passes them through a private temporary `--append-system-prompt-file`. If any piece of policy is missing, the launcher refuses to start. See [other AI clients and the shared instruction source](clients.md).
 
-This is an enforced configuration for this launcher, not a security boundary
-against the machine owner. Someone can edit their own installation or start an
-unrestricted Claude session. Bare `claude` remains the developer workflow. No
-client configuration, local SQLite edit, or prompt instruction can override
-Markets' API scope checks and wallet-signature verification. A centrally managed
-client or isolated hosted interface is needed to control the entire client
-environment.
+The launcher runs Claude Code with:
 
-## Test
+- `--tools ""`, which removes every built-in tool.
+- `--strict-mcp-config` and an inline MCP configuration, so only the `mangrove-agent` server is loaded.
+- `--setting-sources ""`, which excludes user, project and local settings.
+- `--no-chrome`, which disables browser integration.
+- `--permission-mode default`, which keeps manual permission prompts.
+- A private temporary settings file that turns automatic memory off, denies the shell, file, search, web, skill and subagent tools (`Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `NotebookEdit`, `Agent`, `Task`, `Skill`, `WebFetch`, `WebSearch`, `LSP`), allows the Mangrove MCP namespace (`mcp__mangrove-agent__*`), and disables permission bypass mode.
+- `ENABLE_TOOL_SEARCH=false` in the environment, so Mangrove's tools are loaded directly rather than through the client's tool search.
 
-After setup, run `./scripts/chat.sh` to open a fresh session. Type `/mcp` to
-inspect the connection. Built-in slash commands remain available: the launcher
-does not use `--disable-slash-commands`, which also disables `/mcp`. Ask “Have I made any marketplace offers?” The new server history tools
-use a free wallet-signed read, so review and approve that authorization when
-prompted. This is not a payment. The relevant wallet is required. API-key mode also checks `execution:read`; wallet-only mode proves identity by signature. Discovery does not disclose private offers.
+Model-invoked Skill tools stay denied; slash-command availability is separate from the shell and file permissions. Managed administrator policy still applies on top of all this.
 
-Then ask “Read the local SQLite database to answer that.” The session must have
-no shell or file tool available. It should query the server or say it cannot
-inspect local files. Test User A and User B separately. Offer history belongs to
-the proven wallet; public listings remain readable by other authorized users.
+## Approvals
 
-The automated launcher tests capture the actual process arguments with a fake
-CLI, exercise hooks from paths containing spaces and quotes, and reject policy
-override flags. They do not invoke a paid model session. Validate the interaction
-with your installed Claude Code before distributing the client.
+The launcher uses Claude's default permission mode. `marketplace_submit` publishes `anthropic/requiresUserInteraction: true`, so Claude asks for confirmation inline before the agent signs or pays, even though the MCP namespace is allowed. Repository sessions also default to manual permission prompts; an explicit CLI mode or administrator policy can override that default. This does not bypass Claude's security checks or guarantee that every host policy permits a preparation step. The agent still requires a valid, unexpired approval and `confirm=true`, and purchase terms and spending limits stay enforced in code.
 
-Claude's documented controls:
-[CLI tool and MCP restrictions](https://code.claude.com/docs/en/cli-reference),
-[hook project paths](https://code.claude.com/docs/en/hooks).
+## Credentials and hooks
+
+The local MCP credential reaches the agent through the same header helper that `setup.sh` registers (`setup_support.py headers`), never through command-line arguments or the generated settings. The temporary settings contain only the policy and the hook paths, and are deleted when chat exits. Wallet signing and approvals stay inside the local agent, and MangroveMarkets still owns marketplace schemas, offer records, status and authorization.
+
+The launcher wires three hooks with absolute, shell-quoted paths derived from the installation, and refuses to start if any is missing:
+
+- `block-wallet-secrets.sh` on `UserPromptSubmit` rejects a message that contains a private key or recovery phrase.
+- `block-wallet-secrets.sh` on `PostToolUse` checks tool output for key material. It is defense in depth after execution, not a replacement for tool permissions.
+- `preflight-swap.sh` on `PreToolUse` for `execute_swap` stops a swap whose wallet holds none of the input token.
+
+Developer sessions in the repository use the quoted `CLAUDE_PROJECT_DIR` path for the same hooks, so changing directories during a session does not break them.
+
+## What this does and does not protect
+
+This is an enforced configuration for this launcher, not a security boundary against the machine owner. Someone can edit their own installation or start an unrestricted Claude session; a bare `claude` run is the developer workflow. No client configuration, local SQLite edit or prompt instruction can override MangroveMarkets' API scope checks and wallet-signature verification. Controlling an entire client environment takes a centrally managed client or an isolated hosted interface.
+
+## Checking that it works
+
+After setup, run `./scripts/chat.sh` to open a fresh session.
+
+1. Type `/mcp` to inspect the connection. Built-in slash commands remain available; the launcher does not use `--disable-slash-commands`, because that also disables `/mcp`.
+2. Ask the agent for its status. It should call the free `status` tool and answer from the result.
+3. Ask it to "Read the local SQLite database." The session has no shell or file tool, so it should either query the agent's own tools or say that it cannot inspect local files.
+
+Claude's documented controls are in the [CLI reference](https://code.claude.com/docs/en/cli-reference) and the [hooks reference](https://code.claude.com/docs/en/hooks). Validate the interaction with your installed Claude Code version before you distribute the client to others.

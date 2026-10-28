@@ -5,7 +5,7 @@ disable-model-invocation: true
 allowed-tools: Read, Grep, Glob, Bash
 ---
 
-# Security Audit — mangrove-agent trading bot
+# Security Audit - mangrove-agent trading bot
 
 Read-only audit against the mangrove-agent repo. Covers:
 
@@ -18,12 +18,12 @@ Read-only audit against the mangrove-agent repo. Covers:
 
 ## Process
 
-1. **Check for prior audits** at `docs/audits/*-security-audit.md`. If a recent one exists, read it to avoid re-flagging fixed issues and to track remediation.
+1. **Check for prior audits** at `agent-data/audits/*-security-audit.md` (local and gitignored; audit reports are not published). If a recent one exists, read it to avoid re-flagging fixed issues and to track remediation.
 
-2. **Wallet + signing invariants** (CRITICAL — given 2026-04-24). Verify:
+2. **Wallet + signing invariants** (CRITICAL - given 2026-04-24). Verify:
    - `server/src/services/wallet_manager.py::_validate_sign_target` still refuses: tx type 3, tx type 4, `authorizationList` field, non-1inch `to`, non-1inch-spender approves, bare tx (no `to`).
    - `_ONEINCH_ROUTERS` set matches known 1inch V5 + V6 addresses.
-   - `sign_message()` still raises unconditionally — no EIP-191 personal_sign path.
+   - `sign_message()` still raises unconditionally - no EIP-191 personal_sign path.
    - No other code path in `server/src/` calls `Account.from_key`, `Account.from_mnemonic`, `sign_transaction`, `sign_message`, `sign_typed_data`, `sign_authorization`, or `setCode` outside of `wallet_manager.py`.
    - Fernet `decrypt()` is only called from `wallet_manager._load_secret` and `reveal_wallet_secret`.
    - `reveal_wallet_secret` response stays on the localhost REST endpoint, never exposed via MCP.
@@ -50,21 +50,21 @@ Read-only audit against the mangrove-agent repo. Covers:
    Report HIGH / CRITICAL findings only.
 
 7. **Secret handling.**
-   - `grep -rE "(private_key|seed_phrase|mnemonic|secret|API_KEY)" server/src/` — every hit should be a name, not a plaintext value.
+   - `grep -rE "(private_key|seed_phrase|mnemonic|secret|API_KEY)" server/src/` - every hit should be a name, not a plaintext value.
    - Check `.env.example` and `server/src/config/*-config.json` for accidentally committed real keys.
-   - `git log --all -p -- '*.env*' '*config*'` — check git history for leaked secrets.
+   - `git log --all -p -- '*.env*' '*config*'` - check git history for leaked secrets.
 
 8. **Infrastructure.**
-   - `docker-compose.yml` — no bind mounts exposing host secrets; port bindings match the documented `9080`.
-   - `.github/workflows/ci.yml` — no secret leakage in logs; `${{ secrets.* }}` usage is minimal.
-   - `scripts/*.sh` — input validated; no command injection via user input.
+   - `docker-compose.yml` - no bind mounts exposing host secrets; port bindings match the documented `9080`.
+   - `.github/workflows/ci.yml` - no secret leakage in logs; `${{ secrets.* }}` usage is minimal.
+   - `scripts/*.sh` - input validated; no command injection via user input.
 
 ## Output
 
-Write a report to `docs/audits/YYYY-MM-DD-mangrove-agent-security-audit.md` with this shape:
+Write a report to `agent-data/audits/YYYY-MM-DD-mangrove-agent-security-audit.md` with this shape:
 
 ```
-# Security Audit — YYYY-MM-DD
+# Security Audit - YYYY-MM-DD
 
 ## Summary
 Overall severity + high-level findings count by CRITICAL / HIGH / MEDIUM / LOW.
@@ -72,7 +72,7 @@ Overall severity + high-level findings count by CRITICAL / HIGH / MEDIUM / LOW.
 ## Findings
 ### [CRITICAL] <short title>
 - **Location:** `path/to/file.py:LN`
-- **CWE:** CWE-N — Name
+- **CWE:** CWE-N - Name
 - **Description:** what's wrong
 - **Impact:** what could happen
 - **Remediation:** concrete fix
@@ -93,4 +93,4 @@ List of CVEs from pip-audit with fix recommendations.
 - **Redact secrets.** If you encounter a plaintext key or API token in any file, replace with `***` in the report.
 - **No exploits.** Never run network-level attack tests or modify running services.
 - **Cite every finding.** File path + line number + CWE ID. No generic "this could be exploited" language without a specific pointer.
-- **Acknowledge good practices.** The "Done Well" section matters — the Fernet + SecretVault + signing-guard layers exist precisely because of past incidents, and the audit should record what's working.
+- **Acknowledge good practices.** The "Done Well" section matters - the Fernet + SecretVault + signing-guard layers exist precisely because of past incidents, and the audit should record what's working.

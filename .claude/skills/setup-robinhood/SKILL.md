@@ -18,7 +18,9 @@ terminal. The user completes Robinhood's browser authorization for Mangrove
 Agent. Never ask for passwords or tokens in chat, copy another assistant's OAuth
 credentials, or alter Robinhood's approval setting. Verify status after connection.
 
-Use `agent_get_strategy` or `agent_list_strategies` to read `execution_venue`.
+`agent_configure_execution_venue` returns the venue mandate it saved, and
+`agent_configure_strategy_market` returns the strategy record with `execution_venue`.
+No MCP tool currently reads a local strategy record on its own.
 `market_context.market_data_venue` is the price feed, not the execution broker.
 A Robinhood route needs no local wallet. A live status does not prove any order
 has filled: inspect evaluations, `agent_list_venue_orders`, and confirmed trades.

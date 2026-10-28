@@ -29,14 +29,19 @@ multiple independent processes must not concurrently refresh the same OAuth gran
 
 ## Configure a Mangrove strategy
 
-1. Use Mangrove's existing research, create, and backtest tools to prepare an
-   inactive strategy. Its asset must be USD quoted. Start with a fresh strategy;
-   strategies with paper/live trade history cannot change venues. Pass explicit
-   `market_context` (`base_token`, `quote_token`, `market_data_venue`) when creating
-   it, or use `agent_configure_strategy_market` while it is fresh and inactive.
-   The market-data source can differ from the execution venue. Saved-strategy
-   backtests inherit both this context and the stored execution configuration;
-   per-call `config` overrides do not change the saved strategy.
+Venue configuration applies to a local execution record in `draft` or `inactive`
+status. Local strategy creation is retired (the create routes return HTTP 410), and
+the agent has no supported flow that turns a saved MangroveAI strategy into a local
+record. MangroveAI's `evaluate_strategy` tool checks signals on the server; it does
+not create or activate this runner.
+
+1. Start with a fresh local record whose asset is USD quoted. A record with trade
+   history or broker orders cannot change venues. Give it an explicit market with
+   `agent_configure_strategy_market` (or `PATCH /api/v1/agent/strategies/{id}/market`):
+   `market_context` holds `base_token`, `quote_token` and `market_data_venue`, all
+   uppercase, and `base_token` must match the strategy asset. This works only on a
+   `draft` or `inactive` record that uses the stateless evaluation lane, and it never
+   activates or trades. The market-data source can differ from the execution venue.
 2. Call `agent_robinhood_status` to verify the eligible account, approval setting,
    and available buying power. Only the account authorized for this agent is used.
 3. Call `agent_configure_execution_venue` with the local strategy ID and the
@@ -61,9 +66,12 @@ multiple independent processes must not concurrently refresh the same OAuth gran
    bounds each order, and `slippage_pct` bounds its limit price relative to the
    Mangrove evaluation price (maximum 0.25%). The strategy must size exits within
    the same order cap. Configuration selects caller-owned stateless evaluation.
-4. The local activation MCP tool is retired. Existing execution REST endpoints
-   remain, but a supported saved-strategy-to-local-deployment flow is deferred.
-   Server `evaluate_strategy` checks signals; it does not activate this runner.
+4. Activate with the status route, `PATCH /api/v1/agent/strategies/{id}/status`, using
+   `{"status": "live", "confirm": true}`. There is no local MCP tool for activation.
+   Do not send an `allocation` block: a Robinhood route is rejected if it carries a
+   wallet allocation. Activation runs a Robinhood preflight, then registers the
+   strategy's cron job. Activation does not change Robinhood's approval preference.
+   See [strategy lifecycle](strategy-lifecycle.md) for the status rules.
 
 The agent leaves Robinhood's approval preference unchanged. If approvals are off,
 orders can execute directly. If Robinhood requires approval for a particular
@@ -82,9 +90,9 @@ until its outcome is known. It never bypasses broker controls.
   confirmed trades and holdings; it never submits or retries an order.
 - `agent_cancel_venue_order(order_id)` requests cancellation of a known pending
   order. A cancel acknowledgement is not proof that it did not fill.
-- Set the strategy inactive with the existing lifecycle tool to stop new orders.
-  Already submitted orders remain at Robinhood; cancel them separately if desired.
-  The 15-second reconciliation worker continues while the agent is running,
+- Set the strategy `inactive` with `PATCH /api/v1/agent/strategies/{id}/status`
+  (`confirm: true`) to stop new orders. Already submitted orders remain at Robinhood;
+  cancel them separately if desired. The 15-second reconciliation worker continues while the agent is running,
   including for paused strategies.
 
 REST equivalents (all require the agent API key):
@@ -93,6 +101,8 @@ REST equivalents (all require the agent API key):
 | --- | --- |
 | Read readiness | `GET /brokers/robinhood/status` |
 | Configure mandate | `PUT /brokers/strategies/{id}/venue` |
+| Set strategy market | `PATCH /strategies/{id}/market` |
+| Activate or stop | `PATCH /strategies/{id}/status` |
 | Read journal | `GET /brokers/strategies/{id}/orders` |
 | Reconcile | `POST /brokers/strategies/{id}/reconcile` |
 | Cancel | `POST /brokers/orders/{id}/cancel` |
@@ -123,7 +133,7 @@ liquidated positions are not automatically reconciled into the strategy book.
 - Long-only spot crypto and whole-share equities; limit orders only. Crypto
   quantities round down to venue increments. Fractional equity intent is rejected.
 - Crossed quotes (bid greater than ask) are rejected before preview or placement.
-- Equity placement is restricted to regular weekday market hours. Fresh quotes,
+- Equity placement is restricted to weekdays from 9:30 to 16:00 Eastern. Fresh quotes,
   tradability, and broker pre-trade checks must also pass. Crypto pairs must support
   both sides and limit orders.
 - One actionable Mangrove intent per evaluation and one pending order per strategy.
@@ -141,9 +151,6 @@ liquidated positions are not automatically reconciled into the strategy book.
   can conservatively retain the modeled trade's cooldown/counter effects. If an
   actual exit loss differs from a modeled non-loss, new entries latch off with
   `broker_loss_diverged_from_model` rather than silently undercounting loss risk.
-  Full execution-aware risk-event feedback into Mangrove is a follow-up integration.
-- This build's validation uses offline order/fill fixtures plus live read-only
-  account, catalog, pair, and quote checks. No live order was placed for validation.
 
 Official broker references:
 [Trading with your agent](https://robinhood.com/us/en/support/articles/trading-with-your-agent/),

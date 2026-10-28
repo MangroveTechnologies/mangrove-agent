@@ -1,1474 +1,336 @@
-# Hank API Reference
+# REST API Reference
 
-**Generated:** 2026-04-06
-**Status:** Draft
+This is the reference for the REST routes served by the local agent. The agent runs one
+FastAPI process that serves REST, MCP and OpenAPI on a single port (9080 on the host when
+started with Docker Compose). For the MCP surface see [MCP contracts](mcp-contracts.md) and
+run the `list_tools` tool for the live catalog.
 
-This document consolidates all Mangrove API endpoints available to Hank, organized by **Core** (the essentials) and **Extended** (advanced capabilities).
+The REST API covers only what the agent owns: wallets, local execution, scheduling, venue
+connections, the marketplace approval flow and the spend budget. Strategies, backtests,
+signals, market data, on-chain data and the knowledge base belong to MangroveAI and are
+reached through the agent's MCP endpoint, which forwards MangroveAI's tools. There is no REST
+copy of those tools.
 
----
+A running agent serves the machine-readable contract at `/openapi.json` and an interactive
+view at `/docs`. Routes marked "hidden" below are excluded from the OpenAPI schema.
 
-# Core Endpoints
+## Conventions
 
-These are the primary endpoints for Hank's trading bot functionality: wallet management, DEX trading, market data (OHLCV), strategy creation, backtesting, and execution.
+### Base paths
 
----
+| Prefix | Contents |
+|--------|----------|
+| `/health` | Liveness probe |
+| `/api/v1/agent/*` | Every agent route below |
+| `/api/x402/*` | x402 payment-gated routes (the `hello-mangrove` demo only) |
+| `/mcp` | MCP server (Streamable HTTP transport) |
 
-## 1. Wallet Management
+All paths in the tables below are relative to `/api/v1/agent` unless they start with `/api/`
+or are `/health`.
 
-### 1.1 Get Chain Info
+### Access tiers
 
-**Source:** MangroveMarkets MCP Server
-**Tool:** `wallet_chain_info`
-**REST:** `POST /api/v1/tools/wallet_chain_info`
-**Access:** Free
+| Tier | How to call |
+|------|-------------|
+| Free | No credentials |
+| Auth | `X-API-Key` header holding one of the keys in the `API_KEYS` config value (comma-separated) |
+| x402 | An x402 payment, or a valid `X-API-Key` for free access |
 
-Get chain configuration: supported networks, RPC URLs, native token info.
+The key is the agent's own local key, not a MangroveAI key. When `AUTH_ENABLED` is false,
+every route accepts requests without a key. The two placeholder values shipped in the example
+config (`dev-key-1` and `GENERATED_BY_SETUP`) never authenticate; `scripts/setup.sh` replaces
+them with a generated key.
 
-**Parameters:**
+### Errors
 
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `chain` | string | no | `"xrpl"` (default), `"evm"`, or `"solana"` |
+Domain errors return the HTTP status of the error and this body:
 
-**Response:**
-```json
-{
-  "chain": "evm",
-  "chain_family": "evm",
-  "native_token": "ETH",
-  "wallet_creation": "client_side_only",
-  "supported_chain_ids": [1, 8453, 42161, 137, 10, 56, 43114],
-  "networks": {
-    "8453": {"name": "Base", "explorer": "https://basescan.org"}
-  },
-  "sdk_method": "client.wallet.create('evm')"
-}
-```
-
----
-
-### 1.2 Create Wallet
-
-**Source:** MangroveMarkets MCP Server
-**Tool:** `wallet_create`
-**REST:** `POST /api/v1/tools/wallet_create`
-**Access:** Free
-
-Create a new wallet. XRPL wallets are funded via testnet faucet. EVM wallets generate a random keypair (unfunded). **Solana: NOT_IMPLEMENTED (Phase 3).**
-
-**Parameters:**
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `chain` | string | no | `"xrpl"` (default), `"evm"`, or `"solana"` (not yet implemented) |
-| `network` | string | no | XRPL: `"testnet"` (default) or `"devnet"`. Ignored for EVM. |
-| `chain_id` | int | no | EVM chain ID (1=Ethereum, 8453=Base). Ignored for XRPL. |
-
-**XRPL Response:**
-```json
-{
-  "address": "r4Vx2CdzRwHQHqGCUgDjTqa8PoFRdJjPuJ",
-  "secret": "sEdV...",
-  "seed_phrase": null,
-  "network": "testnet",
-  "is_funded": true,
-  "warnings": ["IMPORTANT: Save your wallet secret now..."]
-}
-```
-
-**EVM Response:**
-```json
-{
-  "address": "0xbf57B1ACf74885e215617783Fad4aE4DF849A8d0",
-  "private_key": "0x4f9010df...",
-  "chain_id": 8453,
-  "network": "evm",
-  "is_funded": false,
-  "warnings": ["IMPORTANT: Save your private key now...", "Fund this wallet yourself..."]
-}
-```
-
-**Security:** No tool accepts private keys. Keys are returned once at creation -- the agent stores them locally.
-
----
-
-### 1.3 Check Balance
-
-**Source:** MangroveMarkets MCP Server
-**Tool:** `wallet_balance`
-**REST:** `POST /api/v1/tools/wallet_balance`
-**Status:** NOT_IMPLEMENTED (Phase 1)
-
-Check wallet balance for an address.
-
----
-
-### 1.4 List Transactions
-
-**Source:** MangroveMarkets MCP Server
-**Tool:** `wallet_transactions`
-**REST:** `POST /api/v1/tools/wallet_transactions`
-**Status:** NOT_IMPLEMENTED (Phase 1)
-
-List recent transactions for an address.
-
----
-
-### 1.5 Check Balances (1inch)
-
-**Source:** MangroveMarkets MCP Server
-**Tool:** `oneinch_balances`
-**REST:** `POST /api/v1/tools/oneinch_balances`
-**Access:** Free
-
-Get all token balances for a wallet on an EVM chain.
-
-**Parameters:**
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `chain_id` | int | yes | EVM chain ID |
-| `wallet` | string | yes | Wallet address |
-
-**Response:**
-```json
-{
-  "chain_id": 8453,
-  "wallet": "0xbf57...",
-  "balances": {
-    "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "5470648682909640",
-    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "9000000"
-  }
-}
-```
-
----
-
-## 2. DEX Activity
-
-### 2.1 Venue and Pair Discovery
-
-`dex_supported_venues` and `dex_supported_pairs` are unavailable and hidden from
-supported discovery because their data was placeholder-only. Legacy direct calls
-return `NOT_IMPLEMENTED` without charging. They must not be used to infer current
-venue availability or supported token pairs.
-
----
-
-### 2.3 Get Quote
-
-**Source:** MangroveMarkets MCP Server
-**Tool:** `dex_get_quote`
-**REST:** `POST /api/v1/tools/dex_get_quote`
-**Access:** Free
-
-Get the best swap quote across all venues or from a specific venue.
-
-> **Units note.** This is the **raw backend tool**, whose `amount` is in the
-> token's **smallest units** (wei / base units), as shown below. The agent's
-> `get_swap_quote` MCP wrapper is retired. The retained `POST /api/v1/agent/dex/quote` route and local swap execution instead
-> take `amount` in **human units** (e.g. `0.001` = 0.001 ETH) and convert to
-> base units for you — passing a human float (e.g. `0.001`) straight to the
-> raw tool reads as sub-wei dust and returns `INSUFFICIENT_LIQUIDITY`.
-
-**Parameters:**
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `input_token` | string | yes | Source token address or symbol |
-| `output_token` | string | yes | Destination token address or symbol |
-| `amount` | float | yes | Amount in smallest units (e.g. wei for ETH, 1e6 for USDC) |
-| `venue_id` | string | no | Specific venue (omit for best across all) |
-| `chain_id` | int | no | EVM chain ID (required for 1inch) |
-| `mode` | string | no | `"standard"` (default, fee in swap) or `"x402"` (separate payment) |
-
-**Example -- 1 USDC to ETH on Base:**
-```json
-{
-  "input_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-  "output_token": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
-  "amount": 1000000,
-  "venue_id": "1inch",
-  "chain_id": 8453
-}
-```
-
-**Response:**
-```json
-{
-  "quote_id": "1inch-a1b2c3d4...",
-  "venue_id": "1inch",
-  "input_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-  "output_token": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
-  "input_amount": 1000000,
-  "output_amount": 459244868977722,
-  "exchange_rate": 4.59e-7,
-  "venue_fee": 0.0,
-  "mangrove_fee": 2500.0,
-  "total_cost": 1002500.0,
-  "chain_id": 8453,
-  "billing_mode": "standard"
-}
-```
-
----
-
-### 2.4 Approve Token
-
-**Source:** MangroveMarkets MCP Server
-**Tool:** `dex_approve_token`
-**REST:** `POST /api/v1/tools/dex_approve_token`
-**Access:** Free
-
-Get unsigned ERC-20 approval calldata. Required before swapping ERC-20 tokens on EVM chains. Not needed for native tokens (ETH) or non-EVM chains.
-
-**Parameters:**
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `token_address` | string | yes | ERC-20 token contract address |
-| `chain_id` | int | yes | EVM chain ID |
-| `wallet_address` | string | yes | Agent's public wallet address |
-| `amount` | float | no | Approval amount in smallest units (default: unlimited) |
-
-**Response:** `UnsignedTransaction` with approval calldata, or `null` for non-EVM chains.
-
----
-
-### 2.5 Prepare Swap
-
-**Source:** MangroveMarkets MCP Server
-**Tool:** `dex_prepare_swap`
-**REST:** `POST /api/v1/tools/dex_prepare_swap`
-**Access:** Free
-
-Get unsigned swap calldata for a previously obtained quote. The agent signs this locally and broadcasts via `dex_broadcast`.
-
-**Parameters:**
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `quote_id` | string | yes | The `quote_id` from `dex_get_quote` |
-| `wallet_address` | string | yes | Agent's public wallet address |
-| `slippage` | float | no | Slippage tolerance % (default 1.0) |
-
-**Response:**
-```json
-{
-  "chain_family": "evm",
-  "chain_id": 8453,
-  "venue_id": "1inch",
-  "description": "Swap USDC for ETH via 1inch on chain 8453",
-  "payload": {
-    "to": "0x111111125421cA6dc452d289314280a0f8842A65",
-    "data": "0x12aa3caf...",
-    "value": "0",
-    "gas": 234948,
-    "gasPrice": "7500000"
-  },
-  "estimated_gas": "234948"
-}
-```
-
----
-
-### 2.6 Broadcast Transaction
-
-**Source:** MangroveMarkets MCP Server
-**Tool:** `dex_broadcast`
-**REST:** `POST /api/v1/tools/dex_broadcast`
-**Access:** Free
-
-Broadcast a locally-signed transaction to the network.
-
-**Parameters:**
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `signed_tx` | string | yes | Raw signed transaction as hex string |
-| `chain_id` | int | yes | Chain ID where to broadcast |
-| `venue_id` | string | no | Venue hint for routing |
-| `mev_protection` | bool | no | Use Flashbots private mempool (default: false) |
-
-**Response:**
-```json
-{
-  "tx_hash": "0xc29ac8f7663151c9...",
-  "chain_family": "evm",
-  "chain_id": 8453,
-  "venue_id": "1inch",
-  "broadcast_method": "public"
-}
-```
-
----
-
-### 2.7 Check Transaction Status
-
-**Source:** MangroveMarkets MCP Server
-**Tool:** `dex_tx_status`
-**REST:** `POST /api/v1/tools/dex_tx_status`
-**Access:** Free
-
-Check the on-chain status of a broadcast transaction.
-
-**Parameters:**
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `tx_hash` | string | yes | Transaction hash from `dex_broadcast` |
-| `chain_id` | int | yes | Chain ID where the tx was broadcast |
-| `venue_id` | string | no | Venue hint |
-
-**Response:**
-```json
-{
-  "tx_hash": "0xc29ac8f7...",
-  "chain_family": "evm",
-  "chain_id": 8453,
-  "status": "confirmed",
-  "block_number": 12345678,
-  "gas_used": "150000"
-}
-```
-
----
-
-### Complete Swap Flow
-
-```
-1. dex_get_quote(...)        -> Returns quote with quote_id
-2. dex_approve_token(...)    -> Returns unsigned approval calldata
-   -> Agent signs locally    -> dex_broadcast(signed_approval)
-   -> dex_tx_status(...)     -> Wait for confirmation
-3. dex_prepare_swap(...)     -> Returns unsigned swap calldata
-   -> Agent signs locally    -> dex_broadcast(signed_swap)
-   -> dex_tx_status(...)     -> Wait for confirmation
-4. Done. Token swap confirmed on-chain.
-```
-
----
-
-## 3. Market Data (OHLCV)
-
-### 3.1 Get OHLCV Data
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/crypto-assets/ohlcv/{symbol}`
-**Auth:** Bearer token
-
-Get historical candlestick data for technical analysis and backtesting.
-
-**Parameters:**
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `symbol` | string (path) | yes | Asset symbol (e.g. `"ETH"`, `"BTC"`) |
-| `days` | int (query) | no | Number of days (default: 30) |
-| `provider` | string (query) | no | Data provider (default: `"coinapi"`) |
-
-**Response:**
-```json
-{
-  "success": true,
-  "symbol": "ETH",
-  "data_points": 30,
-  "provider": "coinapi",
-  "data": [
-    {
-      "timestamp": "2026-01-04T00:00:00Z",
-      "open": 3200.00,
-      "high": 3250.00,
-      "low": 3150.00,
-      "close": 3240.50,
-      "volume": 850000
-    }
-  ]
-}
-```
-
----
-
-### 3.2 Get Real-Time Market Data
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/crypto-assets/market-data/{symbol}`
-**Auth:** Bearer token
-
-Get current price, market cap, and 24h volume.
-
-**Parameters:**
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `symbol` | string (path) | yes | Asset symbol |
-| `provider` | string (query) | no | Data provider (default: `"coingecko"`) |
-
-**Response:**
-```json
-{
-  "success": true,
-  "symbol": "BTC",
-  "data": {
-    "current_price": 91282.00,
-    "market_cap": 1823027068010,
-    "volume_24h": 30539603461,
-    "price_change_24h_pct": 2.3,
-    "price_change_7d_pct": -1.5,
-    "ath": 108000,
-    "ath_date": "2024-12-17"
-  }
-}
-```
-
----
-
-## 4. Strategy Management
-
-### 4.1 List Strategies
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/strategies`
-**Auth:** Bearer token
-
-List all strategies for the authenticated user. Returns summary objects (no rules/config).
-
-**Parameters:**
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `skip` | int (query) | no | Pagination offset (default: 0) |
-| `limit` | int (query) | no | Max results (default: 100) |
-
-**Response:**
-```json
-{
-  "success": true,
-  "strategies": [
-    {
-      "id": "5089b9a8-f375-4813-8ed0-d7175368a11e",
-      "name": "eth_strategy",
-      "asset": "ETH",
-      "status": "inactive",
-      "created_at": "2026-01-24T22:01:51Z",
-      "strategy_type": "momentum",
-      "description": "Buys ETH when RSI crosses above 50 while price is above the 50-period SMA"
-    }
-  ],
-  "total": 1,
-  "skip": 0,
-  "limit": 10
-}
-```
-
----
-
-### 4.2 Create Strategy
-
-**Source:** MangroveAI
-**Endpoint:** `POST /api/v1/strategies`
-**Auth:** Bearer token
-
-Create a new trading strategy with entry/exit signal rules.
-
-**Required Fields:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Strategy name |
-| `asset` | string | Asset symbol (e.g. `"BTC"`, `"ETH"`) |
-| `entry` | array | Entry rules (exactly 1 TRIGGER, 0+ FILTERs) |
-
-**Optional Fields:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `exit` | array | Exit rules (default: `[]`) |
-| `reward_factor` | number | Risk/reward ratio (default: 2.0) |
-| `strategy_type` | string | One of: `trend_following`, `momentum`, `volatility`, `breakout`, `mean_reversion` |
-| `description` | string | Human-readable description |
-| `execution_config` | object | Execution parameters (defaults from MangroveAI's trading defaults) |
-
-**Strategy Rules Format:**
-
-Each rule object:
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | yes | Signal function name (e.g. `"rsi_oversold"`, `"ema_cross_up"`) |
-| `signal_type` | string | yes | `"TRIGGER"` (event-based) or `"FILTER"` (state-based) |
-| `timeframe` | string | yes | Candle interval: `5m`, `15m`, `30m`, `1h`, `4h`, `1D` |
-| `params` | object | yes | Signal-specific parameters |
-
-**Signal Composition Constraints:**
-- **Entry:** Exactly 1 TRIGGER + 0 or more FILTERs. All must be true for entry.
-- **Exit:** 0 or 1 TRIGGER + 0 or more FILTERs.
-- **Stop loss / take profit** are NOT signal rules -- managed by execution engine via ATR-based risk management in `execution_config`.
-
-**Request Example:**
-```json
-{
-  "name": "BTC RSI Strategy",
-  "asset": "BTC",
-  "strategy_type": "momentum",
-  "description": "Buys BTC when RSI crosses below 30 while price holds above the 50-period SMA",
-  "entry": [
-    {"name": "rsi_oversold", "signal_type": "TRIGGER", "timeframe": "1h", "params": {"window": 14, "threshold": 30}},
-    {"name": "is_above_sma", "signal_type": "FILTER", "timeframe": "1h", "params": {"window": 50}}
-  ],
-  "exit": [],
-  "reward_factor": 2.0
-}
-```
-
-**Response (201):** Full strategy object including auto-populated `execution_config` and `execution_state`.
-
----
-
-### 4.3 Get Strategy
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/strategies/{strategy_id}`
-**Auth:** Bearer token
-
-Retrieve full strategy details including rules, execution_config, and execution_state.
-
----
-
-### 4.4 Update Strategy Status
-
-**Source:** MangroveAI
-**Endpoint:** `PATCH /api/v1/strategies/{strategy_id}/status`
-**Auth:** Bearer token
-
-Update a strategy's deployment status.
-
-**Body:**
-```json
-{"status": "paper"}
-```
-
-**Valid statuses:** `draft`, `inactive`, `paper`, `live`, `archived`
-
----
-
-### 4.5 Delete Strategy
-
-**Source:** MangroveAI
-**Endpoint:** `DELETE /api/v1/strategies/{strategy_id}`
-**Auth:** Bearer token
-
-Delete a strategy. Only the owner can delete.
-
----
-
-### Execution Config Reference
-
-Every strategy carries an `execution_config` with these fields (defaults from MangroveAI's trading defaults):
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `max_risk_per_trade` | number | 0.01 | Max risk per trade (1%) |
-| `reward_factor` | number | 2 | Risk/reward ratio target |
-| `atr_period` | int | 14 | ATR lookback period in bars |
-| `volatility_tolerance` | number | 0.5 | Where the stop sits on the ATR width, 0–1 (0 = 0.5× signal-timeframe ATR, 1 = 2× daily ATR). Replaces the superseded `atr_volatility_factor` / `atr_short_weight` / `atr_long_weight` / `atr_cap_multiplier`, which `strategies.create` now rejects |
-| `min_balance_threshold` | number | 0.1 | Minimum account balance |
-| `min_trade_amount` | number | 25 | Minimum trade size ($) |
-| `max_open_positions` | int | 10 | Max concurrent positions |
-| `max_trades_per_day` | int | 50 | Daily trade limit |
-| `volatility_window` | int | 24 | Volatility calc window (bars) |
-| `target_volatility` | number | 0.02 | Target volatility level |
-| `volatility_mode` | string | `"stddev"` | `"stddev"` or `"atr"` |
-| `enable_volatility_adjustment` | bool | false | Volatility-based position sizing |
-| `cooldown_config` | object | per-timeframe | Loss-streak cooldowns keyed by timeframe (`short/long_loss_limit`, `short/long_window_bars`, `short/long_cooldown_bars`). Supersedes the deprecated `cooldown_bars` / `daily_momentum_limit` / `weekly_momentum_limit`. |
-| `max_hold_bars` | int | 50 | Max bars to hold a position |
-| `exit_on_loss_after_bars` | int | 50 | Exit losers after N bars |
-| `exit_on_profit_after_bars` | int | 60 | Exit winners after N bars |
-| `profit_threshold_pct` | number | 0.05 | Threshold to consider "winning" |
-
----
-
-## 5. Backtesting
-
-### 5.1 Run Backtest
-
-**Source:** MangroveAI
-**Endpoint:** `POST /api/v1/backtesting/backtest`
-**Auth:** Bearer token
-
-Run a synchronous backtest against historical market data.
-
-**Required Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `asset` | string | Asset symbol (e.g. `"BTC"`, `"ETH"`) |
-| `interval` | string | Time interval (`"1h"`, `"4h"`, `"1d"`) |
-| `initial_balance` | number | Starting account balance |
-| `strategy_json` | string | **Stringified** JSON strategy config |
-| `min_balance_threshold` | number | Minimum balance threshold |
-| `min_trade_amount` | number | Minimum trade size |
-| `max_open_positions` | int | Max concurrent positions |
-| `max_trades_per_day` | int | Daily trade limit |
-| `max_risk_per_trade` | number | Max risk per trade (e.g. 0.01 = 1%) |
-| `max_units_per_trade` | number | Max position size in units |
-| `max_trade_amount` | number | Max trade amount ($) |
-| `volatility_window` | int | Volatility window (bars) |
-| `target_volatility` | number | Target volatility |
-| `volatility_mode` | string | `"stddev"` or `"atr"` |
-| `enable_volatility_adjustment` | bool | Volatility-based sizing |
-| `cooldown_config` | object | Per-timeframe cooldown config (preferred) |
-| `cooldown_bars` | int | DEPRECATED — use `cooldown_config`; ignored by the engine when `cooldown_config` is set |
-| `daily_momentum_limit` | number | DEPRECATED — use `cooldown_config` |
-| `weekly_momentum_limit` | number | DEPRECATED — use `cooldown_config` |
-
-**Date Range Options (at least one required):**
-
-| Mode | Parameters | Behavior |
-|------|-----------|----------|
-| Explicit Range | `start_date` + `end_date` | Exact date range |
-| From Date to Now | `start_date` only | Start to current time |
-| Lookback from End | `end_date` + `lookback_months` | N months back from end |
-| Recent History | `lookback_months` only | N months from now |
-
-**Optional Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `slippage_pct` | number | Max slippage per leg (default: 0.004 = 0.4%) |
-| `fee_pct` | number | Max fee rate (default: 0.0085 = 0.85%) |
-| `execution_config` | object | Stop params (`atr_period`, `volatility_tolerance`). Defaults come from MangroveAI's trading defaults. |
-
-**Important:** `atr_period` and `volatility_tolerance` belong in `execution_config`, NOT in `strategy_json`.
-
-**Response:**
-```json
-{
-  "success": true,
-  "metrics": {
-    "sharpe_ratio": 1.23,
-    "sortino_ratio": 1.10,
-    "calmar_ratio": 0.80,
-    "irr_annualized": 0.25,
-    "max_drawdown": 0.15,
-    "max_drawdown_duration": 42,
-    "win_rate": 0.55
-  },
-  "trade_history": [
-    {
-      "entry_price": 95000.0,
-      "exit_price": 97500.0,
-      "position_size": 0.01,
-      "profit_loss": 18.75,
-      "entry_timestamp": "2025-04-10T08:00:00+00:00",
-      "exit_timestamp": "2025-04-12T14:00:00+00:00",
-      "exit_reason": "TP",
-      "strategy": "BTC RSI Strategy"
-    }
-  ],
-  "execution_time_seconds": 3.21,
-  "trade_count": 12
-}
-```
-
----
-
-### 5.2 Retrieve Backtest Result
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/backtesting/backtest/{backtest_id}`
-**Auth:** Bearer token
-
-Retrieve a previously executed backtest by ID (persisted via AI Copilot workflow).
-
----
-
-### 5.3 Retrieve Backtest Trades
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/backtesting/backtest/{backtest_id}/trades`
-**Auth:** Bearer token
-
-Get trade history for a backtest run.
-
-**Response:**
-```json
-{
-  "success": true,
-  "backtest_id": "550e8400...",
-  "trade_count": 35,
-  "trades": [
-    {
-      "trade_id": "b976121d...",
-      "outcome": "win",
-      "profit_loss": 86.37,
-      "asset": "PAXG",
-      "side": "exit_long",
-      "entry_price": 4338.24,
-      "exit_price": 4435.75,
-      "position_size": 2.22929936,
-      "entry_timestamp": "2025-12-16T14:00:00+00:00",
-      "exit_timestamp": "2025-12-22T06:00:00+00:00",
-      "exit_reason": "TP",
-      "stop_loss_price": 4293.38,
-      "take_profit_price": 4427.95
-    }
-  ]
-}
-```
-
----
-
-### 5.4 Bulk Backtest
-
-**Source:** MangroveAI
-**Endpoint:** `POST /api/v1/backtesting/backtest/bulk`
-**Auth:** Bearer token
-
-Run multiple strategies over a shared date range. Market data is fetched once per unique `(asset, timeframe)` pair and reused across strategies.
-
-**Strategy Sources (provide exactly one):**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `strategy_ids` | array | UUIDs of saved strategies |
-| `strategy_configs` | array | Inline strategy configs (parsed JSON, not stringified) |
-
-Same required parameters as single backtest, plus `start_date` and `end_date` (both required for bulk).
-
-**Response includes per-strategy results:**
-```json
-{
-  "success": true,
-  "results": [
-    {
-      "success": true,
-      "strategy_name": "BTC MACD Strategy",
-      "metrics": {"sharpe_ratio": 1.42, "win_rate": 0.57, "total_trades": 38},
-      "trade_count": 38,
-      "execution_time_seconds": 2.1
-    }
-  ],
-  "data_fetches": 4,
-  "total_execution_time_seconds": 8.7
-}
-```
-
----
-
-## 6. Strategy Execution
-
-### 6.1 Evaluate Strategy (by ID)
-
-**Source:** MangroveAI
-**Endpoint:** `POST /api/v1/execution/evaluate/{strategy_id}`
-**Auth:** Bearer token
-
-Evaluate a strategy against current market data. Loads open positions, checks exit conditions (SL, TP, signals, time-based), evaluates entry signals, returns/persists orders.
-
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `persist` | bool | no | Persist orders/positions/trades (default: true) |
-
-**Response:**
-```json
-{
-  "success": true,
-  "strategy_id": "48982c90...",
-  "strategy_name": "BTC Momentum Strategy",
-  "asset": "BTC-USD",
-  "current_price": 77287.01,
-  "timestamp": "2026-01-31T21:23:40",
-  "execution_state": {
-    "cash_balance": 101562.65,
-    "account_value": 101562.65,
-    "total_trades": 2,
-    "num_open_positions": 0
-  },
-  "new_orders": [
-    {
-      "order_id": "d6e605da...",
-      "asset": "BTC-USD",
-      "side": "exit_long",
-      "order_type": "take_profit",
-      "status": "filled",
-      "price": 77287.01,
-      "position_size": 0.5,
-      "position_id": "e99b2211...",
-      "history": {
-        "created": "2026-01-31T21:23:29",
-        "activated": "2026-01-31T21:23:29",
-        "filled": "2026-01-31T21:23:40",
-        "cancelled": null
-      }
-    }
-  ],
-  "execution_time_seconds": 2.81
-}
-```
-
----
-
-### 6.2 Evaluate Strategy (by Object)
-
-**Source:** MangroveAI
-**Endpoint:** `POST /api/v1/execution/evaluate`
-**Auth:** Bearer token
-
-Evaluate using an inline strategy object instead of a saved ID. Useful for testing draft strategies.
-
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `strategy` | object | yes | Full strategy object with `asset`, `rules`, `execution_config`, `execution_state` |
-| `persist` | bool | no | Persist results (default: false for object-based) |
-
----
-
-### 6.3 Bulk Evaluate
-
-**Source:** MangroveAI
-**Endpoint:** `POST /api/v1/execution/evaluate/bulk`
-**Auth:** Bearer token
-
-Evaluate multiple strategies at the current bar. Market data fetched once per unique `(asset, timeframe)` pair.
-
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `strategy_ids` | array | conditional | DB strategy UUIDs |
-| `strategy_configs` | array | conditional | Inline strategy objects |
-| `persist` | bool | no | Persist results (default: false) |
-
-Both `strategy_ids` and `strategy_configs` may be provided in the same request.
-
----
-
-## 7. Signals
-
-### 7.1 List Signals
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/signals`
-**Auth:** Bearer token
-
-List all available trading signals. 96 active signals (34 TRIGGER, 62 FILTER) across momentum, trend, volume, volatility categories.
-
-**Parameters:**
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `limit` | int (query) | no | Max results (default: 50, max: 100) |
-| `offset` | int (query) | no | Pagination offset (default: 0) |
-
----
-
-### 7.2 Get Signal Details
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/signals/{signal_name}`
-**Auth:** Bearer token
-
-Get full metadata for a signal including parameter specs (type, min, max, default).
-
-**Response:**
-```json
-{
-  "name": "rsi_oversold",
-  "category": "momentum",
-  "metadata": {
-    "rule_name": "rsi_oversold",
-    "description": "RSI is below threshold (oversold condition)",
-    "requires": ["Close"],
-    "params": {
-      "window": {"type": "int", "min": 2, "max": 100, "default": 14},
-      "threshold": {"type": "float", "min": 0.0, "max": 50.0, "default": 30.0}
-    }
-  }
-}
-```
-
----
-
-### 7.3 Search Signals
-
-**Source:** MangroveAI
-**Endpoint:** `POST /api/v1/signals/search`
-**Auth:** Bearer token
-
-Search signals by name, parameters, or keywords.
-
-**Body:**
-```json
-{
-  "query": "sma",
-  "search_type": "name",
-  "limit": 50,
-  "offset": 0
-}
-```
-
-**Search types:** `"name"`, `"params"`, `"keywords"`
-
----
-
-# Extended Endpoints
-
-These endpoints provide advanced capabilities beyond the core trading loop.
-
----
-
-## 8. Crypto Asset Intelligence
-
-### 8.1 Query Assets
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/crypto-assets/query`
-**Auth:** Bearer token
-
-Query approved assets with risk scores. Optimized for frontend dropdowns and asset selection.
-
-**Parameters:**
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `approved_only` | bool | no | Filter to approved only (default: true) |
-| `min_score` | int | no | Minimum risk score (0-100) |
-| `limit` | int | no | Max results (default: 250) |
-
----
-
-### 8.2 List All Assets
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/crypto-assets/all`
-**Auth:** Bearer token
-
-All crypto assets with risk scores, approval status, and metadata.
-
-**Parameters:** `approved` (bool), `min_score` (float), `limit` (int, max 500)
-
----
-
-### 8.3 Get Asset Details
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/crypto-assets/symbols/{symbol}`
-**Auth:** Bearer token
-
-Comprehensive details: risk scores (6-factor), approval status, supply data.
-
----
-
-### 8.4 List Approved Assets
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/crypto-assets/symbols`
-**Auth:** Bearer token
-
-Only assets that pass all quality gates. These are cleared for trading.
-
----
-
-### 8.5 List Exchanges
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/crypto-assets/exchanges`
-**Auth:** Bearer token
-
-All exchanges with tier classification (1, 2, 3), type, volume, regulation status.
-
----
-
-### 8.6 Get Asset Exchanges
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/crypto-assets/symbols/{symbol}/exchanges`
-**Auth:** Bearer token
-
-Which exchanges list a specific asset and with what trading pairs.
-
----
-
-### 8.7 Trending Assets
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/crypto-assets/trending`
-**Auth:** Bearer token
-
-Top trending assets by 24h search volume (CoinGecko).
-
----
-
-### 8.8 Global Market Data
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/crypto-assets/global-market`
-**Auth:** Bearer token
-
-Total market cap, BTC dominance, ETH dominance, 24h change. Useful for market regime detection.
-
----
-
-## 9. On-Chain Analytics (Nansen)
-
-### 9.1 Token Holder Distribution
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/crypto-assets/token-holders/{symbol}`
-**Auth:** Bearer token
-
-Smart money count, whale count, top-10 concentration %. Use sparingly -- expensive API calls.
-
----
-
-### 9.2 Flow Intelligence (Per-Token)
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/crypto-assets/flow-intelligence/{symbol}`
-**Auth:** Bearer token
-
-Real-time capital flows by wallet type (smart traders, whales, exchanges, fresh wallets).
-
-**Parameters:** `chain` (default: `"ethereum"`), `timeframe` (`"5m"`, `"1h"`, `"6h"`, `"12h"`, `"1d"`, `"7d"`)
-
-**Interpretation:**
-- Positive = accumulation (buying/withdrawing from CEX)
-- Negative = distribution (selling/depositing to CEX)
-
----
-
-### 9.3 Smart Money Netflows (Market-Wide)
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/crypto-assets/smart-money/netflows`
-**Auth:** Bearer token
-
-Aggregated netflows across ALL tokens. Find what smart money is buying/selling.
-
-**Parameters:** `chains`, `labels`, `timeframe` (`"1h"`, `"24h"`, `"7d"`, `"30d"`), `limit`
-
----
-
-### 9.4 Smart Money Holdings (Market-Wide)
-
-**Source:** MangroveAI
-**Endpoint:** `GET /api/v1/crypto-assets/smart-money/holdings`
-**Auth:** Bearer token
-
-What smart money is holding RIGHT NOW. Position sizes, 24h changes, holder counts.
-
-**Parameters:** `chains`, `labels`, `min_value` (default: $1M), `limit`
-
----
-
-## 10. 1inch Portfolio & Analytics
-
-### 10.1 Portfolio Value
-
-**Source:** MangroveMarkets MCP Server
-**Tool:** `oneinch_portfolio_value`
-
-Total portfolio value across chains. **Params:** `addresses` (comma-separated wallets), `chain_id` (optional filter).
-
-### 10.2 Portfolio P&L
-
-**Tool:** `oneinch_portfolio_pnl`
-
-Profit and loss for a portfolio. Same params as portfolio value.
-
-### 10.3 Portfolio Tokens
-
-**Tool:** `oneinch_portfolio_tokens`
-
-ERC-20 token holdings detail. Same params.
-
-### 10.4 Portfolio DeFi
-
-**Tool:** `oneinch_portfolio_defi`
-
-DeFi protocol positions. Same params.
-
-### 10.5 Chart Data
-
-**Tool:** `oneinch_chart`
-
-OHLCV candle data for a token pair on-chain. **Params:** `chain_id`, `token0`, `token1`, `period` (`"5m"`, `"15m"`, `"1h"`, `"4h"`, `"1d"`, `"1w"`).
-
-### 10.6 Transaction History
-
-**Tool:** `oneinch_history`
-
-Wallet transaction history across all supported chains. **Params:** `address`, `limit` (default: 50).
-
----
-
-## 11. 1inch Token & Gas
-
-### 11.1 Token Search
-
-**Tool:** `oneinch_token_search`
-
-Search tokens by name/symbol. **Params:** `chain_id`, `query`.
-
-### 11.2 Token Info
-
-**Tool:** `oneinch_token_info`
-
-Detailed token info by contract address. **Params:** `chain_id`, `address`.
-
-### 11.3 Spot Price
-
-**Tool:** `oneinch_spot_price`
-
-USD spot prices. **Params:** `chain_id`, `tokens` (comma-separated addresses).
-
-### 11.4 Gas Price
-
-**Tool:** `oneinch_gas_price`
-
-Current gas prices (low/medium/high). **Params:** `chain_id`.
-
-### 11.5 Token Allowances
-
-**Tool:** `oneinch_allowances`
-
-Check token allowances for a spender. **Params:** `chain_id`, `wallet`, `spender`.
-
----
-
-## 12. Marketplace
-
-### 12.1 Create Listing
-
-**Source:** MangroveMarkets MCP Server
-**Tool:** `marketplace_create_listing`
-**Access:** Free
-
-Create a peer-to-peer listing. Categories: `data`, `compute`, `intelligence`, `models`, `apis`, `storage`, `identity`, `media`, `code`, `other`.
-
-### 12.2 Search Marketplace
-
-**Tool:** `marketplace_search`
-**Access:** x402 ($0.01)
-
-Full-text search with filters (category, price range, listing type).
-
-### 12.3 Get Listing
-
-**Tool:** `marketplace_get_listing`
-**Access:** x402 ($0.01)
-
-Full details of a specific listing.
-
-### 12.4 Settlement Flow
-
-| Tool | Description | Status |
-|------|-------------|--------|
-| `marketplace_make_offer` | Make offer on listing | NOT_IMPLEMENTED (Phase 2) |
-| `marketplace_accept_offer` | Accept offer (creates XRPL escrow) | NOT_IMPLEMENTED (Phase 2) |
-| `marketplace_confirm_delivery` | Confirm delivery (releases escrow) | NOT_IMPLEMENTED (Phase 2) |
-| `marketplace_rate` | Rate completed transaction | NOT_IMPLEMENTED (Phase 2) |
-
----
-
-## 13. Integrations
-
-| Tool | Description | Status |
-|------|-------------|--------|
-| `integration_akash_deploy` | Deploy compute on Akash Network | NOT_IMPLEMENTED (Phase 7) |
-| `integration_bittensor_query` | Query Bittensor subnets | NOT_IMPLEMENTED (Phase 7) |
-| `integration_fetch_discover` | Discover Fetch.ai agents/services | NOT_IMPLEMENTED (Phase 7) |
-| `integration_nodes_status` | Check Nodes.ai distributed infra | NOT_IMPLEMENTED (Phase 7) |
-
----
-
-## 14. Metrics
-
-| Tool | Description | Status |
-|------|-------------|--------|
-| `metrics_market_overview` | Overall marketplace statistics | NOT_IMPLEMENTED (Phase 6) |
-| `metrics_category_trends` | Demand/supply trends by category | NOT_IMPLEMENTED (Phase 6) |
-| `metrics_price_history` | Historical price data by category | NOT_IMPLEMENTED (Phase 6) |
-
----
-
-## 15. Knowledge Base
-
-### 15.1 Search
-
-**Source:** MangroveKnowledgeBase
-**Tool:** `kb_search`
-
-Full-text search with Porter stemming, synonym expansion, tag filtering across 11 trading docs.
-
-### 15.2 List Documents
-
-**Tool:** `kb_list_documents`
-
-All documents with summaries.
-
-### 15.3 Get Document
-
-**Tool:** `kb_get_document`
-
-Full document content by slug.
-
-### 15.4 Get Document Sections
-
-**Tool:** `kb_get_document_sections`
-
-Hierarchical section structure of a document.
-
-### 15.5 Get Backlinks
-
-**Tool:** `kb_get_backlinks`
-
-Find all documents referencing a specific anchor.
-
-### 15.6 List Glossary
-
-**Tool:** `kb_list_glossary`
-
-All glossary entries with definitions.
-
-### 15.7 Glossary Lookup
-
-**Tool:** `kb_glossary_lookup`
-
-Look up a specific term with definition and backlinks.
-
-### 15.8 List Tags
-
-**Tool:** `kb_list_tags`
-
-All tags with document counts.
-
-### 15.9 Get Documents by Tag
-
-**Tool:** `kb_get_documents_by_tag`
-
-Documents associated with a specific tag.
-
-### 15.10 List Signals (KB)
-
-**Tool:** `kb_list_signals`
-
-Available signals with category/type filtering. Mirrors MangroveAI signals from the knowledge base perspective.
-
-### 15.11 Get Signal (KB)
-
-**Tool:** `kb_get_signal`
-
-Full signal metadata from the knowledge base.
-
-### 15.12 List Indicators
-
-**Tool:** `kb_list_indicators`
-
-70 technical indicators across momentum, trend, volume, volatility, patterns, returns.
-
-### 15.13 Get Indicator
-
-**Tool:** `kb_get_indicator`
-
-Full indicator spec: data requirements, parameters, outputs.
-
-### 15.14 Evaluate Signal
-
-**Tool:** `evaluate_signal`
-**Access:** x402 (payment-gated)
-
-Evaluate a trading signal against OHLCV data.
-
-### 15.15 Compute Indicator
-
-**Tool:** `compute_indicator`
-**Access:** x402 (payment-gated)
-
-Compute a technical indicator from market data.
-
----
-
-## 16. AI Copilot
-
-### 16.1 Start Conversation
-
-**Source:** MangroveAI
-**Endpoint:** `POST /api/v1/ai-copilot/start_new_conversation`
-**Auth:** Bearer token
-
-Initialize a new chat session for AI-assisted strategy building.
-
-### 16.2 Chat
-
-**Endpoint:** `POST /api/v1/ai-copilot/chat/{session_id}`
-
-Send message to AI agent. Handles signal matching, parameter selection, backtesting automatically.
-
-### 16.3 List Conversations
-
-**Endpoint:** `GET /api/v1/ai-copilot/list_conversations`
-
-### 16.4 Get Conversation
-
-**Endpoint:** `GET /api/v1/ai-copilot/conversations/{session_id}`
-
-### 16.5 Get Latest Conversation
-
-**Endpoint:** `GET /api/v1/ai-copilot/get_latest_conversation`
-
-### 16.6 Update Conversation
-
-**Endpoint:** `PUT /api/v1/ai-copilot/conversations/{session_id}`
-
-Update conversation title.
-
-### 16.7 Delete Conversation
-
-**Endpoint:** `DELETE /api/v1/ai-copilot/conversations/{session_id}`
-
-### 16.8 Save Strategy
-
-**Endpoint:** `POST /api/v1/ai-copilot/save_strategy`
-
-Persist a generated strategy to the database.
-
-### 16.9 Configuration
-
-**Endpoint:** `GET /api/v1/ai-copilot/configuration`
-
-List available context, agentic, and prompt files.
-
----
-
-## 17. Authentication
-
-### 17.1 Firebase Login
-
-**Source:** MangroveAI
-**Endpoint:** `POST /api/v1/auth/login`
-
-Exchange Firebase ID token for internal JWT tokens.
-
-### 17.2 Google OAuth
-
-**Endpoint:** `POST /api/v1/auth/login/google`
-
-Initiate Google OAuth login flow.
-
-### 17.3 Refresh Token
-
-**Endpoint:** `POST /api/v1/auth/refresh`
-
-Refresh access token using refresh token.
-
-### 17.4 Get Profile
-
-**Endpoint:** `GET /api/v1/auth/profile`
-
-### 17.5 Update Profile
-
-**Endpoint:** `PUT /api/v1/auth/profile`
-
-### 15.6 API Keys
-
-- `GET /api/v1/auth/api-keys` -- List all API keys (masked)
-- `POST /api/v1/auth/api-keys` -- Generate new key with optional scopes/expiration
-- `DELETE /api/v1/auth/api-keys/{key_id}` -- Revoke key
-
----
-
-## x402 Payment Protocol
-
-Tools that require payment use the x402 protocol:
-
-1. Agent calls a payable tool
-2. Server returns `payment_required` with `accepts` array
-3. Agent picks chain/asset, signs payment authorization locally
-4. Agent retries with `payment_proof` parameter
-5. Server verifies, executes, settles payment
-6. Agent receives result + `settlement_receipt`
-
-**Supported Facilitators:**
-
-| Network | Facilitator | URL |
-|---------|-------------|-----|
-| Base (EVM) | Coinbase | https://x402.org/facilitator |
-| XRPL | t54.ai | https://t54.ai/facilitator |
-| Solana | Coinbase | https://x402.org/facilitator |
-
----
-
-## Supported EVM Chains (1inch)
-
-| Chain ID | Name |
-|----------|------|
-| 1 | Ethereum |
-| 8453 | Base |
-| 42161 | Arbitrum |
-| 137 | Polygon |
-| 10 | Optimism |
-| 56 | BNB Chain |
-| 43114 | Avalanche |
-| 324 | zkSync Era |
-| 100 | Gnosis |
-| 59144 | Linea |
-
----
-
-## Error Format
-
-All MCP Server errors follow:
 ```json
 {
   "error": true,
-  "code": "QUOTE_NOT_FOUND",
-  "message": "Quote abc123 not found or expired",
-  "suggestion": "Call dex_get_quote first to obtain a fresh quote"
+  "code": "WALLET_NOT_FOUND",
+  "message": "Human-readable description",
+  "suggestion": "What to do about it",
+  "correlation_id": "uuid"
 }
 ```
 
-All MangroveAI errors follow:
-```json
-{
-  "error": "VALIDATION_ERROR",
-  "message": "Missing required fields: name, asset",
-  "code": "MISSING_FIELD"
-}
-```
+The same ID is returned in the `X-Correlation-Id` response header (a caller-supplied value is
+echoed back) and written to the agent's structured logs. The full code table is in the
+[specification](specification.md#error-handling). Request bodies that fail Pydantic
+validation return FastAPI's standard 422 response.
 
----
+### Retired routes
 
-## Endpoint Summary
+These routes still exist so old callers get a clear answer. They require the API key, are
+hidden from OpenAPI, and always return HTTP 410:
 
-### Core (39 endpoints)
+| Method | Path | Replacement |
+|--------|------|-------------|
+| POST | `/strategies/autonomous` | MangroveAI `load_skill` (`strategy-composition`) and `save_strategy` |
+| POST | `/strategies/manual` | MangroveAI `save_strategy` |
+| GET | `/reference-strategies`, `/reference-strategies/`, `/reference-strategies/search` | MangroveAI `load_skill` (`strategy-composition`) |
+| POST | `/reference-strategies/{reference_id}/build` | MangroveAI `load_skill` (`strategy-composition`) |
 
-| # | Area | Count | Endpoints | Status |
-|---|------|-------|-----------|--------|
-| 1 | Wallet | 5 | chain_info, create, balance, transactions, balances (1inch) | 2 NOT_IMPLEMENTED |
-| 2 | DEX | 7 | venues, pairs, quote, approve, prepare_swap, broadcast, tx_status | All live |
-| 3 | Market Data | 2 | OHLCV, real-time market data | All live |
-| 4 | Strategies | 5 | list, create, get, update status, delete | All live |
-| 5 | Backtesting | 4 | run, get result, get trades, bulk | All live |
-| 6 | Execution | 3 | evaluate by ID, evaluate by object, bulk evaluate | All live |
-| 7 | Signals | 3 | list, get details, search | All live |
+Routes for market data, on-chain data, signals, the knowledge base, backtests and strategy
+listing do not exist and return 404.
 
-### Extended (80+ endpoints)
+## Discovery
 
-| # | Area | Count | Endpoints | Status |
-|---|------|-------|-----------|--------|
-| 8 | Crypto Assets | 8 | query, list all, details, approved, exchanges, asset exchanges, trending, global market | All live |
-| 9 | On-Chain Analytics | 4 | holders, flow intelligence, netflows, holdings | All live |
-| 10 | 1inch Portfolio | 6 | value, P&L, tokens, DeFi, chart, history | All live |
-| 11 | 1inch Token/Gas | 5 | search, info, spot price, gas price, allowances | All live |
-| 12 | Marketplace | 7 | create, search, get, make offer, accept, confirm, rate | 4 NOT_IMPLEMENTED (Phase 2) |
-| 13 | Integrations | 4 | akash, bittensor, fetch, nodes | All NOT_IMPLEMENTED (Phase 7) |
-| 14 | Metrics | 3 | market overview, category trends, price history | All NOT_IMPLEMENTED (Phase 6) |
-| 15 | Knowledge Base | 15 | search, docs, glossary, tags, signals, indicators, compute | All live |
-| 16 | AI Copilot | 9 | start, chat, list, get, latest, update, delete, save, config | All live |
-| 17 | Auth | 7 | login, OAuth, refresh, profile, API keys | All live |
+| Method | Path | Tier | Purpose |
+|--------|------|------|---------|
+| GET | `/health` | Free | `{status, scheduler_running, timestamp}` |
+| GET | `/status` | Free | Agent state (below) |
+| GET | `/tools` | Free | Catalog of MCP tools: `{tools: [...], mangroveai_status}` |
+| PUT | `/identity` | Auth | Save the agent name |
+
+`GET /status` returns:
+
+- `agent_name` (`null` until chosen), `version` and `server_version`, and installed SDK
+  versions under `sdk_versions`.
+- `catalog`: MangroveAI signal and knowledge-base counts, cached for 10 minutes. `catalog.error`
+  is set when they are unavailable, including in wallet (x402) payment mode, where the agent
+  does not spend money on a status read.
+- `wallets_count`, `strategies` (counts by status) and `active_cron_jobs`.
+- `portfolio_risk` (same payload as `GET /portfolio/risk`) and `x402_spend` (same payload as
+  `GET /x402/spend`). Either degrades to `{"error": "unavailable"}` instead of failing the
+  request.
+- `db_path` and `uptime_seconds`.
+
+`GET /tools` lists the tools served by this agent, by MangroveMarkets and by MangroveAI.
+`mangroveai_status` is `unavailable` when MangroveAI's catalog cannot be read; local tools
+remain available.
+
+`PUT /identity` takes `{"name": "<1 to 64 printable characters>"}` and returns
+`{"agent_name": "<name>"}`.
+
+## Wallets
+
+Wallet secrets never appear in a response. Creating or stashing a secret returns a
+`vault_token` that refers to an in-process vault entry. The entry is single-read and expires
+after `SECRET_VAULT_TTL_SECONDS` (300 by default). The reveal routes are called by the local
+scripts in `scripts/`; no MCP tool calls them.
+
+| Method | Path | Tier | Purpose |
+|--------|------|------|---------|
+| POST | `/wallet/create` | Auth | Create and encrypt a wallet (201) |
+| POST | `/wallet/import` | Auth | Import a wallet from a stashed secret (201) |
+| POST | `/wallet/stash-secret` | Auth | Stash a plaintext secret; used by `scripts/stash-secret.sh` |
+| GET | `/wallet/reveal-secret/{vault_token}` | Auth | Reveal and consume a stashed secret; used by `scripts/reveal-secret.sh` |
+| GET | `/wallet/{address}/reveal` | Auth | Decrypt a stored wallet's secret; used by `scripts/reveal-secret.sh --address` |
+| POST | `/wallet/{address}/confirm-backup` | Auth | Record that the user backed up the secret; used by `scripts/confirm-backup.sh` |
+| GET | `/wallet/list` | Auth | Stored wallets (addresses and metadata only) |
+| GET | `/wallet/{address}/balances?chain_id=<int>` | Auth | Token balances (`chain_id` required) |
+| GET | `/wallet/{address}/portfolio?chain_id=<int>` | Auth | Combined `value`, `pnl`, `tokens` and `defi` (`chain_id` optional) |
+| GET | `/wallet/{address}/history?limit=<int>` | Auth | Transaction history (`limit` defaults to 50) |
+
+`POST /wallet/create` body: `chain` (`evm` default, or `xrpl`), `network` (default `mainnet`;
+XRPL also accepts `testnet` and `devnet`), `chain_id` (default 8453, ignored for XRPL), `label`. The response carries
+`address`, `chain`, `network`, `chain_id`, `label`, `created_at`, `vault_token`, `secret_type`,
+`master_key_source`, `reveal_cmd`, `secret_ttl_seconds`, `backup_required`,
+`deposit_instructions` and `safety_note`. Any other chain returns 501
+`CHAIN_NOT_SUPPORTED_IN_V1`.
+
+`POST /wallet/import` body: `vault_token` plus the same `chain`, `network`, `chain_id` and
+`label` fields. `POST /wallet/stash-secret` body: `secret` and optional `address_hint`; it
+returns `{vault_token, secret_ttl_seconds}`.
+
+`POST /wallet/{address}/confirm-backup` sets `backup_confirmed_at`. Until it is set for a
+wallet, live swaps and live strategy activation from that wallet are refused, and so are x402
+payments signed by it.
+
+## DEX
+
+| Method | Path | Tier | Purpose |
+|--------|------|------|---------|
+| GET | `/dex/venues` | Auth | Supported DEX venues |
+| GET | `/dex/pairs?venue_id=<str>` | Auth | Trading pairs for a venue |
+| POST | `/dex/quote` | Auth | Swap quote in human units |
+| POST | `/dex/swap` | Auth | Execute a swap; requires `confirm: true` |
+| GET | `/dex/tx-status?tx_hash=<str>&chain_id=<int>&venue_id=<str>` | Auth | State of a broadcast transaction |
+| GET | `/dex/token-info?chain_id=<int>&address=<str>` | Auth | Token metadata |
+| GET | `/dex/spot-price?chain_id=<int>&tokens=<csv>` | Auth | Spot price for comma-separated symbols or addresses |
+| GET | `/dex/gas-price?chain_id=<int>` | Auth | Gas price estimate |
+
+`venues`, `pairs`, `tx-status`, `token-info`, `spot-price` and `gas-price` pass through to the
+`mangrovemarkets` SDK.
+
+`POST /dex/quote` body: `input_token`, `output_token`, `amount` (human units, greater than 0,
+for example `0.001` for 0.001 ETH), `chain_id`, optional `venue_id`. The agent converts the
+amount to the token's base units for the upstream call and converts the returned
+`input_amount` and `output_amount` back to human units. The raw values are kept as
+`input_amount_base_units` and `output_amount_base_units`, next to `input_token_decimals` and
+`output_token_decimals`.
+
+`POST /dex/swap` body: `input_token`, `output_token`, `amount` (input amount), `chain_id`,
+`wallet_address`, `slippage_pct`, `mev_protection` (default false), optional `venue_id`,
+`confirm`.
+
+- `slippage_pct` is required, a decimal fraction, greater than 0 and at most `0.0025` (0.25
+  percent). There is no default.
+- `confirm` must be `true`, otherwise the route returns 400 `CONFIRMATION_REQUIRED`.
+- The wallet must have a confirmed backup.
+- The response carries `tx_hash`, `status`, `input_token`, `input_amount`, `output_token`,
+  `output_amount`, `fill_price`, `fees`, `approval_tx_hash` and `trade_log_id`.
+
+The swap runs quote, conditional token approval, local signing, broadcast and status polling.
+Signing is local; the SDK never sees a key.
+
+## Kraken (CEX)
+
+There are two connection modes. Bring-your-own-key mode stores an encrypted Kraken key locally
+and talks to Kraken directly. Keyless OAuth mode holds no Kraken credential; the Mangrove
+platform holds the grant and executes.
+
+| Method | Path | Tier | Purpose |
+|--------|------|------|---------|
+| POST | `/cex/stash-kraken` | Auth | Stash `{api_key, api_secret}`; returns `{vault_token, secret_ttl_seconds}`. Used by `scripts/stash-kraken-secret.sh` |
+| POST | `/cex/connect` | Auth | Connect Kraken from `{vault_token}` |
+| GET | `/cex/status` | Auth | Whether a Kraken account is connected |
+| GET | `/cex/balances` | Auth | Kraken balances |
+| POST | `/cex/validate-order` | Auth | Dry-run an order (`pair`, `side`, `volume`, `ordertype`, `price`); no fill |
+| POST | `/cex/sync-fills` | Auth | Pull fills and emit them to telemetry (`mode`, default `live`) |
+| POST | `/cex/oauth/connect-start` | Auth | Begin keyless connect (`mode`: `view` or `execute`); returns an authorize URL |
+| GET | `/cex/oauth/status` | Auth | Keyless connection status |
+| GET | `/cex/oauth/balances` | Auth | Balances through the platform |
+| POST | `/cex/oauth/orders` | Auth | Place or validate an order through the platform (`base`, `quote`, `side`, `volume`, `order_type`, `limit_price`, `validate_only`) |
+
+Routes that need a connected account return 409 `CEX_CREDENTIALS_MISSING` when none exists.
+The `/cex/oauth/*` routes have no MCP tools.
+
+## Robinhood execution venue
+
+See [Robinhood execution](robinhood-execution.md) for setup and scope.
+
+| Method | Path | Tier | Purpose |
+|--------|------|------|---------|
+| GET | `/brokers/robinhood/status` | Auth | Connection, masked account, buying power and trade-approval setting; places no orders |
+| PUT | `/brokers/strategies/{strategy_id}/venue` | Auth | Bind an inactive strategy to Robinhood and a capital mandate |
+| GET | `/brokers/strategies/{strategy_id}/orders` | Auth | Local order journal (account IDs masked) |
+| POST | `/brokers/strategies/{strategy_id}/reconcile` | Auth | Read broker outcomes and persist confirmed fills; never submits an order |
+| POST | `/brokers/orders/{order_id}/cancel` | Auth | Request cancellation of a pending venue order and reconcile |
+
+`PUT .../venue` body (unknown fields rejected): `venue` (`robinhood`), `asset_class` (`equity`
+or `crypto`), `capital`, `max_order_usd` (not above `capital`), `slippage_pct` (greater than 0,
+at most `0.0025`). The strategy must be `draft` or `inactive` and have no execution history.
+The route does not activate trading.
+
+## Marketplace approvals
+
+Marketplace actions that sign or pay use a two-step local approval: the agent shows an exact
+preview first and signs only after explicit confirmation. See
+[Marketplace wallets](marketplace-wallets.md).
+
+| Method | Path | Tier | Purpose |
+|--------|------|------|---------|
+| GET | `/marketplace/readiness` | Auth | Check ownership discovery without signing or creating an approval |
+| POST | `/marketplace/prepare` | Auth | Body `{operation, arguments, wallet_address}`; returns an exact action preview and an `approval_id`; signs nothing |
+| POST | `/marketplace/submit` | Auth | Body `{approval_id, confirm}`; signs and submits only the prepared action, once |
+
+Both bodies reject unknown fields. `confirm` must be `true` to submit. A prepared approval
+expires at the time in its `expires_at` field.
+
+## Strategy execution records
+
+These routes operate on local execution records, identified by the agent's local strategy UUID.
+That ID is not a MangroveAI saved-strategy ID. The agent's API does not create local records.
+
+| Method | Path | Tier | Purpose |
+|--------|------|------|---------|
+| PATCH | `/strategies/{strategy_id}/status` | Auth | Lifecycle transition; the only way to activate, deactivate or archive |
+| PATCH | `/strategies/{strategy_id}/market` | Auth | Set explicit market data for an inactive stateless-lane strategy |
+| POST | `/strategies/{strategy_id}/evaluate` | Auth | Run one evaluation tick now, through the same code path as the scheduler |
+
+`PATCH .../status` body: `status` (`draft`, `inactive`, `paper`, `live`, `archived`), `confirm`
+(default false), and `allocation` (`wallet_address`, `token`, `token_address`, `amount`,
+`slippage_pct`).
+
+- Allowed transitions: `draft` to `inactive` or `archived`; `inactive` to `paper`, `live` or
+  `archived`; `paper` to `live`, `inactive` or `archived`; `live` to `inactive` or `archived`.
+  `archived` is final. A transition to the current status is a no-op.
+- Moving to `live`, or leaving `live`, requires `confirm: true`.
+- Moving to `live` also requires an `allocation` block and a wallet with a confirmed backup.
+  `slippage_pct` is required in the block, greater than 0 and at most `0.0025`.
+- A strategy bound to a Robinhood venue takes no `allocation` and cannot move to `paper`.
+- `paper` and `live` register a scheduler job on the strategy's timeframe. Leaving them
+  cancels it. Leaving `live` releases the allocation.
+- The response is the strategy record: `id`, `mangrove_id`, `name`, `asset`, `timeframe`,
+  `status`, `entry`, `exit`, `execution_config`, `market_context`, `execution_venue`,
+  `generation_report`, `created_at`, `updated_at`.
+
+`PATCH .../market` body (unknown fields rejected): `base_token`, `quote_token`,
+`market_data_venue`, each made of uppercase letters, digits, `.`, `_` or `-`. The strategy must
+be `draft` or `inactive`, on the stateless evaluation lane, with no trades, broker orders or
+positions. The base token must match the strategy asset.
+
+`POST .../evaluate` returns `{strategy_id, evaluation_id, status, order_count, duration_ms,
+error_msg}`, or `{strategy_id, status: "no_evaluation_recorded"}`. An unknown ID returns 404
+`STRATEGY_NOT_FOUND`.
+
+### Paper schedules
+
+The agent supplies the clock for server-owned paper execution of a MangroveAI strategy. See
+[Paper scheduling](paper-scheduling.md). Schedules are scoped to the current upstream
+identity. In these routes `strategy_id` is the MangroveAI strategy UUID, not a local record ID.
+
+| Method | Path | Tier | Purpose |
+|--------|------|------|---------|
+| POST | `/strategies/paper-schedules` | Auth | Start a bounded schedule |
+| GET | `/strategies/paper-schedules` | Auth | List schedules with cached progress; no upstream call |
+| GET | `/strategies/paper-schedules/{schedule_id}?refresh=<bool>` | Auth | Read a schedule; `refresh=true` fetches server state and may incur API or x402 usage |
+| POST | `/strategies/paper-schedules/{schedule_id}/pause` | Auth | Stop new local requests and pause on the server; does not close positions |
+| POST | `/strategies/paper-schedules/{schedule_id}/reconcile` | Auth | Recover an unresolved evaluation with its original identity |
+
+`POST` body (unknown fields rejected): `strategy_id` (UUID), `interval_seconds` (one of 60, 300,
+900, 3600, 14400, 86400), `max_evaluations` (1 to 10000), `confirm` (must be `true` to accept
+the recurring API and x402 cost).
+
+## Execution logs
+
+| Method | Path | Tier | Purpose |
+|--------|------|------|---------|
+| GET | `/strategies/{strategy_id}/evaluations?limit=<int>&offset=<int>` | Auth | Evaluation log, newest first (limit defaults to 50) |
+| GET | `/strategies/{strategy_id}/trades?limit=<int>&offset=<int>` | Auth | Trades for a strategy, newest first |
+| GET | `/trades?limit=<int>&strategy_id=<str>&mode=<live\|paper>` | Auth | Trades across strategies, optionally filtered |
+
+These read the agent's local SQLite records. Server-side trade and evaluation history for
+MangroveAI strategies is available through MangroveAI's MCP tools.
+
+## Portfolio kill switch
+
+| Method | Path | Tier | Purpose |
+|--------|------|------|---------|
+| GET | `/portfolio/risk` | Auth | State of the portfolio kill switch |
+| POST | `/portfolio/risk/reset` | Auth | Clear a tripped switch; human re-activation |
+
+The state carries `tripped`, `tripped_at`, `tripped_reason`, `high_water_mark`, `book_value`,
+`drawdown` and `max_drawdown_limit`. See
+[Portfolio kill switch](specification.md#portfolio-kill-switch).
+
+## x402 spend budget
+
+| Method | Path | Tier | Purpose |
+|--------|------|------|---------|
+| GET | `/x402/spend` | Auth | Budget state |
+| GET | `/x402/spend/payments?limit=<int>&period_id=<int>` | Auth | Payment ledger, newest first (limit 1 to 500, default 50) |
+| POST | `/x402/spend/reset` | Auth | Start a fresh budget period; human top-up |
+
+The state includes `exhausted`, `cap_usd`, `cap_source` (`authorized`, `config` or `default`),
+`spent_usd`, `settled_usd`, `reserved_usd`, `remaining_usd`, `payment_count`,
+`unreconciled_count`, `refunds`, `pending_operations`, `unresolved_payments`, `period_id` and
+`period_started_at`. The payments route returns `{payments, count}`.
+
+`POST /x402/spend/reset` takes an optional body `{"cap_usd": <number >= 0>}`. `cap_usd`
+becomes the budget a human authorized for the new period and overrides `X402_SPEND_CAP_USD`.
+Omit it to restart at the current size. See
+[x402 spend budget](specification.md#x402-spend-budget).
+
+## x402-gated routes
+
+| Method | Path | Tier | Purpose |
+|--------|------|------|---------|
+| GET | `/api/x402/hello-mangrove` | x402 | Demo route that returns a thank-you message |
+
+The route costs $0.05 USDC on the configured `X402_NETWORK`. Without a valid payment or
+`X-API-Key` it returns 402 with the payment requirements. It exists to exercise the payment
+path end to end.
