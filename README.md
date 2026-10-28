@@ -85,10 +85,12 @@ and the complete Perplexity/web instruction bundle are documented in
 [AI client setup](docs/clients.md). Tool access is configured and verified
 separately for each client.
 
-## Install with setup.sh (API key or x402)
+## Install with setup.sh (sign-in, API key or x402)
 
 Clone the repository and run `./scripts/setup.sh`. Choose an existing MangroveAI
-API key or wallet payments (x402, no signup). The script protects local access,
+API key, browser sign-in (OAuth), or wallet payments (x402, no signup). Browser sign-in
+requires the OAuth-enabled backend and currently supports a restricted tool catalog;
+see [sign-in setup and limitations](docs/oauth-login.md). The script protects local access,
 starts the agent and registers Claude when its CLI is available. For x402, a final menu prints wallet steps
 for you to run yourself; it never automatically creates/imports a wallet or pays.
 See [the complete setup and wallet flow](docs/setup-x402.md).
@@ -200,6 +202,7 @@ When it's finished:
 
 ```
 ./scripts/setup.sh --yes                          # preserve settings; fresh install uses x402
+./scripts/setup.sh --auth oauth                    # sign in and approve access in your browser
 ./scripts/setup.sh --auth api-key                  # keep existing key or enter a new one (hidden)
 ./scripts/setup.sh --auth x402                     # explicitly switch to wallet payments
 ./scripts/setup.sh --foreground                    # run uvicorn in your terminal (Ctrl+C to stop)

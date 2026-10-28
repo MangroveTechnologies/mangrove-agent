@@ -16,10 +16,12 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import warnings
+import webbrowser
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -71,7 +73,7 @@ def atomic_config(cfg, path=CONFIG):
 
 
 def upstream_key(cfg, *, include_saved=False):
-    if not include_saved and cfg.get('MANGROVE_ACCESS_MODE') == 'x402':
+    if not include_saved and cfg.get('MANGROVE_ACCESS_MODE') in {'x402', 'oauth'}:
         return ''
     value = cfg.get('MANGROVE_API_KEY')
     if value is None:
@@ -178,6 +180,12 @@ def check_upstream(cfg):
     when it could not be reached, so the caller can skip assertions about
     upstream-derived state instead of failing on a symptom of the same outage.
     """
+    if cfg.get('MANGROVE_ACCESS_MODE') == 'oauth':
+        result = request(cfg, '/api/v1/agent/oauth/status')
+        if not result.get('connected'):
+            raise SetupError('Mangrove sign-in is required. Run ./scripts/setup.sh --auth oauth.')
+        print('OAuth credentials are saved. Live tool access is checked through MCP discovery below.')
+        return True
     if cfg.get('MANGROVE_ACCESS_MODE') == 'x402':
         print('Wallet mode selected: no upstream API key to verify.')
         return True
@@ -531,17 +539,20 @@ def configure(args):
     old = dict(cfg)
     key = upstream_key(cfg, include_saved=True)
     mode = args.auth
+    if args.api_key_stdin and mode not in {None, 'api-key'}:
+        raise SetupError('--api-key-stdin requires api-key mode.')
     if args.api_key_stdin:
         supplied = sys.stdin.read().strip()
         if not supplied or upstream_key({'MANGROVE_API_KEY': supplied}) != supplied:
             raise SetupError('Provide a nonempty API key, not a placeholder.')
         key, mode = supplied, 'api-key'
-    # Interactive runs always offer both modes, highlighting the API key first.
+    # Interactive runs offer sign-in, API-key and wallet access; existing numbering is stable.
     if mode is None:
         if not args.yes:
-            mode = {'1': 'api-key', '2': 'x402'}[choose(
+            mode = {'1': 'api-key', '2': 'x402', '3': 'oauth'}[choose(
                 'How would you like to access MangroveAI?',
-                {'1': 'Use an API key', '2': 'Pay with a wallet (x402; no signup)'},
+                {'1': 'Use an API key', '2': 'Pay with a wallet (x402; no signup)',
+                 '3': 'Sign in to Mangrove in your browser (OAuth)'},
                 '1')]
         else:
             mode = cfg.get('MANGROVE_ACCESS_MODE') or ('api-key' if key else 'x402')
@@ -588,6 +599,9 @@ def configure(args):
     print(f'Access mode: {mode}. Local authentication remains enabled.')
     if mode == 'api-key':
         print('Upstream API-key validity is checked by the verify step below. Failed keys never trigger wallet payments.')
+    elif mode == 'oauth':
+        print('Browser sign-in follows after local startup. API keys and wallet payments will not be used.')
+        print('OAuth currently supports the server connector catalog; strategy writing and sweeps require API-key mode.')
     else:
         print(f'Payment network: {network(cfg)[2]}. Existing network selections are preserved on reruns.')
         print('Automatic payment reconciliation configured for the selected network; RPC availability is checked during recovery.')
@@ -608,6 +622,9 @@ def address(value):
 
 
 def guide(cfg, *, yes=False, docker=False):
+    if cfg.get('MANGROVE_ACCESS_MODE') == 'oauth':
+        print('OAuth setup complete. No separate sign-in script is required.')
+        return
     if upstream_key(cfg):
         print('MangroveAI calls use your API key. Start ./scripts/chat.sh when ready.')
         return
@@ -832,10 +849,64 @@ def launch_chat(cfg: dict) -> int:
                               cwd=workspace, env=env, check=False).returncode
 
 
+def oauth_command(cfg, command, scopes, *, yes=False):
+    require_auth(cfg)
+    if command == 'oauth-setup' and cfg.get('MANGROVE_ACCESS_MODE') != 'oauth':
+        return
+    if command == 'oauth-disconnect':
+        result = request(cfg, '/api/v1/agent/oauth/disconnect', {}, timeout=40)
+        print('Disconnected locally. ' + ('Remote grant revoked.' if result.get('revoked') else
+              result.get('message') or 'Remote revocation could not be confirmed; rerun this command when the original issuer is available.'))
+        return
+    current = request(cfg, '/api/v1/agent/oauth/status')
+    if command == 'oauth-status':
+        print('Connected.' if current.get('connected') else 'Sign-in required.')
+        return
+    if command == 'oauth-setup' and current.get('connected'):
+        print('Already signed in to Mangrove. Using your saved OAuth connection.')
+        return
+    if cfg.get('MANGROVE_ACCESS_MODE') != 'oauth':
+        raise SetupError('Select --auth oauth in setup before signing in.')
+    # Existing grants are preserved when asking for additional access.
+    wanted = set(current.get('scopes', [])) | set(scopes) | set(
+        'data:read strategies:read backtests:read signals:read positions:read offline_access'.split())
+    if current.get('pending'):
+        request(cfg, '/api/v1/agent/oauth/cancel', {})
+    result = request(cfg, '/api/v1/agent/oauth/start', {'scopes': ' '.join(sorted(wanted))}, timeout=20)
+    url = result.get('authorization_url', '')
+    expected = (cfg.get('MANGROVE_OAUTH_ISSUER') or 'https://api.mangrovedeveloper.ai').rstrip('/')
+    parsed = urllib.parse.urlsplit(url)
+    if url.split('?', 1)[0] != expected + '/oauth/authorize' or parsed.fragment:
+        raise SetupError('Invalid authorization destination returned by the local agent.')
+    print('Approve the requested access in your browser. Sign-in never authorizes wallet spending.')
+    print('If the browser does not open, open this URL on this computer:')
+    print(url)
+    webbrowser.open(url)
+    deadline = time.monotonic() + 600
+    try:
+        while time.monotonic() < deadline:
+            state = request(cfg, '/api/v1/agent/oauth/status', timeout=40)
+            if not state.get('pending'):
+                if state.get('connected') and state.get('expires_at') != current.get('expires_at'):
+                    print('Connected to Mangrove. No API key was needed.')
+                    if state.get('revocation_pending'):
+                        print('The previous grant could not be revoked. Run ./scripts/setup.sh --oauth disconnect when the original issuer is available and follow its cleanup instructions. This also disconnects the new grant; sign in again after cleanup. Portal revocation alone does not clear the local cleanup receipt.')
+                    return
+                raise SetupError('Sign-in did not complete. Your prior connection was preserved; rerun ./scripts/setup.sh --auth oauth --oauth login.')
+            time.sleep(1)
+        raise SetupError('Sign-in timed out. Rerun ./scripts/setup.sh --auth oauth --oauth login.')
+    finally:
+        try:
+            request(cfg, '/api/v1/agent/oauth/cancel', {})
+        except SetupError:
+            pass
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['banner', 'configure', 'check', 'markets-check', 'verify', 'guide', 'wallet', 'fingerprint', 'headers', 'register', 'chat'])
-    parser.add_argument('--auth', choices=['api-key', 'x402'])
+    parser.add_argument('command', choices=['banner', 'configure', 'check', 'markets-check', 'verify', 'guide', 'wallet', 'fingerprint', 'headers', 'register', 'chat', 'oauth-login', 'oauth-status', 'oauth-disconnect', 'oauth-setup'])
+    parser.add_argument('--auth', choices=['api-key', 'x402', 'oauth'])
+    parser.add_argument('--scope', action='append', choices=['backtests:run', 'signals:evaluate'], default=[])
     parser.add_argument('--api-key-stdin', action='store_true')
     parser.add_argument('--yes', action='store_true')
     parser.add_argument('--docker', action='store_true')
@@ -856,7 +927,9 @@ def main():
             print(digest.hexdigest())
         else:
             cfg = read_config()
-            if args.command == 'chat':
+            if args.command.startswith('oauth-'):
+                oauth_command(cfg, args.command, args.scope, yes=args.yes)
+            elif args.command == 'chat':
                 return launch_chat(cfg)
             elif args.command == 'headers':
                 require_auth(cfg)

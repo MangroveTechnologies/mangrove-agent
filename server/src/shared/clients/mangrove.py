@@ -91,6 +91,8 @@ def _api_key_base_url(config) -> str | None:
 
 def _api_key(config) -> str | None:
     mode = getattr(config, "MANGROVE_ACCESS_MODE", None)
+    if mode == "oauth":
+        raise ValidationError("This feature requires API-key access; OAuth is supported only by managed MCP tools. No wallet fallback was attempted.")
     if mode not in {None, "api-key", "x402"}:
         raise ValidationError("MANGROVE_ACCESS_MODE must be api-key or x402.")
     if mode == "x402":

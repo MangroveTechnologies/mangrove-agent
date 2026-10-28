@@ -13,6 +13,7 @@ from src.api.routes.discovery import router as discovery_router
 from src.api.routes.hello_mangrove import router as hello_mangrove_router
 from src.api.routes.logs import router as logs_router
 from src.api.routes.marketplace import router as marketplace_router
+from src.api.routes.oauth import router as oauth_router
 from src.api.routes.portfolio import router as portfolio_router
 from src.api.routes.reference_strategies import router as reference_strategies_router
 from src.api.routes.strategies import router as strategies_router
@@ -24,6 +25,7 @@ api_router = APIRouter(prefix="/api/v1")
 
 # mangrove-agent namespace
 agent_router = APIRouter(prefix="/agent")
+agent_router.include_router(oauth_router)
 agent_router.include_router(discovery_router, tags=["discovery"])
 agent_router.include_router(wallet_router)
 agent_router.include_router(cex_router)

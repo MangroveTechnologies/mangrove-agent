@@ -6,14 +6,28 @@ from mcp.server.fastmcp import FastMCP
 
 _mcp_server = None
 
+# These adapters still use API-key/payment SDKs, not the MangroveAI MCP
+# transport. An OAuth grant for that transport cannot authorize Markets or
+# recurring paper execution. Keep local custody and direct broker tools usable.
+_OAUTH_UNSUPPORTED_LOCAL = frozenset({
+    'agent_start_paper_schedule', 'agent_list_paper_schedules',
+    'agent_pause_paper_schedule', 'agent_get_paper_schedule',
+    'agent_reconcile_paper_schedule', 'execute_swap', 'cex_sync_fills',
+    'marketplace_prepare', 'marketplace_submit',
+})
+
 
 class PricedFastMCP(FastMCP):
     """Attach current price hints without mutating registered tool definitions."""
 
     async def list_tools(self):
         from src.services.tool_pricing import enrich_tools, price_hint
+        from src.services import mangrove_oauth
 
-        tools = [tool for tool in await super().list_tools() if tool.name != 'hello_mangrove']
+        oauth_mode = mangrove_oauth.enabled()
+        tools = [tool for tool in await super().list_tools()
+                 if tool.name != 'hello_mangrove'
+                 and not (oauth_mode and tool.name in _OAUTH_UNSUPPORTED_LOCAL)]
         entries = await enrich_tools([{"name": tool.name} for tool in tools])
         result = []
         for tool, entry in zip(tools, entries, strict=True):
@@ -28,7 +42,7 @@ class PricedFastMCP(FastMCP):
         from src.shared.errors import AgentError
 
         try:
-            remote = await marketplace_proxy.list_tools()
+            remote = [] if oauth_mode else await marketplace_proxy.list_tools()
         except AgentError:
             remote = []
         local_names = {tool.name for tool in result}
@@ -49,6 +63,16 @@ class PricedFastMCP(FastMCP):
     async def call_tool(self, name, arguments):
         from src.mcp import mangrove_proxy, marketplace_proxy
         from src.services.marketplace_catalog import RETIRED_READ_TOOLS, is_markets_tool
+        from src.services import mangrove_oauth
+
+        # Guard stale catalogs and direct calls too, before any SDK or wallet
+        # work. Never fall back to an API key or payment after OAuth selection.
+        if mangrove_oauth.enabled() and (name in _OAUTH_UNSUPPORTED_LOCAL or is_markets_tool(name)):
+            return mangrove_proxy.failure(
+                'OAUTH_TOOL_UNAVAILABLE',
+                'This tool requires an API-key or payment integration that does not support '
+                'the current Mangrove OAuth connection. No operation or wallet payment was attempted.',
+            )
 
         if name in RETIRED_READ_TOOLS:
             return mangrove_proxy.failure(
