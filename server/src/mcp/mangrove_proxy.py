@@ -18,6 +18,7 @@ from referencing import Registry
 
 from mcp import ClientSession
 from src.config import app_config
+from src.services import mangrove_oauth as oauth
 from src.shared.clients.mangrove import _api_key, _api_key_base_url, _payment_destination
 from src.shared.errors import AgentError, SdkError, upstream_access_error
 from src.shared.logging import get_logger
@@ -42,6 +43,8 @@ _log = get_logger(__name__)
 
 
 def endpoint() -> str:
+    if oauth.enabled():
+        return oauth.endpoint()
     key = _api_key(app_config)
     base = _api_key_base_url(app_config) if key else _payment_destination(app_config)['base_url']
     if base is None:
@@ -62,6 +65,14 @@ def _http_client(endpoint_url: str, key: str | None) -> httpx.AsyncClient:
     # Bearer-only client had every tools/call rejected with upstream 401 while
     # the same key worked as X-API-Key. Keeping Bearer too means this works
     # against receivers that read either header.
+    if oauth.enabled() and endpoint_url == oauth.endpoint():
+        async def authorize(request):
+            if str(request.url) != oauth.endpoint():
+                raise oauth.OAuthError('OAuth token destination mismatch.')
+            token = await anyio.to_thread.run_sync(oauth.access_token)
+            request.headers['Authorization'] = f'Bearer {token}'
+        return httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False,
+                                 event_hooks={'request': [authorize]})
     headers = {'X-API-Key': key, 'Authorization': f'Bearer {key}'} if key else {}
     hooks = {'request': [_sign_in_hook(endpoint_url)]} if key is None else {}
     return httpx.AsyncClient(headers=headers, timeout=timeout, trust_env=False,
@@ -404,6 +415,17 @@ def transport_error(error):
         if isinstance(nested, BaseExceptionGroup):
             pending.extend(nested.exceptions)
             continue
+        if (oauth.enabled() and isinstance(nested, httpx.HTTPStatusError)
+                and nested.response.status_code in {401, 403}
+                and str(nested.request.url) == oauth.endpoint()):
+            challenge = nested.response.headers.get('www-authenticate', '')
+            match = re.search(r'\bscope="([^"]*)"', challenge)
+            scopes = set(match.group(1).split()) if match else set()
+            extra = sorted(scopes & {'signals:evaluate', 'backtests:run'})
+            command = './scripts/setup.sh --auth oauth --oauth login'
+            command += ''.join(' --oauth-scope ' + scope for scope in extra)
+            return oauth.OAuthError('Mangrove sign-in or additional permission is required. No tool was retried and no wallet payment was attempted.',
+                                    suggestion='Run ' + command + ' and approve access in your browser.')
         denied = upstream_access_error(nested)
         if denied is not None:
             return denied
@@ -442,14 +464,14 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
             return failure('UNKNOWN_TOOL', 'Tool is not advertised by MangroveAI MCP.')
         if not isinstance(arguments, dict) or not Draft202012Validator(tool.inputSchema).is_valid(arguments):
             return failure('VALIDATION_ERROR', 'Arguments do not match the current MangroveAI MCP inputSchema. Refresh tools/list.')
-        target, key = endpoint(), _api_key(app_config)
+        target, key = endpoint(), None if oauth.enabled() else _api_key(app_config)
         annotations = tool.annotations.model_dump() if tool.annotations is not None else {}
         public_free_read = (
             annotations.get('mangrove/access_level') == 'public'
             and annotations.get('mangrove/side_effect') == 'read'
             and annotations.get('mangrove/x402_price_usd') is None
         )
-        if key is not None or public_free_read:
+        if oauth.enabled() or key is not None or public_free_read:
             with anyio.fail_after(float(app_config.MANGROVE_SDK_TIMEOUT_SECONDS)):
                 async with session(target, key) as client:
                     return await invoke(client, tool, arguments)

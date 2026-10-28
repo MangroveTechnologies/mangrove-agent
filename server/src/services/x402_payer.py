@@ -340,21 +340,39 @@ def _configure_payment_client(
 
 def mcp_payment_result(raw, *, payer: str, reservations: list[str], resource: str) -> PaymentResult:
     metadata = raw.meta if isinstance(raw.meta, dict) else {}
+    structured = raw.structuredContent if isinstance(raw.structuredContent, dict) else {}
+    status_metadata = structured if raw.isError else structured.get("_meta", {})
+    status = status_metadata.get("upstream_status") if isinstance(status_metadata, dict) else None
+    # Do not let malformed or contradictory provider metadata turn an MCP
+    # failure into success (or change receipt validation / reservation policy).
+    valid_status = type(status) is int and (
+        400 <= status <= 599 if raw.isError else 200 <= status <= 299
+    )
+    status = status if valid_status else (502 if raw.isError else 200)
+    reason, correlation = _safe_uncertain_metadata(structured)
     receipt = metadata.get(MCP_PAYMENT_RESPONSE_META_KEY)
     settlement = None
     if reservations and valid_settlement(receipt, payer=payer, network=get_network()):
         settlement = {key: receipt[key] for key in ("success", "transaction", "payer", "network")}
     result = PaymentResult(
-        status_code=502 if raw.isError else 200, body=raw.content,
+        status_code=status, body=raw.content,
         paid=settlement is not None, transaction=_str_or_none(settlement, "transaction"),
         network=_str_or_none(settlement, "network"), payer=_str_or_none(settlement, "payer"),
         mcp_result=raw.model_dump(by_alias=True, exclude_none=True),
     )
     from types import SimpleNamespace
-    _reconcile_budget(SimpleNamespace(reservations=reservations), result, settlement=settlement, url=resource)
+    try:
+        _reconcile_budget(SimpleNamespace(reservations=reservations), result, settlement=settlement, url=resource)
+    except X402PaymentUncertain as error:
+        error.upstream_status = status
+        error.upstream_error = reason
+        if correlation is not None:
+            error.correlation_id = correlation
+        raise
     recovery = metadata.get("mangrove/payment")
     if isinstance(recovery, dict) and recovery.get("state") == "pending":
-        error = X402PaymentUncertain(reservation_ids=reservations)
+        error = X402PaymentUncertain(reservation_ids=reservations, upstream_status=status,
+                                     upstream_error=reason, correlation_id=correlation)
         error.payment_state = "settled" if settlement else "unresolved"
         raise error
     return result
@@ -965,6 +983,20 @@ def decode_settlement(response: httpx.Response, *, payer: str | None = None,
     return {key: decoded[key] for key in ("success", "transaction", "payer", "network")}
 
 
+def _safe_uncertain_metadata(body: dict, correlation_id: str | None = None) -> tuple[str | None, str | None]:
+    """Share the REST/MCP allowlist; never expose arbitrary payment response text."""
+    reason = body.get("error")
+    if not isinstance(reason, str) or reason not in {"payment_settlement_unconfirmed", "payment_verification_failed",
+                      "payment_temporarily_unavailable", "payment_identity_unavailable"}:
+        reason = None
+    correlation = correlation_id or body.get("correlation_id")
+    try:
+        correlation = str(uuid.UUID(correlation)) if isinstance(correlation, str) else None
+    except ValueError:
+        correlation = None
+    return reason, correlation
+
+
 def unconfirmed_response_error(response: httpx.Response, reservations) -> X402PaymentUncertain:
     """Retain only allowlisted error metadata from a discarded uncertain response."""
     body = {}
@@ -989,15 +1021,7 @@ def unconfirmed_response_error(response: httpx.Response, reservations) -> X402Pa
         # through with an empty `body` yields no reason and no correlation id,
         # which is the correct "we could not tell" answer.
         _log.debug("x402.payment.unconfirmed_body_undecodable", error_type=type(error).__name__)
-    reason = body.get("error")
-    if not isinstance(reason, str) or reason not in {"payment_settlement_unconfirmed", "payment_verification_failed",
-                      "payment_temporarily_unavailable", "payment_identity_unavailable"}:
-        reason = None
-    correlation = response.headers.get("X-Correlation-Id") or body.get("correlation_id")
-    try:
-        correlation = str(uuid.UUID(str(correlation)))
-    except ValueError:
-        correlation = None
+    reason, correlation = _safe_uncertain_metadata(body, response.headers.get("X-Correlation-Id"))
     return X402PaymentUncertain(reservation_ids=reservations, upstream_status=response.status_code,
                                 upstream_error=reason, correlation_id=correlation)
 

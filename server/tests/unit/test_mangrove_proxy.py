@@ -580,3 +580,20 @@ async def test_strategy_operations_use_remote_mcp_without_local_storage(transpor
     assert params.name == name
     assert params.arguments == arguments
     local_db.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_oauth_never_uses_saved_api_key_or_wallet(transport, monkeypatch):
+    client, connections = transport
+    from src.services import x402_payer
+    monkeypatch.setattr(proxy.oauth, 'enabled', lambda: True)
+    key = Mock(side_effect=AssertionError('OAuth must not read an API key'))
+    payer = AsyncMock(side_effect=AssertionError('OAuth must not pay'))
+    monkeypatch.setattr(proxy, '_api_key', key)
+    monkeypatch.setattr(x402_payer, 'pay_on_open_mcp_session', payer)
+    response = CallToolResult(isError=False, content=[TextContent(type='text', text='answer')])
+    client.send_request.return_value = response
+    assert await proxy.call_tool('server_owned_tool', {'value': 7}) == response
+    assert connections[-1][1] is None
+    key.assert_not_called()
+    payer.assert_not_called()

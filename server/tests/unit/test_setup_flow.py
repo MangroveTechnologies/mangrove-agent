@@ -833,7 +833,7 @@ def test_existing_install_always_offers_access_menu(config, monkeypatch, existin
     setup.configure(args)
     expects_key_menu = bool(existing_key) and selection in {'1', 'default'}
     assert menu.call_count == (2 if expects_key_menu else 1)
-    assert set(menu.call_args_list[0].args[1]) == {'1', '2'}
+    assert set(menu.call_args_list[0].args[1]) == {'1', '2', '3'}
     assert menu.call_args_list[0].args[2] == '1'
     if expects_key_menu:
         assert menu.call_args_list[1].args[1] == {
@@ -1325,3 +1325,138 @@ def test_setup_rerun_preserves_explicit_network_and_backend(config, selected):
                 'X402_SPEND_CAP_USD', 'X402_FACILITATOR_URL']:
         assert saved[key] == cfg[key]
     assert selected in saved['X402_RECONCILIATION_RPC_URLS']
+
+
+def test_oauth_setup_preserves_but_does_not_use_saved_key(config, monkeypatch, capsys):
+    cfg = setup.read_config(setup.EXAMPLE)
+    cfg.update(MANGROVE_API_KEY='prod_saved', API_KEYS='private-local-key')
+    config.write_text(json.dumps(cfg))
+    args = arguments()
+    args.auth = 'oauth'
+    setup.configure(args)
+    saved = json.loads(config.read_text())
+    assert saved['MANGROVE_ACCESS_MODE'] == 'oauth'
+    assert saved['MANGROVE_API_KEY'] == 'prod_saved'
+    assert setup.upstream_key(saved) == ''
+    setup.guide(saved)
+    assert 'prod_saved' not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('command', ['oauth-setup', 'oauth-login'])
+def test_oauth_setup_opens_browser_and_waits_for_callback(monkeypatch, capsys, command):
+    cfg = {'API_KEYS': 'local-private', 'AUTH_ENABLED': True, 'MANGROVE_ACCESS_MODE': 'oauth'}
+    calls = []
+    def request(cfg, path, payload=None, **kwargs):
+        calls.append((path, payload))
+        if path.endswith('/start'):
+            return {'authorization_url': 'https://api.mangrovedeveloper.ai/oauth/authorize?state=example'}
+        if path.endswith('/status'):
+            return {'connected': len(calls) > 1, 'pending': False, 'expires_at': 123 if len(calls) > 1 else None}
+        return {}
+    monkeypatch.setattr(setup, 'request', request)
+    browser = Mock()
+    monkeypatch.setattr(setup.webbrowser, 'open', browser)
+    setup.oauth_command(cfg, command, ['signals:evaluate'])
+    assert browser.call_count == 1
+    assert 'signals:evaluate' in calls[1][1]['scopes']
+    assert 'Connected to Mangrove' in capsys.readouterr().out
+    assert calls[-1][0].endswith('/cancel')
+
+
+@pytest.mark.parametrize('command,yes,opens', [('oauth-setup', False, False), ('oauth-setup', True, False), ('oauth-login', False, True)])
+def test_oauth_setup_automatically_reuses_connection(monkeypatch, capsys, command, yes, opens):
+    cfg = {'API_KEYS': 'local-private', 'AUTH_ENABLED': True, 'MANGROVE_ACCESS_MODE': 'oauth'}
+    started = []
+    def request(cfg, path, payload=None, **kwargs):
+        if path.endswith('/start'):
+            started.append(payload)
+            return {'authorization_url': 'https://api.mangrovedeveloper.ai/oauth/authorize?state=example'}
+        if path.endswith('/status'):
+            return {'connected': True, 'pending': False, 'expires_at': 456 if started else 123}
+        return {}
+    monkeypatch.setattr(setup, 'request', request)
+    prompt = Mock(side_effect=AssertionError('Saved connections must not prompt'))
+    monkeypatch.setattr(setup, 'choose', prompt)
+    browser = Mock()
+    monkeypatch.setattr(setup.webbrowser, 'open', browser)
+    setup.oauth_command(cfg, command, [], yes=yes)
+    assert browser.call_count == int(opens)
+    prompt.assert_not_called()
+    if not opens:
+        assert 'Already signed in to Mangrove. Using your saved OAuth connection.' in capsys.readouterr().out
+
+
+def test_oauth_guide_does_not_send_user_to_internal_helper(capsys):
+    setup.guide({'MANGROVE_ACCESS_MODE': 'oauth'})
+    output = capsys.readouterr().out
+    assert 'setup_support.py' not in output
+    assert 'No separate sign-in script' in output
+
+
+@pytest.mark.parametrize('options,command', [
+    (['--oauth', 'login'], 'oauth-login'),
+    (['--oauth-scope', 'signals:evaluate'], 'oauth-login'),
+    (['--auth', 'oauth'], 'oauth-setup'),
+])
+def test_setup_shell_routes_oauth_through_main_script(checkout, options, command):
+    repo, _ = checkout
+    helper = repo / 'scripts/setup_support.py'
+    source = helper.read_text()
+    hook = """
+def oauth_command(cfg, command, scopes, *, yes=False):
+    assert cfg['MANGROVE_ACCESS_MODE'] == 'oauth'
+    (ROOT / 'oauth-call.json').write_text(json.dumps({'command': command, 'scopes': scopes, 'yes': yes}))
+"""
+    helper.write_text(source.replace("if __name__ == '__main__':", hook + "\nif __name__ == '__main__':"))
+    result = run_setup(checkout, '--yes', '--no-mcp', '--no-verify', *options)
+    assert result.returncode == 0, result.stderr + result.stdout
+    call = json.loads((repo / 'oauth-call.json').read_text())
+    assert call['command'] == command
+    assert call['scopes'] == (['signals:evaluate'] if '--oauth-scope' in options else [])
+    assert call['yes'] == (command == 'oauth-setup')
+    assert 'setup_support.py' not in result.stdout
+
+
+@pytest.mark.parametrize('options', [
+    ['--auth', 'api-key', '--oauth', 'login'],
+    ['--oauth', 'status', '--oauth-scope', 'signals:evaluate'],
+    ['--oauth-scope', 'invalid'],
+    ['--wallet', 'create', '--oauth', 'login'],
+])
+def test_setup_rejects_conflicting_oauth_options_before_mutation(checkout, options):
+    repo, _ = checkout
+    result = run_setup(checkout, *options)
+    assert result.returncode != 0
+    assert not (repo / 'agent-data').exists()
+    assert not (repo / 'server/src/config/local-config.json').exists()
+
+
+def test_oauth_disconnect_surfaces_issuer_cleanup_instructions(monkeypatch, capsys):
+    monkeypatch.setattr(setup, 'require_auth', lambda cfg: None)
+    message = ('Configure MANGROVE_OAUTH_ISSUER to https://issuer.test, restart the agent, '
+               'and run ./scripts/setup.sh --oauth disconnect.')
+    monkeypatch.setattr(setup, 'request', lambda *a, **k: {
+        'disconnected': True, 'revoked': False, 'message': message})
+    setup.oauth_command({}, 'oauth-disconnect', [])
+    output = capsys.readouterr().out
+    assert message in output
+    assert 'Remote grant revoked.' not in output
+
+
+def test_oauth_reconnect_reports_required_local_cleanup(monkeypatch, capsys):
+    cfg = {'API_KEYS': 'synthetic-local', 'AUTH_ENABLED': True, 'MANGROVE_ACCESS_MODE': 'oauth'}
+    states = iter([{'connected': False}, {'connected': True, 'expires_at': 123,
+                                        'revocation_pending': True}])
+    def request(cfg, path, payload=None, **kwargs):
+        if path.endswith('/status'):
+            return next(states)
+        if path.endswith('/start'):
+            return {'authorization_url': 'https://api.mangrovedeveloper.ai/oauth/authorize?state=synthetic'}
+        return {}
+    monkeypatch.setattr(setup, 'request', request)
+    monkeypatch.setattr(setup.webbrowser, 'open', lambda _: True)
+    setup.oauth_command(cfg, 'oauth-login', [])
+    output = capsys.readouterr().out
+    assert './scripts/setup.sh --oauth disconnect' in output
+    assert 'Portal revocation alone does not clear the local cleanup receipt.' in output
+    assert 'sign in again after cleanup' in output
