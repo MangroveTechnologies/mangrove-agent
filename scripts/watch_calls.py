@@ -52,6 +52,19 @@ def label(value):
     return value if isinstance(value, str) and NAME.fullmatch(value) else '-'
 
 
+def oauth_context(extra):
+    if extra.get('caller_auth_method') != 'oauth':
+        return ''
+    fields = (('workspace', 'oauth_workspace', {'personal', 'organization'}),
+              ('role', 'oauth_role', {'owner', 'admin', 'member', 'viewer'}),
+              ('effective_role', 'oauth_effective_role', {'owner', 'admin', 'member', 'viewer'}))
+    parts = []
+    for name, key, allowed in fields:
+        value = extra.get(key)
+        parts.append(f"{name}={value if isinstance(value, str) and value in allowed else '-'}")
+    return ' ' + ' '.join(parts)
+
+
 def number(value):
     return str(value) if type(value) is int and 0 <= value <= 10**12 else '-'
 
@@ -81,6 +94,7 @@ def summarize(line: str, source: str) -> str | None:
             safe_failure = reason if isinstance(reason, str) and (reason in {'bad_arguments', 'mcp_error', 'unhandled_exception', 'access_denied', 'unknown_tool'} or re.fullmatch(r'upstream_[45][0-9]{2}', reason)) else 'unknown'
             return (f"SERVER TOOL {label(extra.get('tool'))} auth={label(extra.get('caller_auth_method'))} "
                     f"effect={label(extra.get('side_effect'))} result={outcome} ms={number(extra.get('duration_ms'))}"
+                    + oauth_context(extra)
                     + (f' reason={safe_failure}' if outcome != 'OK' else ''))
         if event == 'x402 payment settled':
             return 'SERVER PAYMENT settlement_confirmed'
@@ -132,10 +146,14 @@ class SessionSummary:
         self.tools = Counter()
         self.failures = Counter()
         self.http_failures = Counter()
+        self.oauth_contexts = Counter()
 
     def observe(self, message):
         if message.startswith('SERVER TOOL '):
             self.counts['tool_events'] += 1
+            context = re.search(r' workspace=(personal|organization|-) role=(owner|admin|member|viewer|-) effective_role=(owner|admin|member|viewer|-)(?= |$)', message)
+            if ' auth=oauth ' in message and context:
+                self.oauth_contexts[context.group().strip()] += 1
             self.counts['ok' if 'result=OK' in message else 'failed' if 'result=FAILED' in message else 'unknown'] += 1
             key = ' '.join(message.split()[2:4])
             self.tools[key if key in self.tools or len(self.tools) < 100 else '(other tools)'] += 1
@@ -168,9 +186,10 @@ class SessionSummary:
                  f"Agent payment errors: {c['agent_payment_failures']}",
                  f"Normal payment quotes: {c['quotes']}; HTTP error events: {c['http_errors']}"]
         lines += [f'  {name}: {count}' for name, count in self.tools.most_common(10)]
+        lines += [f'  OAuth {context}: {count} tool events' for context, count in self.oauth_contexts.most_common(10)]
         lines += [f'  Failure {reason}: {count}' for reason, count in self.failures.most_common(10)]
         lines += [f'  HTTP error {reason}: {count}' for reason, count in self.http_failures.most_common(10)]
-        if len(self.tools) > 10 or len(self.failures) > 10 or len(self.http_failures) > 10:
+        if any(len(items) > 10 for items in (self.tools, self.failures, self.http_failures, self.oauth_contexts)):
             lines.append('Detail lists show the 10 most frequent entries; totals include all observed events.')
         lines.append('Counts are observed log events, not unique requests or ledger totals. Failure diagnostics may describe the same failed call.')
         lines.append('The watcher did not retry payments or change ledger records. Missing events do not prove success.')

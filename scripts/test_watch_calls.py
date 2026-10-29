@@ -130,6 +130,32 @@ class WatchCallsTests(unittest.TestCase):
         self.assertNotIn('secret', output)
         self.assertNotIn('private-user', output)
 
+    def test_oauth_roles_visible_live_and_in_summary(self):
+        for workspace, role, effective in [('personal', 'admin', 'member'),
+                                            ('organization', 'admin', 'admin')]:
+            output = summarize(json.dumps({'message': 'mcp_tool_call', 'extra': {
+                'tool': 'list_strategies', 'caller_auth_method': 'oauth', 'success': True,
+                'oauth_workspace': workspace, 'oauth_role': role, 'oauth_effective_role': effective,
+                'user_id': 'SECRET_USER', 'org_id': 'SECRET_ORG', 'token': 'SECRET_TOKEN',
+            }}), 'SERVER')
+            expected = f'workspace={workspace} role={role} effective_role={effective}'
+            self.assertIn(expected, output)
+            session = SessionSummary()
+            session.observe(output)
+            self.assertIn(f'OAuth {expected}: 1 tool events', session.render('0s', True))
+            self.assertNotIn('SECRET', output)
+
+    def test_oauth_context_unknown_values_are_not_printed_or_inferred(self):
+        for value in ['SECRET', {'token': 'SECRET'}, ['SECRET'], None]:
+            extra = {'tool': 'list_strategies', 'caller_auth_method': 'oauth', 'success': True,
+                     'oauth_workspace': value, 'oauth_role': value, 'oauth_effective_role': value}
+            output = summarize(json.dumps({'message': 'mcp_tool_call', 'extra': extra}), 'SERVER')
+            self.assertIn('workspace=- role=- effective_role=-', output)
+            self.assertNotIn('SECRET', output)
+            extra['caller_auth_method'] = 'api_key'
+            output = summarize(json.dumps({'message': 'mcp_tool_call', 'extra': extra}), 'SERVER')
+            self.assertNotIn('workspace=', output)
+
     def test_failure_is_not_http_success(self):
         output = summarize(json.dumps({'message': 'mcp_tool_call', 'extra': {
             'tool': 'list_strategies', 'caller_auth_method': 'oauth', 'success': False,
