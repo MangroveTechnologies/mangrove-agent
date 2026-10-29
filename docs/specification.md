@@ -307,7 +307,7 @@ Valid transitions: `draft → inactive`, `inactive → paper`, `inactive → liv
 Side effects by target status:
 - `paper`: register APScheduler cron job keyed to strategy timeframe. Allocation field ignored.
 - `live`: require `confirm: true` AND `allocation` block. Record allocation in local DB. Register cron job.
-- `inactive` (from live): require `confirm: true`. Cancel cron job. Release allocation (mark `active=false`, set `released_at`).
+- `inactive` (from live): require `confirm: true`. Hold new entries. Retain allocation and an exit-only cron while confirmed exposure or unresolved orders remain; cancel and release only when confirmed flat.
 - `inactive` (from paper): cancel cron job. No allocation change.
 - `archived`: cancel any running cron job. Release allocation if active.
 
@@ -907,7 +907,7 @@ client = MangroveMarkets(base_url=os.environ["MANGROVEMARKETS_BASE_URL"])
 **Lifecycle:**
 - Scheduler starts in FastAPI lifespan (`on_startup`)
 - Strategy activation (`paper` or `live`) → register job `eval-<strategy_id>`
-- Strategy deactivation → remove job
+- Strategy deactivation → retain an exit-only job while live exposure or unresolved orders remain; remove it after confirmed flatness
 - Job fires → call `strategy_evaluator.evaluate(strategy_id)`
 
 **Failure handling:** failed evaluations are logged to the `evaluations` table with `status='error'` and `error_msg` populated. The strategy remains active — transient failures (API outages, etc.) should not stop the schedule.
@@ -988,7 +988,7 @@ The services that stay:
 |--------|---------------|
 | `services/wallet_manager.py` | Key gen, Fernet encryption, local signing of unsigned txs from the SDK |
 | `services/strategy_service.py` | Cron-tick orchestration: call `mangroveai.execution.evaluate(strategy_id)` (SDK handles market data fetch + signal eval + risk gates internally), dispatch returned orders to `order_executor`. Strategy CRUD against `mangroveai.strategies` + local cache writes. No local signal evaluation or risk logic. |
-| `services/order_executor.py` | The single execution path for all DEX swaps. Takes an `OrderIntent` (from `strategy_service` for cron-driven trades, or built from a user request for the `POST /dex/swap` route). Orchestrates the full 6-step flow against `mangrovemarkets.dex` (quote → conditional approve → sign → broadcast → poll → prepare → sign → broadcast → poll). Branches paper vs live. |
+| `services/order_executor.py` | Paper and direct user DEX execution helpers; shared signing and quote boundaries. LIVE strategy execution uses the durable `dex_confirmed` receipt journal and `confirmed_execution` book/risk fences. |
 | `services/scheduler_service.py` | APScheduler wrapper: register, cancel, list active jobs |
 | `services/trade_log.py` | SQLite writes: evaluations, trades, positions |
 | `services/allocation_service.py` | Local allocation accounting for live strategies |

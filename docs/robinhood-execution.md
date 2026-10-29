@@ -83,7 +83,7 @@ until its outcome is known. It never bypasses broker controls.
 - `agent_cancel_venue_order(order_id)` requests cancellation of a known pending
   order. A cancel acknowledgement is not proof that it did not fill.
 - Set the strategy inactive with the existing lifecycle tool to stop new orders.
-  Already submitted orders remain at Robinhood; cancel them separately if desired.
+  The exit-only strategy monitor and capital allocation remain while exposure or unresolved orders remain. Already submitted orders remain at Robinhood; cancel them separately if desired.
   The 15-second reconciliation worker continues while the agent is running,
   including for paused strategies.
 
@@ -100,8 +100,7 @@ REST equivalents (all require the agent API key):
 ## Execution and recovery behavior
 
 Before submission, the agent commits an order reservation with a client-generated
-Robinhood `ref_id`. Pending or uncertain orders block another evaluation from
-submitting. A network timeout or crash is **unknown**, never assumed rejected.
+Robinhood `ref_id`. Pending or uncertain orders fence their position. Unknown legacy position identities fence all submissions; one entry may be pending per strategy. A network timeout or crash is **unknown**, never assumed rejected.
 Recovery searches broker history by that identity and never automatically resends
 an ambiguous placement. Missing history alone cannot clear the reservation.
 
@@ -126,22 +125,19 @@ liquidated positions are not automatically reconciled into the strategy book.
 - Equity placement is restricted to regular weekday market hours. Fresh quotes,
   tradability, and broker pre-trade checks must also pass. Crypto pairs must support
   both sides and limit orders.
-- One actionable Mangrove intent per evaluation and one pending order per strategy.
-  Multi-order evaluations are rejected before placement.
+- Distinct position exits submit serially. Exits defer entries until a fresh confirmed evaluation. Entries are limited to one per evaluation and one pending entry per strategy.
 - Bracket exits are evaluated by Mangrove on the strategy schedule. They are not
   native standing Robinhood protective orders. Pending orders do not stop
   evaluation of confirmed holdings. If Mangrove requests an exit while an entry
   remainder is pending, the adapter requests cancellation of that entry. It waits
   for a confirmed terminal outcome and re-evaluates the resulting holdings on the
-  next scheduled tick before placing an exit. Pending sells and unknown placements
-  continue blocking new orders; evaluation cannot make an uncertain order safe to
-  duplicate. Exit execution can therefore still be delayed by broker uncertainty
+  next scheduled tick before placing an exit. Pending sells fence their own position. Unknown placements without position identity fence the entire strategy; unrelated protective exits may continue when their own confirmed holdings are available. Evaluation cannot make an uncertain order safe to duplicate. Exit execution can therefore still be delayed by broker uncertainty
   and the strategy schedule. The local agent must remain running.
-- Risk state from a modeled trade advances only after an actual fill. Partial fills
-  can conservatively retain the modeled trade's cooldown/counter effects. If an
-  actual exit loss differs from a modeled non-loss, new entries latch off with
-  `broker_loss_diverged_from_model` rather than silently undercounting loss risk.
-  Full execution-aware risk-event feedback into Mangrove is a follow-up integration.
+- Risk state is committed from evaluations of the actual confirmed book. The engine
+  receives one fully closed position's aggregate net PnL, including all partial
+  exits and actual fees, with durable close receipts for idempotent ingestion.
+  Prospective positions are activated only by fills. See
+  [confirmed execution](confirmed-execution.md) for the shared contract.
 - This build's validation uses offline order/fill fixtures plus live read-only
   account, catalog, pair, and quote checks. No live order was placed for validation.
 

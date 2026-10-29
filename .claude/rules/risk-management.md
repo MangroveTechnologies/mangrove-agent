@@ -21,19 +21,25 @@ the strategy's `execution_config`):
 
 - **`max_open_positions`** — caps concurrent open positions. Denial: `max_positions`.
 - **`max_trades_per_day`** — daily entry cap. Denial: `daily_limit`.
-- **Loss-streak cooldown** (`cooldown_config`, per timeframe) — after N losing
-  trades on an asset within a rolling window, that asset is put on a cooldown
-  (short and long windows). Denial: `cooldown`.
+- **Loss pause** (canonical `cooldown_model='trades'`) — four consecutive net
+  losing closes or cumulative net losses of 6% of the reset baseline start a
+  36-primary-bar pause. Pauses are clamped to 24 hours through 14 days. The first
+  three closes after a pause use half size; a negative net resume result starts
+  another pause. Three consecutive pauses latch a stop. Explicit `bars` retains
+  the per-timeframe rolling windows in `cooldown_config`. Denial: `cooldown`.
 - **`max_hold_bars`** — force-exits a position held too long (a time-based exit,
   not an entry gate).
 - **Max-drawdown circuit breaker** (`max_drawdown_limit`, default **20%**) — a
   binary halt: once a strategy's equity draws down 20% from its **high-water
   mark** (peak-relative, mark-to-market), new entries are denied. Denial:
-  `max_drawdown`. **Remediation is automatic:** on trip it latches the
-  strategy's per-timeframe long cooldown, then re-baselines the high-water mark
-  to current equity and resumes — so a strategy is never permanently stuck, even
-  if it is flat. This is *enforcement* (deny the entry), shared by backtest and
-  live. It resizes nothing.
+  `max_drawdown`. Under the canonical trades model it starts a 72-primary-bar
+  pause (with the same duration bounds) and counts a strike; expiry re-baselines
+  the peak and opens the resume window. Explicit `bars` measures closed equity
+  and uses its per-timeframe long cooldown. Existing protective exits continue.
+- **Deposit stop** (`max_drawdown_halt_limit`, default **20%**) — closed-equity
+  losses against cumulative gross deposits latch a permanent entry halt.
+  Protective exits remain monitored until the actual book is flat; a restart
+  requires an explicit user action.
 
 **Position sizing** (also engine-side): risk-per-trade budget, volatility
 adjustment, and the `v1`/`v2` cash-reserve clamp. Not a halt — it scales the
@@ -56,7 +62,7 @@ positions in SQLite). So the **portfolio kill switch** lives here
   against a persisted high-water mark.
 - **Trip:** when book drawdown reaches **`PORTFOLIO_MAX_DRAWDOWN_PCT`
   (default 30%)**, on the next live tick it **pauses ALL live strategies**
-  (sets them `inactive`, cancels their crons, releases allocations).
+  (sets them `inactive` and denies new entries; strategies with exposure or unresolved orders retain exit-only crons and allocations until confirmed flat).
 - **Latched — no auto-resume.** Unlike the engine's per-strategy breaker, the
   portfolio switch stays tripped until a **human** clears it. This is
   deliberate: a 30% loss across the whole book warrants human review, not an
