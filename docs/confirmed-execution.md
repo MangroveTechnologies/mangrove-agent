@@ -1,10 +1,29 @@
-# Confirmed live strategy execution
+# Confirmed strategy execution
 
 `strategy_service.tick` evaluates externally executed LIVE strategies by object,
 with `persist=False`, regardless of their paper evaluation lane. The local
 journal supplies actual cash, remaining physical positions, immutable opening
 capital and one net close event per fully closed engine position. Default
 engine-owned paper evaluation continues to use `persist=True`.
+
+Explicit stateless PAPER evaluation also uses caller-owned evaluation. Its
+separate paper journal records the paper executor's simulated fill price and
+amounts atomically with the position, prospective bracket template, order dedup
+key and book revision. The next tick supplies that actual simulated book and
+one net close per fully closed paper position. An engine exit estimate cannot
+advance paper risk until the simulated fill is recorded and delivered. Paper
+fills have no venue fees; their net PnL uses actual simulated entry and exit
+prices. Historical paper fills without complete journal evidence hold entries
+while recorded protective templates remain available.
+
+Paper opening capital is immutable after adoption. Paper risk, receipts and
+cash remain separate from LIVE history. A closed LIVE position does not poison
+the paper journal; open LIVE exposure cannot become a paper position. Stateless
+paper currently supports v1/v2 long positions and explicitly refuses v3 core
+allocations. A paper book must settle flat before LIVE promotion. Human paper
+halts retain protective exit monitors until flat, without releasing LIVE
+allocations. Status changes and ticks share the same per-strategy lock, so a
+paper fill cannot race a promotion or monitor retirement.
 
 `proposed_positions` are prospective bracket templates. An entry creates no
 local position until actual fills exist. Engine account balances and modeled

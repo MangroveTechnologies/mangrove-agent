@@ -60,7 +60,7 @@ def _fetch_mark_price(symbol: str) -> float:
     )
 
 
-def _paper_fill(intent: OrderIntent, strategy_id: str, evaluation_id: str | None) -> Trade:
+def _paper_fill(intent: OrderIntent, strategy_id: str, evaluation_id: str | None, *, record: bool = True) -> Trade:
     """Simulate a paper fill at the current mark price."""
     mark = _fetch_mark_price(intent.symbol)
     # Convention: "buy" spends USDC for the asset; "sell" does the reverse.
@@ -91,16 +91,18 @@ def _paper_fill(intent: OrderIntent, strategy_id: str, evaluation_id: str | None
         status="simulated",
         executed_at=trade_log.now_utc(),
     )
-    trade_log.log_trade(trade)
-    _log.info(
-        "order.paper.simulated",
-        trade_id=trade.id,
-        strategy_id=strategy_id,
-        symbol=intent.symbol,
-        side=intent.side,
-        amount=intent.amount,
-        fill_price=mark,
-    )
+    if record:
+        trade_log.log_trade(trade)
+    if record:
+        _log.info(
+            "order.paper.simulated",
+            trade_id=trade.id,
+            strategy_id=strategy_id,
+            symbol=intent.symbol,
+            side=intent.side,
+            amount=intent.amount,
+            fill_price=mark,
+        )
     return trade
 
 

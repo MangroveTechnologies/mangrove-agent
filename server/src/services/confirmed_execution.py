@@ -67,12 +67,14 @@ def snapshot_revision(strategy_id):
         return tuple(row)
 
 
-def save_risk(strategy_id, before, response, closed_positions, revision, *, complete):
+def save_risk(strategy_id, before, response, closed_positions, revision, *, complete, state_field="execution_state_json"):
     """Persist only engine risk/clock fields; actual journal balances remain owned here.
 
     An incomplete financial book cannot acknowledge estimated closes or a new halt.
     A stale evaluation cannot authorize entries. Callers may retain valid exits.
     """
+    if state_field not in {"execution_state_json", "paper_execution_state_json"}:
+        raise ValueError("Unsupported risk state column")
     returned = response.get("execution_state")
     if not complete or not isinstance(returned, dict):
         return False
@@ -94,7 +96,7 @@ def save_risk(strategy_id, before, response, closed_positions, revision, *, comp
             return False
     with broker_store.connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT execution_state_json FROM strategies WHERE id=?", (strategy_id,)).fetchone()
+        row = conn.execute(f"SELECT {state_field} FROM strategies WHERE id=?", (strategy_id,)).fetchone()
         if not row:
             return False
         state = json.loads(row[0] or "{}")
@@ -110,7 +112,7 @@ def save_risk(strategy_id, before, response, closed_positions, revision, *, comp
             if position:
                 templates.append(activate_template(proposed, dict(position)))
         result = conn.execute(
-            """UPDATE strategies SET execution_state_json=?,open_positions_json=?,execution_revision=execution_revision+1
+            f"""UPDATE strategies SET {state_field}=?,open_positions_json=?,execution_revision=execution_revision+1
                WHERE id=? AND execution_revision=? AND book_revision=?""",
             (json.dumps(state), json.dumps(templates), strategy_id, *revision),
         )

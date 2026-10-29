@@ -74,9 +74,14 @@ def _apply_scheduler_effects(strategy_id: str, row: dict, target: str, current: 
     else:
         from src.services import confirmed_execution
 
-        if (current == "live" or row["exit_only_mode"] == "live") and confirmed_execution.has_exposure(strategy_id):
+        paper_monitor = row["exit_only_mode"] == "paper" or (current == "paper" and _resolve_evaluation_lane(row) == "stateless")
+        if paper_monitor:
+            from src.services import paper_confirmed
+
+        exposure = paper_confirmed.has_exposure(strategy_id) if paper_monitor else confirmed_execution.has_exposure(strategy_id)
+        if (current == "live" or row["exit_only_mode"] == "live" or paper_monitor) and exposure:
             conn = get_connection()
-            conn.execute("UPDATE strategies SET exit_only_mode='live' WHERE id=?", (strategy_id,))
+            conn.execute("UPDATE strategies SET exit_only_mode=? WHERE id=?", ("paper" if paper_monitor else "live", strategy_id))
             conn.commit()
             scheduler_service.register_job(strategy_id, row["timeframe"], "src.services.strategy_service:tick")
         else:
@@ -437,9 +442,13 @@ def get_strategy(strategy_id: str) -> StrategyDetailResponse:
 def update_status(strategy_id: str, update: StrategyStatusUpdate) -> StrategyDetailResponse:
     """Single source of truth for strategy lifecycle transitions."""
     from src.services.broker_execution import _lock
+    from src.services.confirmed_execution import tick_lock
 
     with _lock:
-        return _update_status(strategy_id, update)
+        with tick_lock(strategy_id) as acquired:
+            if not acquired:
+                raise SdkError("Strategy evaluation is in progress; retry the status transition after it completes.")
+            return _update_status(strategy_id, update)
 
 
 def _update_status(strategy_id, update):
@@ -460,6 +469,11 @@ def _update_status(strategy_id, update):
         raise StrategyInvalidStatusTransition(
             "Broker-bound strategies use live execution; test with a separate paper strategy before binding."
         )
+    if target == "live":
+        from src.services import paper_confirmed
+
+        if row["exit_only_mode"] == "paper" or paper_confirmed.has_exposure(strategy_id):
+            raise StrategyInvalidStatusTransition("Confirmed paper exposure must settle flat before live execution.")
 
     # Gate transitions that move real money or stop live execution.
     needs_confirm = target == "live" or (current == "live" and target in {"inactive", "archived"})
@@ -565,6 +579,18 @@ def _tick_locked(strategy_id: str) -> None:
         broker_execution.tick(strategy_id)
         return
     row = _get_row(strategy_id)
+    if row["exit_only_mode"] == "paper" or (row["status"] == "paper" and _resolve_evaluation_lane(row) == "stateless"):
+        try:
+            from src.services import paper_confirmed
+
+            paper_confirmed.tick(strategy_id)
+            _finish_exit_monitor_if_flat(strategy_id)
+        except Exception as exc:
+            trade_log.log_evaluation(Evaluation(id=str(uuid.uuid4()), strategy_id=strategy_id,
+                                               timestamp=trade_log.now_utc(), duration_ms=0,
+                                               status="error", error_msg=str(exc)))
+            _log.error("strategy.tick.errored", strategy_id=strategy_id, exception=str(exc))
+        return
     if row["status"] == "live" or row["exit_only_mode"] == "live":
         try:
             _tick_live(strategy_id)
@@ -770,17 +796,22 @@ def _finish_exit_monitor_if_flat(strategy_id):
     from src.services import confirmed_execution
 
     row = _get_row(strategy_id)
-    if row["exit_only_mode"] and not confirmed_execution.has_exposure(strategy_id):
+    if row["exit_only_mode"] == "paper":
+        from src.services import paper_confirmed
+
+    exposure = paper_confirmed.has_exposure(strategy_id) if row["exit_only_mode"] == "paper" else confirmed_execution.has_exposure(strategy_id)
+    if row["exit_only_mode"] and not exposure:
         conn = get_connection()
         conn.execute("UPDATE strategies SET exit_only_mode=NULL WHERE id=?", (strategy_id,))
         conn.commit()
-        if row["status"] != "live":
+        if row["exit_only_mode"] == "live" and row["status"] != "live":
             allocation_service.release_allocation(strategy_id)
         if row["status"] not in {"live", "paper"}:
             scheduler_service.cancel_job(strategy_id)
-        from src.services import portfolio_risk_service
+        if row["exit_only_mode"] == "live":
+            from src.services import portfolio_risk_service
 
-        portfolio_risk_service.rebaseline(reason="confirmed_flat")
+            portfolio_risk_service.rebaseline(reason="confirmed_flat")
 
 
 def _tick_live(strategy_id):

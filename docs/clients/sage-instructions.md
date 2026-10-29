@@ -14,7 +14,7 @@ before claiming operational access. Respect the host instruction hierarchy.
 
 ## SOURCE: SAGE.md
 
-<!-- sha256: 4215dba5ff59eec24edcee0eb909e0662a7f0a4a2b3e5da061560ab57e82dce0 -->
+<!-- sha256: 4faf3ccd1d22cccf61467bbc08221298975acd9ffa8342fb165167242c510b1e -->
 
 # Mangrove Agent
 
@@ -124,7 +124,7 @@ limitation, not permission to bypass controls.
 
 **Service-layer pattern:** Routes and MCP tools both call shared services in `server/src/services/`. Never duplicate business logic.
 
-**State ownership:** This agent owns the tick and local execution journal. APScheduler fires evaluations and SQLite records trades, evaluations, positions and execution state. Externally executed LIVE strategies always evaluate by object with `persist=False`, using actual confirmed cash, holdings and net close history; prospective templates become positions only after actual fills. Default engine-owned paper evaluation uses `persist=True`; explicit stateless paper runs round-trip their local protocol state. Signals, sizing, exits and risk rules stay in MangroveAI. See [confirmed execution](docs/confirmed-execution.md) for settlement evidence, entry holds and retained exit monitors.
+**State ownership:** This agent owns the tick and local execution journal. APScheduler fires evaluations and SQLite records trades, evaluations, positions and execution state. Externally executed LIVE strategies always evaluate by object with `persist=False`, using actual confirmed cash, holdings and net close history; prospective templates become positions only after actual fills. Default engine-owned paper evaluation uses `persist=True`; explicit stateless paper uses its separate simulated-fill journal and paper risk state, supplying actual paper balances, positions and net closes on each tick. Signals, sizing, exits and risk rules stay in MangroveAI. See [confirmed execution](docs/confirmed-execution.md) for settlement evidence, entry holds and retained exit monitors.
 
 ## Conventions
 
@@ -416,7 +416,7 @@ it does not enable arbitrary messages or XRPL transaction/payment signing.
 
 ## SOURCE: .claude/rules/risk-management.md
 
-<!-- sha256: aa2cbe55b0521d0a68aaf1fb142863771d8f6c160923262d3a8666c9283547ca -->
+<!-- sha256: de28793096c9c3abc0654399661e76617b49d5860ef69277cc68d9cf90e78be8 -->
 
 # Risk Management -- What Happens Behind the Scenes
 
@@ -441,19 +441,25 @@ the strategy's `execution_config`):
 
 - **`max_open_positions`** -- caps concurrent open positions. Denial: `max_positions`.
 - **`max_trades_per_day`** -- daily entry cap. Denial: `daily_limit`.
-- **Loss-streak cooldown** (`cooldown_config`, per timeframe) -- after N losing
-  trades on an asset within a rolling window, that asset is put on a cooldown
-  (short and long windows). Denial: `cooldown`.
+- **Loss pause** (canonical `cooldown_model='trades'`) -- four consecutive net
+  losing closes or cumulative net losses of 6% of the reset baseline start a
+  36-primary-bar pause. Pauses are clamped to 24 hours through 14 days. The first
+  three closes after a pause use half size; a negative net resume result starts
+  another pause. Three consecutive pauses latch a stop. Explicit `bars` retains
+  the per-timeframe rolling windows in `cooldown_config`. Denial: `cooldown`.
 - **`max_hold_bars`** -- force-exits a position held too long (a time-based exit,
   not an entry gate).
 - **Max-drawdown circuit breaker** (`max_drawdown_limit`, default **20%**) -- a
   binary halt: once a strategy's equity draws down 20% from its **high-water
   mark** (peak-relative, mark-to-market), new entries are denied. Denial:
-  `max_drawdown`. **Remediation is automatic:** on trip it latches the
-  strategy's per-timeframe long cooldown, then re-baselines the high-water mark
-  to current equity and resumes -- so a strategy is never permanently stuck, even
-  if it is flat. This is *enforcement* (deny the entry), shared by backtest and
-  live. It resizes nothing.
+  `max_drawdown`. Under the canonical trades model it starts a 72-primary-bar
+  pause (with the same duration bounds) and counts a strike; expiry re-baselines
+  the peak and opens the resume window. Explicit `bars` measures closed equity
+  and uses its per-timeframe long cooldown. Existing protective exits continue.
+- **Deposit stop** (`max_drawdown_halt_limit`, default **20%**) -- closed-equity
+  losses against cumulative gross deposits latch a permanent entry halt.
+  Protective exits remain monitored until the actual book is flat; a restart
+  requires an explicit user action.
 
 **Position sizing** (also engine-side): risk-per-trade budget, volatility
 adjustment, and the `v1`/`v2` cash-reserve clamp. Not a halt -- it scales the
