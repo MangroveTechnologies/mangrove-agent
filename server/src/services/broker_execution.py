@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.models.domain import Evaluation
 from src.services import broker_store as store
-from src.services import robinhood_client, trade_log
+from src.services import confirmed_execution, robinhood_client, trade_log
 from src.services.robinhood_venue import RobinhoodVenue
 from src.shared.errors import SdkError
 from src.shared.logging import get_logger
@@ -183,21 +183,28 @@ async def cancel(venue, order_id):
 async def _tick(venue, strategy_id):
     from src.services import portfolio_risk_service, strategy_service
     from src.shared.clients.mangrove import mangrove_ai_client
-    from src.shared.db.sqlite import get_connection
 
     route = store.route(strategy_id)
     await reconcile(venue, strategy_id)
     row = strategy_service._get_row(strategy_id)
-    if row["status"] != "live":
+    if row["status"] != "live" and row["exit_only_mode"] != "live":
         return
-    if not portfolio_risk_service.check_before_live_execution()["allowed"]:
-        return
+    portfolio = portfolio_risk_service.check_before_live_execution()
+    row = strategy_service._get_row(strategy_id)
     pending = store.orders(strategy_id, pending=True)
-    symbol = row["asset"].removesuffix("-USD")
+    revision = confirmed_execution.snapshot_revision(strategy_id)
+    symbol = row["asset"].split("-")[0]
     quote = await venue.quote(route, symbol)
     mark = float((store.decimal(quote["ask_price"]) + store.decimal(quote["bid_price"])) / 2)
     state, positions = store.execution_inputs(strategy_id, mark)
+    closes, history_complete = confirmed_execution.broker_history(strategy_id)
+    if confirmed_execution.snapshot_revision(strategy_id) != revision:
+        raise SdkError("Confirmed broker book changed while preparing evaluation; retrying next tick.")
+    state["allow_entries"] = bool(portfolio["allowed"] and row["status"] == "live" and not pending and history_complete)
+    delivered, bootstrap = confirmed_execution.close_delivery(state, closes, complete=history_complete)
     payload = strategy_service._stateless_strategy_dict(row)
+    payload["closed_positions"] = delivered
+    payload["closed_positions_bootstrap_complete"] = bootstrap
     payload["execution_state"] = state
     payload["execution_config"]["initial_balance"] = float(route["capital"])
     payload["execution_config"]["initial_cash_balance"] = float(route["capital"])
@@ -210,83 +217,132 @@ async def _tick(venue, strategy_id):
         raise SdkError("Mangrove evaluation did not succeed; no broker order submitted.")
     eid = str(uuid.uuid4())
     intents = strategy_service._extract_order_intents(result, strategy_id=strategy_id, tick_id=eid)
-    blocked = bool(pending and intents)
+    accepted = confirmed_execution.save_risk(
+        strategy_id, state, dump, delivered, revision, complete=history_complete and not pending
+    )
+    if not state["allow_entries"] or not accepted:
+        intents = confirmed_execution.entries_only_removed(intents)
+    if (
+        not intents
+        and not strategy_service._extract_order_intents(result, strategy_id=strategy_id, tick_id=eid)
+        and any(o.get("status") == "filled" for o in dump.get("new_orders") or [])
+    ):
+        raise SdkError("Mangrove returned an unsupported filled intent; execution stopped.")
+    # An exit batch goes first; no entry may overtake a close not yet ingested
+    # into confirmed risk. This is execution ordering, not a second risk model.
+    exits = [intent for intent in intents if intent.action == "exit"]
+    intents = exits or intents
+    if not exits and len(intents) > 1:
+        raise SdkError("Broker execution requires one entry per evaluation.")
     trade_log.log_evaluation(
         Evaluation(
             id=eid,
             strategy_id=strategy_id,
             timestamp=trade_log.now_utc(),
             duration_ms=0,
-            status="skipped" if blocked else "ok",
-            error_msg="Execution deferred until pending broker orders reconcile." if blocked else None,
+            status="ok" if accepted else "skipped",
+            error_msg=None
+            if accepted
+            else "Confirmed history, pending fills or a newer book prevented risk/entry commitment.",
             sdk_response=dump,
             order_intents=intents,
             market_snapshot=strategy_service._market_snapshot(dump, asset=row["asset"]),
         )
     )
-    if not intents and any(o.get("status") == "filled" for o in dump.get("new_orders") or []):
-        raise SdkError("Mangrove returned an unsupported filled intent; execution stopped.")
-    if blocked:
-        # Keep evaluating confirmed holdings, but never submit against an
-        # uncertain book. An exit takes priority over the unfilled remainder of
-        # an entry. Cancellation can race a fill: reconcile, then evaluate the
-        # resulting holdings afresh on the next scheduled tick.
-        needs_exit = any(
-            i.action == "exit" and i.side == "sell" and i.symbol == symbol
-            and any(p["id"] == i.engine_position_id for p in positions)
-            for i in intents
-        )
-        if needs_exit and strategy_service._get_row(strategy_id)["status"] == "live":
-            for order in pending:
-                if json.loads(order["intent_json"])["side"] == "buy" and order["broker_order_id"] and order["status"] != "cancel_pending":
-                    await cancel(venue, order["id"])
-        return
-    if not intents:
-        # Advance non-execution risk/cooldown state only when no modeled trade
-        # occurred. Broker cash and positions always overwrite it next tick.
-        conn = get_connection()
-        conn.execute(
-            "UPDATE strategies SET execution_state_json=?,open_positions_json=? WHERE id=?",
-            (
-                json.dumps(dump.get("execution_state") or state),
-                json.dumps(dump.get("open_positions") or positions),
+    for intent in intents:
+        current_pending = store.orders(strategy_id, pending=True)
+        if any(not json.loads(order["intent_json"]).get("engine_position_id") for order in current_pending):
+            raise SdkError("A pending broker order has no position identity; reconciliation required.")
+        matching = [
+            order
+            for order in current_pending
+            if json.loads(order["intent_json"])["engine_position_id"] == intent.engine_position_id
+        ]
+        if matching:
+            # Cancellation may race a fill. Reconcile and use the next fresh
+            # evaluation for this position; unrelated protective exits continue.
+            if intent.action == "exit":
+                for order in matching:
+                    if (
+                        json.loads(order["intent_json"])["side"] == "buy"
+                        and order["broker_order_id"]
+                        and order["status"] != "cancel_pending"
+                    ):
+                        try:
+                            await cancel(venue, order["id"])
+                        except Exception as exc:
+                            if len(exits) < 2:
+                                raise
+                            _log.warning(
+                                "broker.exit_batch.cancel_failed",
+                                strategy_id=strategy_id,
+                                position_id=intent.engine_position_id,
+                                error=str(exc),
+                            )
+            continue
+        if intent.action == "enter" and current_pending:
+            continue
+        try:
+            await _submit_intent(
+                venue,
                 strategy_id,
-            ),
-        )
-        conn.commit()
-        return
-    if len(intents) != 1:
-        raise SdkError("Broker execution currently requires one Mangrove intent per evaluation.")
-    intent = intents[0]
+                eid,
+                intent,
+                dump,
+                route,
+                state,
+                positions,
+                (revision[0] + 1, revision[1]) if accepted else None,
+            )
+        except Exception as exc:
+            if len(exits) < 2:
+                raise
+            _log.warning(
+                "broker.exit_batch.order_failed",
+                strategy_id=strategy_id,
+                position_id=intent.engine_position_id,
+                error=str(exc),
+            )
+
+    strategy_service._finish_exit_monitor_if_flat(strategy_id)
+
+
+async def _submit_intent(venue, strategy_id, eid, intent, dump, route, state, positions, revision):
+    from src.services import portfolio_risk_service, strategy_service
+
+    symbol = strategy_service._get_row(strategy_id)["asset"].split("-")[0]
     if intent.symbol != symbol:
         raise SdkError("Mangrove intent does not match the strategy asset.")
-    # Reject missing engine position state BEFORE a potentially irreversible
-    # broker operation. Entry bracket templates are retained for future ticks.
-    template = next((p for p in dump.get("open_positions") or [] if p.get("id") == intent.engine_position_id), {})
-    if intent.side == "buy" and not template:
-        raise SdkError("Mangrove did not return the entry position template needed for reconciliation.")
+    template = next(
+        (
+            p
+            for p in dump.get("proposed_positions") or []
+            if p.get("id") == intent.engine_position_id and p.get("execution_confirmed") is False
+        ),
+        {},
+    )
+    if intent.action == "enter" and not template:
+        raise SdkError("Mangrove did not return the proposed entry template needed for reconciliation.")
     args, required = await venue.prepare(route, intent)
     qty = store.decimal(args["quantity"])
-    if intent.side == "buy":
+    if intent.action == "enter":
         if (
             required > store.decimal(route["max_order_usd"])
             or required > store.decimal(state["cash_balance"])
             or required > await venue.balance(route)
         ):
             raise SdkError("Mangrove order exceeds available venue capital or buying power.")
+        if (
+            strategy_service._get_row(strategy_id)["status"] != "live"
+            or not portfolio_risk_service.check_before_live_execution()["allowed"]
+        ):
+            return
     else:
         position = next((p for p in positions if p["id"] == intent.engine_position_id), None)
         if not position or qty > store.decimal(position["position_size"]) or qty > await venue.sellable(route, symbol):
             raise SdkError("Mangrove exit exceeds confirmed holdings available to this strategy.")
-    # Recheck activation after network/evaluation work; a pause must prevent a
-    # not-yet-submitted order. No per-order human approval is added here.
-    if (
-        strategy_service._get_row(strategy_id)["status"] != "live"
-        or not portfolio_risk_service.check_before_live_execution()["allowed"]
-    ):
-        return
     ref_id = str(uuid.uuid4())
-    if not store.reserve(strategy_id, eid, intent, args, template, ref_id):
+    if not store.reserve(strategy_id, eid, intent, args, template, ref_id, expected_revision=revision):
         return
     try:
         response = await venue.submit(route, args, ref_id)
@@ -297,7 +353,6 @@ async def _tick(venue, strategy_id):
         else:
             store.mark(ref_id, "uncertain", error="UNRECOGNIZED_SUBMISSION_RESPONSE")
     except BaseException:
-        # Includes cancellation/process interruption. Unknown != failed.
         store.mark(ref_id, "uncertain", error="SUBMISSION_OUTCOME_UNKNOWN")
         raise
 

@@ -11,6 +11,7 @@ position sizing, cooldowns, volatility adjustment. The agent just
 orchestrates: fetch strategy from local cache → call SDK evaluate →
 hand orders to executor → log.
 """
+
 from __future__ import annotations
 
 import json
@@ -66,18 +67,25 @@ def _apply_scheduler_effects(strategy_id: str, row: dict, target: str, current: 
     """Register or cancel the cron job and release allocation based on target status."""
     if target in {"paper", "live"}:
         scheduler_service.register_job(
-            strategy_id, row["timeframe"],
+            strategy_id,
+            row["timeframe"],
             "src.services.strategy_service:tick",
         )
     else:
-        scheduler_service.cancel_job(strategy_id)
-        if current == "live":
-            allocation_service.release_allocation(strategy_id)
+        from src.services import confirmed_execution
+
+        if (current == "live" or row["exit_only_mode"] == "live") and confirmed_execution.has_exposure(strategy_id):
+            conn = get_connection()
+            conn.execute("UPDATE strategies SET exit_only_mode='live' WHERE id=?", (strategy_id,))
+            conn.commit()
+            scheduler_service.register_job(strategy_id, row["timeframe"], "src.services.strategy_service:tick")
+        else:
+            scheduler_service.cancel_job(strategy_id)
+            if current == "live" or row["exit_only_mode"] == "live":
+                allocation_service.release_allocation(strategy_id)
 
 
-def _extract_order_intents(
-    sdk_resp: Any, *, strategy_id: str, tick_id: str
-) -> list[OrderIntent]:
+def _extract_order_intents(sdk_resp: Any, *, strategy_id: str, tick_id: str) -> list[OrderIntent]:
     """Pull OrderIntents out of an SDK evaluate response.
 
     The shape varies by SDK / upstream version — be defensive. Current
@@ -205,10 +213,14 @@ def _get_live_allocation(
         return None, None, None, None
     wallet_address = active_alloc.wallet_address
     slippage_pct = active_alloc.slippage_pct
-    wrow = get_connection().execute(
-        "SELECT chain_id FROM wallets WHERE address = ?",
-        (wallet_address,),
-    ).fetchone()
+    wrow = (
+        get_connection()
+        .execute(
+            "SELECT chain_id FROM wallets WHERE address = ?",
+            (wallet_address,),
+        )
+        .fetchone()
+    )
     chain_id = wrow["chain_id"] if wrow else None
     return wallet_address, chain_id, slippage_pct, active_alloc.amount
 
@@ -235,10 +247,15 @@ class StrategyAllocationInput(BaseModel):
     # Capped at 0.0025 (0.25%); anything higher is rejected at the
     # API boundary. Matches the decimal convention used for direct
     # swap slippage_pct (server/src/api/routes/dex.py SwapRequest).
-    slippage_pct: float = Field(..., gt=0, le=0.0025, description=(
-        "Slippage tolerance as DECIMAL (0.005 = 0.5%). Max 0.0025 (0.25%). "
-        "No default — must be set at allocation time."
-    ))
+    slippage_pct: float = Field(
+        ...,
+        gt=0,
+        le=0.0025,
+        description=(
+            "Slippage tolerance as DECIMAL (0.005 = 0.5%). Max 0.0025 (0.25%). "
+            "No default — must be set at allocation time."
+        ),
+    )
 
 
 class StrategyStatusUpdate(BaseModel):
@@ -358,10 +375,14 @@ def configure_market(strategy_id: str, market: StrategyMarketContext) -> Strateg
 
 
 def _row_to_response(row: Any) -> StrategyDetailResponse:
-    route = get_connection().execute(
-        "SELECT venue,asset_class,capital,max_order_usd,slippage_pct FROM broker_routes WHERE strategy_id=?",
-        (row["id"],),
-    ).fetchone()
+    route = (
+        get_connection()
+        .execute(
+            "SELECT venue,asset_class,capital,max_order_usd,slippage_pct FROM broker_routes WHERE strategy_id=?",
+            (row["id"],),
+        )
+        .fetchone()
+    )
     return StrategyDetailResponse(
         id=row["id"],
         mangrove_id=row["mangrove_id"],
@@ -381,9 +402,14 @@ def _row_to_response(row: Any) -> StrategyDetailResponse:
 
 
 def _get_row(strategy_id: str) -> Any:
-    row = get_connection().execute(
-        "SELECT * FROM strategies WHERE id = ?", (strategy_id,),
-    ).fetchone()
+    row = (
+        get_connection()
+        .execute(
+            "SELECT * FROM strategies WHERE id = ?",
+            (strategy_id,),
+        )
+        .fetchone()
+    )
     if not row:
         raise StrategyNotFound(
             f"Strategy {strategy_id} not found.",
@@ -411,6 +437,7 @@ def get_strategy(strategy_id: str) -> StrategyDetailResponse:
 def update_status(strategy_id: str, update: StrategyStatusUpdate) -> StrategyDetailResponse:
     """Single source of truth for strategy lifecycle transitions."""
     from src.services.broker_execution import _lock
+
     with _lock:
         return _update_status(strategy_id, update)
 
@@ -426,29 +453,36 @@ def _update_status(strategy_id, update):
         return _row_to_response(row)  # no-op
     _validate_status_transition(current, target)
     from src.services.broker_store import route as broker_route
-    if target == 'paper' and broker_route(strategy_id):
-        raise StrategyInvalidStatusTransition('Broker-bound strategies use live execution; test with a separate paper strategy before binding.')
+
+    if target == "paper" and row["exit_only_mode"] == "live":
+        raise StrategyInvalidStatusTransition("Confirmed live exposure must settle flat before paper execution.")
+    if target == "paper" and broker_route(strategy_id):
+        raise StrategyInvalidStatusTransition(
+            "Broker-bound strategies use live execution; test with a separate paper strategy before binding."
+        )
 
     # Gate transitions that move real money or stop live execution.
-    needs_confirm = (
-        target == "live"
-        or (current == "live" and target in {"inactive", "archived"})
-    )
+    needs_confirm = target == "live" or (current == "live" and target in {"inactive", "archived"})
     if needs_confirm and not update.confirm:
         from src.shared.errors import ConfirmationRequired
+
         raise ConfirmationRequired(
             f"Transition {current} → {target} requires confirm=true.",
             suggestion="This transition affects real funds or stops live execution. Re-submit with confirm=true.",
         )
 
+    prior_allocation = allocation_service.get_active_allocation(strategy_id)
     if target == "live":
         venue_route = broker_route(strategy_id)
         if venue_route:
             if update.allocation:
-                raise StrategyInvalidStatusTransition("Robinhood uses its configured venue allocation, not a wallet allocation.")
+                raise StrategyInvalidStatusTransition(
+                    "Robinhood uses its configured venue allocation, not a wallet allocation."
+                )
             # Broker routes use caller-owned evaluation and confirmed fills.
             # Activation does not modify Robinhood's approval preference.
             from src.services import broker_execution
+
             broker_execution.run(broker_execution.preflight, venue_route)
         else:
             _record_dex_allocation(strategy_id, update)
@@ -457,7 +491,7 @@ def _update_status(strategy_id, update):
     try:
         mangrove_ai_client().strategies.update_status(row["mangrove_id"], target)
     except Exception as e:  # noqa: BLE001
-        if target == "live":
+        if target == "live" and prior_allocation is None:
             allocation_service.release_allocation(strategy_id)
         raise SdkError(f"strategies.update_status failed: {e}") from e
 
@@ -465,9 +499,15 @@ def _update_status(strategy_id, update):
     _set_status(strategy_id, target)
     if "live" in (target, current):
         from src.services import portfolio_risk_service
+
         portfolio_risk_service.rebaseline(reason=f"status_{current}_to_{target}")
-    _log.info("strategy.status_changed", strategy_id=strategy_id, from_status=current, to_status=target,
-              allocation=bool(update.allocation))
+    _log.info(
+        "strategy.status_changed",
+        strategy_id=strategy_id,
+        from_status=current,
+        to_status=target,
+        allocation=bool(update.allocation),
+    )
     return _row_to_response(_get_row(strategy_id))
 
 
@@ -482,6 +522,7 @@ def _record_dex_allocation(strategy_id, update):
     # last chance to catch "user deposited money but never saved
     # their recovery secret" before real funds move.
     from src.services.wallet_manager import require_backup_confirmed
+
     require_backup_confirmed(update.allocation.wallet_address)
     allocation_service.record_allocation(
         strategy_id=strategy_id,
@@ -492,10 +533,19 @@ def _record_dex_allocation(strategy_id, update):
         slippage_pct=update.allocation.slippage_pct,
     )
 
+
 # -- Cron tick ---------------------------------------------------------------
 
 
 def tick(strategy_id: str) -> None:
+    from src.services import confirmed_execution
+
+    with confirmed_execution.tick_lock(strategy_id) as acquired:
+        if acquired:
+            _tick_locked(strategy_id)
+
+
+def _tick_locked(strategy_id: str) -> None:
     """The scheduler callback. Runs in a threadpool — must never propagate
     exceptions, and must never block the request path.
 
@@ -510,8 +560,26 @@ def tick(strategy_id: str) -> None:
        Never let the exception escape.
     """
     from src.services import broker_execution, broker_store
+
     if broker_store.route(strategy_id):
         broker_execution.tick(strategy_id)
+        return
+    row = _get_row(strategy_id)
+    if row["status"] == "live" or row["exit_only_mode"] == "live":
+        try:
+            _tick_live(strategy_id)
+        except Exception as exc:
+            trade_log.log_evaluation(
+                Evaluation(
+                    id=str(uuid.uuid4()),
+                    strategy_id=strategy_id,
+                    timestamp=trade_log.now_utc(),
+                    duration_ms=0,
+                    status="error",
+                    error_msg=str(exc),
+                )
+            )
+            _log.error("strategy.tick.errored", strategy_id=strategy_id, exception=str(exc))
         return
     tick_id = str(uuid.uuid4())
     start_ns = time.monotonic()
@@ -519,20 +587,23 @@ def tick(strategy_id: str) -> None:
         try:
             row = _get_row(strategy_id)
         except StrategyNotFound:
-            _log.error("strategy.tick.errored",
-                       strategy_id=strategy_id, tick_id=tick_id,
-                       exception="StrategyNotFound")
+            _log.error("strategy.tick.errored", strategy_id=strategy_id, tick_id=tick_id, exception="StrategyNotFound")
             return
         mode = row["status"]
-        _log.info("strategy.tick.started",
-                  strategy_id=strategy_id, tick_id=tick_id,
-                  timeframe=row["timeframe"], mode=mode)
+        _log.info(
+            "strategy.tick.started", strategy_id=strategy_id, tick_id=tick_id, timeframe=row["timeframe"], mode=mode
+        )
 
         # Only run the tick for paper or live strategies (defensive).
         if mode not in {"paper", "live"}:
-            _log.info("strategy.tick.completed",
-                      strategy_id=strategy_id, tick_id=tick_id,
-                      order_count=0, duration_ms=0, reason="not active")
+            _log.info(
+                "strategy.tick.completed",
+                strategy_id=strategy_id,
+                tick_id=tick_id,
+                order_count=0,
+                duration_ms=0,
+                reason="not active",
+            )
             return
 
         lane = _resolve_evaluation_lane(row)
@@ -557,28 +628,33 @@ def tick(strategy_id: str) -> None:
                 # requires the same engine bookkeeping; paper stays
                 # simulation-only on OUR side (no wallet, no broadcast).
                 sdk_resp = mangrove_ai_client().execution.evaluate(
-                    row["mangrove_id"], persist=True,
+                    row["mangrove_id"],
+                    persist=True,
                 )
         except Exception as e:  # noqa: BLE001
             duration_ms = int((time.monotonic() - start_ns) * 1000)
-            trade_log.log_evaluation(Evaluation(
-                id=str(uuid.uuid4()),
+            trade_log.log_evaluation(
+                Evaluation(
+                    id=str(uuid.uuid4()),
+                    strategy_id=strategy_id,
+                    timestamp=trade_log.now_utc(),
+                    duration_ms=duration_ms,
+                    status="error",
+                    error_msg=f"SDK evaluate failed: {e}",
+                )
+            )
+            _log.error(
+                "strategy.tick.errored",
                 strategy_id=strategy_id,
-                timestamp=trade_log.now_utc(),
+                tick_id=tick_id,
+                exception=str(e),
                 duration_ms=duration_ms,
-                status="error",
-                error_msg=f"SDK evaluate failed: {e}",
-            ))
-            _log.error("strategy.tick.errored",
-                       strategy_id=strategy_id, tick_id=tick_id,
-                       exception=str(e), duration_ms=duration_ms)
+            )
             return
 
         # Extract OrderIntents from the SDK response (defensive about
         # response shape; logs — never silently drops — malformed intents).
-        order_intents = _extract_order_intents(
-            sdk_resp, strategy_id=strategy_id, tick_id=tick_id
-        )
+        order_intents = _extract_order_intents(sdk_resp, strategy_id=strategy_id, tick_id=tick_id)
 
         # Find the wallet + chain_id for live execution (allocation provides it).
         wallet_address = None
@@ -586,9 +662,7 @@ def tick(strategy_id: str) -> None:
         slippage_pct = None
         allocation_amount = None
         if mode == "live":
-            wallet_address, chain_id, slippage_pct, allocation_amount = (
-                _get_live_allocation(strategy_id)
-            )
+            wallet_address, chain_id, slippage_pct, allocation_amount = _get_live_allocation(strategy_id)
 
         # Log the evaluation FIRST so trades can FK-reference it. The
         # evaluation describes the SDK call outcome, not the downstream
@@ -596,16 +670,18 @@ def tick(strategy_id: str) -> None:
         evaluation_id = str(uuid.uuid4())
         duration_ms = int((time.monotonic() - start_ns) * 1000)
         sdk_dump = sdk_resp.model_dump() if hasattr(sdk_resp, "model_dump") else {}
-        trade_log.log_evaluation(Evaluation(
-            id=evaluation_id,
-            strategy_id=strategy_id,
-            timestamp=trade_log.now_utc(),
-            market_snapshot=_market_snapshot(sdk_dump, asset=row["asset"]),
-            sdk_response=sdk_dump,
-            order_intents=order_intents,
-            duration_ms=duration_ms,
-            status="ok",
-        ))
+        trade_log.log_evaluation(
+            Evaluation(
+                id=evaluation_id,
+                strategy_id=strategy_id,
+                timestamp=trade_log.now_utc(),
+                market_snapshot=_market_snapshot(sdk_dump, asset=row["asset"]),
+                sdk_response=sdk_dump,
+                order_intents=order_intents,
+                duration_ms=duration_ms,
+                status="ok",
+            )
+        )
 
         # Persist the engine's execution_state first-class (#151) — the
         # agent's own record of account/risk state per strategy, and the
@@ -623,20 +699,21 @@ def tick(strategy_id: str) -> None:
                     conn.execute(
                         """UPDATE strategies SET execution_state_json = ?,
                            open_positions_json = ?, updated_at = ? WHERE id = ?""",
-                        (json.dumps(exec_state, default=str),
-                         json.dumps(open_positions_blob, default=str),
-                         trade_log.now_utc().isoformat(), strategy_id),
+                        (
+                            json.dumps(exec_state, default=str),
+                            json.dumps(open_positions_blob, default=str),
+                            trade_log.now_utc().isoformat(),
+                            strategy_id,
+                        ),
                     )
                 else:
                     conn.execute(
                         "UPDATE strategies SET execution_state_json = ?, updated_at = ? WHERE id = ?",
-                        (json.dumps(exec_state, default=str),
-                         trade_log.now_utc().isoformat(), strategy_id),
+                        (json.dumps(exec_state, default=str), trade_log.now_utc().isoformat(), strategy_id),
                     )
                 conn.commit()
             except Exception as e:  # noqa: BLE001
-                _log.error("strategy.execution_state.persist_failed",
-                           strategy_id=strategy_id, exception=str(e))
+                _log.error("strategy.execution_state.persist_failed", strategy_id=strategy_id, exception=str(e))
 
         # Portfolio kill switch (#146): on every LIVE tick, update the live-book
         # high-water mark and trip if aggregate drawdown crosses the limit. A
@@ -646,29 +723,157 @@ def tick(strategy_id: str) -> None:
         # realized losses on OTHER live strategies.
         if mode == "live":
             from src.services import portfolio_risk_service
+
             pr = portfolio_risk_service.check_before_live_execution()
             if not pr["allowed"]:
-                _log.warning("strategy.tick.portfolio_halt",
-                             strategy_id=strategy_id, tick_id=tick_id,
-                             drawdown=pr.get("drawdown"),
-                             book_value=pr.get("book_value"),
-                             high_water_mark=pr.get("high_water_mark"),
-                             reason=pr.get("reason"))
-                _log.info("strategy.tick.completed",
-                          strategy_id=strategy_id, tick_id=tick_id,
-                          order_count=0, duration_ms=duration_ms,
-                          reason="portfolio_halt")
+                _log.warning(
+                    "strategy.tick.portfolio_halt",
+                    strategy_id=strategy_id,
+                    tick_id=tick_id,
+                    drawdown=pr.get("drawdown"),
+                    book_value=pr.get("book_value"),
+                    high_water_mark=pr.get("high_water_mark"),
+                    reason=pr.get("reason"),
+                )
+                _log.info(
+                    "strategy.tick.completed",
+                    strategy_id=strategy_id,
+                    tick_id=tick_id,
+                    order_count=0,
+                    duration_ms=duration_ms,
+                    reason="portfolio_halt",
+                )
                 return
 
         if order_intents:
             order_executor.execute_many(
-                order_intents, mode=mode, strategy_id=strategy_id,
+                order_intents,
+                mode=mode,
+                strategy_id=strategy_id,
                 evaluation_id=evaluation_id,
-                wallet_address=wallet_address, chain_id=chain_id,
+                wallet_address=wallet_address,
+                chain_id=chain_id,
                 slippage_pct=slippage_pct,
                 max_input_amount=allocation_amount,
             )
 
-        _log.info("strategy.tick.completed",
-                  strategy_id=strategy_id, tick_id=tick_id,
-                  order_count=len(order_intents), duration_ms=duration_ms)
+        _log.info(
+            "strategy.tick.completed",
+            strategy_id=strategy_id,
+            tick_id=tick_id,
+            order_count=len(order_intents),
+            duration_ms=duration_ms,
+        )
+
+
+def _finish_exit_monitor_if_flat(strategy_id):
+    from src.services import confirmed_execution
+
+    row = _get_row(strategy_id)
+    if row["exit_only_mode"] and not confirmed_execution.has_exposure(strategy_id):
+        conn = get_connection()
+        conn.execute("UPDATE strategies SET exit_only_mode=NULL WHERE id=?", (strategy_id,))
+        conn.commit()
+        if row["status"] != "live":
+            allocation_service.release_allocation(strategy_id)
+        if row["status"] not in {"live", "paper"}:
+            scheduler_service.cancel_job(strategy_id)
+        from src.services import portfolio_risk_service
+
+        portfolio_risk_service.rebaseline(reason="confirmed_flat")
+
+
+def _tick_live(strategy_id):
+    """Externally executed LIVE always evaluates a confirmed, caller-owned book."""
+    from src.services import confirmed_execution as confirmed
+    from src.services import dex_confirmed, portfolio_risk_service
+
+    dex_confirmed.reconcile(strategy_id)
+    portfolio = portfolio_risk_service.check_before_live_execution()
+    row = _get_row(strategy_id)
+    wallet, chain_id, slippage, allocation = _get_live_allocation(strategy_id)
+    if not wallet:
+        raise SdkError("Live strategy has no retained execution allocation.")
+    revision = confirmed.snapshot_revision(strategy_id)
+    mark = order_executor._fetch_mark_price(row["asset"])
+    state, positions, closes, complete = confirmed.dex_inputs(strategy_id, mark)
+    if confirmed.snapshot_revision(strategy_id) != revision:
+        raise SdkError("Confirmed book changed while preparing evaluation.")
+    pending = dex_confirmed.orders(strategy_id, pending=True)
+    state["allow_entries"] = bool(complete and not pending and portfolio["allowed"] and row["status"] == "live")
+    delivered, bootstrap = confirmed.close_delivery(state, closes, complete=complete)
+    payload = _stateless_strategy_dict(row)
+    payload.update(execution_state=state, closed_positions=delivered, closed_positions_bootstrap_complete=bootstrap)
+    if "reference_capital" in state:
+        payload["execution_config"].update(
+            initial_balance=state["reference_capital"], initial_cash_balance=state["reference_capital"]
+        )
+    result = mangrove_ai_client().execution.evaluate_by_object(payload, persist=False, open_positions=positions)
+    dump = result.model_dump()
+    if dump.get("success") is not True:
+        raise SdkError("Mangrove evaluation did not succeed; no order submitted.")
+    eid = str(uuid.uuid4())
+    intents = _extract_order_intents(result, strategy_id=strategy_id, tick_id=eid)
+    accepted = confirmed.save_risk(strategy_id, state, dump, delivered, revision, complete=complete and not pending)
+    if not accepted or not state["allow_entries"]:
+        intents = confirmed.entries_only_removed(intents)
+    exits = [i for i in intents if i.action == "exit"]
+    intents = exits or intents
+    if not exits and len(intents) > 1:
+        raise SdkError("Only one entry may be submitted per evaluation.")
+    trade_log.log_evaluation(
+        Evaluation(
+            id=eid,
+            strategy_id=strategy_id,
+            timestamp=trade_log.now_utc(),
+            duration_ms=0,
+            status="ok" if accepted else "skipped",
+            sdk_response=dump,
+            order_intents=intents,
+            error_msg=None if accepted else "Financial history or newer book prevented risk/entry commitment.",
+        )
+    )
+    for intent in intents:
+        if intent.symbol not in {row["asset"], row["asset"].split("-")[0]}:
+            raise SdkError("Intent asset does not match the strategy.")
+        if intent.input_token_address or intent.output_token_address:
+            raise SdkError("Engine strategy intents must use asset quantities and the retained quote allocation.")
+        template = next(
+            (
+                p
+                for p in dump.get("proposed_positions") or []
+                if p.get("id") == intent.engine_position_id and p.get("execution_confirmed") is False
+            ),
+            None,
+        )
+        if intent.action == "enter" and not template:
+            raise SdkError("Mangrove did not return a prospective position template.")
+        if intent.action == "enter" and (
+            not portfolio_risk_service.check_before_live_execution()["allowed"]
+            or _get_row(strategy_id)["status"] != "live"
+        ):
+            continue
+        try:
+            oid = dex_confirmed.reserve(
+                strategy_id, eid, intent, template or {}, (revision[0] + 1, revision[1]) if accepted else None
+            )
+            if oid:
+                dex_confirmed.execute(
+                    oid,
+                    intent,
+                    wallet,
+                    chain_id,
+                    slippage,
+                    min(allocation, state["cash_balance"]) if intent.action == "enter" else None,
+                )
+        except Exception as exc:
+            if len(exits) < 2:
+                raise
+            _log.warning(
+                "strategy.exit_batch.order_failed",
+                strategy_id=strategy_id,
+                position_id=intent.engine_position_id,
+                error=str(exc),
+            )
+
+    _finish_exit_monitor_if_flat(strategy_id)

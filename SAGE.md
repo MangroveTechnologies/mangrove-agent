@@ -106,7 +106,7 @@ limitation, not permission to bypass controls.
 
 **Service-layer pattern:** Routes and MCP tools both call shared services in `server/src/services/`. Never duplicate business logic.
 
-**State ownership:** THIS agent owns the tick and the record. APScheduler here fires every strategy evaluation (MangroveAI never schedules for the agent), and the local SQLite (`agent-data/agent.db`) persists every trade, evaluation, position, and per-strategy `execution_state` -- unconditionally, regardless of evaluation lane. Evaluation itself (signals, sizing, exits) happens in the MangroveAI engine via `evaluation_lane`: `server` (default -- by-id; engine DB is authoritative for engine position state) or `stateless` (object-lane; the agent supplies and receives all state, persisted locally and echoed each tick). The engine decides *what* to trade; the agent decides *when to ask*, executes, and keeps the books.
+**State ownership:** This agent owns the tick and local execution journal. APScheduler fires evaluations and SQLite records trades, evaluations, positions and execution state. Externally executed LIVE strategies always evaluate by object with `persist=False`, using actual confirmed cash, holdings and net close history; prospective templates become positions only after actual fills. Default engine-owned paper evaluation uses `persist=True`; explicit stateless paper runs round-trip their local protocol state. Signals, sizing, exits and risk rules stay in MangroveAI. See [confirmed execution](docs/confirmed-execution.md) for settlement evidence, entry holds and retained exit monitors.
 
 ## Conventions
 

@@ -15,10 +15,12 @@ Invariant: at most one active allocation per strategy_id. We don't enforce
 this at the DB level (would need a partial unique index), but the release
 logic and the strategy-service transitions make it true in practice.
 """
+
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from src.models.domain import Allocation
 from src.services.wallet_manager import wallet_exists
@@ -64,7 +66,7 @@ def record_allocation(
     and legacy call sites don't break compilation. The tick / cron path
     refuses to execute_many with a None slippage_pct.
     """
-    if amount <= 0:
+    if not Decimal(str(amount)).is_finite() or amount <= 0:
         raise AllocationInsufficient(
             f"Allocation amount must be > 0; got {amount}.",
             suggestion="Pass a positive amount in the allocation block of PATCH /strategies/{id}/status.",
@@ -75,6 +77,16 @@ def record_allocation(
             suggestion="Use POST /wallet/create first, or pass an address that matches GET /wallet/list.",
         )
 
+    existing = get_active_allocation(strategy_id)
+    if existing:
+        if (
+            existing.wallet_address.lower() == wallet_address.lower()
+            and existing.token_address.lower() == token_address.lower()
+            and existing.amount == amount
+            and existing.slippage_pct == slippage_pct
+        ):
+            return existing
+        raise AllocationInsufficient("An active execution allocation cannot be replaced while retained.")
     alloc_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc)
     conn = get_connection()
@@ -84,10 +96,44 @@ def record_allocation(
             amount, active, created_at, released_at, slippage_pct)
            VALUES (?,?,?,?,?,?,1,?,NULL,?)""",
         (
-            alloc_id, strategy_id, wallet_address, token_address,
-            token_symbol, amount, created_at.isoformat(), slippage_pct,
+            alloc_id,
+            strategy_id,
+            wallet_address,
+            token_address,
+            token_symbol,
+            amount,
+            created_at.isoformat(),
+            slippage_pct,
         ),
     )
+    # A new explicit allocation records the opening quote budget. Historical
+    # capital cannot be reconstructed from an already-running legacy book.
+    history = conn.execute(
+        "SELECT 1 FROM trades WHERE strategy_id=? AND mode='live' LIMIT 1", (strategy_id,)
+    ).fetchone()
+    history = history or conn.execute("SELECT 1 FROM dex_orders WHERE strategy_id=? LIMIT 1", (strategy_id,)).fetchone()
+    history = (
+        history or conn.execute("SELECT 1 FROM broker_orders WHERE strategy_id=? LIMIT 1", (strategy_id,)).fetchone()
+    )
+    baseline = conn.execute("SELECT * FROM execution_capital WHERE strategy_id=?", (strategy_id,)).fetchone()
+    if baseline:
+        if (
+            Decimal(baseline["amount"]) != Decimal(str(amount))
+            or baseline["quote_token_address"].lower() != token_address.lower()
+        ):
+            conn.rollback()
+            raise AllocationInsufficient(
+                "Execution capital is immutable once recorded; use a new strategy for a different budget."
+            )
+    elif not history:
+        conn.execute(
+            "INSERT INTO execution_capital VALUES (?,?,?,?,?,?)",
+            (strategy_id, alloc_id, token_address.lower(), token_symbol, str(amount), created_at.isoformat()),
+        )
+        conn.execute(
+            "UPDATE strategies SET execution_state_json=NULL,open_positions_json='[]',execution_revision=execution_revision+1 WHERE id=?",
+            (strategy_id,),
+        )
     conn.commit()
 
     _log.info(
@@ -151,10 +197,14 @@ def release_allocation(strategy_id: str) -> Allocation | None:
 
 def get_active_allocation(strategy_id: str) -> Allocation | None:
     """Return the strategy's currently-active allocation, or None."""
-    row = get_connection().execute(
-        """SELECT * FROM allocations
+    row = (
+        get_connection()
+        .execute(
+            """SELECT * FROM allocations
            WHERE strategy_id = ? AND active = 1
            ORDER BY created_at DESC LIMIT 1""",
-        (strategy_id,),
-    ).fetchone()
+            (strategy_id,),
+        )
+        .fetchone()
+    )
     return _row_to_allocation(row) if row else None

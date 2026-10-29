@@ -56,7 +56,7 @@ positions in SQLite). So the **portfolio kill switch** lives here
   against a persisted high-water mark.
 - **Trip:** when book drawdown reaches **`PORTFOLIO_MAX_DRAWDOWN_PCT`
   (default 30%)**, on the next live tick it **pauses ALL live strategies**
-  (sets them `inactive`, cancels their crons, releases allocations).
+  (sets them `inactive` and denies new entries; strategies with exposure or unresolved orders retain exit-only crons and allocations until confirmed flat).
 - **Latched — no auto-resume.** Unlike the engine's per-strategy breaker, the
   portfolio switch stays tripped until a **human** clears it. This is
   deliberate: a 30% loss across the whole book warrants human review, not an

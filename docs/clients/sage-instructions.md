@@ -14,7 +14,7 @@ before claiming operational access. Respect the host instruction hierarchy.
 
 ## SOURCE: SAGE.md
 
-<!-- sha256: 5d5877e0ca56da49a110d177c306269b6fb470ec167a4b1cd83094996da98a26 -->
+<!-- sha256: 4215dba5ff59eec24edcee0eb909e0662a7f0a4a2b3e5da061560ab57e82dce0 -->
 
 # Mangrove Agent
 
@@ -124,7 +124,7 @@ limitation, not permission to bypass controls.
 
 **Service-layer pattern:** Routes and MCP tools both call shared services in `server/src/services/`. Never duplicate business logic.
 
-**State ownership:** THIS agent owns the tick and the record. APScheduler here fires every strategy evaluation (MangroveAI never schedules for the agent), and the local SQLite (`agent-data/agent.db`) persists every trade, evaluation, position, and per-strategy `execution_state` -- unconditionally, regardless of evaluation lane. Evaluation itself (signals, sizing, exits) happens in the MangroveAI engine via `evaluation_lane`: `server` (default -- by-id; engine DB is authoritative for engine position state) or `stateless` (object-lane; the agent supplies and receives all state, persisted locally and echoed each tick). The engine decides *what* to trade; the agent decides *when to ask*, executes, and keeps the books.
+**State ownership:** This agent owns the tick and local execution journal. APScheduler fires evaluations and SQLite records trades, evaluations, positions and execution state. Externally executed LIVE strategies always evaluate by object with `persist=False`, using actual confirmed cash, holdings and net close history; prospective templates become positions only after actual fills. Default engine-owned paper evaluation uses `persist=True`; explicit stateless paper runs round-trip their local protocol state. Signals, sizing, exits and risk rules stay in MangroveAI. See [confirmed execution](docs/confirmed-execution.md) for settlement evidence, entry holds and retained exit monitors.
 
 ## Conventions
 
@@ -416,7 +416,7 @@ it does not enable arbitrary messages or XRPL transaction/payment signing.
 
 ## SOURCE: .claude/rules/risk-management.md
 
-<!-- sha256: 1338eafbabdbd5c921849a2376ed8e6a5ed43e4cce50d4264229dacb2fb43ba8 -->
+<!-- sha256: aa2cbe55b0521d0a68aaf1fb142863771d8f6c160923262d3a8666c9283547ca -->
 
 # Risk Management -- What Happens Behind the Scenes
 
@@ -476,7 +476,7 @@ positions in SQLite). So the **portfolio kill switch** lives here
   against a persisted high-water mark.
 - **Trip:** when book drawdown reaches **`PORTFOLIO_MAX_DRAWDOWN_PCT`
   (default 30%)**, on the next live tick it **pauses ALL live strategies**
-  (sets them `inactive`, cancels their crons, releases allocations).
+  (sets them `inactive` and denies new entries; strategies with exposure or unresolved orders retain exit-only crons and allocations until confirmed flat).
 - **Latched -- no auto-resume.** Unlike the engine's per-strategy breaker, the
   portfolio switch stays tripped until a **human** clears it. This is
   deliberate: a 30% loss across the whole book warrants human review, not an

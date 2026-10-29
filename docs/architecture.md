@@ -114,12 +114,12 @@ flowchart LR
     K --> L[(SQLite:<br/>evaluations, trades,<br/>positions)]
 ```
 
-**Critical:** the agent does not evaluate strategies locally, and **does not fetch market data for evaluation** — `mangroveai.execution.evaluate(strategy_id)` takes a strategy ID only and handles everything internally: market data fetch, signal evaluation, risk gates (`max_risk_per_trade`, `max_open_positions`, `max_trades_per_day`), position sizing, volatility adjustment, and cooldown enforcement. The agent's job is:
-1. Call the SDK evaluate endpoint with just the strategy ID
+**Critical:** the agent does not evaluate strategies locally, and **does not fetch market data for evaluation** — Mangrove evaluation handles signals internally; the default paper lane uses a strategy ID, while externally executed LIVE supplies its confirmed local account and holdings by object. The engine handles: market data fetch, signal evaluation, risk gates (`max_risk_per_trade`, `max_open_positions`, `max_trades_per_day`), position sizing, volatility adjustment, and cooldown enforcement. The agent's job is:
+1. Call the SDK with the strategy ID for default paper, or confirmed local LIVE state by object
 2. Branch the returned `OrderIntent[]` to paper or live execution
 3. Log everything
 
-The agent DOES fetch market data for a separate purpose: getting a mark price to simulate paper-mode fills inside `order_executor`. That's a different code path from evaluation.
+The agent fetches marks for paper fills and confirmed LIVE holdings valuation. Signal evaluation remains in MangroveAI.
 
 ---
 
@@ -171,69 +171,22 @@ From here, the scheduler fires independently on the strategy's timeframe — no 
 
 ## Sequence — Cron Tick (strategy evaluation)
 
-```mermaid
-sequenceDiagram
-    participant SCH as APScheduler
-    participant SS as strategy_service
-    participant SDK as mangroveai SDK
-    participant OE as order_executor
-    participant Mkts as mangrovemarkets SDK
-    participant WM as wallet_manager
-    participant TL as trade_log
-    participant DB as SQLite
+LIVE strategy ticks call `evaluate_by_object(..., persist=False)` with confirmed
+local cash, physical holdings and net close history. Paper uses its configured
+lane; the default engine-owned lane calls `evaluate(..., persist=True)`.
 
-    SCH->>SS: tick(strategy_id)
-    SS->>DB: load strategy (mangrove_id, mode, wallet_address)
-    SS->>SDK: execution.evaluate(mangrove_id, persist=mode==live)
-    Note over SDK: SDK internally fetches market data,<br/>applies signal eval, risk gates, sizing
-    SDK-->>SS: [OrderIntent] (0..N)
-
-    alt order_intents empty
-        SS->>TL: log evaluation (no_action)
-        TL->>DB: INSERT evaluations
-    else has orders
-        SS->>OE: execute(order_intents, strategy.mode)
-        loop per order
-            alt mode == paper
-                OE->>SDK: crypto_assets.get_market_data(asset)
-                SDK-->>OE: current price
-                OE->>TL: log simulated trade
-                TL->>DB: INSERT trades (status=simulated)
-            else mode == live
-                OE->>Mkts: dex.get_quote(...)
-                Mkts-->>OE: Quote
-                OE->>Mkts: dex.approve_token if needed
-                Mkts-->>OE: UnsignedTx | None
-                opt approval needed
-                    OE->>WM: sign(tx, wallet)
-                    WM-->>OE: signed_tx
-                    OE->>Mkts: dex.broadcast + tx_status
-                end
-                OE->>Mkts: dex.prepare_swap
-                Mkts-->>OE: UnsignedTx
-                OE->>WM: sign(tx, wallet)
-                WM-->>OE: signed_tx
-                OE->>Mkts: dex.broadcast
-                Mkts-->>OE: tx_hash
-                loop poll
-                    OE->>Mkts: dex.tx_status
-                    Mkts-->>OE: status
-                end
-                OE->>TL: log live trade
-                TL->>DB: INSERT trades (status=confirmed)
-            end
-        end
-        OE->>DB: UPDATE positions
-    end
-```
-
-The evaluator logic is entirely inside `mangroveai.execution.evaluate()`. The agent's `strategy_service` is a thin orchestrator: fetch data, call SDK, dispatch results to the executor.
+The [confirmed execution contract](confirmed-execution.md) describes revision
+fences, prospective templates, actual partial fills, DEX receipts and financial
+incompleteness. DEX LIVE execution uses `dex_confirmed`; broker execution uses
+`broker_execution` and `broker_store`. Both retain exit monitors while exposure
+or unresolved orders remain, including after a portfolio latch. The engine owns
+signals, sizing, exits and all per-strategy risk rules.
 
 ---
 
 ## Sequence — DEX Swap (user-initiated)
 
-User-initiated swaps and cron-driven swaps share the same execution path: the route handler builds an `OrderIntent` from the request and calls `order_executor.execute_one(intent, mode='live')`. There is no separate `dex_service`.
+User-initiated swaps call `order_executor.execute_one(intent, mode='live')`. LIVE strategy ticks use the durable `dex_confirmed` receipt journal; `dex_service` provides shared quote and token-unit conversion helpers.
 
 ```mermaid
 sequenceDiagram
@@ -328,7 +281,7 @@ graph TB
         subgraph "services/"
             SWallet[wallet_manager.py]
             SStrat[strategy_service.py<br/>cron-tick orchestrator]
-            SExec[order_executor.py<br/>single DEX execution path<br/>paper or live]
+            SExec[order_executor.py<br/>paper and manual DEX execution]
             SSched[scheduler_service.py]
             SLog[trade_log.py]
             SAlloc[allocation_service.py]
@@ -383,7 +336,7 @@ graph TB
 Key properties:
 - **Routes never call SDKs directly.** Always through the service layer.
 - **MCP tools and REST routes call the same services.** Logic lives in one place.
-- **`strategy_service` is thin.** Loads strategy from local cache, calls `mangroveai.execution.evaluate(strategy_id)`, dispatches returned orders to the executor. Does not fetch market data (SDK handles that), does not evaluate signals, does not size positions, does not enforce risk gates — all of that lives in the SDK.
+- **`strategy_service` orchestrates execution.** It supplies confirmed LIVE account state by object, commits returned risk state with revision fences and dispatches actual execution. It fetches marks for local holdings valuation; signals, sizing, exit decisions and per-strategy risk gates remain in MangroveAI.
 - **SDK clients are singletons** initialized at startup (`shared/clients/mangrove.py`), shared across services.
 
 ---

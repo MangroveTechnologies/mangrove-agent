@@ -86,16 +86,16 @@ def compute_book_value() -> float:
         """SELECT COALESCE(SUM(a.amount), 0) AS v
              FROM allocations a
              JOIN strategies s ON s.id = a.strategy_id
-            WHERE a.active = 1 AND s.status = 'live'"""
+            WHERE a.active = 1 AND (s.status = 'live' OR s.exit_only_mode='live')"""
     ).fetchone()["v"]
     realized = conn.execute(
         """SELECT COALESCE(SUM(t.p_and_l), 0) AS v
              FROM trades t
              JOIN strategies s ON s.id = t.strategy_id
-            WHERE s.status = 'live' AND t.p_and_l IS NOT NULL"""
+            WHERE (s.status = 'live' OR s.exit_only_mode='live') AND t.mode='live' AND t.status='confirmed' AND t.p_and_l IS NOT NULL"""
     ).fetchone()["v"]
     broker_capital = conn.execute(
-        "SELECT COALESCE(SUM(CAST(b.capital AS REAL)),0) FROM broker_routes b JOIN strategies s ON s.id=b.strategy_id WHERE s.status='live'"
+        "SELECT COALESCE(SUM(CAST(b.capital AS REAL)),0) FROM broker_routes b JOIN strategies s ON s.id=b.strategy_id WHERE (s.status='live' OR s.exit_only_mode='live')"
     ).fetchone()[0]
     return float(committed) + float(broker_capital) + float(realized)
 
