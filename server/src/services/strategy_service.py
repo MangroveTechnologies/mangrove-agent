@@ -445,10 +445,26 @@ def update_status(strategy_id: str, update: StrategyStatusUpdate) -> StrategyDet
     from src.services.confirmed_execution import tick_lock
 
     with _lock:
-        with tick_lock(strategy_id) as acquired:
+        with tick_lock(strategy_id, purpose="status") as acquired:
             if not acquired:
                 raise SdkError("Strategy evaluation is in progress; retry the status transition after it completes.")
             return _update_status(strategy_id, update)
+
+
+def pause_for_portfolio(strategy_id):
+    """Finalize an internal halt inside the same tick's existing fence.
+
+    Public status calls still acquire their own lock and refuse a busy tick.
+    Other strategies and threads follow that ordinary serialized path too.
+    """
+    from src.services.broker_execution import _lock
+    from src.services.confirmed_execution import owns_strategy_tick
+
+    update = StrategyStatusUpdate(status="inactive", confirm=True)
+    if owns_strategy_tick(strategy_id):
+        with _lock:
+            return _update_status(strategy_id, update)
+    return update_status(strategy_id, update)
 
 
 def _update_status(strategy_id, update):

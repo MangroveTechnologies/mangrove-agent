@@ -137,11 +137,15 @@ def check_before_live_execution() -> dict:
     """Called at the top of every LIVE tick, before placing orders.
 
     Advances the high-water mark and trips if drawdown crosses the limit.
-    Returns ``{"allowed": bool, ...}``; ``allowed=False`` means the caller must
-    NOT place new orders (already tripped, or just tripped this call).
+    Returns ``{"allowed": bool, ...}``; ``allowed=False`` holds new entries
+    while protective exits remain available.
     """
     st = _get_state()
     if st["tripped"]:
+        # A busy tick can defer the status transition without clearing the
+        # latch. Retry finalization at the ordinary tick cadence; no new
+        # portfolio trip or trading decision is created by this retry.
+        _pause_all_live(st["tripped_reason"])
         return {"allowed": False, "tripped": True, "reason": st["tripped_reason"],
                 "high_water_mark": st["high_water_mark"]}
 
@@ -173,9 +177,9 @@ def _trip(*, reason: str, drawdown: float, book: float, hwm: float) -> None:
 
 
 def _pause_all_live(reason: str) -> None:
-    """Set every live strategy inactive (cancels its cron + releases allocation).
+    """Set live strategies inactive, retaining exit monitors until confirmed flat.
 
-    Reuses strategy_service.update_status (single source of truth for lifecycle)
+    Reuses the strategy lifecycle transition under its execution fence
     so scheduler + allocation + upstream sync all stay consistent. A failure on
     one strategy is logged and does NOT block the others -- and the latch itself
     (checked first on every tick) already prevents any execution regardless.
@@ -188,9 +192,7 @@ def _pause_all_live(reason: str) -> None:
     ).fetchall()]
     for sid in live_ids:
         try:
-            strategy_service.update_status(
-                sid, strategy_service.StrategyStatusUpdate(status="inactive", confirm=True)
-            )
+            strategy_service.pause_for_portfolio(sid)
             _log.warning("portfolio_risk.paused_strategy", strategy_id=sid, reason=reason)
         except Exception as e:  # noqa: BLE001
             _log.error("portfolio_risk.pause_failed", strategy_id=sid, exception=str(e))

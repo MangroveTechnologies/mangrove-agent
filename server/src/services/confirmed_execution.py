@@ -14,19 +14,34 @@ from src.shared.errors import SdkError
 
 _locks: dict[str, threading.Lock] = {}
 _locks_lock = threading.Lock()
+_lock_owners = threading.local()
 _RISK_FIELDS = ("risk_state", "halt", "bar_index", "last_evaluated_candle", "last_evaluated_timeframe")
 
 
 @contextmanager
-def tick_lock(strategy_id):
+def tick_lock(strategy_id, *, purpose="tick"):
     with _locks_lock:
         lock = _locks.setdefault(strategy_id, threading.Lock())
     acquired = lock.acquire(blocking=False)
     try:
+        if acquired:
+            if not hasattr(_lock_owners, "purposes"):
+                _lock_owners.purposes = {}
+            _lock_owners.purposes[strategy_id] = purpose
         yield acquired
     finally:
         if acquired:
+            _lock_owners.purposes.pop(strategy_id, None)
             lock.release()
+
+
+def owns_strategy_tick(strategy_id):
+    """Only a tick on this thread may finalize its internal portfolio halt.
+
+    Status transitions also hold the nonreentrant lock. They must not become
+    tick owners or admit a nested evaluation during an upstream status call.
+    """
+    return getattr(_lock_owners, "purposes", {}).get(strategy_id) == "tick"
 
 
 def decimal(value):

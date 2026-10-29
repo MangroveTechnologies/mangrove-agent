@@ -24,6 +24,10 @@ allocations. A paper book must settle flat before LIVE promotion. Human paper
 halts retain protective exit monitors until flat, without releasing LIVE
 allocations. Status changes and ticks share the same per-strategy lock, so a
 paper fill cannot race a promotion or monitor retirement.
+An internal portfolio pause may finalize under its own tick's existing lock;
+an external status transition cannot use that internal path or admit a nested
+tick. If another strategy is busy when the portfolio latches, later checks
+retry its status finalization without clearing or retriggering the latch.
 
 `proposed_positions` are prospective bracket templates. An entry creates no
 local position until actual fills exist. Engine account balances and modeled
