@@ -34,11 +34,11 @@
 
 ## What this is
 
-mangrove-agent is your own trading agent. It runs on your machine, holds your keys and wallets locally, and gives an AI client (Claude Code, Codex, Grok Build, Perplexity Computer, or any MCP client) a set of tools for the whole trading loop:
+mangrove-agent is an open-source local client for Mangrove services. It gives an AI client (Claude Code, Codex, Grok Build, Perplexity Computer, or any MCP client) local tools and access to configured hosted services. Credential and wallet custody depends on the selected workflow:
 
 - **Author and test strategies.** The agent turns a goal such as "momentum on ETH" into a backtested strategy by calling the [MangroveAI API](https://mangrovedeveloper.ai). Strategy building, backtesting, signals, market data and the knowledge base all live in MangroveAI; the agent forwards those tools and keeps no copy of them.
 - **Paper trade.** A paper schedule runs on a clock the agent supplies, while MangroveAI owns the strategy, balances, positions and trades. No funds are at risk.
-- **Trade live, non-custodially.** Live DEX swaps go through [MangroveMarkets](https://github.com/MangroveTechnologies/MangroveMarkets), which routes through 1inch across 10 EVM chains (Ethereum, Base, Arbitrum, Polygon, Optimism, BNB, Avalanche, zkSync Era, Gnosis, Linea). The agent defaults to Base. Wallet keys are generated, encrypted and used for signing on your machine, and the routing server never sees them. Kraken (bring-your-own-key or OAuth) and Robinhood are supported venues too.
+- **Use the supported execution workflows.** For local DEX execution, the agent signs transactions on the user's machine. Kraken BYOK keeps its API key local; Kraken OAuth is a separate server-side connection where Mangrove holds the authorized grant. Robinhood uses its documented broker connection. Mangrove services enforce deterministic risk management based on live market and account conditions; the local agent does not implement those checks.
 - **Keep an audit trail.** Local evaluations, DEX swaps and confirmed Robinhood fills are logged to a local SQLite database. Kraken orders are not added to the local trade log.
 
 The agent exposes the same capabilities two ways: an MCP endpoint at `http://127.0.0.1:9080/mcp/` and a REST API under `/api/v1/agent/`. MangroveAI also runs its own hosted MCP server at `https://api.mangrovedeveloper.ai/mcp/`.
