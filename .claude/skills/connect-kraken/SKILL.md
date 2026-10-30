@@ -9,10 +9,10 @@ description: >-
   It is the sibling of the BYOK setup-kraken skill — if the user is willing to
   create and hold their own key locally, use setup-kraken instead; if they want
   Mangrove to manage access, use this. Trigger with phrases such as "connect Kraken with OAuth", "log in to Kraken", or "connect Kraken without a key".
-version: 1.0.0
+version: 0.2.0
 author: Mangrove Technologies
 license: MIT
-allowed-tools: Read, Grep, Glob, Bash(./scripts/*)
+allowed-tools: Read, Bash(./scripts/*)
 compatibility: Claude Code plugin; requires the local mangrove-agent repository, network access, and a Kraken account that can authorize Mangrove OAuth.
 tags: [mangrove, kraken, oauth, exchange, trading]
 ---

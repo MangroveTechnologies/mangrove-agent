@@ -50,6 +50,12 @@ def _fetch_catalog_counts() -> dict:
         "as_of": datetime.now(timezone.utc).isoformat(),
         "error": None,
     }
+    # OAuth credentials are scoped to the managed MCP endpoint. These SDK-only
+    # summary counts are unavailable; do not initialize an API-key client or
+    # issue metered MCP reads from the free status endpoint.
+    if getattr(app_config, "MANGROVE_ACCESS_MODE", None) == "oauth":
+        counts["error"] = "catalog_counts_unavailable_in_oauth_mode"
+        return counts
     try:
         from src.shared.clients.mangrove import _api_key, mangrove_ai_client
         # Status is anonymous/free. SDK catalog reads can incur payments when
@@ -105,7 +111,8 @@ def reset_catalog_cache() -> None:
     summary="Agent status",
     description=(
         "Server + SDK versions, signal/KB catalog counts, wallet count, "
-        "strategies by status, active cron jobs, db path, uptime. Free, no auth."
+        "local execution records by status (not server-saved strategy inventory), "
+        "active cron jobs, db path, uptime. Free, no auth."
     ),
     tags=["discovery"],
 )
@@ -130,6 +137,7 @@ async def status() -> dict:
         },
         "catalog": _catalog_counts(),
         "wallets_count": wallets_count,
+        "strategy_counts_source": "local_execution_records",
         "strategies": {
             "draft": counts.get("draft", 0),
             "inactive": counts.get("inactive", 0),

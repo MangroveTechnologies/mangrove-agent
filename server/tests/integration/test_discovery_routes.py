@@ -171,3 +171,23 @@ def test_discovery_endpoints_do_not_require_api_key(client):
     assert client.get("/api/v1/agent/status").status_code == 200
     assert client.get("/api/v1/agent/tools").status_code == 200
     assert client.get("/health").status_code == 200
+
+
+def test_oauth_status_does_not_initialize_sdk_or_make_catalog_reads(client, monkeypatch):
+    from unittest.mock import Mock
+    from src.api.routes import discovery
+    from src.config import app_config
+
+    monkeypatch.setattr(app_config, "MANGROVE_ACCESS_MODE", "oauth")
+    api_key = Mock(side_effect=AssertionError("OAuth status must not use API keys"))
+    sdk = Mock(side_effect=AssertionError("Free status must not fetch metered catalogs"))
+    monkeypatch.setattr("src.shared.clients.mangrove._api_key", api_key)
+    monkeypatch.setattr("src.shared.clients.mangrove.mangrove_ai_client", sdk)
+    discovery.reset_catalog_cache()
+    response = client.get("/api/v1/agent/status")
+    assert response.status_code == 200
+    catalog = response.json()["catalog"]
+    assert catalog["error"] == "catalog_counts_unavailable_in_oauth_mode"
+    assert all(catalog[key] is None for key in ("signals_total", "kb_indicators_total", "kb_tags_total"))
+    api_key.assert_not_called()
+    sdk.assert_not_called()

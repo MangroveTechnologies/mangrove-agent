@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 
 from src.config import app_config
+from src.shared.clients.mangrove import _api_key
 
 _BASE_PATH = "/api/v1/exchanges/kraken"
 _TIMEOUT = 30.0
@@ -29,7 +30,7 @@ def _headers() -> dict[str, str]:
     # The user's Mangrove API key authenticates us to the markets server, which
     # derives the user_id server-side. No Kraken credential is involved.
     return {
-        "Authorization": f"Bearer {app_config.MANGROVE_API_KEY}",
+        "Authorization": f"Bearer {_api_key(app_config)}",
         "Accept": "application/json",
     }
 

@@ -38,7 +38,7 @@ mangrove-agent is an open-source local client for Mangrove services. It gives an
 
 - **Author and test strategies.** The agent turns a goal such as "momentum on ETH" into a backtested strategy by calling the [MangroveAI API](https://mangrovedeveloper.ai). Strategy building, backtesting, signals, market data and the knowledge base all live in MangroveAI; the agent forwards those tools and keeps no copy of them.
 - **Paper trade.** A paper schedule runs on a clock the agent supplies, while MangroveAI owns the strategy, balances, positions and trades. No funds are at risk.
-- **Use the supported execution workflows.** For local DEX execution, the agent signs transactions on the user's machine. Kraken BYOK keeps its API key local; Kraken OAuth is a separate server-side connection where Mangrove holds the authorized grant. Robinhood uses its documented broker connection. Mangrove services enforce deterministic risk management based on live market and account conditions; the local agent does not implement those checks.
+- **Use the supported execution workflows.** For local DEX execution, the agent signs transactions on the user's machine. Kraken BYOK keeps its API key local; Kraken OAuth is a separate connection where Mangrove holds the authorized grant. Robinhood uses its documented broker connection. Mangrove-owned execution software enforces deterministic risk management based on live market and account conditions. External AI clients and SDKs request operations and preserve Mangrove's decisions, audit details, and errors; they do not replace its risk policy.
 - **Keep an audit trail.** Local evaluations, DEX swaps and confirmed Robinhood fills are logged to a local SQLite database. Kraken orders are not added to the local trade log.
 
 The agent exposes the same capabilities two ways: an MCP endpoint at `http://127.0.0.1:9080/mcp/` and a REST API under `/api/v1/agent/`. MangroveAI also runs its own hosted MCP server at `https://api.mangrovedeveloper.ai/mcp/`.
@@ -67,15 +67,15 @@ The client installs the server in its own execution environment, loads the share
 
 The agent's shared identity and operating instructions live in [`SAGE.md`](SAGE.md). On first run the agent asks what to name itself and saves that choice locally for every client; there is no default personal name. `AGENTS.md` points Codex and compatible clients to `SAGE.md`, and `CLAUDE.md` imports it for Claude Code. Launch helpers, MCP configuration templates and the instruction bundle for hosts without file access are in [AI client setup](docs/clients.md). Tool access is configured and verified separately for each client.
 
-### Prerequisites for a clone
+## Install with setup.sh (sign-in, API key or x402)
 
-| Tool | Why |
-|---|---|
-| **Python 3.11+** (https://www.python.org/downloads/) | The agent is a Python FastAPI process. |
-| **Git** (on Windows, [Git for Windows](https://git-scm.com/download/win)) | Clones the repository. On Windows it also provides Git Bash, so the `*.sh` scripts behave as on macOS and Linux. |
-| **An AI client** | One with command execution or MCP access. See [AI client setup](docs/clients.md). Claude Code is optional. |
-| **MangroveAI API key** (free at https://mangrovedeveloper.ai) | Optional. `setup.sh` also offers x402 wallet payments. |
-| **VS Code** | Optional editor with an integrated terminal. |
+Clone the repository and run `./scripts/setup.sh`. Choose an existing MangroveAI
+API key, browser sign-in (OAuth), or wallet payments (x402, no signup). Browser sign-in
+requires the OAuth-enabled backend and currently supports a restricted tool catalog;
+see [sign-in setup and limitations](docs/oauth-login.md). The script protects local access,
+starts the agent and registers Claude when its CLI is available. For x402, a final menu prints wallet steps
+for you to run yourself; it never automatically creates/imports a wallet or pays.
+See [the complete setup and wallet flow](docs/setup-x402.md).
 
 [`SETUP.md`](SETUP.md) walks through installing these step by step on macOS and Windows.
 
@@ -97,56 +97,25 @@ When it finishes:
 
 Continue with your client using the [user guide](docs/user-guide.md#come-back-or-switch-clients). Claude users can run `./scripts/chat.sh` for a session with shell and file tools disabled and only the Mangrove MCP server; see [restricted chat](docs/restricted-chat.md). In x402 mode, finish the printed payment-wallet steps before you request paid data or backtests ([details](docs/setup-x402.md)). With an API key you can paper trade without a payment wallet. Paper trades are simulated, but the upstream data and evaluation calls behind them still count against your API-key allowance or cost x402 payments.
 
-Useful flags:
-
-```bash
-./scripts/setup.sh --yes                 # no prompts; keep existing settings, fresh install uses x402
-./scripts/setup.sh --auth api-key        # use an API key (hidden prompt; offers to keep an existing key)
-./scripts/setup.sh --auth x402           # switch to wallet payments
-./scripts/setup.sh --foreground          # run uvicorn in this terminal (Ctrl+C stops it)
-./scripts/setup.sh --no-mcp              # skip Claude Code registration
-./scripts/setup.sh --no-verify           # skip the final verification pass
-./scripts/setup.sh --docker              # use Docker instead of bare-metal
-BARE_PORT=9085 ./scripts/setup.sh        # use a different port when 9080 is busy
+```
+./scripts/setup.sh --yes                          # preserve settings; fresh install uses x402
+./scripts/setup.sh --auth oauth                    # sign in and approve access in your browser
+./scripts/setup.sh --auth api-key                  # keep existing key or enter a new one (hidden)
+./scripts/setup.sh --auth x402                     # explicitly switch to wallet payments
+./scripts/setup.sh --foreground                    # run uvicorn in your terminal (Ctrl+C to stop)
+./scripts/setup.sh --no-mcp                        # skip Claude Code registration
+./scripts/setup.sh --no-verify                     # skip the post-start verify pass
+./scripts/setup.sh --docker                        # use Docker instead of bare-metal
+BARE_PORT=9085 ./scripts/setup.sh                  # use a different port (9080 busy/squatted)
 ```
 
-`BARE_PORT` applies to the server, the readiness check, the MCP registration and the verification, and later runs reuse the saved port. If the port is occupied, `setup.sh` stops with an error instead of reporting success; free the port or set `BARE_PORT`.
+`BARE_PORT` is honored end-to-end (server + health check + MCP registration + verify). If 9080 is occupied, `setup.sh` refuses to start and tells you to free it or set `BARE_PORT` — it will not silently bind-fail or report a false success.
 
-### Claude Code plugin
+---
 
-The plugin flow requires a MangroveAI API key. Tell Claude Code *"install this trading bot: https://github.com/MangroveTechnologies/mangrove-agent"*, or run:
+## Alternate quick start — Docker
 
-```bash
-claude plugin marketplace add MangroveTechnologies/mangrove-agent
-claude plugin install mangrove-agent@mangrove
-```
-
-Inside a Claude Code session the same commands are `/plugin marketplace add MangroveTechnologies/mangrove-agent` and `/plugin install mangrove-agent@mangrove`. Claude Code asks for your MangroveAI API key and stores it as a sensitive setting; never paste the key into chat. Start a new session. On first start the plugin installs its Python dependencies and starts the agent in the background (about 1-3 minutes). Then ask *"what can you do?"* or *"build me a momentum strategy for ETH"*.
-
-- **Needs:** Python 3.11+ and a bash shell (macOS, Linux, or WSL or Git Bash on Windows).
-- **Where your data lives:** `~/.mangrove-agent/` holds the config, the SQLite database (wallets, strategies, trades) and the wallet master key (`agent-data/master.key`). It survives plugin updates. Back it up once you hold funds, and never delete it while wallets hold funds.
-- **Logs:** `~/.mangrove-agent/agent-data/agent.log` (server) and `bootstrap.log` (install and start).
-
-### Codex
-
-The repository ships a Codex marketplace file at `.agents/plugins/marketplace.json`. Add the marketplace from a terminal:
-
-```bash
-codex plugin marketplace add MangroveTechnologies/mangrove-agent
-```
-
-Then install `mangrove-agent` from the `mangrove` marketplace in the Plugins Directory of the ChatGPT desktop app, as described in OpenAI's [Codex plugin docs](https://developers.openai.com/codex/plugins/build). To enable it for one project, add this to that repository's `.codex/config.toml`:
-
-```toml
-[plugins."mangrove-agent@mangrove"]
-enabled = true
-```
-
-You can also skip the marketplace and point Codex at the local MCP server (`http://127.0.0.1:9080/mcp/`) using `.codex/config.toml.example`, or launch it with `.venv/bin/python3 scripts/client_session.py codex`. See [AI client setup](docs/clients.md#codex-and-grok-build).
-
-### Docker
-
-Docker runs the same setup in a container:
+If you can't run Python on the host (corporate restrictions, reproducibility mandate), Docker works the same way. The tradeoff: the container can't reach your OS keychain, so the Fernet master key lives in `./agent-data/master.key` (chmod 600, gitignored) instead of Keychain / Secret Service / Credential Manager.
 
 ```bash
 ./scripts/setup.sh --docker

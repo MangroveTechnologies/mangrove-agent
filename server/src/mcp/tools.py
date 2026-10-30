@@ -122,7 +122,7 @@ def _register_discovery(server: FastMCP) -> None:
 
     register_tool(ToolEntry(
         name="status",
-        description="Agent name, status + counts + uptime. Free, no auth.",
+        description="Agent name, local execution record counts and uptime. Strategy counts are local, not the account's server-saved strategies. Free, no auth.",
         access="free",
         parameters=[],
     ))

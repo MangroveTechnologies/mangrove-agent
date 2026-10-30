@@ -56,6 +56,8 @@ FOREGROUND="no"
 SKIP_TOUR="no"
 API_KEY_STDIN=""
 AUTH_MODE=""
+OAUTH_ACTION=""
+OAUTH_ARGS=()
 WALLET_ACTION=""
 CONFIG_ARGS=(--url "$BASE_URL")
 MARKETS_URL_DEFAULT="https://mangrovemarkets-pcqgpciucq-uc.a.run.app"
@@ -97,7 +99,9 @@ Options:
   --skip-tour           Suppress the first-run platform tour by writing the
                         .claude/.onboarded marker before Claude Code launches.
                         Replay it later by asking or 'rm .claude/.onboarded'.
-  --auth MODE           api-key or x402. Existing mode is preserved by default.
+  --auth MODE           api-key, oauth or x402. Existing mode is preserved by default.
+  --oauth ACTION        login, status or disconnect. Login runs within setup.
+  --oauth-scope SCOPE   Request signals:evaluate or backtests:run with browser approval.
   --api-key-stdin       Read upstream key from stdin (use a private pipe).
                         Interactive users should use --auth api-key instead.
   --wallet ACTION       Run an explicit user-requested create/import/list/select
@@ -121,7 +125,11 @@ while [ $# -gt 0 ]; do
     --skip-tour) SKIP_TOUR="yes"; shift ;;
     --api-key) fail "--api-key was removed to protect credentials. Use --auth api-key for hidden entry, or --api-key-stdin with a private pipe." ;;
     --api-key-stdin) API_KEY_STDIN="yes"; shift ;;
-    --auth) [ $# -ge 2 ] || fail "--auth needs api-key or x402"; AUTH_MODE="$2"; shift 2 ;;
+    --auth) [ $# -ge 2 ] || fail "--auth needs api-key, oauth or x402"; AUTH_MODE="$2"; shift 2 ;;
+    --oauth) [ $# -ge 2 ] || fail "--oauth needs login, status or disconnect"; OAUTH_ACTION="$2"; shift 2 ;;
+    --oauth-scope) [ $# -ge 2 ] || fail "--oauth-scope needs signals:evaluate or backtests:run"
+      case "$2" in signals:evaluate|backtests:run) ;; *) fail "Unsupported OAuth scope" ;; esac
+      OAUTH_ARGS+=(--scope "$2"); shift 2 ;;
     --wallet) [ $# -ge 2 ] || fail "--wallet needs create/import/list/select"; WALLET_ACTION="$2"; shift 2 ;;
     --markets-url) [ $# -ge 2 ] && [ -n "$2" ] || fail "--markets-url needs a value"; MARKETS_URL_ARG="$2"; shift 2 ;;
     --yes) ASSUME_YES="yes"; shift ;;
@@ -131,9 +139,20 @@ while [ $# -gt 0 ]; do
 done
 
 # -- 0. validate before changing configuration or state -----------------------
-case "$AUTH_MODE" in ""|api-key|x402) ;; *) fail "--auth must be api-key or x402" ;; esac
+case "$AUTH_MODE" in ""|api-key|oauth|x402) ;; *) fail "--auth must be api-key, oauth or x402" ;; esac
+case "$OAUTH_ACTION" in ""|login|status|disconnect) ;; *) fail "--oauth must be login, status or disconnect" ;; esac
+if [ -n "$OAUTH_ACTION" ] || [ "${#OAUTH_ARGS[@]}" -gt 0 ]; then
+  [ -z "$WALLET_ACTION$API_KEY_STDIN" ] || fail "OAuth options cannot be combined with wallet actions or API-key input."
+  [ -z "$AUTH_MODE" ] || [ "$AUTH_MODE" = "oauth" ] || fail "OAuth options require --auth oauth."
+  if [ "$OAUTH_ACTION" = status ] || [ "$OAUTH_ACTION" = disconnect ]; then
+    [ "${#OAUTH_ARGS[@]}" -eq 0 ] && [ -z "$AUTH_MODE$MARKETS_URL_ARG" ] || fail "Run --oauth status or disconnect without configuration options."
+  else
+    AUTH_MODE="oauth"
+    OAUTH_ACTION="login"
+  fi
+fi
 case "$WALLET_ACTION" in ""|create|import|list|select) ;; *) fail "--wallet must be create/import/list/select" ;; esac
-[ "$AUTH_MODE" != "x402" ] || [ -z "$API_KEY_STDIN" ] || fail "--api-key conflicts with --auth x402"
+[ -z "$API_KEY_STDIN" ] || [ -z "$AUTH_MODE" ] || [ "$AUTH_MODE" = "api-key" ] || fail "--api-key-stdin requires api-key mode"
 [ "$MODE" != "docker" ] || [ "$FOREGROUND" = "no" ] || fail "--foreground cannot be combined with --docker"
 [ -z "${MANGROVE_AGENT_HOME:-}" ] || fail "Run clone setup in a terminal without MANGROVE_AGENT_HOME (plugin state override)."
 [ "$HOST" = "127.0.0.1" ] || fail "setup.sh requires the loopback bind 127.0.0.1"
@@ -156,6 +175,10 @@ PYURL
   PORT="${BASE_URL##*:}"
   export BASE_URL
   CONFIG_ARGS=(--url "$BASE_URL")
+fi
+if [ "$OAUTH_ACTION" = status ] || [ "$OAUTH_ACTION" = disconnect ]; then
+  "$PY" "$SUPPORT" "oauth-$OAUTH_ACTION"
+  exit 0
 fi
 if [ -n "$WALLET_ACTION" ]; then
   [ -z "$AUTH_MODE$API_KEY_STDIN$MARKETS_URL_ARG" ] && [ "$ASSUME_YES" = "no" ] && [ "$FOREGROUND" = "no" ] \
@@ -370,6 +393,12 @@ while [ "$SECONDS" -lt "$DEADLINE" ]; do
 done
 [ "$READY" = "yes" ] || fail "Local authenticated readiness failed. Inspect agent logs and config; MCP was not registered."
 ok "local authentication verified; no paid request made"
+if [ "$OAUTH_ACTION" = login ]; then
+  "$PY" "$SUPPORT" oauth-login ${OAUTH_ARGS[@]+"${OAUTH_ARGS[@]}"}
+else
+  [ "$ASSUME_YES" = "no" ] || OAUTH_ARGS+=(--yes)
+  "$PY" "$SUPPORT" oauth-setup ${OAUTH_ARGS[@]+"${OAUTH_ARGS[@]}"}
+fi
 "$PY" "$SUPPORT" markets-check
 if [ "$MODE" = "bare" ]; then
   printf '%s\n' "$FINGERPRINT" > agent-data/bare.fingerprint

@@ -145,7 +145,7 @@ def _request(method: str, url: str, body: dict | None = None) -> dict:
     try:
         with httpx.Client(timeout=15, follow_redirects=False, trust_env=False) as client:
             with client.stream(method, url, json=body, headers={
-                "Authorization": f"Bearer {app_config.MANGROVE_API_KEY}",
+                "Authorization": f"Bearer {_api_key(app_config)}",
                 "Accept-Encoding": "identity",
             }) as response:
                 if response.status_code != 200:

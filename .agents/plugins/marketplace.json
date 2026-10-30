@@ -11,7 +11,7 @@
         "source": "local",
         "path": "./"
       },
-      "description": "Local client for Mangrove strategy research, backtesting, paper trading, and supported execution workflows. Mangrove services enforce deterministic risk checks based on live market and account conditions; custody depends on the selected connection and wallet mode.",
+      "description": "Local client for Mangrove strategy research, backtesting, paper trading, and supported execution workflows. Mangrove-owned execution software enforces deterministic risk management based on live market and account conditions; custody depends on the selected connection and wallet mode.",
       "policy": {
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL"

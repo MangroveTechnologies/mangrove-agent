@@ -1082,12 +1082,15 @@ def test_error_text_from_a_library_is_scrubbed(wallet):
 
 # Drive the real MCP payment SDK with a fake session and real custody/ledger.
 class _McpPaymentSession:
-    def __init__(self, *, receipt=None, requirements=None, failure=None, is_error=False, free=False):
+    def __init__(self, *, receipt=None, requirements=None, failure=None, is_error=False, free=False,
+                 structured=None, metadata=None):
         self.receipt = receipt
         self.requirements = requirements or _requirements()
         self.failure = failure
         self.is_error = is_error
         self.free = free
+        self.structured = structured
+        self.metadata = metadata or {}
         self.calls = []
         self.initialized = False
 
@@ -1107,13 +1110,83 @@ class _McpPaymentSession:
             raise self.failure
         return CallToolResult(
             content=[TextContent(type="text", text='{"message":"hello"}')], isError=self.is_error,
-            _meta={MCP_PAYMENT_RESPONSE_META_KEY: self.receipt} if self.receipt is not None else None,
+            structuredContent=self.structured,
+            _meta={**self.metadata, **({MCP_PAYMENT_RESPONSE_META_KEY: self.receipt}
+                                     if self.receipt is not None else {})},
         )
 
 
 def _mcp_receipt(**overrides):
     return {"success": True, "transaction": "0x" + "ab" * 32,
             "payer": _TEST_ADDRESS, "network": _SEPOLIA, **overrides}
+
+
+@pytest.mark.parametrize("reason", ["payment_settlement_unconfirmed", "payment_verification_failed",
+                                   "payment_temporarily_unavailable", "payment_identity_unavailable"])
+async def test_mcp_uncertain_preserves_safe_diagnostics_without_releasing_or_retrying(wallet, sepolia_network, reason):
+    from src.services import spend_service, x402_payer
+
+    correlation = "7700ba08-c0d5-4ba2-b04b-173ec3d5aa42"
+    session = _McpPaymentSession(is_error=True, structured={
+        "upstream_status": 503, "error": reason, "correlation_id": correlation,
+        "message": "SYNTHETIC_SECRET", "payment_headers": "SYNTHETIC_SECRET",
+    })
+    with pytest.raises(X402PaymentUncertain) as caught:
+        await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
+    result = caught.value.to_dict()
+    assert result["upstream_status"] == 503
+    assert result["upstream_error"] == reason
+    assert result["correlation_id"] == correlation
+    assert result["retry_payment"] is False
+    assert "SYNTHETIC_SECRET" not in str(result)
+    assert len(session.calls) == 2  # Initial challenge plus one signed request.
+    assert spend_service.list_payments()[0]["state"] == "authorized"
+    assert spend_service.get_status()["spent_usd"] == 0.05
+
+
+async def test_mcp_uncertain_discards_untrusted_error_text(wallet, sepolia_network):
+    from src.services import x402_payer
+
+    session = _McpPaymentSession(is_error=True, structured={
+        "upstream_status": 503, "error": "SYNTHETIC_SECRET", "correlation_id": "SYNTHETIC_SECRET",
+    })
+    with pytest.raises(X402PaymentUncertain) as caught:
+        await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
+    assert caught.value.to_dict()["upstream_error"] is None
+    assert "SYNTHETIC_SECRET" not in str(caught.value.to_dict())
+
+
+@pytest.mark.parametrize("is_error,status,expected", [
+    (True, 503, 503), (True, 400, 400), (False, 202, 202),
+    (True, 200, 502), (False, 503, 200), (True, "503", 502),
+    (True, True, 502), (True, None, 502), (True, 600, 502),
+    (False, 199, 200), (False, 300, 200),
+])
+async def test_mcp_status_metadata_does_not_change_valid_settlement(wallet, sepolia_network, is_error, status, expected):
+    from src.services import spend_service, x402_payer
+
+    metadata = {"upstream_status": status}
+    session = _McpPaymentSession(receipt=_mcp_receipt(), is_error=is_error,
+                                structured=metadata if is_error else {"_meta": metadata})
+    result = await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
+    assert result.status_code == expected
+    assert result.paid
+    assert spend_service.list_payments()[0]["state"] == "settled"
+    assert len(session.calls) == 2
+
+
+async def test_mcp_pending_result_with_receipt_preserves_settled_state_and_diagnostics(wallet, sepolia_network):
+    from src.services import spend_service, x402_payer
+
+    session = _McpPaymentSession(receipt=_mcp_receipt(), is_error=True,
+                                structured={"upstream_status": 503, "error": "payment_temporarily_unavailable"},
+                                metadata={"mangrove/payment": {"state": "pending"}})
+    with pytest.raises(X402PaymentUncertain) as caught:
+        await x402_payer.pay_mcp(session, wallet_address=wallet, resource="http://localhost:9080/mcp/")
+    assert caught.value.payment_state == "settled"
+    assert caught.value.upstream_status == 503
+    assert caught.value.upstream_error == "payment_temporarily_unavailable"
+    assert spend_service.list_payments()[0]["state"] == "settled"
 
 
 @pytest.mark.parametrize("is_error", [False, True])

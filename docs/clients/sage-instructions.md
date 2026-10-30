@@ -200,7 +200,7 @@ and their experience level; these are separate from the agent's chosen name.
 
 ## SOURCE: .claude/rules/trading-bot-workflow.md
 
-<!-- sha256: 95fbd5465e14d0617ccdca6c467d2b6c6e1b29499521331b195d4c5160a01d26 -->
+<!-- sha256: 291ae3f0de35a7ece30f5b8436a6b2f6250a1b6d0aa5d1124143e79491612459 -->
 
 # Server-owned strategy workflows
 
@@ -220,6 +220,18 @@ to existing execution records and are not interchangeable with server draft ids.
 Do not copy, cache to disk, or regenerate server skill files inside this client.
 Wallet custody, credential handling and local execution monitoring remain client
 responsibilities; follow wallet-presentation.md and risk-management.md for those.
+
+For listing or managing saved strategies, load the server's `strategy-management`
+skill and use MangroveAI `list_strategies` and `get_strategy`. API-key, OAuth and
+x402 connections all use MangroveAI for saved definitions; platform inventory and
+platform management belong to the separate platform experience. Do not query the
+platform or use platform record IDs as a fallback for missing MangroveAI records.
+Keep server results separate from local execution records. An empty MangroveAI
+result says nothing about records in another service. Local `status` strategy counts describe this agent's
+execution records, not the signed-in account's server inventory. Never substitute
+a shell or SQLite read for a server strategy result, or infer an identity mismatch
+from different counts. If access is unavailable, report it; do not change access
+mode, server destination, or account to get more records without the user's request.
 
 For a new sweep, load the server's `sweeps` skill. To find or inspect existing
 sweep results, load `sweep-results`. Sieve screening uses the discovered
