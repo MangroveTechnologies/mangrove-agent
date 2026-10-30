@@ -14,13 +14,14 @@ namespace is enough. See docs/specification.md MCP Tools table.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Annotated, Any
 
 from httpx import HTTPStatusError
 from mangrove_ai.exceptions import APIError as AIAPIError
 from mangrove_markets.exceptions import APIError as MarketsAPIError
 from mcp.server.fastmcp import FastMCP
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from pydantic import Field
 
 from src.mcp.registry import ToolEntry, ToolParam, clear_tools, register_tool
 from src.shared.auth.middleware import get_request_api_key, has_valid_api_key
@@ -85,6 +86,13 @@ def _require(api_key: str) -> bool:
 _APIKEY = ToolParam(name="api_key", type="string", required=False,
                     description="Local agent API key; omit when supplied in the X-API-Key header.")
 
+_SWAP_AMOUNT_DESCRIPTION = (
+    "Asset quantity in human token units for the existing USDC/asset path: "
+    "buy uses output-asset units and spends USDC at the current mark price; "
+    "sell uses input-asset units and receives USDC. A buy amount is not a fixed "
+    "USDC spend cap. Unlike MCP, REST /dex/swap uses the exact input-token amount."
+)
+
 
 # ---------------------------------------------------------------------------
 # Registration
@@ -113,7 +121,10 @@ def register(server: FastMCP):
 
 
 def _register_discovery(server: FastMCP) -> None:
-    @server.tool()
+    @server.tool(
+        title="Agent status",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True),
+    )
     async def status() -> str:
         """Return agent status: user-chosen name, version, wallets count, strategies by status,
         active cron jobs, db path, uptime. Free, no auth required."""
@@ -127,7 +138,10 @@ def _register_discovery(server: FastMCP) -> None:
         parameters=[],
     ))
 
-    @server.tool()
+    @server.tool(
+        title="Set agent name",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False),
+    )
     async def set_agent_name(name: str, api_key: str = "") -> CallToolResult:
         """Save the name the user chose for this agent, shared across AI clients.
         Use only after the user chooses or requests a new name. Local, no cost.
@@ -152,7 +166,10 @@ def _register_discovery(server: FastMCP) -> None:
                     _APIKEY],
     ))
 
-    @server.tool()
+    @server.tool(
+        title="List available tools",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True),
+    )
     async def list_tools() -> str:
         """List all registered MCP tools with their access tier, parameters,
         and pricing. Free, no auth."""
@@ -173,7 +190,10 @@ def _register_discovery(server: FastMCP) -> None:
 
 
 def _register_wallet(server: FastMCP) -> None:
-    @server.tool()
+    @server.tool(
+        title="Create local wallet",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
+    )
     async def create_wallet(
         chain: str = "evm", network: str = "mainnet",
         chain_id: int | None = 8453, label: str | None = None,
@@ -214,7 +234,10 @@ def _register_wallet(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(
+        title="Import local wallet",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False),
+    )
     async def import_wallet(
         vault_token: str,
         chain: str = "evm", network: str = "mainnet",
@@ -266,7 +289,10 @@ def _register_wallet(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(
+        title="List local wallets",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    )
     async def list_wallets(api_key: str = "") -> str:
         """List stored wallets (addresses + metadata only)."""
         if not _require(api_key):
@@ -286,7 +312,10 @@ def _register_dex(server: FastMCP) -> None:
     def _cex_err(e: Exception) -> str:
         return _handle_upstream_error("CEX_ERROR", e)
 
-    @server.tool()
+    @server.tool(
+        title="Kraken connection status",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    )
     async def cex_status(api_key: str = "") -> str:
         """Is a Kraken (CEX) account connected on this machine? Free of Kraken key."""
         if not _require(api_key):
@@ -299,7 +328,10 @@ def _register_dex(server: FastMCP) -> None:
         access="auth", parameters=[_APIKEY],
     ))
 
-    @server.tool()
+    @server.tool(
+        title="Connect Kraken credentials",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False),
+    )
     async def cex_connect_kraken(vault_token: str, api_key: str = "") -> str:
         """Connect Kraken by consuming a vault_token from scripts/stash-kraken-secret.sh.
         The key is persisted ENCRYPTED at rest; it never enters this chat."""
@@ -321,7 +353,10 @@ def _register_dex(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(
+        title="Read Kraken balances",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True),
+    )
     async def cex_balances(api_key: str = "") -> str:
         """Kraken balances (BYOK — talks to Kraken directly with the local key)."""
         if not _require(api_key):
@@ -337,7 +372,10 @@ def _register_dex(server: FastMCP) -> None:
         access="auth", parameters=[_APIKEY],
     ))
 
-    @server.tool()
+    @server.tool(
+        title="Validate Kraken order without execution",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True),
+    )
     async def cex_validate_order(
         pair: str, side: str, volume: float,
         ordertype: str = "market", price: float | None = None, api_key: str = "",
@@ -367,7 +405,10 @@ def _register_dex(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(
+        title="Sync Kraken fills to telemetry",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
+    )
     async def cex_sync_fills(mode: str = "live", api_key: str = "") -> str:
         """Pull the user's Kraken fills and emit them to telemetry (authed by the
         Mangrove key). The Kraken key never leaves this machine."""
@@ -389,9 +430,13 @@ def _register_dex(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(
+        title="Execute USDC and asset swap",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True),
+    )
     async def execute_swap(
-        input_token: str, output_token: str, amount: float,
+        input_token: str, output_token: str,
+        amount: Annotated[float, Field(description=_SWAP_AMOUNT_DESCRIPTION)],
         chain_id: int, wallet_address: str, slippage_pct: float,
         venue_id: str | None = None,
         confirm: bool = False,
@@ -400,6 +445,13 @@ def _register_dex(server: FastMCP) -> None:
         """Execute a swap. Requires confirm=true + explicit slippage_pct.
 
         Full 6-step flow with client-side signing; SDK never sees keys.
+
+        The existing USDC/asset path uses human asset quantities: a buy uses
+        output-asset units and spends USDC at the current mark price; a sell
+        uses input-asset units and receives USDC. A buy amount is not a fixed
+        USDC spend cap. This differs from REST /dex/swap's exact input-token
+        amount. output_token=USDC selects a sell; otherwise the output asset
+        is bought with USDC. Other quote-token pairs are not implemented here.
 
         `slippage_pct` is REQUIRED and specified as a DECIMAL, capped
         at 0.0025 (0.25%). Typical values: 0.001 (0.1%), 0.002 (0.2%),
@@ -445,12 +497,15 @@ def _register_dex(server: FastMCP) -> None:
             "slippage_pct). Single code path shared with cron-driven "
             "trades. Slippage is always user-specified — no default — "
             "because picking a tolerance is a risk decision."
+            " Amount is an asset quantity: buy in output-asset units, sell in "
+            "input-asset units, using USDC as the quote token. Buys spend at "
+            "the current mark price, not a fixed USDC cap; REST uses exact input."
         ),
         access="auth",
         parameters=[
             ToolParam(name="input_token", type="string", required=True, description="Input token"),
             ToolParam(name="output_token", type="string", required=True, description="Output token"),
-            ToolParam(name="amount", type="number", required=True, description="Input amount"),
+            ToolParam(name="amount", type="number", required=True, description=_SWAP_AMOUNT_DESCRIPTION),
             ToolParam(name="chain_id", type="integer", required=True, description="EVM chain id"),
             ToolParam(name="wallet_address", type="string", required=True, description="Wallet from local store"),
             ToolParam(name="slippage_pct", type="number", required=True, description="Slippage tolerance as DECIMAL, capped at 0.0025 (0.25%). Typical: 0.001 (0.1%), 0.002 (0.2%), 0.0025 (max). Higher values refused."),
@@ -504,7 +559,10 @@ def _register_x402_spend(server: FastMCP) -> None:
     finds nobody to ask and stays stopped, which is the case that matters.
     """
 
-    @server.tool()
+    @server.tool(
+        title="Read x402 spending budget and ledger",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    )
     async def x402_spend_status(limit: int = 20, api_key: str = "") -> str:
         """Outbound x402 budget: spent, remaining, and what the money went on.
 
@@ -547,7 +605,10 @@ def _register_x402_spend(server: FastMCP) -> None:
         ],
     ))
 
-    @server.tool()
+    @server.tool(
+        title="Authorize a new x402 budget period",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False),
+    )
     async def x402_spend_reset(
         confirm: bool = False, cap_usd: float | None = None, api_key: str = "",
     ) -> str:

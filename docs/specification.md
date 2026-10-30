@@ -408,7 +408,7 @@ Tool descriptions include parameters, return shapes, and access tier. All tools 
 | Markets read | `oneinch_balances` (discovered) | Existing local REST adapter retained |
 | Unavailable discovery | `dex_supported_venues` (hidden) | Placeholder discovery is not supported |
 | Markets read | `dex_get_quote` (native server units) | `POST /dex/quote` retains human units |
-| DEX | `execute_swap` | `POST /dex/swap` |
+| DEX | `execute_swap` (asset quantity; see below) | `POST /dex/swap` (exact input quantity) |
 | Market | `get_ohlcv` | `GET /market/ohlcv` |
 | Market | `get_market_data` | `GET /market/data` |
 | Signals | `list_signals` | `GET /signals` |
@@ -423,6 +423,20 @@ Tool descriptions include parameters, return shapes, and access tier. All tools 
 | Logs | `list_trades` | `GET /strategies/{id}/trades` |
 | Logs | `list_all_trades` | `GET /trades` |
 | KB | `kb_search` | `GET /kb/search` |
+
+The current local MCP `execute_swap` adapter uses the USDC/asset convention from
+the engine's order intents. Its `amount` is a human token quantity: a buy uses
+output-asset units and converts that quantity to USDC spend at the current mark
+price; a sell uses input-asset units and receives USDC. For example, with ETH at
+2,500 USDC, buying with `amount=1` requests one ETH and resolves to 2,500 USDC of
+input. It is not a fixed USDC spend cap or a guarantee of the final filled amount.
+`output_token=USDC` selects a sell; otherwise the output asset is bought with
+USDC. Other quote-token pairs are not implemented by this MCP adapter.
+
+The REST `/dex/swap` route supplies explicit token fields and instead uses the
+exact human input-token amount: `amount=1` for USDC to ETH means one USDC of
+input. This MCP/REST distinction does not change confirmation, signing, slippage,
+payment or Mangrove risk enforcement.
 
 **Nice-to-have (extend after core ships):**
 
