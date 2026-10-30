@@ -641,6 +641,31 @@ def test_upstream_key_probe_uses_configured_base_without_redirects_or_retries(mo
                       'Bearer ' + cfg['MANGROVE_API_KEY'], None, 5)]
 
 
+@pytest.mark.parametrize(('prefix', 'environment'), [
+    ('dev_', None),
+    ('dev_', 'dev'),
+    ('test_', None),
+])
+def test_dev_and_test_keys_never_guess_an_upstream_origin(monkeypatch, prefix, environment):
+    monkeypatch.delenv('MANGROVE_BASE_URL', raising=False)
+    if environment is None:
+        monkeypatch.delenv('MANGROVE_ENVIRONMENT', raising=False)
+    else:
+        monkeypatch.setenv('MANGROVE_ENVIRONMENT', environment)
+    monkeypatch.setattr(setup.urllib.request, 'build_opener',
+                        lambda *handlers: pytest.fail('origin validation must happen before network access'))
+    cfg = {'MANGROVE_ACCESS_MODE': 'api-key', 'MANGROVE_API_KEY': prefix + 'a' * 48}
+    with pytest.raises(setup.SetupError, match='require|requires'):
+        setup.probe_upstream_key(cfg)
+
+
+def test_test_key_can_use_explicit_local_environment(monkeypatch):
+    monkeypatch.delenv('MANGROVE_BASE_URL', raising=False)
+    monkeypatch.setenv('MANGROVE_ENVIRONMENT', 'local')
+    cfg = {'MANGROVE_ACCESS_MODE': 'api-key', 'MANGROVE_API_KEY': 'test_' + 'a' * 48}
+    assert setup.upstream_api_base(cfg) == 'http://localhost:5001/api/v1'
+
+
 def test_plugin_health_requires_current_agent_body(monkeypatch):
     class Response:
         status = 200
@@ -704,13 +729,19 @@ def test_plugin_health_requires_its_recorded_process_root(monkeypatch, tmp_path)
     pid_file.write_text('123')
     root_file.write_text('/plugin/cache/current')
     venv = '/plugin/data/venv'
-    command = f'{venv}/bin/python -m uvicorn src.app:app --host 127.0.0.1 --app-dir /plugin/cache/current/server'
+    command = f'{venv}/bin/python -m uvicorn src.app:app --host 127.0.0.1 --port 9080 --app-dir /plugin/cache/current/server'
     monkeypatch.setattr(plugin_probe.subprocess, 'run',
                         lambda *args, **kwargs: type('Result', (), {'returncode': 0, 'stdout': command})())
     monkeypatch.setattr(plugin_probe, 'healthy_agent', lambda url: True)
     assert plugin_probe.plugin_process('123', str(root_file)) is True
     assert plugin_probe.owned_healthy_agent('http://127.0.0.1:9080/health', str(pid_file),
                                              str(root_file), '/plugin/cache/current') is True
+    # A healthy Mangrove process on another port must not be claimed as this PID.
+    assert plugin_probe.owned_healthy_agent('http://127.0.0.1:9081/health', str(pid_file),
+                                             str(root_file), '/plugin/cache/current') is False
+    # Root identity alone remains sufficient when startup intentionally decides
+    # whether an old owned PID can be restarted after a port change.
+    assert plugin_probe.plugin_process('123', str(root_file)) is True
     assert plugin_probe.owned_healthy_agent('http://127.0.0.1:9080/health', str(pid_file),
                                              str(root_file), '/plugin/cache/foreign') is False
     foreign_command = f'{venv}/bin/python -m http.server 9080 --directory /plugin/cache/current/server'

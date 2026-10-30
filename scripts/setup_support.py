@@ -123,13 +123,25 @@ UPSTREAM_METRICS_TIMEOUT_SECONDS = 5
 
 def upstream_api_base(cfg):
     """Resolve the same REST base URL precedence as the MangroveAI SDK."""
+    key = upstream_key(cfg)
+    environment = os.environ.get('MANGROVE_ENVIRONMENT')
+    if environment and environment not in {'dev', 'prod', 'local'}:
+        raise SetupError('MANGROVE_ENVIRONMENT must be dev, prod or local.')
+    if not environment:
+        environment = ('dev' if key.startswith('dev_') else
+                       'local' if key.startswith('local_') else 'prod')
     value = cfg.get('MANGROVEAI_BASE_URL') or os.environ.get('MANGROVE_BASE_URL')
     if not value:
-        key = upstream_key(cfg)
-        environment = os.environ.get('MANGROVE_ENVIRONMENT')
-        if not environment:
-            environment = ('dev' if key.startswith('dev_') else
-                           'local' if key.startswith('local_') else 'prod')
+        if environment == 'dev':
+            raise SetupError(
+                'Development API key checks require MANGROVEAI_BASE_URL or MANGROVE_BASE_URL; '
+                'there is no verified development API default.'
+            )
+        if key.startswith('test_') and environment == 'prod':
+            raise SetupError(
+                'Test API keys require MANGROVEAI_BASE_URL, MANGROVE_BASE_URL, '
+                'or MANGROVE_ENVIRONMENT=local; production is not used as a fallback.'
+            )
         try:
             endpoints = json.loads((ROOT / 'server/src/config/mangrove-endpoints.json').read_text())
             value = endpoints['environments'][environment]['base_url']

@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -47,15 +48,14 @@ def healthy_agent(url):
     )
 
 
-def plugin_process(pid, root_file):
-    """Return true only for this plugin's uvicorn process and recorded root."""
+def _process_arguments(pid, root_file):
     try:
         pid_value = int(pid)
         if pid_value < 1:
-            return False
+            return None
         root = Path(root_file).read_text(encoding="utf-8").strip()
         if not root:
-            return False
+            return None
         result = subprocess.run(
             ["ps", "-p", str(pid_value), "-o", "command="],
             capture_output=True,
@@ -65,11 +65,16 @@ def plugin_process(pid, root_file):
         )
         arguments = shlex.split(result.stdout.strip())
     except (OSError, ValueError, subprocess.SubprocessError):
-        return False
+        return None
+    if result.returncode != 0 or not arguments:
+        return None
+    return arguments, root
+
+
+def _is_plugin_process(arguments, root):
     app_dir = os.path.join(root, "server")
     return (
-        result.returncode == 0
-        and arguments
+        arguments
         and "python" in Path(arguments[0]).name.lower()
         and len(arguments) > 2
         and arguments[1:3] == ["-m", "uvicorn"]
@@ -77,6 +82,38 @@ def plugin_process(pid, root_file):
         and "--app-dir" in arguments
         and arguments[arguments.index("--app-dir") + 1] == app_dir
     )
+
+
+def plugin_process(pid, root_file):
+    """Return true for this plugin's uvicorn process and recorded root."""
+    process = _process_arguments(pid, root_file)
+    return process is not None and _is_plugin_process(*process)
+
+
+def process_serves_url(pid, root_file, url):
+    """Confirm the owned uvicorn command is bound to this loopback URL."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        url_host = parsed.hostname
+        url_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        if (parsed.scheme != "http" or url_host not in {"localhost", "127.0.0.1", "::1"}
+                or parsed.username or parsed.password or parsed.query or parsed.fragment):
+            return False
+    except (TypeError, ValueError):
+        return False
+    process = _process_arguments(pid, root_file)
+    if process is None:
+        return False
+    arguments, root = process
+    if not _is_plugin_process(arguments, root):
+        return False
+    try:
+        port = int(arguments[arguments.index("--port") + 1])
+        host = arguments[arguments.index("--host") + 1]
+    except (ValueError, IndexError):
+        return False
+    normalized_url_host = "127.0.0.1" if url_host == "localhost" else url_host
+    return port == url_port and host == normalized_url_host
 
 
 def owned_healthy_agent(url, pid_file, root_file, expected_root):
@@ -87,7 +124,7 @@ def owned_healthy_agent(url, pid_file, root_file, expected_root):
         return False
     return (
         recorded_root == expected_root
-        and plugin_process(pid, root_file)
+        and process_serves_url(pid, root_file, url)
         and healthy_agent(url)
     )
 
