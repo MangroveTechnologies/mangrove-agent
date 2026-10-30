@@ -86,7 +86,7 @@ with a withdrawal-capable key.
 ## Step 3 - Store the key securely (never in chat)
 
 The key is stored **encrypted at rest on the user's machine** (Fernet, same
-SecretVault model as wallet secrets) and entered out-of-band in their terminal  - 
+SecretVault model as wallet secrets) and entered out-of-band in their terminal -
 **not** pasted into this chat. Follow the same pattern as wallet import:
 
 - The user runs the Kraken-key stash command in a terminal (the agent never sees
