@@ -24,6 +24,10 @@ ROOT = Path(__file__).resolve().parents[3]
 SPEC = importlib.util.spec_from_file_location('setup_support', ROOT / 'scripts/setup_support.py')
 setup = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(setup)
+PLUGIN_PROBE_SPEC = importlib.util.spec_from_file_location(
+    'plugin_http_status', ROOT / 'scripts/plugin_http_status.py')
+plugin_probe = importlib.util.module_from_spec(PLUGIN_PROBE_SPEC)
+PLUGIN_PROBE_SPEC.loader.exec_module(plugin_probe)
 ADDR = '0x' + '1' * 40
 
 
@@ -359,11 +363,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         with open('requests.jsonl', 'a') as f: f.write(json.dumps({'path':self.path})+'\\n')
         valid = self.headers.get('X-API-Key') == cfg['API_KEYS'].split(',')[0]
-        if self.path.endswith('/tools'):
+        if self.path == '/api/v1/users/me/metrics':
+            metrics_valid = self.headers.get('Authorization') == f"Bearer {cfg['MANGROVE_API_KEY']}"
+            body, code = ({'success': True, 'metrics': {}}, 200) if metrics_valid else ({}, 401)
+        elif self.path.endswith('/tools'):
             body = {'tools':[{'name':n} for n in ['create_wallet','import_wallet','list_wallets','list_signals']]}
             if Path('catalog.json').exists(): body = json.loads(Path('catalog.json').read_text())
             code = 200
-        elif self.path == '/health': body, code = {'scheduler_running': True}, 200
+        elif self.path == '/health': body, code = {'status': 'healthy', 'scheduler_running': True}, 200
         elif self.path.endswith('/marketplace/readiness'):
             body, code = {'ownership_discovery': 'ready'}, 200 if valid else 401
         else: body, code = [], 200 if valid else 401
@@ -373,6 +380,10 @@ HTTPServer(('127.0.0.1', int(sys.argv[sys.argv.index('--port')+1])), Handler).se
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
+    example_path = repo / 'server/src/config/local-example-config.json'
+    example_config = json.loads(example_path.read_text())
+    example_config['MANGROVEAI_BASE_URL'] = f'http://127.0.0.1:{port}/api/v1'
+    example_path.write_text(json.dumps(example_config))
     env = dict(os.environ, BARE_PORT=str(port))
     for key in ['BASE_URL', 'BARE_HOST', 'MANGROVE_AGENT_HOME', 'PYTHONPATH']:
         env.pop(key, None)
@@ -515,20 +526,16 @@ def test_shell_fresh_no_key_rerun_and_mode_switch(checkout):
     assert 'prod_synthetic' not in switched.stdout + switched.stderr
     assert 'Marketplace ownership discovery verified' in switched.stdout
     requests = [json.loads(line)['path'] for line in (repo / 'requests.jsonl').read_text().splitlines()]
-    # The signals read is the upstream API-key check: setup presents the key to the
-    # platform once rather than reporting success without ever having used it.
+    # The authenticated metrics read is separate from local API-key checks and
+    # anonymous MCP catalog discovery.
     assert set(requests) == {'/api/v1/agent/wallet/list', '/api/v1/agent/tools', '/health',
                              '/api/v1/agent/marketplace/readiness',
-                             '/api/v1/agent/signals?limit=1'}
+                             '/api/v1/users/me/metrics'}
 
 
 # -- upstream API-key check -------------------------------------------------
-#
-# Setup used to print "validity/quota have not been checked" and exit 0 with a
-# key the platform would reject, so the first sign of trouble was an opaque
-# upstream 401 mid-conversation. These pin all three outcomes.
 
-UPSTREAM_PROBE = '/api/v1/agent/signals?limit=1'
+UPSTREAM_PROBE = 'https://api.mangrovedeveloper.ai/api/v1/users/me/metrics'
 
 
 def _cfg(mode='api-key'):
@@ -536,37 +543,235 @@ def _cfg(mode='api-key'):
 
 
 def test_check_upstream_reports_a_working_key(monkeypatch, capsys):
-    seen = []
-    monkeypatch.setattr(setup, 'request', lambda cfg, path: seen.append(path) or [])
+    class Response:
+        status = 200
+
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def read(self, limit): return b'{"success":true,"metrics":{}}'
+
+    class Opener:
+        def open(self, request, timeout):
+            assert request.full_url == UPSTREAM_PROBE
+            assert request.get_header('Authorization') == 'Bearer ' + _cfg()['MANGROVE_API_KEY']
+            assert request.get_header('X-api-key') is None
+            assert timeout == setup.UPSTREAM_METRICS_TIMEOUT_SECONDS
+            return Response()
+
+    monkeypatch.setattr(setup.urllib.request, 'build_opener', lambda *handlers: Opener())
     assert setup.check_upstream(_cfg()) is True
-    assert seen == [UPSTREAM_PROBE]
     assert 'verified' in capsys.readouterr().out
 
 
-@pytest.mark.parametrize('code', [401, 403])
-def test_check_upstream_fails_loudly_on_a_rejected_key(monkeypatch, code):
-    def reject(cfg, path):
-        raise setup.SetupError(f'Agent returned HTTP {code}; check local authentication and server logs.')
-    monkeypatch.setattr(setup, 'request', reject)
+def _http_error(code):
+    return setup.urllib.error.HTTPError(UPSTREAM_PROBE, code, 'mock', {}, io.BytesIO(b''))
+
+
+def test_check_upstream_rejects_only_an_invalid_key(monkeypatch):
+    class Opener:
+        def open(self, request, timeout): raise _http_error(401)
+    monkeypatch.setattr(setup.urllib.request, 'build_opener', lambda *handlers: Opener())
     with pytest.raises(setup.SetupError) as exc:
         setup.check_upstream(_cfg())
-    # The message has to name the platform and the way out, not the local agent.
-    assert 'rejected by the platform' in str(exc.value)
-    assert 'mangrovedeveloper.ai' in str(exc.value)
+    assert 'HTTP 401' in str(exc.value)
+    assert 'mangrove.io/developer/api-keys' in str(exc.value)
 
 
-def test_check_upstream_skips_when_the_platform_is_unreachable(monkeypatch, capsys):
-    def unreachable(cfg, path):
-        raise setup.SetupError('No valid response from the local agent.')
-    monkeypatch.setattr(setup, 'request', unreachable)
-    # A condition the user cannot act on must not fail the install.
+@pytest.mark.parametrize(('code', 'result', 'message'), [
+    (403, 'forbidden', 'HTTP 403'),
+    (429, 'rate_limited', 'HTTP 429'),
+    (503, 'unknown', 'unknown'),
+])
+def test_check_upstream_classifies_non_auth_failures_separately(monkeypatch, capsys, code, result, message):
+    class Opener:
+        def open(self, request, timeout): raise _http_error(code)
+    monkeypatch.setattr(setup.urllib.request, 'build_opener', lambda *handlers: Opener())
     assert setup.check_upstream(_cfg()) is False
-    assert 'NOT verified' in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert message in output
+    if result == 'rate_limited':
+        assert 'key validity was not verified' in output
+    elif result == 'forbidden':
+        assert 'scope or account access is unresolved' in output
+
+
+def test_check_upstream_skips_when_platform_is_unreachable_or_malformed(monkeypatch, capsys):
+    class Unreachable:
+        def open(self, request, timeout): raise OSError('offline')
+    monkeypatch.setattr(setup.urllib.request, 'build_opener', lambda *handlers: Unreachable())
+    assert setup.check_upstream(_cfg()) is False
+    assert 'unknown' in capsys.readouterr().out
+
+    class MalformedResponse:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def read(self, limit): return b'[]'
+    class Malformed:
+        def open(self, request, timeout): return MalformedResponse()
+    monkeypatch.setattr(setup.urllib.request, 'build_opener', lambda *handlers: Malformed())
+    assert setup.check_upstream(_cfg()) is False
+    assert 'unknown' in capsys.readouterr().out
 
 
 def test_check_upstream_has_nothing_to_check_in_wallet_mode(monkeypatch):
-    monkeypatch.setattr(setup, 'request', lambda cfg, path: pytest.fail('wallet mode must not probe'))
+    monkeypatch.setattr(setup.urllib.request, 'build_opener', lambda *handlers: pytest.fail('wallet mode must not probe'))
     assert setup.check_upstream(_cfg('x402')) is True
+
+
+def test_upstream_key_probe_uses_configured_base_without_redirects_or_retries(monkeypatch):
+    cfg = dict(_cfg(), MANGROVEAI_BASE_URL='https://api.example.test/api/v1')
+    calls = []
+
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def read(self, limit): return b'{"success":true,"metrics":{}}'
+
+    class Opener:
+        def open(self, request, timeout):
+            calls.append((request.full_url, request.get_header('Authorization'),
+                          request.get_header('X-api-key'), timeout))
+            return Response()
+
+    monkeypatch.setattr(setup.urllib.request, 'build_opener', lambda *handlers: Opener())
+    assert setup.probe_upstream_key(cfg) == 'verified'
+    assert calls == [('https://api.example.test/api/v1/users/me/metrics',
+                      'Bearer ' + cfg['MANGROVE_API_KEY'], None, 5)]
+
+
+def test_plugin_health_requires_current_agent_body(monkeypatch):
+    class Response:
+        status = 200
+        def __init__(self, body): self.body = body
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def read(self, limit): return json.dumps(self.body).encode()
+
+    class Opener:
+        def __init__(self, body): self.body = body
+        def open(self, request, timeout):
+            assert timeout == 2
+            return Response(self.body)
+
+    monkeypatch.setattr(plugin_probe.urllib.request, 'build_opener',
+                        lambda *handlers: Opener({'status': 'healthy', 'scheduler_running': True}))
+    assert plugin_probe.healthy_agent('http://127.0.0.1:9080/health') is True
+    monkeypatch.setattr(plugin_probe.urllib.request, 'build_opener',
+                        lambda *handlers: Opener({'scheduler_running': True}))
+    assert plugin_probe.healthy_agent('http://127.0.0.1:9080/health') is False
+    monkeypatch.setattr(plugin_probe.urllib.request, 'build_opener',
+                        lambda *handlers: Opener({'status': 'healthy', 'scheduler_running': False}))
+    assert plugin_probe.healthy_agent('http://127.0.0.1:9080/health') is False
+
+
+def test_plugin_health_uses_real_local_http_and_does_not_follow_redirects():
+    events = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+
+        def do_GET(self):
+            events.append(self.path)
+            if self.path == '/redirect':
+                self.send_response(302)
+                self.send_header('Location', '/health')
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(b'{"status":"healthy","scheduler_running":true}')
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f'http://127.0.0.1:{server.server_port}'
+    try:
+        assert plugin_probe.healthy_agent(base + '/health') is True
+        assert plugin_probe.healthy_agent(base + '/redirect') is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+    assert events == ['/health', '/redirect']
+
+
+def test_plugin_health_requires_its_recorded_process_root(monkeypatch, tmp_path):
+    pid_file = tmp_path / 'agent.pid'
+    root_file = tmp_path / 'agent.root'
+    pid_file.write_text('123')
+    root_file.write_text('/plugin/cache/current')
+    venv = '/plugin/data/venv'
+    command = f'{venv}/bin/python -m uvicorn src.app:app --host 127.0.0.1 --app-dir /plugin/cache/current/server'
+    monkeypatch.setattr(plugin_probe.subprocess, 'run',
+                        lambda *args, **kwargs: type('Result', (), {'returncode': 0, 'stdout': command})())
+    monkeypatch.setattr(plugin_probe, 'healthy_agent', lambda url: True)
+    assert plugin_probe.plugin_process('123', str(root_file)) is True
+    assert plugin_probe.owned_healthy_agent('http://127.0.0.1:9080/health', str(pid_file),
+                                             str(root_file), '/plugin/cache/current') is True
+    assert plugin_probe.owned_healthy_agent('http://127.0.0.1:9080/health', str(pid_file),
+                                             str(root_file), '/plugin/cache/foreign') is False
+    foreign_command = f'{venv}/bin/python -m http.server 9080 --directory /plugin/cache/current/server'
+    monkeypatch.setattr(plugin_probe.subprocess, 'run',
+                        lambda *args, **kwargs: type('Result', (), {'returncode': 0, 'stdout': foreign_command})())
+    assert plugin_probe.plugin_process('123', str(root_file)) is False
+
+
+def test_plugin_process_ownership_matches_an_isolated_uvicorn_process(tmp_path):
+    module_dir = tmp_path / 'modules'
+    module_dir.mkdir()
+    (module_dir / 'uvicorn.py').write_text('''
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args): pass
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(b'{"status":"healthy","scheduler_running":true}')
+HTTPServer(('127.0.0.1', int(sys.argv[sys.argv.index('--port') + 1])), Handler).serve_forever()
+''')
+    root = tmp_path / 'plugin-cache' / 'current'
+    (root / 'server').mkdir(parents=True)
+    venv = tmp_path / 'plugin-data' / 'venv'
+    (venv / 'bin').mkdir(parents=True)
+    python = venv / 'bin' / 'python'
+    python.symlink_to(sys.executable)
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1', 0))
+        port = sock.getsockname()[1]
+    process = subprocess.Popen(
+        [str(python), '-m', 'uvicorn', 'src.app:app', '--app-dir', str(root / 'server'),
+         '--host', '127.0.0.1', '--port', str(port)],
+        cwd=tmp_path,
+        env=dict(os.environ, PYTHONPATH=str(module_dir)),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    pid_file = tmp_path / 'agent.pid'
+    root_file = tmp_path / 'agent.root'
+    pid_file.write_text(str(process.pid))
+    root_file.write_text(str(root))
+    url = f'http://127.0.0.1:{port}/health'
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not plugin_probe.healthy_agent(url):
+            time.sleep(0.05)
+        assert plugin_probe.plugin_process(str(process.pid), str(root_file)) is True
+        assert plugin_probe.owned_healthy_agent(url, str(pid_file), str(root_file), str(root)) is True
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
+def test_plugin_scripts_no_longer_probe_removed_strategy_route():
+    for script in ('plugin-bootstrap.sh', 'plugin-start-agent.sh'):
+        content = (ROOT / 'scripts' / script).read_text()
+        assert '/api/v1/agent/strategies' not in content
+        assert '--owned-health' in content
 
 
 @pytest.mark.parametrize('missing_local_tool', [False, True])

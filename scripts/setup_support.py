@@ -118,6 +118,73 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+UPSTREAM_METRICS_TIMEOUT_SECONDS = 5
+
+
+def upstream_api_base(cfg):
+    """Resolve the same REST base URL precedence as the MangroveAI SDK."""
+    value = cfg.get('MANGROVEAI_BASE_URL') or os.environ.get('MANGROVE_BASE_URL')
+    if not value:
+        key = upstream_key(cfg)
+        environment = os.environ.get('MANGROVE_ENVIRONMENT')
+        if not environment:
+            environment = ('dev' if key.startswith('dev_') else
+                           'local' if key.startswith('local_') else 'prod')
+        try:
+            endpoints = json.loads((ROOT / 'server/src/config/mangrove-endpoints.json').read_text())
+            value = endpoints['environments'][environment]['base_url']
+        except (OSError, ValueError, KeyError, TypeError):
+            raise SetupError('Cannot resolve the configured MangroveAI API destination.') from None
+
+    try:
+        parsed = urllib.parse.urlsplit(value.strip())
+        host = parsed.hostname
+        _ = parsed.port
+        loopback_http = (parsed.scheme == 'http' and host in {'localhost', '127.0.0.1', '::1'})
+        if (not host or parsed.username or parsed.password or parsed.query or parsed.fragment
+                or parsed.path.rstrip('/') != '/api/v1'
+                or not (parsed.scheme == 'https' or loopback_http)):
+            raise ValueError
+    except (AttributeError, TypeError, ValueError):
+        raise SetupError('MangroveAI API destination must be HTTPS (or loopback HTTP) and end in /api/v1.') from None
+    return value.strip().rstrip('/')
+
+
+def probe_upstream_key(cfg):
+    """Return verified, rejected, forbidden, rate_limited, or unknown.
+
+    This is a single authenticated, non-billable usage-metrics read. It never
+    redirects, retries, logs the key, or falls back to an x402 payment.
+    """
+    key = upstream_key(cfg)
+    if not key:
+        return 'unknown'
+    url = upstream_api_base(cfg) + '/users/me/metrics'
+    req = urllib.request.Request(
+        url,
+        headers={'Authorization': f'Bearer {key}', 'Accept': 'application/json'},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    try:
+        with opener.open(req, timeout=UPSTREAM_METRICS_TIMEOUT_SECONDS) as response:
+            if response.status != 200:
+                return 'unknown'
+            body = response.read(64 * 1024)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        return {401: 'rejected', 403: 'forbidden', 429: 'rate_limited'}.get(exc.code, 'unknown')
+    except (OSError, ValueError, urllib.error.URLError):
+        return 'unknown'
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        return 'unknown'
+    if (isinstance(payload, dict) and payload.get('success') is True
+            and isinstance(payload.get('metrics'), dict)):
+        return 'verified'
+    return 'unknown'
+
+
 def request(cfg, path, payload=None, *, authenticated=True, timeout=10):
     url = origin(cfg.get('LOCAL_AGENT_URL', '')) + path
     headers = {'Content-Type': 'application/json'}
@@ -163,23 +230,7 @@ def check(cfg):
 
 
 def check_upstream(cfg):
-    """Prove the configured MangroveAI key actually reaches the platform.
-
-    One cheap authenticated read through the running agent, over the same
-    SDK -> REST path its own tools use. Setup used to report success without ever
-    presenting the key upstream, so a rejected key surfaced mid-conversation as
-    an opaque "Invalid or expired token" that pointed the user at their key
-    rather than at whatever was actually wrong.
-
-    A rejected credential fails loudly: it is unambiguous and the user can act on
-    it. Anything else -- offline, proxy, upstream maintenance -- is a skip, since
-    setup must not refuse to finish over a condition the user cannot fix and the
-    local agent is already working by this point.
-
-    Returns True when the platform answered (or there is no key to check), False
-    when it could not be reached, so the caller can skip assertions about
-    upstream-derived state instead of failing on a symptom of the same outage.
-    """
+    """Check upstream authentication separately from local liveness/discovery."""
     if cfg.get('MANGROVE_ACCESS_MODE') == 'oauth':
         result = request(cfg, '/api/v1/agent/oauth/status')
         if not result.get('connected'):
@@ -189,20 +240,22 @@ def check_upstream(cfg):
     if cfg.get('MANGROVE_ACCESS_MODE') == 'x402':
         print('Wallet mode selected: no upstream API key to verify.')
         return True
-    try:
-        request(cfg, '/api/v1/agent/signals?limit=1')
-    except SetupError as exc:
-        if str(exc).startswith(('Agent returned HTTP 401;', 'Agent returned HTTP 403;')):
-            raise SetupError(
-                'The MangroveAI API key was rejected by the platform (upstream '
-                '401/403). Mint one at https://mangrovedeveloper.ai under '
-                'Settings > API Keys, then rerun: ./scripts/setup.sh --auth api-key'
-            ) from None
-        print('Upstream API key NOT verified: the platform was unreachable. Local '
-              'setup is complete; rerun ./scripts/verify_quickstart.sh when online.')
-        return False
-    print('Upstream API key verified against the platform.')
-    return True
+    result = probe_upstream_key(cfg)
+    if result == 'rejected':
+        raise SetupError(
+            'MangroveAI rejected the configured API key (HTTP 401). Mint or check '
+            'the key at https://mangrove.io/developer/api-keys, then rerun setup.'
+        )
+    if result == 'verified':
+        print('Upstream API key verified with an authenticated usage-metrics read.')
+        return True
+    messages = {
+        'forbidden': 'MangroveAI denied the metrics read (HTTP 403); key scope or account access is unresolved.',
+        'rate_limited': 'MangroveAI rate-limited the metrics read (HTTP 429); key validity was not verified.',
+        'unknown': 'MangroveAI key readiness is unknown: the metrics endpoint was unavailable or returned an invalid response.',
+    }
+    print(messages[result] + ' Local setup remains complete; rerun ./scripts/verify_quickstart.sh later.')
+    return False
 
 
 def check_markets(cfg):
