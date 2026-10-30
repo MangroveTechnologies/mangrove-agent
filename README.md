@@ -202,7 +202,7 @@ Say **"set up Kraken"** or **"connect Kraken without a key"** in a session and t
 
 ## What the agent can do
 
-The agent serves two kinds of tools. Run `list_tools` for the live catalog. For the managed MangroveAI tools, `discover_tools` returns names and descriptions first and full schemas on request; see [progressive discovery](docs/clients.md#progressive-discovery-of-managed-services).
+The local agent exposes `list_tools` for its own MCP catalog, including local helpers and tools it currently forwards. This call does not query the hosted MangroveAI catalog directly. For the hosted service, use MCP protocol discovery (`tools/list`) against its `/mcp/` endpoint; when available, `discover_tools` provides a higher-level view of names and descriptions first, with schemas on request. Catalogs can differ by service configuration and can change over time, so do not rely on a fixed total. See [progressive discovery](docs/clients.md#progressive-discovery-of-managed-services).
 
 **1. MangroveAI tools (the source of truth).** Strategies, backtests, sweeps, signals, market data, on-chain data, the knowledge base and the Strategy Engine live in MangroveAI. The agent reads MangroveAI's live MCP catalog (cached for up to a minute) and forwards each call to MangroveAI's `/mcp/` endpoint, paying per call in x402 wallet mode or using your API key. When MangroveAI adds or changes a tool, the agent picks it up without a code change.
 

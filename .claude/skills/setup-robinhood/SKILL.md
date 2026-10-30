@@ -1,6 +1,12 @@
 ---
 name: setup-robinhood
-description: Connect Robinhood as Mangrove Agent's execution venue, inspect the connection and strategy routing, and explain setup or recovery. Use for Robinhood connection and routing requests; use the existing strategy workflow for research and signal selection.
+description: Connect Robinhood as Mangrove Agent's execution venue, inspect the connection and strategy routing, and explain setup or recovery. Use when the user asks to connect Robinhood, check Robinhood status, route a strategy to Robinhood, or recover a Robinhood authorization. Trigger with phrases such as "connect Robinhood", "check Robinhood status", or "route this strategy to Robinhood". Use the existing strategy workflow for research and signal selection.
+version: 1.0.0
+author: Mangrove Technologies
+license: MIT
+allowed-tools: Read, Grep, Glob, Bash(./scripts/*)
+compatibility: Claude Code plugin; requires the local mangrove-agent repository, network access, and a Robinhood account that can authorize Mangrove Agent.
+tags: [mangrove, robinhood, oauth, broker, trading]
 ---
 
 # Robinhood execution venue

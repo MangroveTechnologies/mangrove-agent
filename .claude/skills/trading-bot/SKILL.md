@@ -1,11 +1,17 @@
 ---
 name: trading-bot
 description: >-
-  The mangrove-agent operating rules: server workflow discovery and local execution, how to
+  Use when the user asks what the trading agent can do, how to use it, or how risk controls work. The mangrove-agent operating rules cover server workflow discovery and local execution, how to
   present and handle wallets without secrets ever entering chat, and which risk controls already
   run in the engine and the agent. Load it before any strategy, backtest, sweep, wallet, balance,
   swap, Kraken or live-trading work, and whenever the user asks what the bot can do or how it
-  keeps funds safe.
+  keeps funds safe. Trigger with phrases such as "what can this bot do", "how does the bot manage risk", or "help me use the trading agent".
+version: 1.0.0
+author: Mangrove Technologies
+license: MIT
+allowed-tools: Read, Grep, Glob, Bash(./scripts/*)
+compatibility: Claude Code plugin; requires the local mangrove-agent repository and configured Mangrove services for live discovery.
+tags: [mangrove, trading, mcp, risk-management]
 ---
 
 # Operating the Mangrove trading agent

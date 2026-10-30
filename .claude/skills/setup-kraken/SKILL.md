@@ -9,8 +9,14 @@ description: >-
   SDK connects to Kraken DIRECTLY with the user's key - the key stays on the
   user's machine and never reaches a Mangrove server. The keyless OAuth path
   (Mangrove holds the grant and submits on the user's behalf, server-side) is
-  the sibling `connect-kraken` skill, NOT this one - offer it when the user
-  doesn't want to create or manage an API key.
+  the sibling connect-kraken skill, NOT this one - offer it when the user
+  doesn't want to create or manage an API key. Trigger with phrases such as "connect Kraken", "set up my Kraken key", or "trade on Kraken".
+version: 1.0.0
+author: Mangrove Technologies
+license: MIT
+allowed-tools: Read, Grep, Glob, Bash(./scripts/*)
+compatibility: Claude Code plugin; requires the local mangrove-agent repository and a Kraken account for connection setup.
+tags: [mangrove, kraken, exchange, trading, byok]
 ---
 
 # Setup Kraken (local BYOK)

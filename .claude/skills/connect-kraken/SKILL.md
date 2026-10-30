@@ -6,9 +6,15 @@ description: >-
   "log in with Kraken", "connect Kraken without a key", "I don't want to manage
   a Kraken key". This is the KEYLESS (OAuth) mode: the user consents once in a
   browser and the Mangrove platform holds the grant and trades on their behalf.
-  It is the sibling of the BYOK `setup-kraken` skill — if the user is willing to
+  It is the sibling of the BYOK setup-kraken skill — if the user is willing to
   create and hold their own key locally, use setup-kraken instead; if they want
-  Mangrove to manage access, use this.
+  Mangrove to manage access, use this. Trigger with phrases such as "connect Kraken with OAuth", "log in to Kraken", or "connect Kraken without a key".
+version: 1.0.0
+author: Mangrove Technologies
+license: MIT
+allowed-tools: Read, Grep, Glob, Bash(./scripts/*)
+compatibility: Claude Code plugin; requires the local mangrove-agent repository, network access, and a Kraken account that can authorize Mangrove OAuth.
+tags: [mangrove, kraken, oauth, exchange, trading]
 ---
 
 # Connect Kraken (keyless, OAuth)
