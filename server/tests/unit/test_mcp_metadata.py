@@ -1,9 +1,11 @@
 """Discover real local tools without starting the agent or executing an action."""
 from __future__ import annotations
 
+import json
 import socket
 import sqlite3
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from mcp.types import Tool, ToolAnnotations
@@ -180,3 +182,92 @@ def test_existing_quantity_resolution_remains_unsigned(side, explicit, ref_price
         output_token_address=("ETH" if side == "buy" else "USDC") if explicit else None)
     # Pure resolver only. No quote, signing, execute_one, wallet or provider call.
     assert order_executor._resolve_tokens(intent) == expected
+
+
+_BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+_SEPOLIA_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_token,output_token,chain_id", [
+    ("DAI", "ETH", 8453), ("ETH", "DAI", 8453),
+    ("ETH", "eth", 8453), ("USDC", "usdc", 8453),
+    ("", "USDC", 8453), ("USDC", "", 8453),
+    (_BASE_USDC, "USDC", 8453), ("USDC", _BASE_USDC, 8453),
+    (_BASE_USDC, _BASE_USDC.lower(), 8453),
+    (_BASE_USDC, "ETH", 84532), ("ETH", _BASE_USDC, 84532),
+    (_SEPOLIA_USDC, "ETH", 8453), ("USDC", _SEPOLIA_USDC, 8453),
+    ("ETH", "0x" + "1" * 40, 8453),
+])
+async def test_unsupported_pair_never_reaches_executor(metadata_server, monkeypatch, input_token, output_token, chain_id):
+    from src.services import order_executor
+
+    executor = Mock(side_effect=AssertionError("Unsupported pair reached action boundary"))
+    monkeypatch.setattr(order_executor, "execute_one", executor)
+    result = await metadata_server._tool_manager._tools["execute_swap"].run({
+        "input_token": input_token, "output_token": output_token, "amount": 1,
+        "chain_id": chain_id, "wallet_address": "unused-fixture", "slippage_pct": 0.001,
+        "confirm": True, "api_key": "test-key-1",
+    })
+    error = json.loads(result)
+    assert error["error"] is True
+    assert error["code"] == "VALIDATION_ERROR"
+    assert "USDC" in error["message"]
+    executor.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_token,output_token,chain_id,side,symbol", [
+    ("USDC", "ETH", 8453, "buy", "ETH"),
+    ("ETH", "USDC", 8453, "sell", "ETH"),
+    ("usdc", "eth", 1, "buy", "eth"),
+    ("ETH", "uSdC", 10, "sell", "ETH"),
+    (_BASE_USDC, "ETH", 8453, "buy", "ETH"),
+    ("ETH", _BASE_USDC.lower(), 8453, "sell", "ETH"),
+    (_SEPOLIA_USDC, "ETH", 84532, "buy", "ETH"),
+    ("ETH", _SEPOLIA_USDC.lower(), 84532, "sell", "ETH"),
+    ("0x" + "e" * 40, "USDC", 8453, "sell", "0x" + "e" * 40),
+])
+async def test_valid_pair_preserves_asset_quantity_at_unsigned_boundary(
+    metadata_server, monkeypatch, input_token, output_token, chain_id, side, symbol,
+):
+    from src.services import order_executor
+
+    def unsigned(intent, **kwargs):
+        assert intent.side == side and intent.symbol == symbol and intent.amount == 1
+        assert intent.input_token_address is None and intent.output_token_address is None
+        assert kwargs == {"mode": "live", "wallet_address": "unused-fixture", "chain_id": chain_id,
+                          "venue_id": None, "slippage_pct": 0.001}
+        source, target, amount = order_executor._resolve_tokens(intent)
+        assert (source, target, amount) == (("USDC", symbol, 2500) if side == "buy" else (symbol, "USDC", 1))
+        return SimpleNamespace(tx_hash=None, status="unsigned-fixture", input_token=source, input_amount=amount,
+                               output_token=target, output_amount=0, fill_price=2500, fees={}, id="not-an-order")
+
+    executor = Mock(side_effect=unsigned)
+    monkeypatch.setattr(order_executor, "execute_one", executor)
+    monkeypatch.setattr(order_executor, "_fetch_mark_price", lambda symbol: 2500)
+    result = await metadata_server._tool_manager._tools["execute_swap"].run({
+        "input_token": input_token, "output_token": output_token, "amount": 1,
+        "chain_id": chain_id, "wallet_address": "unused-fixture", "slippage_pct": 0.001,
+        "confirm": True, "api_key": "test-key-1",
+    })
+    assert json.loads(result)["status"] == "unsigned-fixture"
+    executor.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_key,confirm,expected", [
+    ("invalid-fixture", True, "AUTH_INVALID_API_KEY"),
+    ("test-key-1", False, "CONFIRMATION_REQUIRED"),
+])
+async def test_pair_guard_keeps_auth_and_confirmation_first(metadata_server, monkeypatch, api_key, confirm, expected):
+    from src.services import order_executor
+
+    executor = Mock(side_effect=AssertionError("Unauthenticated or unconfirmed request reached action"))
+    monkeypatch.setattr(order_executor, "execute_one", executor)
+    result = await metadata_server._tool_manager._tools["execute_swap"].run({
+        "input_token": "DAI", "output_token": "ETH", "amount": 1, "chain_id": 8453,
+        "wallet_address": "unused-fixture", "slippage_pct": 0.001, "api_key": api_key, "confirm": confirm,
+    })
+    assert json.loads(result)["code"] == expected
+    executor.assert_not_called()

@@ -430,8 +430,11 @@ output-asset units and converts that quantity to USDC spend at the current mark
 price; a sell uses input-asset units and receives USDC. For example, with ETH at
 2,500 USDC, buying with `amount=1` requests one ETH and resolves to 2,500 USDC of
 input. It is not a fixed USDC spend cap or a guarantee of the final filled amount.
-`output_token=USDC` selects a sell; otherwise the output asset is bought with
-USDC. Other quote-token pairs are not implemented by this MCP adapter.
+Exactly one leg must be USDC and the other a distinct asset. The adapter accepts
+the case-insensitive USDC symbol or a locally reviewed canonical USDC address
+matching `chain_id` (Base mainnet or Base Sepolia). A USDC output selects a sell;
+a USDC input selects a buy. Unsupported pairs, self-swaps, both-USDC legs and
+known USDC addresses from the wrong chain are refused before the executor.
 
 The REST `/dex/swap` route supplies explicit token fields and instead uses the
 exact human input-token amount: `amount=1` for USDC to ETH means one USDC of

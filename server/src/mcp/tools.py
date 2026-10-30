@@ -93,6 +93,34 @@ _SWAP_AMOUNT_DESCRIPTION = (
     "USDC spend cap. Unlike MCP, REST /dex/swap uses the exact input-token amount."
 )
 
+_SWAP_TOKEN_DESCRIPTION = (
+    "One leg must be USDC and the other a distinct asset. USDC is accepted as "
+    "a case-insensitive symbol or the locally reviewed canonical address on "
+    "chain_id (Base mainnet or Base Sepolia). Unsupported, same-token and "
+    "known wrong-chain USDC pairs are refused before execution."
+)
+
+
+def _swap_direction(input_token: str, output_token: str, chain_id: int) -> tuple[str, str]:
+    """Validate the MCP adapter's USDC/asset contract without resolving remotely."""
+    from src.services.wallet_manager import canonical_usdc_addresses
+    from src.shared.errors import ValidationError
+
+    source, target = input_token.strip(), output_token.strip()
+    canonical = canonical_usdc_addresses()
+    expected = canonical.get(chain_id)
+    known = set(canonical.values())
+    if any(token.lower() in known and token.lower() != expected for token in (source, target)):
+        raise ValidationError("The USDC address does not match the requested chain. No swap was attempted.")
+    source_usdc = source.upper() == "USDC" or source.lower() == expected
+    target_usdc = target.upper() == "USDC" or target.lower() == expected
+    if not source or not target or source.lower() == target.lower() or source_usdc == target_usdc:
+        raise ValidationError(
+            "execute_swap requires exactly one USDC leg and a distinct asset. No swap was attempted.",
+            suggestion="Use the USDC symbol or its locally recognized canonical address for the requested chain.",
+        )
+    return ("sell", source) if target_usdc else ("buy", target)
+
 
 # ---------------------------------------------------------------------------
 # Registration
@@ -435,7 +463,8 @@ def _register_dex(server: FastMCP) -> None:
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True),
     )
     async def execute_swap(
-        input_token: str, output_token: str,
+        input_token: Annotated[str, Field(description=_SWAP_TOKEN_DESCRIPTION)],
+        output_token: Annotated[str, Field(description=_SWAP_TOKEN_DESCRIPTION)],
         amount: Annotated[float, Field(description=_SWAP_AMOUNT_DESCRIPTION)],
         chain_id: int, wallet_address: str, slippage_pct: float,
         venue_id: str | None = None,
@@ -450,8 +479,10 @@ def _register_dex(server: FastMCP) -> None:
         output-asset units and spends USDC at the current mark price; a sell
         uses input-asset units and receives USDC. A buy amount is not a fixed
         USDC spend cap. This differs from REST /dex/swap's exact input-token
-        amount. output_token=USDC selects a sell; otherwise the output asset
-        is bought with USDC. Other quote-token pairs are not implemented here.
+        amount. Exactly one leg must be USDC: its case-insensitive symbol or
+        a locally reviewed canonical address matching chain_id. A USDC output
+        selects a sell; a USDC input selects a buy. Unsupported, same-token
+        and known wrong-chain USDC pairs are refused before execution.
 
         `slippage_pct` is REQUIRED and specified as a DECIMAL, capped
         at 0.0025 (0.25%). Typical values: 0.001 (0.1%), 0.002 (0.2%),
@@ -472,8 +503,7 @@ def _register_dex(server: FastMCP) -> None:
                     "DEX swaps require confirm=true.",
                     suggestion="Re-invoke with confirm=true.",
                 )
-            side = "sell" if output_token.upper() == "USDC" else "buy"
-            symbol = input_token if side == "sell" else output_token
+            side, symbol = _swap_direction(input_token, output_token, chain_id)
             intent = OrderIntent(action="enter", side=side, symbol=symbol,
                                  amount=amount, reason="user-initiated")
             trade = execute_one(intent, mode="live",
@@ -503,8 +533,8 @@ def _register_dex(server: FastMCP) -> None:
         ),
         access="auth",
         parameters=[
-            ToolParam(name="input_token", type="string", required=True, description="Input token"),
-            ToolParam(name="output_token", type="string", required=True, description="Output token"),
+            ToolParam(name="input_token", type="string", required=True, description=_SWAP_TOKEN_DESCRIPTION),
+            ToolParam(name="output_token", type="string", required=True, description=_SWAP_TOKEN_DESCRIPTION),
             ToolParam(name="amount", type="number", required=True, description=_SWAP_AMOUNT_DESCRIPTION),
             ToolParam(name="chain_id", type="integer", required=True, description="EVM chain id"),
             ToolParam(name="wallet_address", type="string", required=True, description="Wallet from local store"),
