@@ -644,6 +644,8 @@ def test_upstream_key_probe_uses_configured_base_without_redirects_or_retries(mo
 @pytest.mark.parametrize(('prefix', 'environment'), [
     ('dev_', None),
     ('dev_', 'dev'),
+    ('dev_', 'prod'),
+    ('dev_', 'local'),
     ('test_', None),
 ])
 def test_dev_and_test_keys_never_guess_an_upstream_origin(monkeypatch, prefix, environment):
@@ -657,6 +659,18 @@ def test_dev_and_test_keys_never_guess_an_upstream_origin(monkeypatch, prefix, e
     cfg = {'MANGROVE_ACCESS_MODE': 'api-key', 'MANGROVE_API_KEY': prefix + 'a' * 48}
     with pytest.raises(setup.SetupError, match='require|requires'):
         setup.probe_upstream_key(cfg)
+
+
+@pytest.mark.parametrize('environment', ['prod', 'local'])
+def test_dev_key_keeps_explicit_origin_when_environment_is_overridden(monkeypatch, environment):
+    monkeypatch.setenv('MANGROVE_ENVIRONMENT', environment)
+    monkeypatch.setenv('MANGROVE_BASE_URL', 'https://environment.example/api/v1')
+    cfg = {
+        'MANGROVE_ACCESS_MODE': 'api-key',
+        'MANGROVE_API_KEY': 'dev_' + 'a' * 48,
+        'MANGROVEAI_BASE_URL': 'https://configured.example/api/v1',
+    }
+    assert setup.upstream_api_base(cfg) == 'https://configured.example/api/v1'
 
 
 def test_test_key_can_use_explicit_local_environment(monkeypatch):
