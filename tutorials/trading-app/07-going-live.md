@@ -89,23 +89,25 @@ It is protection, not paternalism. For this chapter use `0.002`.
 ## 3. Understand how `execute_swap` reads the amount
 
 `execute_swap` takes `input_token`, `output_token`, `amount`, `chain_id`,
-`wallet_address`, `slippage_pct` and `confirm`. It treats USDC as the quote
-currency and works with one other asset at a time:
+`wallet_address`, `slippage_pct` and `confirm`. The adapter requires exactly one
+USDC leg and one distinct asset: provide the case-insensitive `USDC` symbol or
+the canonical USDC address for the selected chain. A known USDC address from a
+different chain, two USDC legs, a self-swap or another unsupported pair is
+refused before execution.
 
-- **Selling** (the output token is USDC): the input token is the asset and
+- **Selling** (USDC is the output token): the input token is the asset and
   `amount` is the quantity of that asset to sell.
-- **Buying** (the output token is anything else): the agent spends USDC. It
-  reads `amount` as the quantity of the asset you want to buy, fetches that
-  asset's current price, and spends `amount` times that price in USDC. The
-  `input_token` you pass is not used.
+- **Buying** (USDC is the input token): the output token is the asset and
+  `amount` is the quantity of the asset requested. The adapter estimates USDC
+  input from the current mark price; it is not a fixed USDC spend cap or a
+  guarantee of the final filled amount.
 
-So a request to spend about 1 USDC on ETH needs an `amount` of roughly 1
-divided by the current ETH price, not 1. Passing 1 would try to buy one whole
-ETH. Before approving the call, make the client state the `amount` it will pass
-and the USDC it expects to spend, and check `input_amount` in the result.
+For example, with ETH at 2,500 USDC, `amount=1` requests one ETH and estimates
+2,500 USDC of input; it does not request a 1 USDC spend. Before approving the
+call, confirm the pair and amount, then check `input_amount` in the result.
 
-If you want to set the exact USDC input yourself, use the REST route instead,
-which treats `amount` as the input amount verbatim:
+To set the exact human USDC input yourself, use the REST route below, which
+treats `amount` as the input amount verbatim:
 
 ```bash
 curl -s -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
@@ -167,8 +169,10 @@ curl -s -H "X-API-Key: $KEY" \
   | python3 -m json.tool
 ```
 
-`status: "confirmed"` with a block number means the swap settled. No `tx_hash`
-means no on-chain trade happened.
+`status: "confirmed"` with a block number means the swap settled. If no
+`tx_hash` is returned, treat the outcome as unknown: the network may have
+accepted a broadcast even if the response was lost. Reconcile the local trade
+record and wallet history before any follow-up, and do not resubmit automatically.
 
 ## 6. Review what happened
 
