@@ -1,5 +1,6 @@
 """Local human OAuth setup. Credentials never enter MCP tool arguments."""
 import logging
+import secrets
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
@@ -64,9 +65,31 @@ def callback(request: Request):
         if any(len(request.query_params.getlist(k)) != 1 for k in request.query_params):
             raise oauth.OAuthError('Duplicate callback parameters.')
         oauth.complete(dict(request.query_params))
-        message, status = 'Connected to Mangrove. You can close this tab and return to setup.', 200
+        nonce = secrets.token_urlsafe(18)
+        content = f"""<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Mangrove connection</title></head>
+<body>
+  <main>
+    <h1>Mangrove is connected</h1>
+    <p>Your account is ready. Return to setup to finish.</p>
+    <p>This tab will close in a moment. If it stays open, close it and return to setup.</p>
+  </main>
+  <script nonce="{nonce}">window.setTimeout(function () {{ window.close(); }}, 1500);</script>
+</body>
+</html>"""
+        headers = {
+            'Cache-Control': 'no-store',
+            'Referrer-Policy': 'no-referrer',
+            'Content-Security-Policy': f"default-src 'none'; script-src 'nonce-{nonce}'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'",
+        }
+        return HTMLResponse(content, status_code=200, headers=headers)
     except oauth.OAuthError:
-        message, status = 'Sign-in did not complete. Return to setup and start sign-in again.', 400
-    return HTMLResponse('<!doctype html><title>Mangrove connection</title><p>' + message + '</p>',
-                        status_code=status, headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
-                        'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'"})
+        content = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+                   '<title>Mangrove connection</title></head><body><main><h1>Sign-in did not complete</h1>'
+                   '<p>Return to setup and start sign-in again.</p></main></body></html>')
+        return HTMLResponse(content, status_code=400, headers={
+            'Cache-Control': 'no-store',
+            'Referrer-Policy': 'no-referrer',
+            'Content-Security-Policy': "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'",
+        })

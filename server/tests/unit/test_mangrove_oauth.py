@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import parse_qs, urlsplit
@@ -163,6 +164,30 @@ def test_local_routes_auth_and_redacted_callback(env, monkeypatch):
     assert response.status_code == 400
     assert 'secret' not in response.text and 'private' not in response.text
     assert response.headers['cache-control'] == 'no-store'
+    assert 'window.close' not in response.text
+    assert 'script-src' not in response.headers['content-security-policy']
+
+    monkeypatch.setattr(
+        oauth, 'post',
+        lambda path, data=None, **kwargs: {'client_id': 'client'} if path == '/oauth/register' else reply(),
+    )
+    started = oauth.start()
+    state = parse_qs(urlsplit(started['authorization_url']).query)['state'][0]
+    response = client.get('/api/v1/agent/oauth/callback', params={
+        'state': state, 'iss': oauth.issuer(), 'code': 'synthetic-code',
+    })
+    assert response.status_code == 200
+    assert '<h1>Mangrove is connected</h1>' in response.text
+    assert 'Return to setup to finish' in response.text
+    assert 'If it stays open, close it and return to setup.' in response.text
+    script_nonce = re.search(r'<script nonce="([^"]+)">', response.text)
+    assert script_nonce and re.fullmatch(r'[A-Za-z0-9_-]+', script_nonce.group(1))
+    csp = response.headers['content-security-policy']
+    assert f"script-src 'nonce-{script_nonce.group(1)}'" in csp
+    assert "default-src 'none'" in csp and "frame-ancestors 'none'" in csp
+    assert 'setTimeout(function () { window.close(); }, 1500)' in response.text
+    assert 'synthetic-code' not in response.text and state not in response.text
+    assert 'mgo_at_' not in response.text and 'mgo_rt_' not in response.text
     record = logging.LogRecord('uvicorn.access', 20, '', 0, '%s %s %s %s %s',
                                ('ip', 'GET', '/api/v1/agent/oauth/callback?code=secret', '1.1', 200), None)
     routes._CallbackLogFilter().filter(record)
