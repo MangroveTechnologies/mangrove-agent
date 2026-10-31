@@ -135,7 +135,7 @@ def create_app() -> FastAPI:
         description=(
             "FastAPI + MCP service template with three-tier access control.\n\n"
             "## For Agents\n\n"
-            "- **REST discovery**: GET `/openapi.json` for the full OpenAPI 3.0 spec\n"
+            "- **REST discovery**: GET `/openapi.json` for the OpenAPI spec\n"
             "- **MCP tool catalog**: GET `/api/v1/agent/tools` for the live tool catalog and MangroveAI availability\n"
             "- **MCP endpoint**: Connect to `/mcp` via Streamable HTTP transport\n\n"
             "## Access Tiers\n\n"

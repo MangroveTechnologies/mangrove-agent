@@ -289,6 +289,9 @@ async def test_pair_guard_keeps_auth_and_confirmation_first(metadata_server, mon
 def test_fastapi_description_points_to_live_tool_catalog():
     from src.app import app
 
+    assert app.openapi()["openapi"] == "3.1.0"
+    assert "GET `/openapi.json` for the OpenAPI spec" in app.description
+    assert "OpenAPI 3.0" not in app.description
     assert "GET `/api/v1/agent/tools`" in app.description
     assert "/api/v1/docs/tools" not in app.description
 
