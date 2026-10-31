@@ -1094,6 +1094,32 @@ def test_markets_setup_check_reports_unavailable_without_blocking_other_tools(mo
     assert 'private' not in output
 
 
+@pytest.mark.parametrize('ownership', ['ready', 'unavailable'])
+def test_markets_setup_shows_validated_product_status(monkeypatch, capsys, ownership):
+    from src.services.marketplace_status import MESSAGE
+
+    status = {'version': 1, 'product': 'agent_to_agent_marketplace',
+              'availability': 'under_construction', 'message': MESSAGE}
+    monkeypatch.setattr(setup, 'request', Mock(return_value={
+        'ownership_discovery': ownership, 'marketplace': status,
+    }))
+    setup.check_markets({})
+    output = capsys.readouterr().out
+    assert MESSAGE in output
+    assert ('verified' if ownership == 'ready' else 'unavailable') in output
+
+
+def test_markets_setup_does_not_echo_arbitrary_product_text(monkeypatch, capsys):
+    monkeypatch.setattr(setup, 'request', Mock(return_value={
+        'ownership_discovery': 'ready', 'marketplace': {
+            'version': 1, 'product': 'agent_to_agent_marketplace',
+            'availability': 'under_construction', 'message': 'private upstream text',
+        },
+    }))
+    setup.check_markets({})
+    assert 'private upstream text' not in capsys.readouterr().out
+
+
 def test_keyless_setup_checks_public_ownership_discovery(monkeypatch, capsys):
     call = Mock(return_value={'ownership_discovery': 'ready'})
     monkeypatch.setattr(setup, 'request', call)

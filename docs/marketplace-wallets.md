@@ -273,3 +273,20 @@ payment does not require the current balance to cover the purchase again.
 The spending cap is permission to spend, not the wallet's token balance. These
 checks do not lock on-chain funds: another transaction can still change the
 balance, so Markets verification, settlement and durable recovery remain required.
+
+## Product status and recovery compatibility
+
+Agent to agent marketplace currently under construction. The local preparation
+and submission tools carry this product context; it does not describe strategy
+marketplace features, 1inch, Kraken or the other trading integrations. The Markets
+server owns the versioned product declaration in discovery. Local readiness and
+setup display its validated construction status beside ownership readiness and
+retain the specific upstream ownership-configuration diagnostic. Unrelated
+authentication, payment and service failures are not relabelled.
+
+There is no new execution gate. Existing funded offer recovery, release,
+cancellation and refund paths keep their existing protections. Upgrade this local
+consumer before publishing the server's presentation change: approval contracts
+ignore only the exact new construction note and matching product metadata so
+existing approvals retain their prior digest. Other description, schema,
+ownership and annotation changes still invalidate the contract.
