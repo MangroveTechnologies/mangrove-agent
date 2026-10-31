@@ -291,3 +291,13 @@ def test_fastapi_description_points_to_live_tool_catalog():
 
     assert "GET `/api/v1/agent/tools`" in app.description
     assert "/api/v1/docs/tools" not in app.description
+
+
+def test_wallet_backup_openapi_uses_current_strategy_route_name():
+    from src.app import app
+
+    description = app.openapi()["paths"][
+        "/api/v1/agent/wallet/{address}/confirm-backup"
+    ]["post"]["description"]
+    assert "PATCH `/api/v1/agent/strategies/{strategy_id}/status`" in description
+    assert "update_strategy_status" not in description

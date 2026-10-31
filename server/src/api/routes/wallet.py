@@ -191,7 +191,8 @@ async def wallet_reveal_by_address(address: str) -> RevealSecretResponse:
     summary="Confirm the user has backed up this wallet's secret",
     description=(
         "Flips wallets.backup_confirmed_at. Unlocks execute_swap and "
-        "update_strategy_status(live) for this wallet. The CLI "
+        "the live strategy transition through PATCH "
+        "`/api/v1/agent/strategies/{strategy_id}/status`. The CLI "
         "(scripts/confirm-backup.sh) calls this AFTER the user has "
         "revealed the secret and stored it somewhere safe."
     ),

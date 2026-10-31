@@ -868,7 +868,8 @@ def confirm_backup(address: str) -> WalletListItem:
 
     The user invokes `./scripts/confirm-backup.sh <address>` AFTER they've
     saved the plaintext secret outside the agent. This flips the flag;
-    downstream, execute_swap and update_strategy_status(live) unlock.
+    downstream, execute_swap and the live strategy transition through PATCH
+    `/api/v1/agent/strategies/{strategy_id}/status` unlock.
     """
     conn = get_connection()
     row = conn.execute(
