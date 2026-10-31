@@ -419,7 +419,7 @@ it does not enable arbitrary messages or XRPL transaction/payment signing.
 
 ## SOURCE: .claude/rules/risk-management.md
 
-<!-- sha256: 1338eafbabdbd5c921849a2376ed8e6a5ed43e4cce50d4264229dacb2fb43ba8 -->
+<!-- sha256: 3bcb3bf5831a579862857fa84aa9c12138b1bab1f644434087dea2e4835c9301 -->
 
 # Risk Management -- What Happens Behind the Scenes
 
@@ -450,8 +450,10 @@ the strategy's `execution_config`):
 - **`max_hold_bars`** -- force-exits a position held too long (a time-based exit,
   not an entry gate).
 - **Max-drawdown circuit breaker** (`max_drawdown_limit`, default **20%**) -- a
-  binary halt: once a strategy's equity draws down 20% from its **high-water
-  mark** (peak-relative, mark-to-market), new entries are denied. Denial:
+  binary halt: once a strategy's **closed (realized) equity** draws down 20%
+  from its **high-water mark** (peak-relative), new entries are denied. Closed
+  equity is cash plus open positions valued at entry cost; unrealized price
+  swings do not change it. Denial:
   `max_drawdown`. **Remediation is automatic:** on trip it latches the
   strategy's per-timeframe long cooldown, then re-baselines the high-water mark
   to current equity and resumes -- so a strategy is never permanently stuck, even
