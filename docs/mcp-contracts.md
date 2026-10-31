@@ -120,6 +120,12 @@ is running or that a tool has passed live execution.
 - The tools FastMCP registers, the names it ends up with, and the independent discovery
   registry in `server/src/mcp/registry.py` all agree. Registration attempts are recorded
   before the SDK silently ignores duplicate names.
+- Local discovery exposes titles and explicit read-only, destructive, idempotent
+  and open-world hints, tested through the SDK HTTP transport in
+  `server/tests/unit/test_mcp_metadata.py`. These hints describe possible tool
+  effects; they do not authorize calls, assert zero cost, replace user approval,
+  or enforce Mangrove risk policy. Forwarded receiver hints and marketplace
+  interaction metadata remain intact during price enrichment.
 - Parameter names, primitive types and required flags agree between the runtime schema and
   the registry. Authentication stays required for auth tools, but `api_key` is optional
   because a client may send the header instead. An omitted or false confirmation still

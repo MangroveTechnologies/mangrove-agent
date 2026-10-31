@@ -108,7 +108,7 @@ tools requires the API key.
 | `create_wallet` | Auth | Create and encrypt a wallet; returns a `vault_token` | `POST /wallet/create` |
 | `import_wallet` | Auth | Import a wallet from a stashed `vault_token` | `POST /wallet/import` |
 | `list_wallets` | Auth | List wallets, without secrets | `GET /wallet/list` |
-| `execute_swap` | Auth | Execute a DEX swap | `POST /dex/swap` |
+| `execute_swap` | Auth | Execute a DEX swap in asset units; see below | `POST /dex/swap` (exact input quantity) |
 | `cex_status` | Auth | Whether Kraken is connected | `GET /cex/status` |
 | `cex_connect_kraken` | Auth | Connect Kraken from a `vault_token` | `POST /cex/connect` |
 | `cex_balances` | Auth | Kraken balances | `GET /cex/balances` |
@@ -144,6 +144,23 @@ Tool names that clients should treat as MangroveAI's, not the agent's, include
 `get_strategy`, `list_signals`, `get_ohlcv`, `get_market_data`, `kb_search`, `list_trades`,
 `list_positions`, `list_evaluations` and `discover_tools`. They are served as MangroveAI
 advertises them, so run `list_tools` for the current set.
+
+The current local MCP `execute_swap` adapter uses the USDC/asset convention from
+the engine's order intents. Its `amount` is a human token quantity: a buy uses
+output-asset units and converts that quantity to USDC spend at the current mark
+price; a sell uses input-asset units and receives USDC. For example, with ETH at
+2,500 USDC, buying with `amount=1` requests one ETH and resolves to 2,500 USDC of
+input. It is not a fixed USDC spend cap or a guarantee of the final filled amount.
+Exactly one leg must be USDC and the other a distinct asset. The adapter accepts
+the case-insensitive USDC symbol or a locally reviewed canonical USDC address
+matching `chain_id` (Base mainnet or Base Sepolia). A USDC output selects a sell;
+a USDC input selects a buy. Unsupported pairs, self-swaps, both-USDC legs and
+known USDC addresses from the wrong chain are refused before the executor.
+
+The REST `/dex/swap` route supplies explicit token fields and instead uses the
+exact human input-token amount: `amount=1` for USDC to ETH means one USDC of
+input. This MCP/REST distinction does not change confirmation, signing, slippage,
+payment or Mangrove risk enforcement.
 
 ## Execution behavior
 
