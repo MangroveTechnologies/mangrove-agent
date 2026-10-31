@@ -22,7 +22,7 @@ def _unavailable_facilitator_metadata(*_args, **_kwargs):
 # Keep ordinary test collection offline; live runs opt into ENVIRONMENT=local.
 with (patch.object(HTTPFacilitatorClient, "get_supported", _unavailable_facilitator_metadata)
       if os.environ.get("ENVIRONMENT") == "test" else nullcontext()):
-    from src.app import create_app
+    import src.app as app_module
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +37,7 @@ def client():
     # Each test gets a fresh app + fresh MCP session manager. Sharing a
     # module-global app across tests breaks because FastMCP's session
     # manager's task group is closed after the first lifespan exit.
-    app = create_app()
+    app = app_module.create_app()
     with TestClient(app) as c:
         yield c
 
@@ -61,7 +61,6 @@ def offline_x402_facilitator(monkeypatch, _offline_facilitator_metadata):
     from x402.http import HTTPFacilitatorClient
     from x402.schemas import SupportedResponse
 
-    import src.app as app_module
     from src.mcp import server as mcp_server
     from src.shared.x402 import server as receiver
     from src.shared.x402.config import get_network
@@ -105,6 +104,6 @@ def offline_x402_facilitator(monkeypatch, _offline_facilitator_metadata):
 @pytest.fixture
 def offline_x402_client(offline_x402_facilitator):
     # The explicit dependency installs the handshake before app construction.
-    app = create_app()
+    app = app_module.create_app()
     with TestClient(app) as client:
         yield client
