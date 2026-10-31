@@ -38,8 +38,8 @@ local database, the scheduler and venue connections.
   `agent_reconcile_paper_schedule`.
 
 ID ownership follows each tool's contract. `agent_start_paper_schedule.strategy_id` is a
-MangroveAI strategy UUID sent to `execution.paper_start`; the returned `schedule_id` belongs
-to this local agent and is used by its schedule-management tools. Do not treat every ID on an
+MangroveAI strategy UUID sent to `execution.paper_start`; the returned `id` is the local
+schedule ID, passed as `schedule_id` to schedule-management tools. Do not treat every ID on an
 `agent_` tool as local.
 
 `hello_mangrove`, an x402 demo, is registered and callable but is hidden from `list_tools`.
