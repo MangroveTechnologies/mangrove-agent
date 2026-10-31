@@ -326,6 +326,47 @@ async def session(endpoint_url: str, key: str | None = None):
         raise
 
 
+_REFERENCE_KEYWORDS = frozenset({'$ref', '$dynamicRef', '$recursiveRef'})
+
+
+def _has_reference(item) -> bool:
+    if isinstance(item, dict):
+        return any(key in _REFERENCE_KEYWORDS or _has_reference(value) for key, value in item.items())
+    if isinstance(item, list):
+        return any(_has_reference(value) for value in item)
+    return False
+
+
+def _drop_inert_ids(item, depth=0):
+    """Copy ``item`` without each ``$id`` that cannot change how a reference resolves.
+
+    A ``$id`` names a schema; it only matters to a ``$ref`` that resolves against it.
+    One with no reference anywhere beneath it (MangroveAI's execution-config schema
+    carries ``urn:mangrove:execution-config:1``) is dropped, so the advertised schema
+    stays local-only. A ``$id`` that scopes a reference is kept, and ``validate_tool``
+    refuses it.
+    """
+    if depth > 48:
+        return item
+    if isinstance(item, dict):
+        inert = isinstance(item.get('$id'), str) and not _has_reference(item)
+        return {key: _drop_inert_ids(value, depth + 1) for key, value in item.items()
+                if not (inert and key == '$id')}
+    if isinstance(item, list):
+        return [_drop_inert_ids(value, depth + 1) for value in item]
+    return item
+
+
+def normalize_tool(tool: Tool) -> Tool:
+    """Return ``tool`` with inert ``$id`` keywords removed from its schemas."""
+    update = {}
+    if tool.inputSchema is not None:
+        update['inputSchema'] = _drop_inert_ids(tool.inputSchema)
+    if tool.outputSchema is not None:
+        update['outputSchema'] = _drop_inert_ids(tool.outputSchema)
+    return tool.model_copy(update=update, deep=True) if update else tool
+
+
 def validate_tool(tool: Tool) -> None:
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]{0,127}', tool.name):
         raise ValueError('Invalid tool name')
@@ -359,7 +400,8 @@ async def _read_catalog(target: str) -> list[Tool]:
                 size = 0
                 for _ in range(16):
                     page = await client.list_tools(cursor=cursor)
-                    for tool in page.tools:
+                    for listed in page.tools:
+                        tool = normalize_tool(listed)
                         validate_tool(tool)
                         size += len(tool.model_dump_json())
                         if tool.name in names or len(result) >= 2048 or size > 8 * 1024 * 1024:
