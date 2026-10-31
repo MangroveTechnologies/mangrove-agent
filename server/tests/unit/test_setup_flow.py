@@ -750,7 +750,10 @@ def test_plugin_health_requires_its_recorded_process_root(monkeypatch, tmp_path)
     assert plugin_probe.plugin_process('123', str(root_file)) is False
 
 
-def test_plugin_process_ownership_matches_an_isolated_uvicorn_process(tmp_path):
+def test_plugin_process_ownership_matches_an_isolated_uvicorn_process(tmp_path, monkeypatch):
+    # Linux ps truncates captured command output to COLUMNS unless wide output
+    # is explicit. Long plugin cache/data paths must retain the ownership args.
+    monkeypatch.setenv('COLUMNS', '80')
     module_dir = tmp_path / 'modules'
     module_dir.mkdir()
     (module_dir / 'uvicorn.py').write_text('''

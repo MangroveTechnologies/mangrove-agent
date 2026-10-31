@@ -57,7 +57,8 @@ def _process_arguments(pid, root_file):
         if not root:
             return None
         result = subprocess.run(
-            ["ps", "-p", str(pid_value), "-o", "command="],
+            # Both procps and BSD ps need wide output for long plugin paths.
+            ["ps", "-ww", "-p", str(pid_value), "-o", "command="],
             capture_output=True,
             text=True,
             check=False,
