@@ -65,11 +65,13 @@ def mangrove_ai_client() -> MangroveAI:
 
 
 def _api_key_base_url(config) -> str | None:
-    """Explicit API-key destination; absent overrides retain SDK defaults."""
+    """Development keys require an explicit origin; other keys retain SDK defaults."""
     from urllib.parse import urlsplit
 
     value = getattr(config, "MANGROVEAI_BASE_URL", None)
     if value is None or value == "":
+        if (_api_key(config) or "").startswith("dev_"):
+            raise ValidationError("Development API keys require an explicit MANGROVEAI_BASE_URL. No destination was guessed.")
         return None
     if not isinstance(value, str):
         raise ValidationError("MANGROVEAI_BASE_URL must be a URL string or null.")
