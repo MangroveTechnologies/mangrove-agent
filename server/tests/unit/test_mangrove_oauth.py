@@ -13,6 +13,7 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
 from src.api.routes import oauth as routes
 from src.services import mangrove_oauth as oauth
 

@@ -72,7 +72,7 @@ def callback(request: Request):
 <body>
   <main>
     <h1>Mangrove is connected</h1>
-    <p>Your account is ready. Return to setup to finish.</p>
+    <p>Sign-in succeeded. Return to setup to finish.</p>
     <p>This tab will close in a moment. If it stays open, close it and return to setup.</p>
   </main>
   <script nonce="{nonce}">window.setTimeout(function () {{ window.close(); }}, 1500);</script>
