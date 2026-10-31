@@ -284,3 +284,10 @@ async def test_pair_guard_keeps_auth_and_confirmation_first(metadata_server, mon
     })
     assert json.loads(result)["code"] == expected
     executor.assert_not_called()
+
+
+def test_fastapi_description_points_to_live_tool_catalog():
+    from src.app import app
+
+    assert "GET `/api/v1/agent/tools`" in app.description
+    assert "/api/v1/docs/tools" not in app.description

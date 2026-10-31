@@ -1,9 +1,9 @@
 """MCP tool registry with access tier metadata.
 
 Maintains a catalog of all registered MCP tools with their access tier,
-parameters, and pricing info. Used by the /api/v1/docs/tools discovery
-endpoint so agents can programmatically discover what tools exist and
-what each one costs before connecting via MCP.
+parameters, and pricing info. Used to describe local MCP tools and their pricing. The live HTTP
+catalog is exposed at /api/v1/agent/tools; MCP clients can also call
+list_tools or the protocol tools/list method.
 """
 from dataclasses import dataclass, field
 from typing import Optional
