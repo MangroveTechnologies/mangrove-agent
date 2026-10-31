@@ -13,6 +13,12 @@ running or that every provider/tool has passed live execution acceptance.
 
 - Actual FastMCP registration attempts (before the SDK silently ignores duplicate
   names), runtime names, and the independent discovery registry all agree.
+- Local discovery exposes titles and explicit read-only, destructive, idempotent
+  and open-world hints, tested through the SDK HTTP transport in
+  `server/tests/unit/test_mcp_metadata.py`. These hints describe possible tool
+  effects; they do not authorize calls, assert zero cost, replace user approval,
+  or enforce Mangrove risk policy. Forwarded receiver hints and marketplace
+  interaction metadata remain intact during price enrichment.
 - Parameter names, primitive types and argument requiredness agree. Authentication
   remains required for auth tools, but `api_key` is optional when sent in the
   local HTTP header. A false/omitted confirmation still refuses execution.

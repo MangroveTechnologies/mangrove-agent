@@ -3,6 +3,7 @@
 import json
 
 import anyio
+from mcp.types import ToolAnnotations
 
 from src.services import paper_schedule_service as paper
 
@@ -19,7 +20,10 @@ def register(server):
         except Exception as error:
             return _handle_agent_error(error)
 
-    @server.tool()
+    @server.tool(
+        title="Start paper evaluation schedule",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True),
+    )
     async def agent_start_paper_schedule(
         strategy_id: str, interval_seconds: int, max_evaluations: int, confirm: bool = False, api_key: str = ""
     ) -> str:
@@ -30,22 +34,34 @@ def register(server):
         """
         return await call(api_key, paper.start, strategy_id, interval_seconds, max_evaluations, confirm)
 
-    @server.tool()
+    @server.tool(
+        title="List local paper schedules",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    )
     async def agent_list_paper_schedules(api_key: str = "") -> str:
         """List local schedule IDs and cached progress for the current upstream identity; no upstream call."""
         return await call(api_key, paper.list_schedules)
 
-    @server.tool()
+    @server.tool(
+        title="Pause paper evaluation schedule",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True),
+    )
     async def agent_pause_paper_schedule(schedule_id: str, api_key: str = "") -> str:
         """Stop new local requests and confirm server pause. Does not close paper positions."""
         return await call(api_key, paper.pause, schedule_id)
 
-    @server.tool()
+    @server.tool(
+        title="Read paper schedule status",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True),
+    )
     async def agent_get_paper_schedule(schedule_id: str, refresh: bool = False, api_key: str = "") -> str:
         """Read local scheduling status. refresh fetches authoritative server state and may cost API/x402 usage."""
         return await call(api_key, paper.inspect, schedule_id, refresh)
 
-    @server.tool()
+    @server.tool(
+        title="Reconcile unresolved paper evaluation",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True),
+    )
     async def agent_reconcile_paper_schedule(schedule_id: str, api_key: str = "") -> str:
         """Recover an unresolved evaluation using the original tick and payment operation identity."""
         return await call(api_key, paper.reconcile, schedule_id)
