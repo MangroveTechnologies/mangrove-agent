@@ -274,6 +274,14 @@ def check_upstream(cfg):
 def check_markets(cfg):
     try:
         result = request(cfg, '/api/v1/agent/marketplace/readiness')
+        if isinstance(result, dict):
+            status = result.get('marketplace')
+            if (isinstance(status, dict) and type(status.get('version')) is int
+                    and status['version'] == 1
+                    and status.get('product') == 'agent_to_agent_marketplace'
+                    and status.get('availability') == 'under_construction'
+                    and status.get('message') == 'Agent to agent marketplace currently under construction.'):
+                print(status['message'])
         if not isinstance(result, dict) or result.get('ownership_discovery') != 'ready':
             raise SetupError('Invalid ownership readiness response.')
     except SetupError:

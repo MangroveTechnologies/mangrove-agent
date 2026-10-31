@@ -18,6 +18,7 @@ from mcp.client.streamable_http import streamablehttp_client
 
 from src.config import app_config
 from src.services.marketplace_authorization import contract_digest, normalize_arguments, validate_challenge
+from src.services.marketplace_status import product_status as _product_status
 from src.services.wallet_manager import _get_wallet_row, sign_marketplace_proof
 from src.shared.clients.mangrove import _api_key
 from src.shared.errors import AgentError, SigningError, UpstreamAccessError, upstream_access_error
@@ -27,6 +28,21 @@ from src.shared.x402.mcp_diagnostics import protect_mcp_diagnostics
 class MarketplaceError(AgentError):
     code = "MARKETPLACE_UNAVAILABLE"
     http_status = 400
+
+
+class MarketplaceReadinessError(MarketplaceError):
+    """Preserve an explicit server readiness diagnostic beside product status."""
+
+    http_status = 503
+
+    def __init__(self, product_status: dict, diagnostic: dict) -> None:
+        super().__init__("Markets ownership discovery is unavailable or incompatible.")
+        self.product_status = product_status
+        self.diagnostic = diagnostic
+
+    def to_dict(self) -> dict:
+        return {**super().to_dict(), "marketplace": self.product_status,
+                "diagnostic": self.diagnostic}
 
 
 def _url(value: str) -> str:
@@ -43,7 +59,7 @@ def _url(value: str) -> str:
         raise MarketplaceError("Configure a trusted HTTPS endpoint or loopback HTTP endpoint.") from None
 
 
-def _settings() -> dict:
+def _settings(*, product_status: dict | None = None) -> dict:
     key = _api_key(app_config)
     pinned_audience = getattr(app_config, "MARKETPLACE_OWNERSHIP_AUDIENCE", None)
     chain_id = getattr(app_config, "MARKETPLACE_CHAIN_ID", None)
@@ -53,7 +69,8 @@ def _settings() -> dict:
         raise MarketplaceError("Configure a supported marketplace wallet network.")
     markets = _url(app_config.MANGROVEMARKETS_BASE_URL)
     authority = _url(getattr(app_config, "MANGROVEAI_BASE_URL", None)) if key else None
-    ownership = _discover_ownership(markets)
+    ownership = (_discover_ownership(markets) if product_status is None else
+                 _discover_ownership(markets, product_status=product_status))
     audience = ownership["audience"]
     if pinned_audience is not None and pinned_audience != audience:
         raise MarketplaceError("Markets ownership identity does not match the configured deployment.")
@@ -70,13 +87,12 @@ def _settings() -> dict:
     }
 
 
-def _discover_ownership(markets: str) -> dict:
+def _discover_ownership(markets: str, *, product_status: dict | None = None) -> dict:
     try:
         with httpx.Client(timeout=10, follow_redirects=False, trust_env=False) as client:
             with client.stream("GET", markets + "/.well-known/mangrove-marketplace",
                                headers={"Accept-Encoding": "identity"}) as response:
-                if (response.status_code != 200
-                        or response.headers.get("content-encoding", "identity") != "identity"):
+                if response.headers.get("content-encoding", "identity") != "identity":
                     raise ValueError
                 raw = bytearray()
                 for chunk in response.iter_bytes():
@@ -84,6 +100,22 @@ def _discover_ownership(markets: str) -> dict:
                     if len(raw) > 8192:
                         raise ValueError
                 document = json.loads(raw)
+                status_code = response.status_code
+        if not isinstance(document, dict):
+            raise ValueError
+        declared_status = _product_status(document)
+        if status_code != 200:
+            # Only this explicit ownership-configuration response carries a product
+            # readiness declaration. Never relabel auth, payment or service failures.
+            if (status_code == 503 and declared_status is not None
+                    and document.get("error") is True
+                    and document.get("code") == "OWNERSHIP_UNAVAILABLE"
+                    and document.get("message") == "Marketplace ownership is not configured"):
+                raise MarketplaceReadinessError(declared_status, {
+                    "code": document["code"], "message": document["message"],
+                    "http_status": status_code,
+                })
+            raise ValueError
         if (not isinstance(document, dict) or type(document.get("version")) is not int
                 or document["version"] != 1):
             raise ValueError
@@ -102,6 +134,8 @@ def _discover_ownership(markets: str) -> dict:
         if (type(chain_id) is not int or chain_id not in {8453, 84532}
                 or ownership.get("evm_network") != f"eip155:{chain_id}"):
             raise ValueError
+        if product_status is not None and declared_status is not None:
+            product_status.update(declared_status)
         return ownership
     except (httpx.HTTPError, ValueError, TypeError):
         raise MarketplaceError("Markets ownership discovery is unavailable or incompatible.") from None
@@ -109,8 +143,14 @@ def _discover_ownership(markets: str) -> dict:
 
 def readiness() -> dict:
     """Check ownership configuration without signing, paying or creating approvals."""
-    _settings()
-    return {"ownership_discovery": "ready", "wallet_check": "on_selection"}
+    product_status: dict = {}
+    try:
+        _settings(product_status=product_status)
+    except MarketplaceReadinessError as error:
+        return {"ownership_discovery": "unavailable", "marketplace": error.product_status,
+                "diagnostic": error.diagnostic, "wallet_check": "on_selection"}
+    return {"ownership_discovery": "ready", "wallet_check": "on_selection",
+            **({"marketplace": product_status} if product_status else {})}
 
 
 def _identity(settings: dict, wallet: dict) -> dict:
