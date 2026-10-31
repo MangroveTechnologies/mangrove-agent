@@ -113,6 +113,19 @@ async def test_enrichment_preserves_receiver_hints_and_interaction_metadata(meta
             assert submit.annotations.readOnlyHint is False
 
 
+@pytest.mark.asyncio
+async def test_import_wallet_describes_private_handoff_file(metadata_server):
+    tools = {tool.name: tool for tool in await metadata_server.list_tools()}
+    tool = tools["import_wallet"]
+    assert "prints the file path, not the token" in tool.description
+    assert "restricted `./scripts/chat.sh` client cannot read" in tool.description
+    from src.mcp.registry import list_tools
+
+    registry_tool = next(entry for entry in list_tools() if entry["name"] == "import_wallet")
+    vault_token = next(param for param in registry_tool["parameters"] if param["name"] == "vault_token")
+    assert "private handoff file printed by scripts/stash-secret.sh" in vault_token["description"]
+
+
 def test_tools_list_wire_exposes_quantity_units_and_hints(metadata_server):
     # This is the SDK's ASGI transport only: no agent lifespan, DB, scheduler,
     # provider client or tool handler is started. TestClient uses no socket.

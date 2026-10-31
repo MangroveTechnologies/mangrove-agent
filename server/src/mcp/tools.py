@@ -274,11 +274,12 @@ def _register_wallet(server: FastMCP) -> None:
     ) -> str:
         """Import an existing wallet whose secret has been stashed in the vault.
 
-        The user's flow: run `./scripts/stash-secret.sh` in a terminal (it
-        prompts for the private key via `read -s` so it isn't echoed, posts
-        to /internal/stash-secret, prints the returned vault_token). Then
-        tell the agent to import that id. The private key NEVER enters
-        Claude Code's conversation context — this tool only handles the id.
+        The user's flow: run `./scripts/stash-secret.sh` in a terminal. It
+        prompts for the private key without echoing it, writes a private
+        single-use handoff file, and prints the file path, not the token.
+        A client with local-file access can read the token from that file and
+        call this tool. The restricted `./scripts/chat.sh` client cannot read
+        the file. The private key never enters this tool or the conversation.
 
         Supports EVM keys/mnemonics and XRPL family seeds.
         Do NOT accept a raw private key, mnemonic or seed as input to this tool,
@@ -302,13 +303,16 @@ def _register_wallet(server: FastMCP) -> None:
     register_tool(ToolEntry(
         name="import_wallet",
         description=(
-            "Import an existing wallet from a stashed vault_token. The user "
-            "must obtain the id by running scripts/stash-secret.sh in a "
-            "terminal FIRST — this tool refuses raw keys by design."
+            "Import an existing wallet from the private handoff file created "
+            "by scripts/stash-secret.sh. That script prints the file path, "
+            "not the vault_token. A client with local-file access reads the "
+            "token and calls this tool; restricted scripts/chat.sh cannot. "
+            "Raw keys are refused."
         ),
         access="auth",
         parameters=[
-            ToolParam(name="vault_token", type="string", required=True, description="From scripts/stash-secret.sh output"),
+            ToolParam(name="vault_token", type="string", required=True,
+                      description="Read from the private handoff file printed by scripts/stash-secret.sh using a client with local-file access."),
             ToolParam(name="chain", type="string", required=False, description="evm (default) or xrpl"),
             ToolParam(name="network", type="string", required=False, description="mainnet (default) | testnet"),
             ToolParam(name="chain_id", type="integer", required=False, description="Default 8453 (Base mainnet)"),
