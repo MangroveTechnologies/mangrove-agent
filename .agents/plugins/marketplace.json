@@ -3,7 +3,7 @@
   "interface": {
     "displayName": "Mangrove"
   },
-  "description": "Claude Code plugins from Mangrove Technologies.",
+  "description": "Provider agnostic plugins from Mangrove Technologies.",
   "plugins": [
     {
       "name": "mangrove-agent",
