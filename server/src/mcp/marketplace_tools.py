@@ -3,7 +3,7 @@ import json
 
 import anyio
 from mcp.server.fastmcp import FastMCP
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from src.mcp.registry import ToolEntry, ToolParam, register_tool
 from src.services import marketplace
@@ -19,7 +19,10 @@ def register_marketplace(server: FastMCP) -> None:
     """Expose explicit preparation and confirmation without exposing a raw signer."""
     from src.mcp.tools import _APIKEY, _auth_error, _handle_agent_error, _require
 
-    @server.tool()
+    @server.tool(
+        title="Prepare marketplace action for review",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
+    )
     async def marketplace_prepare(operation: str, arguments: dict, wallet_address: str, api_key: str = "") -> CallToolResult:
         """Prepare a discovered Markets action for local approval without signing.
         Use the configured Markets catalog for operation names and arguments.
@@ -34,7 +37,11 @@ def register_marketplace(server: FastMCP) -> None:
         except Exception as error:
             return _response(json.loads(_handle_agent_error(error)))
 
-    @server.tool(meta={"anthropic/requiresUserInteraction": True})
+    @server.tool(
+        title="Submit approved marketplace action",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True),
+        meta={"anthropic/requiresUserInteraction": True},
+    )
     async def marketplace_submit(approval_id: str, confirm: bool = False, api_key: str = "") -> CallToolResult:
         """After user approval of the prepared action, sign locally and submit once.
         Requires confirm=true. Never create a replacement approval after an uncertain
