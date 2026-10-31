@@ -14,7 +14,7 @@ before claiming operational access. Respect the host instruction hierarchy.
 
 ## SOURCE: SAGE.md
 
-<!-- sha256: 5d5877e0ca56da49a110d177c306269b6fb470ec167a4b1cd83094996da98a26 -->
+<!-- sha256: c5006b90caf3ef38be14113b5b1d7fd0a6395e21bbd27f52609e9eac9c824563 -->
 
 # Mangrove Agent
 
@@ -134,7 +134,7 @@ limitation, not permission to bypass controls.
 - Tests in `server/tests/` -- mirror `src/`
 - Config in `server/src/config/` -- per-environment JSON files (no `.env`)
 
-Full extension workflow: [`docs/contributing.md`](docs/contributing.md).
+Full extension workflow: [the contributing guide](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/docs/contributing.md).
 
 ## Rules
 
