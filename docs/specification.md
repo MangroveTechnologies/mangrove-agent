@@ -426,6 +426,11 @@ status, so trades from direct swaps satisfy the foreign key. Status counts exclu
 | `019_paper_payment_attempt` | `paper_schedules.payment_request_id` |
 | `020_x402_shared_recovery` | `x402_recovery_state` |
 
+The migration runner applies SQL files in lexicographic filename order and records the
+full filename in `_migrations.filename`; the numeric prefix is not a unique migration ID.
+The two `018_` files are separate ordered migrations. Do not rename or renumber an
+existing migration file, because a renamed filename is treated as unapplied.
+
 Kraken credentials and the Robinhood OAuth grant are not in the database. They are
 Fernet-encrypted files in the data directory next to it (`cex-kraken.enc` and
 `robinhood-oauth.enc`).

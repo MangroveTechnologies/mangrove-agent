@@ -51,9 +51,9 @@ You pay for MangroveAI access with a free API key from https://mangrovedeveloper
 |---|---|---|
 | Ask your AI client | You use Claude Code, Codex, Grok Build or Perplexity Computer and want the client to install and connect itself | [Install with an AI client](#install-with-an-ai-client) |
 | Clone and run `setup.sh` | You want the full repository, API-key or x402 access, and the option to change the code | [Quick start](#quick-start-clone-and-run-setupsh) |
-| Claude Code plugin | You use Claude Code and have a MangroveAI API key | [Claude Code plugin](#claude-code-plugin) |
-| Codex plugin or MCP config | You use Codex | [Codex](#codex) |
-| Docker | You cannot run Python on the host | [Docker](#docker) |
+| Claude Code plugin | You use Claude Code and have a MangroveAI API key | [Claude Code plugin](docs/clients.md#claude-code) |
+| Codex plugin or MCP config | You use Codex | [Codex](docs/clients.md#codex-and-grok-build) |
+| Docker | You cannot run Python on the host | [Docker](#alternate-quick-start--docker) |
 
 Every path runs the same agent. Use one path per machine: the agent listens on `127.0.0.1:9080`, so a plugin install and a clone cannot run side by side on that port.
 
