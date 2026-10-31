@@ -15,6 +15,8 @@ DATA_DIR="${CLAUDE_PLUGIN_DATA:-$AGENT_HOME}"
 PORT="${MANGROVE_AGENT_PORT:-9080}"
 KEY="${CLAUDE_PLUGIN_OPTION_MANGROVE_API_KEY:-}"
 STATE="$AGENT_HOME/agent-data"
+PID_FILE="$STATE/agent.pid"
+ROOT_FILE="$STATE/agent.root"
 export CLAUDE_PLUGIN_ROOT="$ROOT" MANGROVE_AGENT_HOME="$AGENT_HOME" CLAUDE_PLUGIN_DATA="$DATA_DIR"
 
 PY=""
@@ -54,12 +56,9 @@ fi
 [ -n "$KEY" ] || status "NOT CONFIGURED: no MangroveAI API key. Tell the user to get a free key at https://mangrovedeveloper.ai and set it with \`/plugin\` (mangrove-agent -> configure), or in a terminal: \`claude plugin install mangrove-agent@mangrove --config mangrove_api_key=<key>\`. They must never paste the key into this chat."
 export CLAUDE_PLUGIN_OPTION_MANGROVE_API_KEY="$KEY"
 
-# /strategies requires the key (unlike /health, /status, /tools), so a 200 means
-# this agent accepts the plugin's key, not just that something holds the port.
-code="$("$PY" "$ROOT/scripts/plugin_http_status.py" "http://127.0.0.1:$PORT/api/v1/agent/strategies" "$KEY")"
-
-if [ "$code" = "200" ] && [ "$(cat "$STATE/agent.root" 2>/dev/null)" = "$ROOT" ]; then
-  status "RUNNING at http://127.0.0.1:$PORT (state in $AGENT_HOME). MCP tools are available."
+if "$PY" "$ROOT/scripts/plugin_http_status.py" --owned-health \
+    "http://127.0.0.1:$PORT/health" "$PID_FILE" "$ROOT_FILE" "$ROOT"; then
+  status "RUNNING: this plugin's agent process and local health check are verified at http://127.0.0.1:$PORT (state in $AGENT_HOME). If MCP tools are missing, run /mcp and reconnect."
 fi
 
 mkdir -p "$STATE" 2>/dev/null && chmod 700 "$AGENT_HOME" "$STATE" 2>/dev/null

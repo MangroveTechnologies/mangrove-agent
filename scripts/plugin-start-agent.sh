@@ -73,10 +73,13 @@ fi
 http_code() {  # http_code <url> [api-key]
   "$PY" "$ROOT/scripts/plugin_http_status.py" "$@"
 }
-# /health, /status and /tools are unauthenticated, so they can't tell our agent
-# from another one on the port. /strategies requires the key and reads only the
-# local DB (no upstream call).
-ours_healthy() { [ "$(http_code "http://127.0.0.1:$PORT/api/v1/agent/strategies" "$KEY")" = "200" ]; }
+agent_healthy() {
+  "$PY" "$ROOT/scripts/plugin_http_status.py" --owned-health \
+    "http://127.0.0.1:$PORT/health" "$PID_FILE" "$ROOT_FILE" "$ROOT"
+}
+plugin_process() {
+  "$PY" "$ROOT/scripts/plugin_http_status.py" --plugin-process "$1" "$ROOT_FILE"
+}
 
 # -- 1. dependencies -----------------------------------------------------------
 LOCK_SHA="$("$PY" -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$ROOT/server/requirements.lock")"
@@ -97,23 +100,25 @@ chmod 600 "$CFG"
 # -- 3. (re)start ----------------------------------------------------------------
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   OLD_PID="$(cat "$PID_FILE")"
-  if [ "$(cat "$ROOT_FILE" 2>/dev/null || true)" = "$ROOT" ] && ours_healthy; then
+  if agent_healthy; then
     log "agent already running (pid $OLD_PID) from this plugin version"
     exit 0
   fi
-  if ps -p "$OLD_PID" -o command= 2>/dev/null | grep -q 'uvicorn src.app:app'; then
+  if plugin_process "$OLD_PID"; then
     log "restarting agent pid $OLD_PID (plugin updated or unhealthy)"
     kill "$OLD_PID" 2>/dev/null || true
     for _ in $(seq 1 20); do kill -0 "$OLD_PID" 2>/dev/null || break; sleep 0.5; done
+  else
+    log "recorded PID $OLD_PID is not this plugin's uvicorn process; leaving it untouched"
   fi
 fi
 
 if [ "$(http_code "http://127.0.0.1:$PORT/health")" != "0" ]; then
-  if ours_healthy; then
-    log "an agent accepting this key is already serving :$PORT; leaving it running"
+  if agent_healthy; then
+    log "this plugin's healthy agent is already serving :$PORT; leaving it running"
     exit 0
   fi
-  die "port $PORT is already in use by another process (a git-clone mangrove-agent?). Stop it, or set MANGROVE_AGENT_PORT."
+  die "port $PORT is already in use by a process this plugin cannot verify. It was left untouched; stop it or set MANGROVE_AGENT_PORT."
 fi
 
 cd "$AGENT_HOME"
@@ -126,7 +131,7 @@ printf '%s\n' "$ROOT" > "$ROOT_FILE"
 log "agent starting (pid $(cat "$PID_FILE")) on 127.0.0.1:$PORT"
 
 for _ in $(seq 1 60); do
-  if ours_healthy; then
+  if agent_healthy; then
     log "agent healthy on 127.0.0.1:$PORT"
     exit 0
   fi
