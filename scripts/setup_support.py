@@ -132,10 +132,11 @@ def upstream_api_base(cfg):
                        'local' if key.startswith('local_') else 'prod')
     value = cfg.get('MANGROVEAI_BASE_URL') or os.environ.get('MANGROVE_BASE_URL')
     if not value:
-        if environment == 'dev':
+        if environment == 'dev' or key.startswith('dev_'):
             raise SetupError(
-                'Development API key checks require MANGROVEAI_BASE_URL or MANGROVE_BASE_URL; '
-                'there is no verified development API default.'
+                'Development API key checks require MANGROVEAI_BASE_URL or MANGROVE_BASE_URL, '
+                'even when MANGROVE_ENVIRONMENT is overridden; there is no verified '
+                'development API default.'
             )
         if key.startswith('test_') and environment == 'prod':
             raise SetupError(
