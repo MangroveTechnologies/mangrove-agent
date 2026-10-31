@@ -94,7 +94,7 @@ if [ ! -x "$VENV/bin/python" ] || [ "$(cat "$VENV/.lock-sha256" 2>/dev/null || t
 fi
 
 # -- 2. config -----------------------------------------------------------------
-"$VENV/bin/python" "$ROOT/scripts/plugin_seed_config.py" "$ROOT/server/src/config/local-example-config.json" "$CFG" "$KEY" "$PORT" "$MARKETS_URL_DEFAULT"
+printf '%s' "$KEY" | "$VENV/bin/python" "$ROOT/scripts/plugin_seed_config.py" "$ROOT/server/src/config/local-example-config.json" "$CFG" "$PORT" "$MARKETS_URL_DEFAULT"
 chmod 600 "$CFG"
 
 # -- 3. (re)start ----------------------------------------------------------------

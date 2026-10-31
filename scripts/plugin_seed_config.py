@@ -1,13 +1,17 @@
 """Seed or update the plugin's local-config.json (chmod 600) with the user's key.
 
-Usage: plugin_seed_config.py EXAMPLE_CONFIG CONFIG_PATH API_KEY PORT MARKETS_URL_DEFAULT
+Usage: plugin_seed_config.py EXAMPLE_CONFIG CONFIG_PATH PORT MARKETS_URL_DEFAULT
+The API key is read from standard input, never from process arguments.
 Called by plugin-start-agent.sh.
 """
 import json
 import os
 import sys
 
-example, cfg_path, key, port, markets_default = sys.argv[1:6]
+example, cfg_path, port, markets_default = sys.argv[1:5]
+key = sys.stdin.read()
+if not key:
+    raise SystemExit("An API key is required on standard input.")
 if os.path.exists(cfg_path):
     with open(cfg_path, "r") as f:
         cfg = json.load(f)

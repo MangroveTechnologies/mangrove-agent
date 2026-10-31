@@ -154,12 +154,14 @@ def test_key_mode_real_sdk_headers_and_no_payment_fallback(monkeypatch, status):
 
     def handle(request):
         seen.append(request)
+        assert str(request.url).startswith("https://dev.example/api/v1/")
         assert request.headers["Authorization"] == "Bearer dev_configured"
         assert "PAYMENT-SIGNATURE" not in request.headers
         assert "X-Wallet-Address" not in request.headers
         return httpx.Response(status, json={"signals": [], "total": 0})
 
     monkeypatch.setattr(app_config, "MANGROVE_API_KEY", "dev_configured")
+    monkeypatch.setattr(app_config, "MANGROVEAI_BASE_URL", "https://dev.example/api/v1")
     monkeypatch.setenv("MANGROVE_API_KEY", "prod_ambient")
     monkeypatch.setattr("mangrove_ai._config._maybe_load_dotenv", lambda: pytest.fail("dotenv loaded"))
     monkeypatch.setattr(mangrove, "create_x402_mangrove_client", lambda **kw: pytest.fail("payment fallback"))
@@ -232,3 +234,15 @@ def test_api_key_destination_rejects_unsafe_or_invalid_override(value):
 
 def test_missing_api_key_destination_preserves_sdk_defaults():
     assert mangrove._api_key_base_url(SimpleNamespace()) is None
+
+
+@pytest.mark.parametrize("base", [None, ""])
+def test_dev_key_missing_origin_is_rejected_by_the_shared_resolver(monkeypatch, base):
+    config = SimpleNamespace(MANGROVE_API_KEY="dev_fixture", MANGROVEAI_BASE_URL=base,
+                             MANGROVE_SDK_TIMEOUT_SECONDS=1)
+    monkeypatch.setattr(mangrove, "_get_config", lambda: config)
+    factory = Mock(side_effect=AssertionError("SDK must not guess a development destination"))
+    monkeypatch.setattr(mangrove, "MangroveAI", factory)
+    with pytest.raises(ValidationError, match="Development API keys require"):
+        mangrove_ai_client()
+    factory.assert_not_called()
