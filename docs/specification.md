@@ -1,428 +1,149 @@
-# Technical Specification: mangrove-agent
+# Technical Specification
 
-**Generated:** 2026-04-17
-**Status:** Draft
-**Based on:** `docs/user-stories.md` (approved requirements)
-
-> **Superseded in part (2026-10).** Strategy authoring and backtesting moved to
-> MangroveAI, which is now the single source of truth. The agent no longer generates
-> candidates, runs or grades backtests, or proxies Oracle, market-data, signal, KB or
-> on-chain reads: it forwards MangroveAI's tools over MCP. `POST /strategies/autonomous`
-> and `/strategies/manual` return 410; `candidate_generator`, `backtest_service`,
-> `backtest_verdict`, `threshold_spec.json` and the `BACKTEST_*` config keys are gone.
-> Sections describing them are kept for history only. See `README.md` for the current
-> tool surface.
+This is the technical specification for mangrove-agent: its interfaces, behavior, data models,
+storage and configuration. For how the pieces fit together, read the
+[architecture](architecture.md) first. For the full route list, see the
+[API reference](api-reference.md).
 
 ## Overview
 
-mangrove-agent is a FastAPI + MCP service that wraps the `mangroveai` and `mangrovemarkets` Python SDKs with local state, autonomous strategy generation, cron-based execution, and a full audit trail.
+mangrove-agent is a FastAPI and MCP service that runs on the user's own machine. It holds
+wallet keys locally, runs scheduled strategy evaluations, controls what can be signed and
+spent, and keeps an audit trail in SQLite. Strategy authoring, backtesting, signals, market
+data and strategy evaluation are done by MangroveAI, which the agent reaches over MCP and
+through the `mangroveai` SDK. DEX routing and marketplace actions are done by MangroveMarkets.
 
-It exposes the same functionality two ways:
-- **MCP tools at `/mcp`** (Streamable HTTP transport) — preferred for AI agents because of structured tool discovery and typed invocation.
-- **REST endpoints at `/api/v1/agent/*`** — universal; any HTTP client (Python scripts, cron jobs, curl, notebooks, tests) can use them without an MCP library.
+The agent exposes its functions two ways:
 
-Both protocols share a single service layer — `create_wallet` (MCP tool) and `POST /api/v1/agent/wallet/create` (REST endpoint) call the same Python function. No duplicated business logic.
+- **MCP tools at `/mcp`** (Streamable HTTP). This is the preferred interface for AI clients
+  because tools are discoverable and typed.
+- **REST routes at `/api/v1/agent/*`**. Any HTTP client can use them without an MCP library.
 
-The agent runs on the user's own machine via Docker Compose (or `uvicorn` directly) — single-user, local-only for v1. It holds wallet keys locally (encrypted), registers APScheduler cron jobs at strategy activation, and logs every evaluation and trade to local SQLite.
+Both interfaces call one service layer. For example, the `create_wallet` tool and
+`POST /api/v1/agent/wallet/create` call the same function. The agent is single-user and
+local-only.
 
-Cloud deployment (Cloud Run, persistent cloud storage) is **out of scope for v1** and will be addressed in a subsequent release.
+## Access tiers
 
-## Access Tiers
+| Tier | What it covers | How to access |
+|------|----------------|---------------|
+| Free | `GET /health`, `GET /api/v1/agent/status`, `GET /api/v1/agent/tools`, and the `status` and `list_tools` tools | No credentials |
+| Auth | Every other agent route and tool | `X-API-Key` header |
+| x402 | `GET /api/x402/hello-mangrove` and the `hello_mangrove` tool, a demo of the payment path | An x402 payment, or a valid `X-API-Key` |
 
-| Tier | Endpoints | How to access |
-|------|-----------|---------------|
-| Free | `/health`, `/api/v1/agent/tools`, `/api/v1/agent/status` | No credentials |
-| Auth | Everything else (default tier for v1 agent endpoints) | `X-API-Key: <configured-key>` header |
-| x402 | Reserved — currently the `hello_mangrove.py` demo route only (renamed from the template's `easter_egg.py`); no v1 agent endpoints land here yet | x402 payment OR `X-API-Key` bypass |
+## Authentication
 
-Single-user model: the API key (config key `API_KEY`) is a shared secret between the user's Claude Code config and the agent. No RBAC, no user accounts.
+Authentication is a single shared secret between the user's AI client and the agent. There are
+no accounts, sessions or roles.
 
-x402 stays wired up — middleware, routes, config keys, the `hello_mangrove` demo endpoint — so future agent endpoints can be moved to the payment tier without scaffolding work. The choice of which agent endpoints to monetize is deferred.
+1. The `API_KEYS` config value holds one or more comma-separated keys. `scripts/setup.sh`
+   generates a unique key on first run.
+2. A request sends `X-API-Key: <key>`. Keys are compared in constant time.
+3. A missing key returns 401 `AUTH_MISSING_API_KEY`. A wrong key returns 401
+   `AUTH_INVALID_API_KEY`.
+4. The two placeholder values published in the example config, `dev-key-1` and
+   `GENERATED_BY_SETUP`, never authenticate.
+5. When `AUTH_ENABLED` is false, all checks pass.
 
----
+MCP clients send the same header on every request to `/mcp`. The agent copies the header into
+the request context, so a tool authenticates whether the client sends the header or passes the
+optional `api_key` argument. A missing or invalid key makes the tool return an error with code
+`AUTH_INVALID_API_KEY`.
 
-## API Contracts
+A Claude Code project registers the server like this:
 
-All endpoints are JSON over HTTPS. Base path: `/api/v1/agent`. Every endpoint has a mirrored MCP tool with identical semantics (see [MCP Tools](#mcp-tools)).
-
-### Discovery (free)
-
-#### `GET /health`
-Returns `{ status, service, version, timestamp }`.
-
-#### `GET /api/v1/agent/tools`
-Returns the full MCP tool catalog (tool names, descriptions, parameters, access tier).
-
-#### `GET /api/v1/agent/status`
-Returns service state:
 ```json
 {
-  "version": "0.1.0",
-  "wallets_count": 2,
-  "strategies": {"draft": 3, "inactive": 1, "paper": 2, "live": 1, "archived": 5},
-  "active_cron_jobs": 3,
-  "db_path": "./agent.db",
-  "uptime_seconds": 12345
-}
-```
-
----
-
-### Wallet (auth)
-
-#### `POST /api/v1/agent/wallet/create`
-Create + encrypt + store a wallet locally.
-
-**v1 scope:** EVM chains only for live execution. XRPL accepted but returns a clear "not supported in v1" error; Solana not supported at all.
-
-**Request:**
-```json
-{
-  "chain": "string — evm | xrpl (stubbed, returns 501)",
-  "network": "string — mainnet | testnet",
-  "chain_id": "int | null — required for evm",
-  "label": "string | null — human-friendly name"
-}
-```
-
-**Response (201):**
-```json
-{
-  "address": "string — public address",
-  "chain": "string",
-  "network": "string",
-  "chain_id": "int | null",
-  "label": "string | null",
-  "created_at": "string — ISO 8601",
-  "warning": "string — reminder that keys are stored locally encrypted; user should back up their seed phrase shown in the chat"
-}
-```
-
-**Security warning returned in `warning` field and also logged to stdout:**
-
-> The seed phrase is shown **once** in the response, then encrypted to disk. Never retrievable via API after creation.
->
-> ⚠️ **Important:** the seed phrase will appear in your chat transcript, which Claude Code writes to disk under `~/.claude/projects/.../*.jsonl`. If you do not want the seed phrase persisted there, (1) copy it to a secure location, (2) delete the corresponding session transcript file, and (3) back it up offline (paper, hardware wallet, password manager). Never screenshot without securing the image.
-
-**Errors:** 400 `VALIDATION_ERROR`, 409 `WALLET_ALREADY_EXISTS`, 501 `CHAIN_NOT_SUPPORTED_IN_V1` (for XRPL), 502 `SDK_ERROR`.
-
-#### `GET /api/v1/agent/wallet/list`
-List all stored wallets (addresses + metadata only, no keys).
-
-#### `GET /api/v1/agent/wallet/{address}/balances?chain_id=<int>`
-Returns token balances via `mangrovemarkets.dex.balances()`.
-
-#### `GET /api/v1/agent/wallet/{address}/portfolio?chain_id=<int>`
-Returns aggregate portfolio: value, P&L, tokens, DeFi positions (via `mangrovemarkets.portfolio.*`).
-
-#### `GET /api/v1/agent/wallet/{address}/history?limit=<int>`
-Returns transaction history via `mangrovemarkets.portfolio.history()`.
-
----
-
-### DEX (auth)
-
-#### `GET /api/v1/agent/dex/venues`
-List supported DEX venues via `mangrovemarkets.dex.supported_venues()`.
-
-#### `GET /api/v1/agent/dex/pairs?venue_id=<str>`
-List trading pairs for a venue.
-
-#### `POST /api/v1/agent/dex/quote`
-**Request:**
-```json
-{
-  "input_token": "string — token address or symbol",
-  "output_token": "string",
-  "amount": "number — in base units of input_token",
-  "chain_id": "int",
-  "venue_id": "string | null — null = best across venues"
-}
-```
-**Response (200):** Mirrors `mangrovemarkets.dex.Quote` model.
-
-#### `POST /api/v1/agent/dex/swap`
-Execute the full 6-step swap flow. **Requires `confirm: true`** in the request body — protects against agent-initiated swaps without user approval.
-
-**Request:**
-```json
-{
-  "input_token": "string",
-  "output_token": "string",
-  "amount": "number",
-  "chain_id": "int",
-  "wallet_address": "string — must be in the agent's wallet store",
-  "slippage": "number — default 1.0 (percent)",
-  "mev_protection": "boolean — default false",
-  "confirm": "boolean — must be true"
-}
-```
-
-**Response (200):**
-```json
-{
-  "tx_hash": "string",
-  "status": "string — confirmed | pending",
-  "input_amount": "number",
-  "output_amount": "number",
-  "fill_price": "number",
-  "fees": "object",
-  "approval_tx_hash": "string | null",
-  "trade_log_id": "string — UUID in the agent's local trades table"
-}
-```
-
-Internal flow: quote → `approve_token` (returns None if already approved) → sign approval if returned → broadcast → wait → `prepare_swap` → sign locally → `broadcast` → poll `tx_status` until confirmed → log to SQLite.
-
-**Errors:** 400 `VALIDATION_ERROR`, 400 `CONFIRMATION_REQUIRED`, 404 `WALLET_NOT_FOUND`, 502 `SDK_ERROR`, 500 `SIGNING_ERROR`.
-
----
-
-### Market Data (auth)
-
-#### `GET /api/v1/agent/market/ohlcv?symbol=<str>&timeframe=<str>&lookback_days=<int>`
-Returns OHLCV via `mangroveai.crypto_assets.get_ohlcv()`.
-
-#### `GET /api/v1/agent/market/data?symbol=<str>`
-Current market data (price, market cap, volume, 24h/7d change).
-
-#### `GET /api/v1/agent/market/trending`
-Trending assets.
-
-#### `GET /api/v1/agent/market/global`
-Global market cap, BTC dominance, 24h change.
-
-#### `GET /api/v1/agent/on-chain/smart-money?symbol=<str>&chain=<str>`
-Smart money sentiment via `mangroveai.on_chain.get_smart_money_sentiment()`.
-
-#### `GET /api/v1/agent/on-chain/whale-activity?symbol=<str>&hours_back=<int>`
-Whale activity summary.
-
-#### `GET /api/v1/agent/on-chain/token-holders/{symbol}`
-Holder distribution and concentration.
-
----
-
-### Signals (auth)
-
-#### `GET /api/v1/agent/signals?category=<str>&search=<str>&limit=<int>`
-List/search signals via `mangroveai.signals.list()` with optional filtering.
-
-#### `GET /api/v1/agent/signals/{name}`
-Signal detail with parameter spec.
-
----
-
-### Strategies (auth)
-
-#### `POST /api/v1/agent/strategies/autonomous`
-Autonomous strategy creation: skill picks candidates → quick backtest → filter → rank by IRR → full backtest → persist.
-
-**Request:**
-```json
-{
-  "goal": "string — natural-language goal, e.g. 'Trade ETH on momentum breakouts with tight stops'",
-  "asset": "string",
-  "timeframe": "string — 1m | 5m | 15m | 1h | 4h | 1d",
-  "candidate_count": "int — default 7, range [5, 10]",
-  "backtest_lookback_months": "int — default 3"
-}
-```
-
-**Response (201):**
-```json
-{
-  "strategy": { ... full StrategyDetail ... },
-  "generation_report": {
-    "candidates_tried": 7,
-    "candidates_passed_filter": 3,
-    "winner_rank": 1,
-    "verdict": {"verdict": "PASS", "passed_count": 6, "...": "see backtest_verdict.py"},
-    "full_backtest_metrics": {
-      "irr_annualized": 0.42,
-      "sharpe_ratio": 1.8,
-      "max_drawdown": 0.12,
-      "win_rate": 0.58,
-      "total_trades": 47
-    },
-    "rejected_reasons": [
-      {"candidate": "...", "reason": "win_rate 21.0% < 25% (threshold_spec min_win_rate)"},
-      ...
-    ]
-  }
-}
-```
-
-**Errors:** 400 `VALIDATION_ERROR`, 422 `STRATEGY_NO_VIABLE_CANDIDATES`, 502 `SDK_ERROR`.
-
-#### `POST /api/v1/agent/strategies/manual`
-Manual strategy creation with explicit entry/exit rules.
-
-**Request:**
-```json
-{
-  "name": "string",
-  "asset": "string",
-  "timeframe": "string",
-  "entry": [
-    {
-      "name": "string — signal name",
-      "signal_type": "string — TRIGGER | FILTER",
-      "params": "object"
+  "mcpServers": {
+    "mangrove-agent": {
+      "type": "http",
+      "url": "http://localhost:9080/mcp/",
+      "headers": { "X-API-Key": "<your-configured-api-key>" }
     }
-  ],
-  "exit": [ ... ],
-  "execution_config": "object | null — null = Mangrove defaults"
-}
-```
-
-**Response (201):** Full `StrategyDetail`.
-
-Validation: entry must be exactly 1 TRIGGER + 0+ FILTERs; exit must be 0–1 TRIGGERs + 0+ FILTERs.
-
-#### `GET /api/v1/agent/strategies?status=<str>&limit=<int>&offset=<int>`
-List strategies with optional status filter.
-
-#### `GET /api/v1/agent/strategies/{id}`
-Full strategy details.
-
-#### `PATCH /api/v1/agent/strategies/{id}/status`
-**Single source of truth for strategy lifecycle.** This is the only way to activate, deactivate, or archive a strategy. Side effects (register/cancel cron jobs, allocate/release funds) are driven by the status transition.
-
-**Request:**
-```json
-{
-  "status": "string — draft | inactive | paper | live | archived",
-  "confirm": "boolean — required when activating to live or deactivating a live strategy",
-  "allocation": {
-    "wallet_address": "string — required when transitioning to live",
-    "token": "string — token address or symbol",
-    "amount": "number"
   }
 }
 ```
 
-Valid transitions: `draft → inactive`, `inactive → paper`, `inactive → live`, `paper → live`, `paper → inactive`, `live → inactive`, `* → archived`.
+The key is the agent's own local key. It is not a MangroveAI key and is never forwarded
+upstream.
 
-Side effects by target status:
-- `paper`: register APScheduler cron job keyed to strategy timeframe. Allocation field ignored.
-- `live`: require `confirm: true` AND `allocation` block. Record allocation in local DB. Register cron job.
-- `inactive` (from live): require `confirm: true`. Cancel cron job. Release allocation (mark `active=false`, set `released_at`).
-- `inactive` (from paper): cancel cron job. No allocation change.
-- `archived`: cancel any running cron job. Release allocation if active.
+## API contracts
 
-**Errors:** 400 `STRATEGY_INVALID_STATUS_TRANSITION`, 400 `CONFIRMATION_REQUIRED`, 400 `ALLOCATION_INSUFFICIENT`, 404 `WALLET_NOT_FOUND`.
+The [API reference](api-reference.md) lists every route with its method, path, access tier and
+request shapes. This section records the behavior that the rest of the system depends on.
 
-#### `POST /api/v1/agent/strategies/{id}/backtest`
-**Request:**
-```json
-{
-  "mode": "string — quick | full",
-  "lookback_months": "int — default 3",
-  "start_date": "string | null — ISO 8601",
-  "end_date": "string | null"
-}
-```
-**Response:** Full backtest metrics + trade history.
+- **Base path.** Agent routes live under `/api/v1/agent`. x402-gated routes live under
+  `/api/x402`.
+- **Wallet secrets.** No route or tool returns a plaintext secret except the two reveal routes
+  called by the local scripts. `create` and `stash-secret` return a `vault_token`, a
+  single-read, in-memory handle that expires after `SECRET_VAULT_TTL_SECONDS`.
+- **Backup gate.** Live swaps, live strategy activation and x402 payments are refused for a
+  wallet until `POST /wallet/{address}/confirm-backup` has set its `backup_confirmed_at`.
+- **Swaps.** `POST /dex/swap` requires `confirm: true` and an explicit `slippage_pct` that is
+  greater than 0 and at most `0.0025`. Amounts are in human units.
+- **Lifecycle.** `PATCH /strategies/{id}/status` is the only way to activate, deactivate or
+  archive a local execution record. Transitions into and out of `live` need `confirm: true`.
+- **Retired routes.** `POST /strategies/autonomous`, `POST /strategies/manual` and the
+  `/reference-strategies` routes return 410. Creating strategies is done with MangroveAI's
+  `load_skill` and `save_strategy` tools.
+- **Hosted capabilities.** There are no REST routes for market data, on-chain data, signals,
+  the knowledge base, backtests or strategy listing. Use the MCP tools that MangroveAI
+  advertises.
 
-#### `POST /api/v1/agent/strategies/{id}/evaluate`
-Manually trigger a single evaluation tick (for debugging/power users). Same code path the cron job runs.
+## MCP tools
 
----
+The server registers local tools and also serves tools discovered from MangroveMarkets and
+MangroveAI. `list_tools` returns the live catalog with each tool's tier, parameters and,
+where known, price. [MCP contracts](mcp-contracts.md) explains the ownership split.
 
-### Execution Logs (auth)
+Local tool names are plain `verb_resource` names with no project prefix, except tools that
+manage local execution state, which use the `agent_` prefix. Every local tool except the free
+tools requires the API key.
 
-#### `GET /api/v1/agent/strategies/{id}/evaluations?limit=<int>&offset=<int>`
-Returns evaluation log for a strategy, newest first.
+| Tool | Tier | Purpose | REST equivalent |
+|------|------|---------|-----------------|
+| `status` | Free | Agent name, version, counts, kill-switch and budget state | `GET /status` |
+| `list_tools` | Free | Tool catalog | `GET /tools` |
+| `set_agent_name` | Auth | Save the user-chosen agent name | `PUT /identity` |
+| `create_wallet` | Auth | Create and encrypt a wallet; returns a `vault_token` | `POST /wallet/create` |
+| `import_wallet` | Auth | Import a wallet from a stashed `vault_token` | `POST /wallet/import` |
+| `list_wallets` | Auth | List wallets, without secrets | `GET /wallet/list` |
+| `execute_swap` | Auth | Execute a DEX swap in asset units; see below | `POST /dex/swap` (exact input quantity) |
+| `cex_status` | Auth | Whether Kraken is connected | `GET /cex/status` |
+| `cex_connect_kraken` | Auth | Connect Kraken from a `vault_token` | `POST /cex/connect` |
+| `cex_balances` | Auth | Kraken balances | `GET /cex/balances` |
+| `cex_validate_order` | Auth | Dry-run a Kraken order | `POST /cex/validate-order` |
+| `cex_sync_fills` | Auth | Pull Kraken fills into telemetry | `POST /cex/sync-fills` |
+| `marketplace_prepare` | Auth | Prepare a Markets action for local approval | `POST /marketplace/prepare` |
+| `marketplace_submit` | Auth | Sign and submit a prepared action once | `POST /marketplace/submit` |
+| `x402_spend_status` | Auth | Budget state and recent ledger | `GET /x402/spend`, `GET /x402/spend/payments` |
+| `x402_spend_reset` | Auth | Start a fresh budget after the user agrees | `POST /x402/spend/reset` |
+| `agent_robinhood_status` | Auth | Robinhood readiness and masked account | `GET /brokers/robinhood/status` |
+| `agent_configure_execution_venue` | Auth | Bind an inactive strategy to Robinhood | `PUT /brokers/strategies/{id}/venue` |
+| `agent_configure_strategy_market` | Auth | Set market data for an inactive stateless strategy | `PATCH /strategies/{id}/market` |
+| `agent_list_venue_orders` | Auth | Local broker order journal | `GET /brokers/strategies/{id}/orders` |
+| `agent_reconcile_venue_orders` | Auth | Read broker outcomes and save fills | `POST /brokers/strategies/{id}/reconcile` |
+| `agent_cancel_venue_order` | Auth | Cancel a pending venue order | `POST /brokers/orders/{id}/cancel` |
+| `agent_start_paper_schedule` | Auth | Start a bounded paper schedule | `POST /strategies/paper-schedules` |
+| `agent_list_paper_schedules` | Auth | List schedules | `GET /strategies/paper-schedules` |
+| `agent_get_paper_schedule` | Auth | Read a schedule | `GET /strategies/paper-schedules/{id}` |
+| `agent_pause_paper_schedule` | Auth | Pause a schedule | `POST /strategies/paper-schedules/{id}/pause` |
+| `agent_reconcile_paper_schedule` | Auth | Recover an unresolved evaluation | `POST /strategies/paper-schedules/{id}/reconcile` |
+| `hello_mangrove` | x402 | Payment demo; hidden from `list_tools` | `GET /api/x402/hello-mangrove` |
 
-#### `GET /api/v1/agent/strategies/{id}/trades?limit=<int>&offset=<int>`
-Returns trades for a strategy, newest first.
+Some REST routes have no local tool: the wallet stash, reveal and confirm-backup routes (which
+handle secrets and are called by scripts), the `/cex/oauth/*` routes, the DEX read routes
+(`venues`, `pairs`, `tx-status`, `token-info`, `spot-price`, `gas-price`) and `quote`, the
+wallet `balances`, `portfolio` and `history` routes, `POST /portfolio/risk/reset`,
+`PATCH /strategies/{id}/status`, `POST /strategies/{id}/evaluate` and the execution-log
+routes. Markets serves the equivalent DEX and wallet reads as discovered tools. In particular,
+no tool resets the portfolio kill switch or confirms a wallet backup.
 
-#### `GET /api/v1/agent/trades?limit=<int>&strategy_id=<str>&mode=<str>`
-All trades across strategies, with optional filters.
-
----
-
-### Knowledge Base (auth)
-
-#### `GET /api/v1/agent/kb/search?q=<str>&limit=<int>`
-Full-text search via `mangroveai.kb.search.*`.
-
-#### `GET /api/v1/agent/kb/glossary/{term}`
-Glossary term lookup with backlinks.
-
----
-
-### x402 Spend Budget (auth)
-
-Governs money going **out** — what the agent pays for priced upstream calls.
-Independent of the portfolio controls, which govern trading capital. Paper
-trading, local tools and anything reached with an API key are unaffected.
-
-#### `GET /api/v1/agent/x402/spend`
-Budget state: `spent_usd`, `remaining_usd`, `cap_usd`, `cap_source`
-(`authorized` | `config` | `default`), `exhausted`, `unreconciled_count`, and
-the current `period_id`.
-
-`unreconciled_count` **should be zero.** Budget is claimed inside the signer,
-so no transport can pay without being charged; closing the reservation needs
-the response, so it must be called explicitly (`spend_service.reconcile`). A
-driver that skips it breaks no payment — it just stops the ledger recording
-whether anything settled. This counter is how that becomes visible. Also surfaced unauthenticated in the `x402_spend` block of
-`GET /api/v1/agent/status`.
-
-#### `GET /api/v1/agent/x402/spend/payments?limit=<int>&period_id=<int>`
-The payment ledger, newest first — one row per authorization, with payee,
-network, resource, settlement transaction and release reason. Omit
-`period_id` for every payment ever authorized.
-
-#### `POST /api/v1/agent/x402/spend/reset`
-Body: `{"cap_usd": <float|null>}`. Starts a fresh budget period, optionally
-with a new size; `cap_usd` is recorded as the amount a human authorized and
-overrides `X402_SPEND_CAP_USD` from then on. Omit it to restart at the
-current size.
-
-**The budget never refills itself.** This is a human decision — the equivalent
-MCP tool (`x402_spend_reset`) refuses without `confirm=true`, so the agent
-cannot clear its own refused payment. An unattended caller (a scheduler tick)
-that exhausts the budget correctly stays stopped until someone is asked.
-
----
-
-## MCP Tools
-
-Every REST endpoint has a mirrored MCP tool with identical semantics. Tool names use plain `verb_resource` form (e.g. `create_strategy_autonomous`, `list_trades`, `get_market_data`) — no project prefix; the MCP server namespace is enough.
-
-Tool descriptions include parameters, return shapes, and access tier. All tools enforce the same auth as their REST counterparts.
-
-### v1 scope — core vs nice-to-have
-
-**Core (must work for a demoable trading bot, ~22 tools):**
-
-| Category | Tool | REST endpoint |
-|----------|------|---------------|
-| Discovery | `status` | `GET /status` |
-| Discovery | `list_tools` | `GET /tools` |
-| Wallet | `create_wallet` | `POST /wallet/create` |
-| Wallet | `list_wallets` | `GET /wallet/list` |
-| Markets read | `oneinch_balances` (discovered) | Existing local REST adapter retained |
-| Unavailable discovery | `dex_supported_venues` (hidden) | Placeholder discovery is not supported |
-| Markets read | `dex_get_quote` (native server units) | `POST /dex/quote` retains human units |
-| DEX | `execute_swap` (asset quantity; see below) | `POST /dex/swap` (exact input quantity) |
-| Market | `get_ohlcv` | `GET /market/ohlcv` |
-| Market | `get_market_data` | `GET /market/data` |
-| Signals | `list_signals` | `GET /signals` |
-| Strategy | `create_strategy_autonomous` | `POST /strategies/autonomous` |
-| Strategy | `create_strategy_manual` | `POST /strategies/manual` |
-| Strategy | `list_strategies` | `GET /strategies` |
-| Strategy | `get_strategy` | `GET /strategies/{id}` |
-| Strategy | `update_strategy_status` | `PATCH /strategies/{id}/status` |
-| Strategy | `backtest_strategy` | `POST /strategies/{id}/backtest` |
-| Strategy | `evaluate_strategy` | `POST /strategies/{id}/evaluate` |
-| Logs | `list_evaluations` | `GET /strategies/{id}/evaluations` |
-| Logs | `list_trades` | `GET /strategies/{id}/trades` |
-| Logs | `list_all_trades` | `GET /trades` |
-| KB | `kb_search` | `GET /kb/search` |
+Tool names that clients should treat as MangroveAI's, not the agent's, include
+`load_skill`, `save_strategy`, `run_backtest`, `get_backtest`, `list_strategies`,
+`get_strategy`, `list_signals`, `get_ohlcv`, `get_market_data`, `kb_search`, `list_trades`,
+`list_positions`, `list_evaluations` and `discover_tools`. They are served as MangroveAI
+advertises them, so run `list_tools` for the current set.
 
 The current local MCP `execute_swap` adapter uses the USDC/asset convention from
 the engine's order intents. Its `amount` is a human token quantity: a buy uses
@@ -441,106 +162,198 @@ exact human input-token amount: `amount=1` for USDC to ETH means one USDC of
 input. This MCP/REST distinction does not change confirmation, signing, slippage,
 payment or Mangrove risk enforcement.
 
-**Nice-to-have (extend after core ships):**
+## Execution behavior
 
-| Category | Tool | REST endpoint |
-|----------|------|---------------|
-| Wallet | `get_portfolio` | `GET /wallet/{a}/portfolio` |
-| Wallet | `get_history` | `GET /wallet/{a}/history` |
-| DEX | `list_dex_pairs` | `GET /dex/pairs` |
-| Market | `get_trending` | `GET /market/trending` |
-| Market | `get_global_market` | `GET /market/global` |
-| On-chain | `get_smart_money` | `GET /on-chain/smart-money` |
-| On-chain | `get_whale_activity` | `GET /on-chain/whale-activity` |
-| On-chain | `get_token_holders` | `GET /on-chain/token-holders/{s}` |
-| Signals | `get_signal` | `GET /signals/{name}` |
-| KB | `kb_glossary` | `GET /kb/glossary/{term}` |
+### Scheduler
 
-Cut list rationale: the core 22 are enough to demo "autonomously create, backtest, deploy, and execute a strategy" end-to-end. The 10 nice-to-haves are research/analytics surface that the user can reach via other Mangrove tooling if needed.
+The scheduler is APScheduler's `BackgroundScheduler` with a SQLAlchemy job store on the agent's
+SQLite file. It starts in the FastAPI lifespan and stops without waiting for in-flight ticks.
 
----
+Job defaults are `coalesce=True`, `max_instances=1` and `misfire_grace_time=60`, with a
+ten-thread executor. Each local `paper` or `live` record has a job `eval-<strategy_id>` that
+calls `strategy_service.tick`:
 
-## Data Models
+| Timeframe | Cron |
+|-----------|------|
+| `1m` | `*/1 * * * *` |
+| `5m` | `*/5 * * * *` |
+| `15m` | `*/15 * * * *` |
+| `1h` | `0 * * * *` |
+| `4h` | `0 */4 * * *` |
+| `1d` | `0 0 * * *` |
 
-### Pydantic request/response models
+An unknown timeframe is refused with `SCHEDULER_ERROR`. Four fixed-interval jobs also run:
+`paper-dispatch` (every 5 seconds), `broker-reconciliation` (every 15 seconds),
+`x402-reconciliation` (every 15 seconds) and `x402-refunds` (every 30 seconds). The last two
+exist only when `X402_RECONCILIATION_RPC_URLS` is configured.
+
+A tick never raises. A failed evaluation is logged as an evaluation with `status: error` and
+the strategy stays active.
+
+### Evaluation lanes
+
+Each local record has an `evaluation_lane`. When it is empty the record uses `server`.
+
+| Lane | Call | Source of truth for state |
+|------|------|---------------------------|
+| `server` | Evaluate the saved strategy by ID, `persist=True` | MangroveAI's database |
+| `stateless` | Evaluate the full strategy object with the agent's `execution_state` and open positions, `persist=False` | The agent's `strategies.execution_state_json` and `open_positions_json` |
+
+A stateless strategy can carry explicit market data (`base_token`, `quote_token`,
+`market_data_venue`), which `PATCH /strategies/{id}/market` sets while the strategy is
+inactive. Binding a strategy to a Robinhood venue forces the stateless lane.
+
+### Order intents
+
+MangroveAI's evaluation returns `new_orders`. The agent converts each order with
+`status: filled` and side `enter_long` or `exit_long` into an `OrderIntent`: `action`
+(`enter` or `exit`), `side` (`buy` or `sell`), `symbol`, `amount` in asset units, the
+evaluation-time `ref_price`, and the engine's position and order IDs and bracket levels.
+Resting orders such as pending stop-loss and take-profit brackets are logged and skipped until
+the engine reports them filled. An order that fails to convert is skipped with a logged
+warning.
+
+### Paper schedules
+
+Server-owned paper execution evaluates a MangroveAI strategy on MangroveAI's side, on a clock
+the agent supplies. See [Paper scheduling](paper-scheduling.md).
+
+- `interval_seconds` must be one of 60, 300, 900, 3600, 14400 or 86400. `max_evaluations` is 1
+  to 10000. `confirm=true` is required because evaluations can incur API or x402 cost.
+- A schedule is unique per upstream identity and strategy. The identity is the configured API
+  key and its destination, or the payer wallet.
+- The dispatcher runs at most four evaluations at once. A slot is `unix_time // interval`. A
+  slot is recorded as pending before MangroveAI is called and is never evaluated twice.
+- States: `starting`, `active`, `pausing`, `paused`, `exhausted` (all evaluations used),
+  `attention` (an evaluation outcome is unknown), `start_rejected` and `start_uncertain`.
+  `attention` stops further calls until `agent_reconcile_paper_schedule` retries the same slot
+  with its original payment identity.
+- Pausing stops new local requests first, then asks MangroveAI to pause. It does not close
+  positions.
+- Start errors map to `PAPER_START_REJECTED` (409, MangroveAI refused) and
+  `PAPER_START_UNCONFIRMED` (502, outcome unknown).
+
+### Portfolio kill switch
+
+MangroveAI enforces risk per strategy. Only the agent sees the whole live book, so the agent
+enforces aggregate drawdown.
+
+- **Book value** is the sum of active live allocations, the capital of live Robinhood
+  mandates, and the realized profit and loss of trades of strategies in `live` status.
+- **High-water mark** is the highest book value seen. It advances on each live tick and is
+  re-baselined whenever a strategy enters or leaves `live`, so changing the live set is not
+  read as drawdown.
+- **Trip.** When drawdown from the high-water mark reaches `PORTFOLIO_MAX_DRAWDOWN_PCT`
+  (default 0.30), the switch trips: every live strategy is moved to `inactive` (which cancels
+  its job and releases its allocation) and the switch latches.
+- **Latched.** While tripped, no live tick places an order. The switch never resets itself. A
+  human clears it with `POST /api/v1/agent/portfolio/risk/reset`, which re-baselines to the
+  current book. There is no MCP tool for the reset.
+- The check runs at the start of each live tick, after the evaluation is logged, so a trip
+  caused by losses on other strategies still stops this tick's orders.
+
+The state appears in `GET /status` under `portfolio_risk` and at `GET /portfolio/risk`.
+
+### x402 spend budget
+
+The budget governs money going out: what the agent pays for priced upstream calls in wallet
+mode. It is separate from trading capital. Calls authenticated with a Mangrove API key are not
+payments and are not counted.
+
+- **Cap.** The budget for the current period is, in order: the amount a human authorized at
+  the last top-up, then `X402_SPEND_CAP_USD`, then 25 dollars. A cap of 0 blocks all payments.
+- **Reservation before signing.** Each payment is recorded in the ledger inside an atomic
+  transaction before the signature exists. Amounts are integer micro-USD, the same unit as a
+  USDC EIP-3009 `value`.
+- **Counting.** A payment counts against the budget from the moment it is authorized, and
+  stays counted until it is settled or provably released. Confirmed refunds are credited back
+  to the period of the original charge. Over-counting is preferred to under-counting.
+- **Exhaustion.** When the budget is consumed it latches as `exhausted` and later payments are
+  refused with `X402_SPEND_CAP_EXCEEDED` (403) before anything is signed. A single payment
+  that does not fit in what is left is refused without latching.
+- **Top-up.** Only a human renews the budget: `POST /x402/spend/reset` or the
+  `x402_spend_reset` tool with `confirm=true`. It starts a new period with the spent total at
+  zero, optionally with a new `cap_usd`. History is kept under the old period.
+- **Uncertainty.** A payment whose outcome is unknown keeps its amount reserved and is never
+  retried automatically; independent requests can proceed. `unreconciled_count` reports old
+  authorizations still unresolved. See [x402 payment uncertainty](x402-payment-uncertainty.md).
+
+The state appears in `GET /status` under `x402_spend` and at `GET /x402/spend`.
+
+## Data models
+
+These Pydantic models are defined in `server/src/models/domain.py` and
+`server/src/services/strategy_service.py`.
 
 ```python
-# Wallets
-class WalletCreateRequest(BaseModel):
-    chain: Literal["evm", "xrpl"]
-    network: Literal["mainnet", "testnet"]
-    chain_id: int | None = None
-    label: str | None = None
+class OrderIntent(BaseModel):
+    action: Literal["enter", "exit"]
+    side: Literal["buy", "sell"]
+    symbol: str
+    amount: float                      # asset units for strategy intents; input-token amount for swaps
+    reason: str = ""
+    ref_price: float | None = None     # evaluation-time price
+    engine_position_id: str | None = None
+    engine_order_id: str | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    input_token_address: str | None = None    # both or neither
+    output_token_address: str | None = None
 
-class WalletCreateResponse(BaseModel):
-    address: str
-    chain: str
-    network: str
-    chain_id: int | None
-    label: str | None
-    created_at: datetime
-    seed_phrase: str  # ONLY returned on create, never again
-    warning: str
+class Evaluation(BaseModel):           # one scheduler tick
+    id: str
+    strategy_id: str
+    timestamp: datetime
+    market_snapshot: dict = {}         # price, timestamp, asset the evaluation saw
+    sdk_response: dict = {}            # the evaluation response, verbatim
+    order_intents: list[OrderIntent] = []
+    duration_ms: int
+    status: Literal["ok", "error", "skipped"]
+    error_msg: str | None = None
 
-class WalletListItem(BaseModel):
-    address: str
-    chain: str
-    network: str
-    chain_id: int | None
-    label: str | None
-    created_at: datetime
+class Trade(BaseModel):                # a fill: live, paper or validate
+    id: str
+    strategy_id: str | None = None
+    evaluation_id: str | None = None   # null for user-initiated swaps
+    order_intent: OrderIntent | None = None
+    mode: Literal["live", "paper", "validate"]
+    tx_hash: str | None = None
+    input_token: str | None = None
+    input_amount: float | None = None
+    output_token: str | None = None
+    output_amount: float | None = None
+    fill_price: float
+    fees: dict = {}
+    status: Literal["pending", "confirmed", "failed", "simulated"]
+    executed_at: datetime
+    confirmed_at: datetime | None = None
+    p_and_l: float | None = None       # set on the exit trade
+    venue: str | None = None           # kraken, 1inch, robinhood, ...
+    venue_order_ref: str | None = None
+    venue_trade_ref: str | None = None
+    base: str | None = None            # CEX amounts
+    quote: str | None = None
+    side: Literal["buy", "sell"] | None = None
+    qty: float | None = None
 
-
-# Strategies
-class StrategyRule(BaseModel):
-    name: str                                 # signal name
-    signal_type: Literal["TRIGGER", "FILTER"]
-    timeframe: str | None = None
-    params: dict[str, Any]
-
-class ExecutionConfig(BaseModel):
-    initial_balance: float = 10000
-    max_open_positions: int = 3
-    max_trades_per_day: int = 10
-    max_risk_per_trade: float = 0.02
-    max_units_per_trade: float | None = None
-    max_trade_amount: float | None = None
-    min_trade_amount: float = 25
-    volatility_window: int = 24
-    target_volatility: float = 0.1
-
-class StrategyCreateAutonomousRequest(BaseModel):
-    goal: str                                  # natural-language
+class Position(BaseModel):
+    id: str                            # the engine's position ID when known
+    strategy_id: str
     asset: str
-    timeframe: Literal["1m", "5m", "15m", "1h", "4h", "1d"]
-    candidate_count: int = Field(7, ge=5, le=10)
-    backtest_lookback_months: int = 3
+    entry_trade_id: str
+    exit_trade_id: str | None = None
+    entry_price: float
+    entry_amount: float
+    entry_time: datetime
+    exit_price: float | None = None
+    exit_amount: float | None = None
+    exit_time: datetime | None = None
+    status: Literal["open", "closed"]
+    stop_loss: float | None = None
+    take_profit: float | None = None
 
-class StrategyCreateManualRequest(BaseModel):
-    name: str
-    asset: str
-    timeframe: str
-    entry: list[StrategyRule]
-    exit: list[StrategyRule] = []
-    execution_config: ExecutionConfig | None = None
-
-class StrategyDetail(BaseModel):
-    id: str                                    # agent's local UUID
-    mangrove_id: str                           # Mangrove's strategy ID
-    name: str
-    asset: str
-    timeframe: str
-    status: Literal["draft", "inactive", "paper", "live", "archived"]
-    entry: list[StrategyRule]
-    exit: list[StrategyRule]
-    execution_config: ExecutionConfig
-    generation_report: dict | None = None       # for autonomous strategies
-    created_at: datetime
-    updated_at: datetime
-
-
-# Allocations (live strategies only)
-class Allocation(BaseModel):
+class Allocation(BaseModel):           # live strategies only
+    id: str
     strategy_id: str
     wallet_address: str
     token_address: str
@@ -548,236 +361,102 @@ class Allocation(BaseModel):
     amount: float
     active: bool
     created_at: datetime
-    released_at: datetime | None
+    released_at: datetime | None = None
+    slippage_pct: float | None = None  # decimal, at most 0.0025
 
+class StrategyStatusUpdate(BaseModel):
+    status: Literal["draft", "inactive", "paper", "live", "archived"]
+    confirm: bool = False
+    allocation: StrategyAllocationInput | None = None
 
-# Execution
-class OrderIntent(BaseModel):
-    """Pure output of strategy_evaluator. No side effects."""
-    action: Literal["enter", "exit"]
-    side: Literal["buy", "sell"]
-    symbol: str
-    amount: float
-    reason: str                                 # which signal fired
-    stop_loss: float | None = None
-    take_profit: float | None = None
-
-class Evaluation(BaseModel):
-    """A record of one cron-tick evaluation. OrderIntents come from the SDK,
-    not from local logic — the agent does not evaluate strategies itself."""
-    id: str
-    strategy_id: str
-    timestamp: datetime
-    market_snapshot: dict                        # last bar of data passed to SDK
-    sdk_response: dict                           # verbatim response from mangrove_ai.execution.evaluate()
-    order_intents: list[OrderIntent]             # extracted from sdk_response for easy querying
-    duration_ms: int
-    status: Literal["ok", "error", "skipped"]
-    error_msg: str | None
-
-class Trade(BaseModel):
-    id: str
-    strategy_id: str
-    evaluation_id: str
-    order_intent: OrderIntent
-    mode: Literal["live", "paper"]
-    tx_hash: str | None                          # null for paper
-    input_token: str
-    input_amount: float
-    output_token: str
-    output_amount: float
-    fill_price: float
-    fees: dict                                   # gas, protocol, slippage
-    status: Literal["pending", "confirmed", "failed", "simulated"]
-    executed_at: datetime
-    confirmed_at: datetime | None
-    p_and_l: float | None                        # filled when the position closes
-
-class Position(BaseModel):
-    id: str
-    strategy_id: str
+class StrategyDetailResponse(BaseModel):
+    id: str                            # the agent's local UUID
+    mangrove_id: str                   # the MangroveAI strategy ID
+    name: str
     asset: str
-    entry_trade_id: str
-    exit_trade_id: str | None
-    entry_price: float
-    entry_amount: float
-    entry_time: datetime
-    exit_price: float | None
-    exit_amount: float | None
-    exit_time: datetime | None
-    status: Literal["open", "closed"]
-    stop_loss: float | None
-    take_profit: float | None
-
-
-# Backtest
-class BacktestRequest(BaseModel):
-    mode: Literal["quick", "full"]
-    lookback_months: int = 3
-    start_date: datetime | None = None
-    end_date: datetime | None = None
-
-class BacktestResult(BaseModel):
-    strategy_id: str
-    mode: str
-    metrics: dict                                 # irr, sharpe, sortino, max_dd, win_rate, total_trades, net_pnl
-    trades: list[dict] | None                     # only populated for full mode
-    duration_ms: int
+    timeframe: str
+    status: str
+    entry: list[dict]
+    exit: list[dict]
+    execution_config: dict
+    market_context: StrategyMarketContext | None = None
+    execution_venue: ExecutionVenueResponse | None = None
+    generation_report: dict | None = None
+    created_at: datetime
+    updated_at: datetime
 ```
 
----
+## SQLite schema
 
-### SQLite Schema
+All state is in one SQLite file at `DB_PATH`, in WAL mode with foreign keys enforced. Migrations
+in `server/src/shared/db/migrations/` apply in filename order at startup and are recorded in a
+`_migrations` table. The scheduler adds its own job table (`apscheduler_jobs`).
 
-```sql
--- Wallets: encrypted local key storage
-CREATE TABLE wallets (
-    id TEXT PRIMARY KEY,                          -- UUID
-    address TEXT UNIQUE NOT NULL,
-    chain TEXT NOT NULL,                          -- evm | xrpl
-    network TEXT NOT NULL,                        -- mainnet | testnet
-    chain_id INTEGER,
-    encrypted_secret BLOB NOT NULL,               -- Fernet-encrypted seed phrase
-    encryption_method TEXT NOT NULL,              -- 'fernet-v1'
-    label TEXT,
-    created_at TEXT NOT NULL,                     -- ISO 8601
-    metadata_json TEXT
-);
-CREATE INDEX idx_wallets_chain ON wallets(chain, chain_id);
+| Table | Purpose | Key columns |
+|-------|---------|-------------|
+| `wallets` | Encrypted wallets | `address` (unique), `chain` (`evm` or `xrpl`), `network`, `chain_id`, `encrypted_secret` (Fernet), `encryption_method`, `label`, `backup_confirmed_at`, `created_at` |
+| `strategies` | Local execution records | `id`, `mangrove_id` (unique), `name`, `asset`, `timeframe`, `status`, `entry_json`, `exit_json`, `execution_config_json`, `generation_report_json`, `execution_state_json`, `evaluation_lane`, `open_positions_json`, `market_context_json` |
+| `allocations` | Per-strategy fund commitments | `strategy_id`, `wallet_address`, `token_address`, `token_symbol`, `amount`, `slippage_pct`, `active`, `released_at` |
+| `evaluations` | One row per tick | `strategy_id`, `timestamp`, `market_snapshot_json`, `sdk_response_json`, `order_intents_json`, `duration_ms`, `status`, `error_msg` |
+| `trades` | One row per fill | `strategy_id`, `evaluation_id`, `order_intent_json`, `mode`, `tx_hash`, token and amount columns, `fill_price`, `fees_json`, `status`, `executed_at`, `confirmed_at`, `p_and_l`, `venue`, `venue_order_ref`, `venue_trade_ref` |
+| `positions` | Open and closed positions | `strategy_id`, `asset`, `entry_trade_id`, `exit_trade_id`, prices, amounts, times, `status`, `stop_loss`, `take_profit` |
+| `portfolio_risk` | Single row: kill-switch state | `high_water_mark`, `tripped`, `tripped_at`, `tripped_reason` |
+| `x402_spend_state` | Single row: current budget period | `period_id`, `period_started_at`, `period_cap_micro_usd`, `exhausted`, `exhausted_at`, `exhausted_reason` |
+| `x402_payments` | One row per payment authorization | `period_id`, `state` (`authorized`, `settled`, `released`), `amount_micro_usd`, `wallet_address`, `payee`, `network`, `resource`, `transaction_hash`, `valid_before`, `valid_after`, `authorization_nonce`, `asset`, `release_reason`, `operation_id` |
+| `x402_operations` | Durable identity of a paid operation | `fingerprint`, `state` (`pending`, `complete`, `unsigned_failed`), encrypted `payment_headers` and `response` |
+| `x402_recovery_state` | Recovery bookkeeping per operation | `operation_id`, `action_id`, `token`, `replacement_allowed`, `next_id` |
+| `x402_reconciliation_evidence` | Evidence behind a reconciliation outcome | `reservation_id`, `outcome`, `evidence_json` |
+| `x402_reconciliation_jobs` | Background reconciliation schedule | `reservation_id`, `attempts`, `next_check`, `outcome` |
+| `x402_refunds` | Verified credits against original charges | `reservation_id`, `state` (`pending`, `review`, `confirmed`), `refund_tx`, `network`, `amount_micro_usd` |
+| `marketplace_approvals` | Prepared marketplace actions | `payload`, `expires_at`, `state` (`prepared`, `submitted`, `completed`), `result` |
+| `broker_routes` | Strategy-to-Robinhood bindings | `strategy_id`, `venue`, account numbers, `asset_class`, `capital`, `max_order_usd`, `slippage_pct` |
+| `broker_orders` | Durable broker order intents | `strategy_id`, `evaluation_id`, `intent_key`, `status`, `broker_order_id`, `filled_quantity`, `filled_notional`, `fees` |
+| `broker_events` | Order status history | `order_id`, `status`, `filled_quantity` |
+| `broker_holdings` | Exact broker quantity and cost per position | `position_id`, `quantity`, `unit_cost` |
+| `paper_schedules` | Server-owned paper schedules | `scope`, `strategy_id`, `controller_id`, `run_id`, `interval_seconds`, `max_evaluations`, `evaluations`, `state`, `pending_slot`, `last_slot`, `last_result`, `error` |
+| `agent_identity` | Single row: the agent name | `name` (1 to 64 characters) |
 
--- Strategies: local cache of Mangrove strategies (Mangrove is source of truth)
-CREATE TABLE strategies (
-    id TEXT PRIMARY KEY,                          -- agent's UUID
-    mangrove_id TEXT UNIQUE NOT NULL,             -- Mangrove's strategy ID
-    name TEXT NOT NULL,
-    asset TEXT NOT NULL,
-    timeframe TEXT NOT NULL,
-    status TEXT NOT NULL,                         -- draft | inactive | paper | live | archived
-    entry_json TEXT NOT NULL,                     -- list[StrategyRule]
-    exit_json TEXT NOT NULL,
-    execution_config_json TEXT NOT NULL,
-    generation_report_json TEXT,                  -- null for manual strategies
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-CREATE INDEX idx_strategies_status ON strategies(status);
+Migration `002` seeds a placeholder `strategies` row with ID `user-initiated`, in `archived`
+status, so trades from direct swaps satisfy the foreign key. Status counts exclude it.
 
--- Allocations: per-strategy fund commitments (live only)
-CREATE TABLE allocations (
-    id TEXT PRIMARY KEY,
-    strategy_id TEXT NOT NULL REFERENCES strategies(id),
-    wallet_address TEXT NOT NULL REFERENCES wallets(address),
-    token_address TEXT NOT NULL,
-    token_symbol TEXT NOT NULL,
-    amount REAL NOT NULL,
-    active INTEGER NOT NULL DEFAULT 1,            -- boolean
-    created_at TEXT NOT NULL,
-    released_at TEXT
-);
-CREATE INDEX idx_allocations_strategy ON allocations(strategy_id, active);
+| Migration | Adds |
+|-----------|------|
+| `001_initial` | `wallets`, `strategies`, `allocations`, `evaluations`, `trades`, `positions` |
+| `002_user_initiated_placeholder` | The `user-initiated` placeholder strategy |
+| `003_wallet_backup_confirmed` | `wallets.backup_confirmed_at` |
+| `004_allocation_slippage` | `allocations.slippage_pct` |
+| `005_strategy_execution_state` | `strategies.execution_state_json` |
+| `006_evaluation_lane` | `strategies.evaluation_lane`, `open_positions_json` |
+| `007_portfolio_risk` | `portfolio_risk` |
+| `008_x402_spend` | `x402_spend_state`, `x402_payments` |
+| `009_x402_uncertain_authorizations` | Restores authorizations that had been released without proof |
+| `010_x402_authorization_metadata` | Public authorization fields on `x402_payments` |
+| `011_x402_payment_pause` | Pending-payment index, `x402_reconciliation_evidence` |
+| `012_x402_operations` | `x402_operations`, `x402_reconciliation_jobs`, `x402_payments.operation_id` |
+| `013_x402_refunds` | `x402_refunds` |
+| `014_marketplace_approvals` | `marketplace_approvals` |
+| `015_independent_payment_operations` | Replaces the pending-operation index so unrelated operations do not block each other |
+| `016_broker_execution` | `broker_routes`, `broker_orders`, `broker_events`, `broker_holdings`, venue columns on `trades` |
+| `017_strategy_market_context` | `strategies.market_context_json` |
+| `018_agent_identity` | `agent_identity` |
+| `018_paper_schedules` | `paper_schedules` |
+| `019_paper_payment_attempt` | `paper_schedules.payment_request_id` |
+| `020_x402_shared_recovery` | `x402_recovery_state` |
 
--- Evaluations: every cron tick
-CREATE TABLE evaluations (
-    id TEXT PRIMARY KEY,
-    strategy_id TEXT NOT NULL REFERENCES strategies(id),
-    timestamp TEXT NOT NULL,
-    market_snapshot_json TEXT NOT NULL,           -- data sent to the SDK
-    sdk_response_json TEXT NOT NULL,              -- verbatim response from mangrove_ai.execution.evaluate()
-    order_intents_json TEXT NOT NULL,             -- extracted from sdk_response for querying
-    duration_ms INTEGER NOT NULL,
-    status TEXT NOT NULL,                         -- ok | error | skipped
-    error_msg TEXT
-);
-CREATE INDEX idx_evaluations_strategy_ts ON evaluations(strategy_id, timestamp DESC);
+The migration runner applies SQL files in lexicographic filename order and records the
+full filename in `_migrations.filename`; the numeric prefix is not a unique migration ID.
+The two `018_` files are separate ordered migrations. Do not rename or renumber an
+existing migration file, because a renamed filename is treated as unapplied.
 
--- Trades: every order intent → execution
-CREATE TABLE trades (
-    id TEXT PRIMARY KEY,
-    strategy_id TEXT NOT NULL REFERENCES strategies(id),
-    evaluation_id TEXT REFERENCES evaluations(id),
-    order_intent_json TEXT NOT NULL,
-    mode TEXT NOT NULL,                           -- live | paper
-    tx_hash TEXT,                                 -- null for paper
-    input_token TEXT NOT NULL,
-    input_amount REAL NOT NULL,
-    output_token TEXT NOT NULL,
-    output_amount REAL NOT NULL,
-    fill_price REAL NOT NULL,
-    fees_json TEXT NOT NULL,
-    status TEXT NOT NULL,                         -- pending | confirmed | failed | simulated
-    executed_at TEXT NOT NULL,
-    confirmed_at TEXT,
-    p_and_l REAL
-);
-CREATE INDEX idx_trades_strategy ON trades(strategy_id, executed_at DESC);
-CREATE INDEX idx_trades_status ON trades(status);
+Kraken credentials and the Robinhood OAuth grant are not in the database. They are
+Fernet-encrypted files in the data directory next to it (`cex-kraken.enc` and
+`robinhood-oauth.enc`).
 
--- Positions: derived from trades, cached for fast evaluator access
-CREATE TABLE positions (
-    id TEXT PRIMARY KEY,
-    strategy_id TEXT NOT NULL REFERENCES strategies(id),
-    asset TEXT NOT NULL,
-    entry_trade_id TEXT NOT NULL REFERENCES trades(id),
-    exit_trade_id TEXT REFERENCES trades(id),
-    entry_price REAL NOT NULL,
-    entry_amount REAL NOT NULL,
-    entry_time TEXT NOT NULL,
-    exit_price REAL,
-    exit_amount REAL,
-    exit_time TEXT,
-    status TEXT NOT NULL,                         -- open | closed
-    stop_loss REAL,
-    take_profit REAL
-);
-CREATE INDEX idx_positions_strategy_status ON positions(strategy_id, status);
+## Error handling
 
--- Outbound x402 spend budget: one state row + a per-payment ledger.
--- A per-payment ceiling cannot bound VOLUME (a sweep is ~99 priced calls),
--- and only the agent can see the aggregate, so the budget lives here.
-CREATE TABLE x402_spend_state (
-    id INTEGER PRIMARY KEY CHECK (id = 1),        -- single row
-    period_id INTEGER NOT NULL DEFAULT 1,         -- bumped by a human top-up
-    period_started_at TEXT NOT NULL,
-    period_cap_micro_usd INTEGER,                 -- budget a human authorized; NULL = use config
-    exhausted INTEGER NOT NULL DEFAULT 0,         -- budget spent; never clears itself
-    exhausted_at TEXT,
-    exhausted_reason TEXT,
-    updated_at TEXT NOT NULL
-);
+Every domain error has this body, over REST with the error's HTTP status, and as JSON text from
+an MCP tool:
 
--- One row per payment AUTHORIZATION, not per settlement: the agent controls
--- what it signs, not what a receiver settles. A row counts against the budget
--- from the moment it is signed, and is released only on positive evidence the
--- authorization is dead (guard refused, or the receiver burned the nonce).
--- Amounts are integer micro-USD -- USDC is 6-decimal, so an EIP-3009 `value`
--- IS the micro-USD amount, and no float enters the accounting.
-CREATE TABLE x402_payments (
-    id TEXT PRIMARY KEY,
-    period_id INTEGER NOT NULL,
-    state TEXT NOT NULL,                          -- authorized | settled | released
-    amount_micro_usd INTEGER NOT NULL,
-    wallet_address TEXT NOT NULL,                 -- audit only; the budget is agent-wide
-    payee TEXT,
-    network TEXT,
-    resource TEXT,                                -- URL, query string stripped
-    transaction_hash TEXT,
-    valid_before INTEGER,                         -- unix second the authorization dies at
-    release_reason TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-CREATE INDEX idx_x402_payments_period_state ON x402_payments(period_id, state);
-CREATE INDEX idx_x402_payments_created_at ON x402_payments(created_at DESC);
-
--- APScheduler job store (built-in table schema, managed by apscheduler[sqlalchemy])
--- CREATE TABLE apscheduler_jobs ... (managed by the library)
-```
-
----
-
-## Error Handling
-
-Standard error response:
 ```json
 {
   "error": true,
@@ -788,256 +467,189 @@ Standard error response:
 }
 ```
 
-### Error codes
-
 | Code | HTTP | When |
 |------|------|------|
-| `AUTH_MISSING_API_KEY` | 401 | `X-API-Key` header not provided |
-| `AUTH_INVALID_API_KEY` | 401 | Key doesn't match the configured `API_KEY` |
-| `VALIDATION_ERROR` | 400 | Pydantic validation failed; details in `message` |
-| `CONFIRMATION_REQUIRED` | 400 | Live deploy/stop/withdraw without `confirm: true` |
-| `WALLET_NOT_FOUND` | 404 | Address not in the agent's wallet store |
-| `WALLET_ALREADY_EXISTS` | 409 | Wallet with that address already stored |
-| `STRATEGY_NOT_FOUND` | 404 | Strategy ID not found |
-| `STRATEGY_INVALID_STATUS_TRANSITION` | 400 | Illegal transition (e.g., draft → live) |
-| `STRATEGY_INVALID_COMPOSITION` | 400 | Manual mode: entry/exit rule constraint violated |
-| `STRATEGY_NO_VIABLE_CANDIDATES` | 422 | Autonomous mode: no candidates passed filters |
-| `ALLOCATION_INSUFFICIENT` | 400 | Wallet balance < requested allocation |
-| `SDK_ERROR` | 502 | Upstream Mangrove SDK error; original error in `message` |
-| `SIGNING_ERROR` | 500 | Local signing failed (bad key, wallet corruption) |
-| `EVALUATION_ERROR` | 500 | Strategy evaluator raised; details logged |
-| `SCHEDULER_ERROR` | 500 | APScheduler job registration/cancellation failed |
-| `CHAIN_NOT_SUPPORTED_IN_V1` | 501 | User requested XRPL/Solana wallet creation or live execution |
-| `X402_SPEND_CAP_EXCEEDED` | 403 | Outbound x402 payment refused on budget grounds — the budget is spent, or this one payment does not fit in what is left. Nothing was signed. |
-| `INTERNAL_ERROR` | 500 | Catch-all; details in server logs |
+| `AUTH_MISSING_API_KEY` | 401 | No `X-API-Key` header |
+| `AUTH_INVALID_API_KEY` | 401 | The key is not in `API_KEYS` |
+| `VALIDATION_ERROR` | 400 | Input failed validation |
+| `CONFIRMATION_REQUIRED` | 400 | A swap, live transition or top-up without `confirm: true` |
+| `WALLET_NOT_FOUND` | 404 | Address not in the local wallet store |
+| `WALLET_ALREADY_EXISTS` | 409 | A wallet with that address is already stored |
+| `STRATEGY_NOT_FOUND` | 404 | No local record with that ID |
+| `STRATEGY_INVALID_STATUS_TRANSITION` | 400 | Illegal lifecycle move, or an unsupported combination such as a Robinhood-bound strategy going to `paper` |
+| `ALLOCATION_INSUFFICIENT` | 400 | Allocation amount is not greater than 0 |
+| `CEX_CREDENTIALS_MISSING` | 409 | A Kraken tool was used before Kraken was connected |
+| `SDK_ERROR` | 502 | An upstream call failed |
+| `UPSTREAM_AUTHENTICATION_FAILED` | 401 | An upstream service rejected the configured credential |
+| `UPSTREAM_ACCESS_DENIED` | 403 | An upstream service denied the operation |
+| `UPSTREAM_RATE_LIMITED` | 429 | MangroveAI's rate limit was reached; no retry or payment fallback is attempted |
+| `SIGNING_ERROR` | 500 | Local signing failed or the signing guard refused the payload |
+| `X402_PAYMENT_ERROR` | 502 | An outbound payment could not be completed |
+| `X402_PAYMENT_UNCERTAIN` | 409 | A payment's outcome is unresolved; its amount stays reserved and it is not retried automatically |
+| `X402_SPEND_CAP_EXCEEDED` | 403 | A payment was refused for budget reasons; nothing was signed |
+| `PAPER_START_REJECTED` | 409 | MangroveAI refused to start paper execution |
+| `PAPER_START_UNCONFIRMED` | 502 | The paper start outcome is unknown |
+| `MARKETPLACE_UNAVAILABLE` | 400 | Markets discovery or ownership configuration is unavailable or incompatible |
+| `PURCHASE_BALANCE_UNAVAILABLE` | 503 | The funding check for an approved purchase could not be read |
+| `PURCHASE_INSUFFICIENT_FUNDS` | 409 | The wallet cannot cover an approved purchase |
+| `SCHEDULER_ERROR` | 500 | Unknown timeframe when registering a job |
+| `CHAIN_NOT_SUPPORTED_IN_V1` | 501 | A wallet chain other than `evm` or `xrpl` |
+| `INTERNAL_ERROR` | 500 | Unexpected failure; see the logs |
 
-All errors carry a `correlation_id` for cross-referencing against the agent's logs.
+Tools that call MangroveAI return errors in MangroveAI's own format, plus the codes above for
+failures in the agent's layer (`AUTH_REQUIRED`, `UNKNOWN_TOOL`, `VALIDATION_ERROR` for
+arguments that do not match the current input schema, `UPSTREAM_ERROR`). `RETIRED_TOOL` is
+returned for a retired agent wrapper whose function Markets serves directly.
 
----
+The `correlation_id` matches the `X-Correlation-Id` response header and the agent's structured
+logs.
 
-## Authentication & Authorization
+## External integrations
 
-**Model:** single-user API key authentication.
+### MangroveAI
 
-**Flow:**
-1. The `API_KEY` config value is loaded at startup via the template's config loader (see [Configuration](#configuration)).
-2. Requests include `X-API-Key: <key>`.
-3. Middleware validates against the configured `API_KEY`; rejects with 401 if missing or invalid.
-4. Free tier endpoints bypass the middleware.
+**Purpose:** strategies, backtests, signals, market and on-chain data, knowledge base,
+strategy evaluation.
 
-**MCP auth:** MCP is served over Streamable HTTP transport. The MCP client (Claude Code, Claude Desktop, custom agent) sends the API key as a standard HTTP header on every request to `/mcp`.
+- **MCP.** Tools are discovered from MangroveAI's `/mcp/` endpoint and forwarded unchanged. The
+  destination is the MangroveAI API origin with `/api/v1` replaced by `/mcp/`.
+- **SDK.** The `mangroveai` SDK is used for evaluation (`execution.evaluate` and
+  `evaluate_by_object`), paper execution control, strategy status sync and mark prices.
+- **Authentication modes.** With a Mangrove API key (`MANGROVE_API_KEY`) the key authenticates
+  every call. Without one, the agent pays per call with x402 from the payer wallet
+  (`X402_PAYER_WALLET`). `MANGROVE_ACCESS_MODE` set to `api-key` or `x402` forces a mode;
+  unset, a configured key selects API-key mode. A mode never changes because a call failed.
+- **Destination.** `MANGROVEAI_BASE_URL` overrides the API origin for API-key mode and must be
+  HTTPS (or loopback HTTP) and end in `/api/v1`. In wallet mode the destination comes from
+  the bundled `mangrove-endpoints.json`, selected by `X402_MANGROVE_ENVIRONMENT` or the agent's
+  environment, with `X402_MANGROVE_BASE_URL` and `X402_MANGROVE_KB_BASE_URL` as overrides.
+- **Timeout.** `MANGROVE_SDK_TIMEOUT_SECONDS` (180 in the example config) bounds SDK calls.
 
-Client-side configuration example (`.mcp.json` in a Claude Code project):
-```json
-{
-  "mcpServers": {
-    "mangrove-agent": {
-      "transport": "http",
-      "url": "http://localhost:9080/mcp",
-      "headers": {
-        "X-API-Key": "<your-configured-api-key>"
-      }
-    }
-  }
-}
-```
+### MangroveMarkets
 
-Server-side, the agent's FastAPI middleware inspects `X-API-Key` identically for REST and MCP requests — the MCP mount at `/mcp` is just another FastAPI route group. If the key is missing or invalid, the MCP tool call returns an MCP-level error with `code: AUTH_INVALID_API_KEY` (mapped to 401 for REST). Discovery tools (`status`, `list_tools`) bypass auth.
+**Purpose:** DEX quotes and routing through 1inch, token and gas data, portfolio reads and
+marketplace actions.
 
-**Storage:** No user accounts, no sessions, no tokens. Single shared secret per deployment.
+- `MANGROVEMARKETS_BASE_URL` points at the Markets server, used by both the SDK and the MCP
+  client. The example config uses `http://localhost:9081`.
+- Signing is local. The SDK returns unsigned transactions; the agent signs them with the
+  wallet's decrypted key and broadcasts the signed bytes. The key is never passed to the SDK.
+- Markets tools that move assets or pay money return an approval preview and need
+  `marketplace_submit`.
 
----
+### Robinhood
 
-## External Integrations
+The agent connects to Robinhood's MCP endpoint with an OAuth grant it owns, created by
+`scripts/connect-robinhood.sh`. The grant is Fernet-encrypted under the master key. The agent
+never reads another client's credentials, never opens a login from a background worker and
+never retries an order submission automatically. See
+[Robinhood execution](robinhood-execution.md).
 
-### 1. `mangroveai` SDK
+### Kraken
 
-**Purpose:** strategies, backtesting, signals, market data, on-chain, KB.
+Two modes: bring-your-own-key, where an encrypted key stays on the machine and the agent calls
+Kraken directly; and keyless OAuth, where the Mangrove platform holds the grant. Fills from the
+bring-your-own-key mode can be sent to telemetry with `cex_sync_fills`; the key itself is never
+sent.
 
-**Config:**
-- `MANGROVE_API_KEY` — prod_* or dev_* (SDK auto-detects env)
-- `MANGROVEAI_BASE_URL` — optional override
+### Local key encryption
 
-**Usage:**
-```python
-from mangrove_ai import MangroveAI
-client = MangroveAI()  # reads env
-```
+Wallet secrets are encrypted with Fernet (`cryptography`) before they are written to SQLite. The
+master key is resolved in this order:
 
-**Failure handling:** SDK raises `APIError`, `NotFoundError`, `RateLimitError`. The agent's service layer catches these and re-raises as `SDKError` (502) with the original correlation_id preserved.
+1. The keyfile at `MASTER_KEY_PATH` (owner-only permissions, 44 bytes).
+2. The OS keychain through `keyring`, under the service name `KEYRING_SERVICE_NAME`.
+3. If neither exists, a new key is generated into the keyfile. A missing key that the database
+   has ciphertext for is a configuration error to fix, not a reason to generate a new key.
 
-**Retry:** SDK's built-in retry handles 429/5xx. The agent does not add additional retry.
+Decryption happens only inside the wallet manager's signing functions, and only after the
+payload passes the signing guard.
 
----
+### Signing guard
 
-### 2. `mangrovemarkets` SDK
+The wallet manager signs exactly these things, and refuses everything else before it touches
+the key:
 
-**Purpose:** DEX swaps, wallet creation, portfolio analytics.
+- A transaction to a known 1inch aggregation router (EIP-155 or EIP-1559 only).
+- An ERC-20 `approve()` whose spender is a 1inch router.
+- An x402 payment authorization: EIP-712 `TransferWithAuthorization` for USDC on a pinned
+  chain and contract, with the struct fields checked field for field.
+- Marketplace ownership proofs and Sign-In-With-X messages, each with its own validation.
 
-**Config:**
-- `MANGROVEMARKETS_BASE_URL` — defaults to `http://localhost:9081` (self-hosted placeholder; port chosen to dodge the VSCode Helper squat on :8080); set to deployed URL in prod
-- `MANGROVE_API_KEY` — same key as `mangroveai`
-
-**Usage:**
-```python
-from mangrove_markets import MangroveMarkets
-client = MangroveMarkets(base_url=os.environ["MANGROVEMARKETS_BASE_URL"])
-```
-
-**Signing:** The SDK never touches private keys. `prepare_swap()` and `approve_token()` return unsigned transaction payloads; the agent's `wallet_manager` decrypts the key in memory, signs the payload, then calls `broadcast()` with the signed tx. Key is zeroed from memory immediately after.
-
-**Failure handling:** Same pattern as `mangroveai`.
-
----
-
-### 3. Local Key Encryption
-
-**Library:** `cryptography` (Fernet symmetric encryption).
-
-**Master key source (priority order):**
-1. OS Keychain via `keyring` library (macOS Keychain, GNOME Keyring, Windows Credential Manager) — default
-2. Config value `MASTER_KEY_ENV_FALLBACK` (resolved via the template's config loader, can reference a secret) — fallback for CI or other environments without a keychain
-
-**Scheme:**
-- Master key generated once on first wallet creation, stored in keychain
-- Each wallet's seed phrase encrypted with `Fernet(master_key)` before DB insert
-- Decryption only in `wallet_manager.sign()` scope; decrypted bytes never logged, never returned from an endpoint
-
----
-
-### 4. APScheduler
-
-**Library:** `apscheduler` with `BackgroundScheduler` and SQLAlchemy job store.
-
-**Job store:** the same SQLite DB as the agent's data (config value `DB_PATH`) — survives process restarts.
-
-**Timeframe mapping:**
-| Strategy timeframe | Cron expression |
-|--------------------|-----------------|
-| 1m | `*/1 * * * *` |
-| 5m | `*/5 * * * *` |
-| 15m | `*/15 * * * *` |
-| 1h | `0 * * * *` |
-| 4h | `0 */4 * * *` |
-| 1d | `0 0 * * *` |
-
-**Lifecycle:**
-- Scheduler starts in FastAPI lifespan (`on_startup`)
-- Strategy activation (`paper` or `live`) → register job `eval-<strategy_id>`
-- Strategy deactivation → remove job
-- Job fires → call `strategy_evaluator.evaluate(strategy_id)`
-
-**Failure handling:** failed evaluations are logged to the `evaluations` table with `status='error'` and `error_msg` populated. The strategy remains active — transient failures (API outages, etc.) should not stop the schedule.
-
----
+EIP-7702 and blob transactions, authorization lists, contract deployments, other targets and
+arbitrary message signing are refused.
 
 ## Configuration
 
-The agent uses the existing mangrove-agent config system — no invented `.env` files, no parallel layer. Values live in `server/src/config/{environment}-config.json`, with required keys declared in `server/src/config/configuration-keys.json`. The `ENVIRONMENT` env var selects which file to load. Secret values can be referenced using the existing `secret:NAME:PROPERTY` syntax; literal values are fine for local dev.
+Configuration is JSON in `server/src/config/{ENVIRONMENT}-config.json`. `configuration-keys.json`
+declares which keys are required. A value can be a literal or a `secret:NAME:PROPERTY`
+reference resolved from GCP Secret Manager. With `MANGROVE_AGENT_HOME` set (plugin installs),
+config, database and master key live under that directory and relative paths resolve against
+it. See the [configuration guide](configuration.md).
 
-### `configuration-keys.json` (agent + x402, both required)
+**Required keys:**
 
-x402 keys from the template stay required — payment middleware needs them at startup even if no agent endpoints are payment-gated yet.
+| Key | Meaning | Example-config value |
+|-----|---------|----------------------|
+| `AUTH_ENABLED` | Turn API key checking on or off | `true` |
+| `API_KEYS` | Comma-separated valid keys | generated by setup |
+| `MANGROVEMARKETS_BASE_URL` | Markets server | `http://localhost:9081` |
+| `DB_PATH` | SQLite file | `./agent-data/agent.db` |
+| `MASTER_KEY_PATH` | Master keyfile | `./agent-data/master.key` |
+| `KEYRING_SERVICE_NAME` | OS keychain service name | `mangrove-agent` |
+| `MANGROVE_SDK_TIMEOUT_SECONDS` | SDK and upstream call timeout | `180` |
+| `LOG_RETENTION_DAYS` | Log retention period | `90` |
+| `SECRET_VAULT_TTL_SECONDS` | Lifetime of a `vault_token` | `300` |
+| `X402_FACILITATOR_URL` | Facilitator for the demo route and tool | Coinbase CDP facilitator |
+| `X402_NETWORK` | Payment network, CAIP-2 | `eip155:8453` |
+| `X402_PAY_TO` | Address that receives demo payments | set |
+| `X402_USDC_CONTRACT` | USDC contract for the network | Base mainnet USDC |
+| `X402_HELLO_MANGROVE_PRICE` | Demo price in USDC base units | `50000` |
+| `X402_CDP_API_KEY_ID`, `X402_CDP_API_KEY_SECRET` | Facilitator credentials (empty if unused) | empty |
 
-```json
-{
-  "required": [
-    "AUTH_ENABLED",
-    "API_KEY",
-    "MANGROVE_API_KEY",
-    "MANGROVEMARKETS_BASE_URL",
-    "DB_PATH",
-    "KEYRING_SERVICE_NAME",
-    "MASTER_KEY_ENV_FALLBACK",
-    "LOG_RETENTION_DAYS",
-    "X402_FACILITATOR_URL",
-    "X402_NETWORK",
-    "X402_PAY_TO",
-    "X402_USDC_CONTRACT",
-    "X402_HELLO_MANGROVE_PRICE",
-    "X402_CDP_API_KEY_ID",
-    "X402_CDP_API_KEY_SECRET"
-  ],
-  "full_app_keys": []
-}
-```
+**Optional keys** are loaded when present: `MANGROVE_API_KEY`, `MANGROVE_ACCESS_MODE`,
+`MANGROVEAI_BASE_URL`, `X402_MANGROVE_ENVIRONMENT`, `X402_MANGROVE_BASE_URL`,
+`X402_MANGROVE_KB_BASE_URL`, `X402_RECONCILIATION_RPC_URLS` (a map of network ID to RPC URL;
+there is no public fallback, and `scripts/setup.sh` seeds the selected network when wallet
+mode is chosen), `MARKETPLACE_OWNERSHIP_AUDIENCE`, `MARKETPLACE_CHAIN_ID` (8453 or
+84532) and `MARKETPLACE_XRPL_NETWORK`.
 
-### Example `local-config.json`
+**Full-app keys** are validated only when present, and startup fails if one is present but
+empty: `PORTFOLIO_MAX_DRAWDOWN_PCT` (default 0.30) and `X402_SPEND_CAP_USD` (default 25).
 
-```json
-{
-  "AUTH_ENABLED": true,
-  "API_KEY": "local-dev-key",
-  "MANGROVE_API_KEY": "dev_...",
-  "MANGROVEMARKETS_BASE_URL": "http://localhost:9081",
-  "DB_PATH": "./agent.db",
-  "KEYRING_SERVICE_NAME": "mangrove-agent",
-  "MASTER_KEY_ENV_FALLBACK": "",
-  "LOG_RETENTION_DAYS": 90,
-  "X402_FACILITATOR_URL": "https://x402.org/facilitator",
-  "X402_NETWORK": "eip155:84532",
-  "X402_PAY_TO": "0xde991861bB3e7078015826Fad749de398F6ec1f6",
-  "X402_USDC_CONTRACT": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-  "X402_HELLO_MANGROVE_PRICE": "50000",
-  "X402_CDP_API_KEY_ID": "",
-  "X402_CDP_API_KEY_SECRET": ""
-}
-```
+**Read with defaults:** `LOCAL_AGENT_URL` (default `http://localhost:9080`) is the agent's own
+local address, used by scripts and never a remote host. `X402_PAYER_WALLET` (default empty) is
+the wallet outbound payments are signed with; no wallet is chosen on the user's behalf.
 
-### Notes
+## Service layer
 
-- `API_KEY`, `MANGROVE_API_KEY`, and `MASTER_KEY_ENV_FALLBACK` are the secret-sensitive values. In environments with Secret Manager configured, they can be written as `"secret:mangrove-api-key:value"`; local deployments use literal strings.
-- `MASTER_KEY_ENV_FALLBACK` is intentionally non-required at runtime — if empty, the agent uses the OS keychain. Set it only for environments without a keychain (e.g., CI).
-- `full_app_keys` is empty for v1 (no Postgres or Redis).
-- The `MANGROVEAI_BASE_URL` is auto-detected by the SDK from the `MANGROVE_API_KEY` prefix (`prod_*` vs `dev_*`); no separate config key needed.
-
----
-
-## Service Layer Modules
-
-All routes and MCP tools delegate to these services. Never duplicate business logic between the two interfaces.
-
-**Service principle:** if a service would just forward arguments to an SDK call and return the result, it doesn't exist. Routes call the SDK clients directly (via `shared/clients/mangrove.py` singletons). Services exist only when they add orchestration the SDK doesn't provide.
-
-The services that stay:
+Routes and tools delegate to these services in `server/src/services/`. Business logic is never
+duplicated between the two interfaces.
 
 | Module | Responsibility |
-|--------|---------------|
-| `services/wallet_manager.py` | Key gen, Fernet encryption, local signing of unsigned txs from the SDK |
-| `services/strategy_service.py` | Cron-tick orchestration: call `mangroveai.execution.evaluate(strategy_id)` (SDK handles market data fetch + signal eval + risk gates internally), dispatch returned orders to `order_executor`. Strategy CRUD against `mangroveai.strategies` + local cache writes. No local signal evaluation or risk logic. |
-| `services/order_executor.py` | The single execution path for all DEX swaps. Takes an `OrderIntent` (from `strategy_service` for cron-driven trades, or built from a user request for the `POST /dex/swap` route). Orchestrates the full 6-step flow against `mangrovemarkets.dex` (quote → conditional approve → sign → broadcast → poll → prepare → sign → broadcast → poll). Branches paper vs live. |
-| `services/scheduler_service.py` | APScheduler wrapper: register, cancel, list active jobs |
-| `services/trade_log.py` | SQLite writes: evaluations, trades, positions |
-| `services/allocation_service.py` | Local allocation accounting for live strategies |
-| `services/spend_service.py` | The aggregate budget for outbound x402 payments: running total, per-payment ledger, and the human-authorized top-up. Lives here for the same reason the portfolio kill switch does — the signing guard sees one payload and the payer sees one request; only this process holds the total. |
+|--------|----------------|
+| `wallet_manager` | Key generation, Fernet encryption, the signing guard, local signing, backup gate |
+| `secret_vault` | In-memory, single-read, expiring store behind `vault_token` |
+| `strategy_service` | Lifecycle transitions and the scheduler tick for local records |
+| `order_executor` | The single execution path for swaps and paper fills; maintains positions |
+| `scheduler_service` | APScheduler wrapper and fixed-interval jobs |
+| `paper_schedule_service` | Server-owned paper schedules |
+| `trade_log` | Writes and reads of evaluations, trades and positions |
+| `allocation_service` | Per-strategy fund allocations |
+| `portfolio_risk_service` | Aggregate drawdown and the kill switch |
+| `spend_service` | The outbound x402 budget and ledger |
+| `x402_payer`, `payment_operations`, `payment_reconciliation_worker`, `refund_service` | Outbound payments, operation identity, reconciliation and refunds |
+| `dex_service` | Quotes in human units |
+| `broker_execution`, `broker_store`, `robinhood_client`, `robinhood_venue` | Robinhood execution venue |
+| `cex_service`, `cex_oauth_service`, `cex_credentials` | Kraken in both modes |
+| `marketplace`, `marketplace_catalog`, `marketplace_reads`, `marketplace_payments`, `marketplace_authorization` | Local approval flow for Markets actions |
+| `agent_identity` | The agent name |
+| `tool_pricing` | Price hints for `list_tools` |
 
-**Routes that call SDKs directly (no service layer):** signal listing, market data (OHLCV, current data, trending, global), on-chain analytics, KB search/glossary, portfolio (value, P&L, tokens, DeFi, history), DEX venue/pair listing, DEX quote. Each route handler imports the appropriate SDK client from `shared/clients/mangrove.py`, calls the method, returns the response. Adding a wrapper service for these would only duplicate the SDK's interface.
+Some read-only routes (DEX venues, pairs, gas price and similar, and the wallet balance and
+portfolio reads) call the `mangrovemarkets` SDK client directly from the route handler. A
+service exists only where it adds orchestration, state or safety checks.
 
-**Architectural note:** there is no `strategy_evaluator.py` module. Strategy evaluation (signal firing, position sizing, risk gates, cooldowns, volatility adjustments) is entirely the responsibility of `mangroveai.execution.evaluate()`. The agent calls the SDK and executes whatever `OrderIntent[]` comes back. Reimplementing any of that logic locally would duplicate upstream work and inevitably drift out of sync.
-
----
-
-## Traceability: User Story → Endpoint
-
-Every user story maps to at least one endpoint.
-
-| Story | Endpoints |
-|-------|-----------|
-| US-1 create wallet | `POST /wallet/create` |
-| US-2 balances | `GET /wallet/{a}/balances` |
-| US-3 DEX venues/pairs | `GET /dex/venues`, `GET /dex/pairs` |
-| US-4 swap quote | `POST /dex/quote` |
-| US-5 execute swap | `POST /dex/swap` |
-| US-6 OHLCV | `GET /market/ohlcv` |
-| US-7 market data | `GET /market/data` |
-| US-8 trending / global | `GET /market/trending`, `GET /market/global` |
-| US-9 on-chain | `GET /on-chain/smart-money`, `/whale-activity`, `/token-holders` |
-| US-10 portfolio | `GET /wallet/{a}/portfolio`, `/history` |
-| US-11 signals | `GET /signals`, `GET /signals/{name}` |
-| US-12 create strategy | `POST /strategies/autonomous`, `POST /strategies/manual` |
-| US-13 list/view strategies | `GET /strategies`, `GET /strategies/{id}` |
-| US-14 update status | `PATCH /strategies/{id}/status` |
-| US-15 backtest | `POST /strategies/{id}/backtest` |
-| US-16 automated eval loop | `PATCH /strategies/{id}/status` (activates cron) + `POST /strategies/{id}/evaluate` (manual tick) |
-| US-17 deposit/withdraw | `PATCH /strategies/{id}/status` with `allocation` block (deposit on → live) or confirm (withdraw on → inactive) |
-| US-18 KB | `GET /kb/search`, `GET /kb/glossary/{term}` |
+There is no local signal evaluator. Signal firing, position sizing, risk gates, cooldowns and
+volatility adjustment are the responsibility of MangroveAI's evaluation, and the agent
+executes whatever order intents it returns.

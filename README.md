@@ -7,8 +7,8 @@
 
   <p>
     <strong>A local MCP server (Model Context Protocol) and Claude Code plugin for AI trading agents.</strong><br>
-    Built on the Mangrove API, with a REST API alongside. FastAPI + MCP. Autonomous strategy generation, cron-driven execution, full audit trail.<br>
-    CEX trade execution on <strong>Kraken</strong> &nbsp;·&nbsp; DEX execution via <strong>1inch</strong> across 10 EVM chains
+    Built on the Mangrove API, with a REST API alongside. FastAPI + MCP. Strategies are authored and backtested on MangroveAI; this agent supplies the clock, local custody and execution, and a full audit trail.<br>
+    Kraken and Robinhood venues, and DEX execution via <strong>1inch</strong> across 10 EVM chains
   </p>
 
   <p>
@@ -34,56 +34,38 @@
 
 ## What this is
 
-A local AI trading agent that:
-- Turns natural-language goals ("momentum on ETH") into backtested, ranked trading strategies via the [MangroveAI API](https://mangrovedeveloper.ai).
-- Runs live strategies on APScheduler cron jobs. Same evaluator path for paper and live.
-- Executes live DEX swaps through [MangroveMarkets](https://github.com/MangroveTechnologies/MangroveMarkets) — 1inch routing across 10 EVM chains (Ethereum, Base, Arbitrum, Polygon, Optimism, BNB, Avalanche, zkSync Era, Gnosis, Linea; the agent defaults to Base). Client-side signing; the routing server never touches your keys.
-- Trades on **Kraken** too, with two connection modes: **bring-your-own-key** (`/setup-kraken` — a least-privilege API key that stays on your machine and talks to Kraken directly) or **keyless OAuth** (`/connect-kraken` — consent once in a browser, no key to manage).
-- Logs every evaluation and trade — DEX and CEX — to local SQLite for a full audit trail.
+mangrove-agent is an open-source local client for Mangrove services. It gives an AI client (Claude Code, Codex, Grok Build, Perplexity Computer, or any MCP client) local tools and access to configured hosted services. Credential and wallet custody depends on the selected workflow:
 
-### What you get
+- **Author and test strategies.** The agent turns a goal such as "momentum on ETH" into a backtested strategy by calling the [MangroveAI API](https://mangrovedeveloper.ai). Strategy building, backtesting, signals, market data and the knowledge base all live in MangroveAI; the agent forwards those tools and keeps no copy of them.
+- **Paper trade.** A paper schedule runs on a clock the agent supplies, while MangroveAI owns the strategy, balances, positions and trades. No funds are at risk.
+- **Use the supported execution workflows.** For local DEX execution, the agent signs transactions on the user's machine. Kraken BYOK keeps its API key local; Kraken OAuth is a separate connection where Mangrove holds the authorized grant. Robinhood uses its documented broker connection. Mangrove-owned execution software enforces deterministic risk management based on live market and account conditions. External AI clients and SDKs request operations and preserve Mangrove's decisions, audit details, and errors; they do not replace its risk policy.
+- **Keep an audit trail.** Local evaluations, DEX swaps and confirmed Robinhood fills are logged to a local SQLite database. Kraken orders are not added to the local trade log.
 
-- **119 tools** (as of October 2026; `/mcp` in Claude Code showed 119 on 2026-10-20). That is the hosted MangroveAI catalog forwarded by the agent plus local tools. Run `list_tools` against the endpoint for the live catalog.
-- **7 agent skills** in `.claude/skills`: `audit-security`, `check-alignment`, `connect-kraken`, `setup-kraken`, `setup-robinhood`, `tool-spec`, `trading-bot`. The Claude Code plugin wires in four of them.
-- **REST API** (FastAPI) next to the MCP server, same agent.
-- **Claude Code plugin** install, see [Install as a Claude Code plugin](#install-as-a-claude-code-plugin-api-key-required).
-- **Works with Codex and any MCP client.** The local MCP endpoint is `http://127.0.0.1:9080/mcp/`. See [Use it from Codex](#use-it-from-codex).
-- **Hosted MangroveAI MCP server** at `https://api.mangrovedeveloper.ai/mcp/` (streamable HTTP, answers `initialize` without auth).
-- **Pricing:** a free API key at https://mangrovedeveloper.ai, or x402 pay-per-call in USDC.
-- **Non-custodial:** execution on Kraken (bring-your-own-key or OAuth), Robinhood, and 1inch across 10 EVM chains. Keys and wallets stay on your machine.
+The agent exposes the same capabilities two ways: an MCP endpoint at `http://127.0.0.1:9080/mcp/` and a REST API under `/api/v1/agent/`. MangroveAI also runs its own hosted MCP server at `https://api.mangrovedeveloper.ai/mcp/`.
 
-More for agent builders: https://mangrove.ai/agents/ and https://mangrove.ai/llms.txt
+You pay for MangroveAI access with a free API key from https://mangrovedeveloper.ai, or per call in USDC with x402 (no signup). More for agent builders: https://mangrove.ai/agents/ and https://mangrove.ai/llms.txt. Full platform documentation and the trading knowledge base are at https://mangrove.io/docs (knowledge base: https://mangrove.io/knowledge-base); the agent's `kb_search` tool queries the same corpus.
 
-Full platform documentation and the trading knowledge base live at **https://mangrove.io/docs** (KB: https://mangrove.io/knowledge-base) — the agent's `kb_search` tool queries the same corpus.
+## Choose an install path
 
-**Real mainnet swap from the agent** (verified April 2026): [0x5c126e...c5565](https://basescan.org/tx/0x5c126e6be26fc736bcb3f11a8f4c699aeee754f6c0bf7e5b7aa2df6a859c5565)
+| Path | Use it when | Start here |
+|---|---|---|
+| Ask your AI client | You use Claude Code, Codex, Grok Build or Perplexity Computer and want the client to install and connect itself | [Install with an AI client](#install-with-an-ai-client) |
+| Clone and run `setup.sh` | You want the full repository, API-key or x402 access, and the option to change the code | [Quick start](#quick-start-clone-and-run-setupsh) |
+| Claude Code plugin | You use Claude Code and have a MangroveAI API key | [Claude Code plugin](docs/clients.md#claude-code) |
+| Codex plugin or MCP config | You use Codex | [Codex](docs/clients.md#codex-and-grok-build) |
+| Docker | You cannot run Python on the host | [Docker](#alternate-quick-start--docker) |
 
----
+Every path runs the same agent. Use one path per machine: the agent listens on `127.0.0.1:9080`, so a plugin install and a clone cannot run side by side on that port.
 
-## Use Mangrove agent with your AI client
+### Install with an AI client
 
-Start with the [user guide](docs/user-guide.md) for installation, choosing a name,
-coming back later, and switching clients.
-
-Tell **Claude Code, Codex, Grok Build, or Perplexity Computer**:
+Tell Claude Code, Codex, Grok Build or Perplexity Computer:
 
 > Install https://github.com/MangroveTechnologies/mangrove-agent and follow its AI client installation instructions.
 
-**For the installing agent:** follow [AI client setup](docs/clients.md#install-from-an-agent).
-Install the server in your execution environment, load the complete agent
-instructions, discover its tools, and call the free `status` tool before
-reporting success. Perplexity Computer can use the provided command client;
-this installation does not require creating a Perplexity Project, configuring a
-custom cloud connector, or installing another desktop app.
+The client installs the server in its own execution environment, loads the shared agent instructions, discovers the tools and calls the free `status` tool before it reports success. The [user guide](docs/user-guide.md) covers installation, choosing the agent's name, coming back later and switching clients. The installing agent follows [Install from an agent](docs/clients.md#install-from-an-agent). Perplexity Computer uses the provided command client and needs no Perplexity Project, custom cloud connector or extra desktop app.
 
-The agent's shared identity and operating instructions live in [`SAGE.md`](SAGE.md).
-First run asks what to name the agent. That choice is saved locally and reused
-across clients; there is no default personal name.
-`AGENTS.md` points Codex and compatible clients there; `CLAUDE.md` imports it for
-Claude Code. Codex and Grok Build launch helpers, MCP configuration templates,
-and the complete Perplexity/web instruction bundle are documented in
-[AI client setup](docs/clients.md). Tool access is configured and verified
-separately for each client.
+The agent's shared identity and operating instructions live in [`SAGE.md`](SAGE.md). On first run the agent asks what to name itself and saves that choice locally for every client; there is no default personal name. `AGENTS.md` points Codex and compatible clients to `SAGE.md`, and `CLAUDE.md` imports it for Claude Code. Launch helpers, MCP configuration templates and the instruction bundle for hosts without file access are in [AI client setup](docs/clients.md). Tool access is configured and verified separately for each client.
 
 ## Install with setup.sh (sign-in, API key or x402)
 
@@ -95,93 +77,9 @@ starts the agent and registers Claude when its CLI is available. For x402, a fin
 for you to run yourself; it never automatically creates/imports a wallet or pays.
 See [the complete setup and wallet flow](docs/setup-x402.md).
 
-## Install as a Claude Code plugin (API key required)
+[`SETUP.md`](SETUP.md) walks through installing these step by step on macOS and Windows.
 
-For the existing API-key plugin flow, tell your Claude Code agent *"install this trading bot: https://github.com/MangroveTechnologies/mangrove-agent"*, or run it yourself:
-
-```bash
-claude plugin marketplace add MangroveTechnologies/mangrove-agent
-claude plugin install mangrove-agent@mangrove
-```
-
-Inside a Claude Code session the same thing is `/plugin marketplace add MangroveTechnologies/mangrove-agent`, then `/plugin install mangrove-agent@mangrove`. Claude Code asks for your **MangroveAI API key** (free at https://mangrovedeveloper.ai) and stores it as a sensitive setting. Never paste the key into chat.
-
-Start a new session. On first start the plugin installs its Python dependencies and starts the agent in the background (about 1-3 minutes). Then say *"give me the tour"* or *"build me a momentum strategy for ETH"*.
-
-- **Needs:** Python 3.11+ and a bash shell (macOS, Linux, or WSL / Git Bash on Windows).
-- **Where your data lives:** `~/.mangrove-agent/` holds the config, the SQLite DB (wallets, strategies, trades) and the wallet master key. It survives plugin updates. Back it up once you hold funds, and never delete it while wallets hold funds.
-- **Network:** the agent listens on `127.0.0.1:9080` only. Don't also run a git-clone agent on 9080.
-- **Logs:** `~/.mangrove-agent/agent-data/agent.log` (server) and `bootstrap.log` (install/start).
-
-Want to change the code? Clone the repo instead (below). Both paths run the same agent.
-
-### Use it from Codex
-
-The repo ships a Codex marketplace file at `.agents/plugins/marketplace.json`. Add the marketplace from a terminal:
-
-```bash
-codex plugin marketplace add MangroveTechnologies/mangrove-agent
-```
-
-Per OpenAI's [Codex plugin docs](https://developers.openai.com/codex/plugins/build), the plugin is then installed from the Plugins Directory in the ChatGPT desktop app (restart the app, open the Plugins Directory, choose the `mangrove` marketplace, install `mangrove-agent`). The docs list no CLI install command. To enable it for one project, add this to that repo's `.codex/config.toml`:
-
-```toml
-[plugins."mangrove-agent@mangrove"]
-enabled = true
-```
-
-You can also skip the marketplace and point Codex at the local MCP server (`http://127.0.0.1:9080/mcp/`) with the template in `.codex/config.toml.example`. See [AI client setup](docs/clients.md#codex-and-grok-build).
-
-## Get started (git clone)
-
-This repo is **your own trading agent**: you run it on your machine, your keys never leave it, and it's the reference consumer of the [Mangrove API](https://mangrovedeveloper.ai) — clone it, make it yours, extend it into your own trading system.
-
-1. **Choose your AI client** in the [user guide](docs/user-guide.md). Claude Code, Codex, Grok Build and Perplexity Computer support installation. A MangroveAI API key is optional; a fresh unattended setup defers wallet payments until you configure them.
-2. **Follow [`SETUP.md`](SETUP.md)** for manual prerequisites and setup. Its longer Claude walkthrough is optional; other clients do not need Claude or Node.js for the Python agent.
-3. **Take the guided walkthrough** at [`tutorials/trading-app/`](tutorials/trading-app/00-index.md) - self-paced chapters from "I just cloned this" to "I have a paper strategy running" to (optionally) "I made a live swap."
-
-Chapters 01-05 avoid live trading capital. Paid API calls can still consume an API-key allowance or require x402 payments, including in paper mode. Chapters 06-08 cover optional live trading.
-
-Already know your way around? Keep reading — the rest of this README is a reference.
-
-## Connect your Kraken account
-
-The agent trades on Kraken (CEX) as well as on-chain. Two ways in — pick by how you want access held:
-
-| | **Bring your own key** — `/setup-kraken` | **Keyless OAuth** — `/connect-kraken` |
-|---|---|---|
-| How it works | You create a **least-privilege** Kraken API key (trade + query only, **withdrawal disabled**); the SDK talks to `api.kraken.com` directly from your machine | You approve once in a browser (Kraken Connect / OAuth2); no API key to create, copy, or store |
-| Who holds access | **You** — the key never leaves your machine and never touches a Mangrove server | **Mangrove platform** holds the OAuth grant and submits on your behalf |
-| Best for | Self-custody purists; anyone comfortable making an API key | Fastest path; anyone who doesn't want to manage a key |
-| Revoke | Delete the key in Kraken settings | Revoke the app grant in Kraken settings |
-
-Just say **"set up Kraken"** or **"connect Kraken without a key"** in a session and the matching skill walks you through it — including the exact permission set for the BYOK key. Fills sync into the same local SQLite trade log as your DEX swaps (`cex_status`, `cex_balances`, `cex_sync_fills`).
-
----
-
-## Prerequisites
-
-For marketplace listings and other ownership-protected actions, see
-[Marketplace wallet approvals](docs/marketplace-wallets.md). Claude can prepare
-an action, show it for approval, then have the local agent sign and submit it to
-MangroveMarkets. This requires explicit marketplace configuration and a backed-up
-Base or XRPL wallet. Payment settlement is a separate integration.
-
-| Tool | Install | Why |
-|---|---|---|
-| **VSCode** (optional) | https://code.visualstudio.com/download | Editor with an integrated terminal. Your existing terminal or AI client's execution environment also works. |
-| **Python 3.11+** | https://www.python.org/downloads/ | The agent is a Python FastAPI process. 3.11 is the minimum. |
-| **Git for Windows** (Windows only) | https://git-scm.com/download/win | Gives you Git Bash, so the `*.sh` scripts in this repo work identically to macOS / Linux. Set VSCode's default terminal to `Git Bash` via the command palette. |
-| **AI client** | [Claude, Codex, Grok, or Perplexity setup](docs/clients.md) | A client with command execution or MCP access. Claude Code is optional. |
-| **MangroveAI API key** | Free at https://mangrovedeveloper.ai | Optional for setup.sh: choose API-key access or x402 wallet payments. |
-
-Docker is **optional** — see the alternate install path below. Bare-metal is the primary path because the `keyring` library can reach your OS keychain directly when the agent runs natively.
-
----
-
-## Quick start — bare-metal (recommended)
-
-One command selects API-key or x402 access, creates a venv, installs dependencies, starts the local agent, registers Claude when available, and verifies authenticated local access.
+### Quick start: clone and run `setup.sh`
 
 ```bash
 git clone https://github.com/MangroveTechnologies/mangrove-agent.git mangrove-agent
@@ -189,16 +87,15 @@ cd mangrove-agent
 ./scripts/setup.sh
 ```
 
-First run can take a few minutes for dependencies and network discovery. Re-runs preserve configuration and local state; they can restart the server after code or configuration changes. Connecting another client to an already running agent does not require rerunning setup.
+One command selects API-key or x402 access, creates `.venv`, installs dependencies, starts the agent in the background, registers it with Claude Code when the `claude` CLI is present, and verifies authenticated local access. A first run can take a few minutes. Reruns preserve configuration and local state and restart the server only when code or configuration changed. Connecting another client to a running agent does not need a rerun.
 
-When it's finished:
-- Agent runs at `http://localhost:9080` (pid in `agent-data/bare.pid`, logs in `agent-data/bare.log`). We bind 9080 externally because `:8080` is commonly squatted by VSCode Helper and other dev tools.
-- `./scripts/verify_quickstart.sh --bare` passed: local authentication and required local tools were checked. Unavailable remote tools are reported separately.
-- Claude registration is saved when available and not skipped; other clients use the command client or their own MCP connection.
+When it finishes:
 
-**After setup, continue with your chosen client** using the [user guide](docs/user-guide.md#come-back-or-switch-clients). Claude users can start `./scripts/chat.sh` for a session with shell/file tools disabled and only Mangrove MCP; see [restricted chat](docs/restricted-chat.md). In x402 mode, complete the printed payment-wallet instructions before requesting paid data or backtests. API-key users can paper-trade without a payment wallet. Simulated trades do not make upstream API calls free.
+- The agent runs at `http://127.0.0.1:9080`. Its process ID is in `agent-data/bare.pid` and its log is `agent-data/bare.log`.
+- `setup.sh` has run `scripts/verify_quickstart.sh`, which checks authenticated local access, scheduler readiness and that the onboarding tools are discoverable.
+- Claude registration is saved when the CLI is available and you did not pass `--no-mcp`. Other clients use the command client or their own MCP connection.
 
-### Useful `./scripts/setup.sh` flags
+Continue with your client using the [user guide](docs/user-guide.md#come-back-or-switch-clients). Claude users can run `./scripts/chat.sh` for a session with shell and file tools disabled and only the Mangrove MCP server; see [restricted chat](docs/restricted-chat.md). In x402 mode, finish the printed payment-wallet steps before you request paid data or backtests ([details](docs/setup-x402.md)). With an API key you can paper trade without a payment wallet. Paper trades are simulated, but the upstream data and evaluation calls behind them still count against your API-key allowance or cost x402 payments.
 
 ```
 ./scripts/setup.sh --yes                          # preserve settings; fresh install uses x402
@@ -221,205 +118,206 @@ BARE_PORT=9085 ./scripts/setup.sh                  # use a different port (9080 
 If you can't run Python on the host (corporate restrictions, reproducibility mandate), Docker works the same way. The tradeoff: the container can't reach your OS keychain, so the Fernet master key lives in `./agent-data/master.key` (chmod 600, gitignored) instead of Keychain / Secret Service / Credential Manager.
 
 ```bash
-git clone https://github.com/MangroveTechnologies/mangrove-agent.git mangrove-agent
-cd mangrove-agent
 ./scripts/setup.sh --docker
 ```
 
-State is persisted in the `./agent-data/` directory (bind-mounted into the container). The directory mount avoids the macOS / Windows single-file bind-mount staleness that previously ate DB rows after rebuild.
+Docker setup uses port 9080, published on loopback only. State persists in the `./agent-data/` directory, which is bind-mounted into the container as a directory (single-file mounts drift on macOS and Windows). The wallet master key is stored the same way as in a bare-metal install, in `agent-data/master.key` (mode 0600, gitignored).
 
----
+## Your first strategy and trade
 
-## Your first trade
+The full walkthrough is the [trading tutorial](tutorials/trading-app/00-index.md); this is the short version. Chapters 01-05 use no live trading capital, and chapters 06-08 cover optional live trading.
 
-This section is a fast tour. The full walkthrough is in [`tutorials/trading-app/`](tutorials/trading-app/00-index.md); come back here if you want the shorter reference.
+**First connection.** Your client loads the shared policy, discovers tools and calls free `status`. If the installation has no saved name, it asks you to choose one. Startup does not fetch paid data, run backtests or configure wallets on its own.
 
-**First connection.** Your chosen client loads the shared policy, discovers tools and calls free status. If the installation has no saved name, it asks you to choose one. Startup does not automatically fetch paid market data, run backtests or configure wallets. Ask for a tour when you want one; paid examples need the appropriate access first.
-
-**Paper trading (payment wallet needed for paid API calls in x402 mode).**
+**Build a strategy.**
 
 > "Build me a strategy for ETH on 1h."
 
-The agent calls MangroveAI's `build_strategy_for_regime`: the server reads the current market regime, searches the Strategy Engine's completed runs with fixed floors (more than 10 trades, Sharpe at least 1, IRR at least 10%, beats benchmarks) in that regime, picks one at random from those whose entry the regime admits, saves it as a draft and backtests it on the last 90 days. Ask for a *new* strategy to have one composed from regime-allowed signals instead.
+The agent calls MangroveAI's `build_strategy_for_regime`. The server reads the current market regime and searches the Strategy Engine's completed runs, using fixed quality floors (more than 10 trades, Sharpe at least 1, annual return at least 10%, beats its benchmarks), for one whose entry the regime admits. It picks one, saves it as a draft and backtests it on the last 90 days. Ask for a *new* strategy to have one composed from regime-allowed signals instead. Strategy building and backtesting follow instructions the agent loads live from MangroveAI with `load_skill`.
+
+**Paper trade it.**
 
 > "Promote it to paper."
 
-Schedules the strategy on a cron at the strategy's timeframe. Evaluations fire, paper fills get logged. No funds at risk.
+The agent calls `agent_start_paper_schedule` with the server strategy ID, an interval (60, 300, 900, 3600, 14400 or 86400 seconds), a maximum number of evaluations (1 to 10000) and `confirm=true`. The agent's clock triggers each evaluation; MangroveAI evaluates the strategy and owns its balances, positions and trades. Use `agent_list_paper_schedules`, `agent_get_paper_schedule`, `agent_pause_paper_schedule` and `agent_reconcile_paper_schedule` to follow and control it. See [paper scheduling](docs/paper-scheduling.md).
 
-**Going live (optional, needs funds).**
+**Go live (optional, needs funds).** Live trading is a separate, explicit decision.
 
-For Robinhood, use the bundled `setup-robinhood` skill and
-[execution-venue setup](docs/robinhood-execution.md). It uses broker OAuth and
-needs no local trading wallet.
+- **Robinhood:** use the bundled `setup-robinhood` skill and the [execution venue guide](docs/robinhood-execution.md). It uses broker OAuth and needs no local trading wallet.
+- **DEX:** wallet setup and live trading are covered in chapters 06 and 07 of the tutorial. In outline: create or import a wallet (`create_wallet`, or `./scripts/stash-secret.sh` and then `import_wallet`); save its secret in your own terminal with `./scripts/reveal-secret.sh --address WALLET_ADDRESS`; run `./scripts/confirm-backup.sh WALLET_ADDRESS`; fund the wallet with a small amount of USDC on Base; then trade. `execute_swap` needs `confirm=true`, an explicit `slippage_pct` of at most 0.0025 (0.25%) and a backup-confirmed wallet. A strategy moves to `live` through `PATCH /api/v1/agent/strategies/{strategy_id}/status` with `confirm=true` and an allocation (`wallet_address`, `token`, `token_address`, `amount`, `slippage_pct`).
+- At swap time the agent signs locally and sends only the signed transaction to MangroveMarkets to broadcast. Swap signing is restricted to calls to the 1inch routers and the ERC-20 approvals that precede them; any other transaction is refused before the key is decrypted.
 
-For DEX execution, wallet setup and live trading are in Chapters 06 and 07 of the tutorial:
+## Connect your Kraken account
 
-- Create or import a wallet via `create_wallet` / `stash-secret.sh` + `import_wallet`.
-- Save the secret via `./scripts/reveal-secret.sh <vault_token>` in your terminal (never in the chat).
-- Run `./scripts/confirm-backup.sh <address>` to flip the backup gate.
-- Fund with 1–5 USDC on Base.
-- Promote the strategy to live with an allocation block (`confirm=true`, `slippage_pct ≤ 0.0025`).
-- Live evaluations fire on the same cron; when the strategy decides to trade, the `mangrovemarkets` SDK routes through 1inch, the agent signs locally, broadcasts, and logs the tx.
+The agent connects to Kraken in one of two modes, chosen by how you want access held. What each mode can do differs:
 
-## Safety model at a glance
+| | **Bring your own key** (`/setup-kraken`) | **Keyless OAuth** (`/connect-kraken`) |
+|---|---|---|
+| How it works | You create a least-privilege Kraken API key (query and order permissions, **withdrawal disabled**). The agent talks to `api.kraken.com` directly from your machine. | You approve once in a browser (Kraken Connect, OAuth2). There is no API key to create, copy or store. |
+| Who holds access | **You.** The key stays on your machine and never reaches a Mangrove server. | **The Mangrove platform** holds the OAuth grant and submits orders on your behalf. |
+| Best for | Self-custody and anyone comfortable making an API key. | The fastest path, or anyone who does not want to manage a key. |
+| Orders | Dry-run validation only (`cex_validate_order`). The agent does not place real orders with your key. | Real orders through `POST /api/v1/agent/cex/oauth/orders`. No MCP tool places a Kraken order. |
+| Revoke | Delete the key in Kraken settings. | Revoke the app grant in Kraken settings, or disconnect in Mangrove. |
 
-- **Your private keys never touch this chat.** `create_wallet` returns a `vault_token`, not the plaintext. Revealing is a separate CLI (`reveal-secret.sh`) that prints to your terminal only.
-- **Harness hooks block key pastes.** If you try to paste a key into Claude Code, `.claude/hooks/block-wallet-secrets.sh` refuses the prompt with an educational message. The hook is in `.claude/settings.json` — the machine owner can change this configuration.
-- **Live trading is gated on explicit backup confirmation.** After you save a wallet's secret off-agent, `./scripts/confirm-backup.sh <addr>` flips a flag. `execute_swap` and `update_strategy_status → live` refuse on wallets without it.
-- **Master key stays local.** Bare-metal: OS keychain. Docker: `./agent-data/master.key` (chmod 600, gitignored).
+Say **"set up Kraken"** or **"connect Kraken without a key"** in a session and the matching skill walks you through it, including the exact permission set for the key. In bring-your-own-key mode, `cex_sync_fills` sends your Kraken trade statistics to the MangroveMarkets telemetry service; it does not add them to the local trade log.
 
----
+## Safety model
+
+- **Private keys stay out of the chat.** `create_wallet` returns a `vault_token`, never the plaintext secret. You reveal the secret in your own terminal with `./scripts/reveal-secret.sh`, which refuses to write to anything but a terminal.
+- **Claude hooks block key pastes.** In Claude Code sessions, `.claude/hooks/block-wallet-secrets.sh` refuses prompts that contain a private key or recovery phrase, and checks tool output as defense in depth. The hook is configured in `.claude/settings.json`, and the machine owner can change it. Other clients do not inherit it, so never paste a secret into any AI chat.
+- **Live trading needs a confirmed backup.** After you save a wallet's secret off the agent, `./scripts/confirm-backup.sh WALLET_ADDRESS` records it. Live swaps and paying x402 from a wallet refuse wallets without it.
+- **The master key stays local.** Wallet secrets are encrypted with a Fernet key stored in `agent-data/master.key` (mode 0600, gitignored). If no keyfile exists, the agent reads an OS keychain entry instead; it never silently generates a replacement for a key that is missing.
+- **Local access is authenticated.** The agent binds to `127.0.0.1`, and setup generates a unique local credential (`API_KEYS`) for the AI client. That credential is separate from your MangroveAI key.
 
 ## What the agent can do
 
-The agent has two kinds of tools. Run `list_tools` for the live, authoritative catalog.
+The local agent exposes `list_tools` for its own MCP catalog, including local helpers and tools it currently forwards. This call does not query the hosted MangroveAI catalog directly. For the hosted service, use MCP protocol discovery (`tools/list`) against its `/mcp/` endpoint; when available, `discover_tools` provides a higher-level view of names and descriptions first, with schemas on request. Catalogs can differ by service configuration and can change over time, so do not rely on a fixed total. See [progressive discovery](docs/clients.md#progressive-discovery-of-managed-services).
 
-**1. MangroveAI tools (the single source of truth).** Everything about strategies, backtests, signals, market data, on-chain data, the knowledge base and the Strategy Engine lives in MangroveAI. The agent keeps **no copy** of these tools: at startup it reads MangroveAI's live MCP catalog and forwards each call to MangroveAI's `/mcp/` endpoint, paying per call in x402 wallet mode or using your API key. When MangroveAI adds or changes a tool, the agent picks it up without a code change.
+**1. MangroveAI tools (the source of truth).** Strategies, backtests, sweeps, signals, market data, on-chain data, the knowledge base and the Strategy Engine live in MangroveAI. The agent reads MangroveAI's live MCP catalog (cached for up to a minute) and forwards each call to MangroveAI's `/mcp/` endpoint, paying per call in x402 wallet mode or using your API key. When MangroveAI adds or changes a tool, the agent picks it up without a code change.
 
 | Area (examples, not a fixed list) | MangroveAI tools |
 |---|---|
 | Strategy building | `load_skill`, `build_strategy_for_regime`, `list_backtest_markets`, `save_strategy`, `update_strategy`, `verify_strategy`, `list_strategies`, `get_strategy` |
-| Backtests | `run_backtest` + `get_backtest` (a saved strategy), `get_backtest_trades`, `list_backtests`, `get_benchmark`, `screen_candidates` |
-| Sweep results | `find_sweep_runs` |
-| Signals & regime | `list_signals`, `get_signal`, `search_signals`, `match_signals`, `query_signal_behavior`, `get_market_regime` |
+| Backtests | `run_backtest`, `get_backtest`, `get_backtest_trades`, `list_backtests`, `get_benchmark`, `screen_candidates` |
+| Sweeps | `find_sweep_runs`, `size_sweep`, `create_sweep`, `launch_sweep`, `list_sweeps`, `get_sweep`, `pause_sweep` |
+| Signals and regime | `list_signals`, `get_signal`, `search_signals`, `match_signals`, `query_signal_behavior`, `get_market_regime` |
 | Market, on-chain, DeFi, social | `get_ohlcv`, `get_market_data`, `get_trending`, `get_token_holders`, `get_smart_money_sentiment`, `get_chain_tvl`, `get_social_sentiment`, and more |
 | Knowledge base | `kb_search`, `kb_glossary_get`, `kb_get_document`, `query_knowledge` |
 | Marketplace | `search_marketplace`, `get_marketplace_strategy` |
-| Your MangroveAI positions & trades | `list_positions`, `list_trades` |
+| Your MangroveAI positions and trades | `list_positions`, `list_trades` |
 
-**2. Local tools (things only your machine can do).** These stay in the agent because they need your keys, your wallet or your local records.
+**2. Local tools (what only your machine can do).** These stay in the agent because they need your keys, your wallets or your local records.
 
 | Category | Tools |
 |---|---|
 | Discovery (free) | `status`, `list_tools` |
-| Naming (local, authenticated) | `set_agent_name` |
-| Payment diagnostics | `hello_mangrove` remains directly callable; hidden from normal discovery |
-| Wallet custody | `create_wallet`, `import_wallet`, `list_wallets` stay local; balance and portfolio reads are discovered from Markets |
+| Naming | `set_agent_name` |
+| Wallet custody | `create_wallet`, `import_wallet`, `list_wallets` |
 | Kraken (CEX) | `cex_status`, `cex_connect_kraken`, `cex_balances`, `cex_validate_order`, `cex_sync_fills` |
-| Markets reads | Server-owned `dex_*`, `oneinch_*` and approved `wallet_*` reads; supports API-key access or $0.01 USDC x402 reads. See [migration and units](docs/markets-read-migration.md). |
-| Local DEX execution | `execute_swap` retains local approval, signing and human-unit conversion |
-| Server execution history | Discovered MangroveAI trade and evaluation tools |
+| DEX execution | `execute_swap` (local approval, signing and human-unit conversion) |
+| Paper scheduling | `agent_start_paper_schedule`, `agent_list_paper_schedules`, `agent_get_paper_schedule`, `agent_pause_paper_schedule`, `agent_reconcile_paper_schedule` |
+| Robinhood venue | `agent_robinhood_status`, `agent_configure_execution_venue`, `agent_configure_strategy_market`, `agent_list_venue_orders`, `agent_reconcile_venue_orders`, `agent_cancel_venue_order` |
+| Marketplace approvals | `marketplace_prepare`, `marketplace_submit` (see [marketplace wallet approvals](docs/marketplace-wallets.md)) |
 | x402 spend budget | `x402_spend_status`, `x402_spend_reset` |
+| Payment diagnostics | `hello_mangrove` stays directly callable but is hidden from normal discovery |
 
-Saved strategies are listed and read through MangroveAI MCP `list_strategies` and
-`get_strategy`. Local strategy list/get tools and REST routes are removed; local status/evaluation
-MCP tools are also removed. Use the server-advertised strategy tools.
-Local execution, scheduling and history remain separate from saved-strategy reads.
+The agent also forwards MangroveMarkets read tools (`dex_*`, `oneinch_*` and approved `wallet_*` names) that it discovers from the Markets server. They support API-key access or x402 reads at $0.01 USDC each; see [Markets read tools](docs/markets-read-tools.md) for names and units.
 
-Local tools also have REST endpoints at `/api/v1/agent/*`, calling the same service layer. MangroveAI tools have **no** local REST copy; call them over the agent's MCP endpoint, or call MangroveAI directly. Authenticated routes take `X-API-Key` set to the first entry of `API_KEYS` in `server/src/config/local-config.json` (a unique key `setup.sh` generates). That is the agent's own local key, **not** your MangroveAI API key. `/health`, `status` and `list_tools` need no key, so a wrong key looks fine until the first authenticated call returns 401.
+Saved strategies are read through MangroveAI's `list_strategies` and `get_strategy`. The agent has no local strategy creation: the old local create routes return HTTP 410.
 
-**Backtests and the Strategy Engine.** Backtests run on MangroveAI, never in the agent. For a saved strategy, `run_backtest` submits the run and `get_backtest` reads the result when it finishes. To search what the Strategy Engine has already measured, use `find_sweep_runs`. Creating and launching new sweeps is not offered over MCP today. Deeper dives: the KB [SIEVE guide](https://mangrove.io/docs/guides/using-sieve-prefilter) and [Experiments reference](https://mangrove.io/docs/api-reference/experiments).
+Local tools also have REST endpoints under `/api/v1/agent/`, backed by the same service layer. MangroveAI tools have no local REST copy; call them over the agent's MCP endpoint or call MangroveAI directly. Authenticated routes take an `X-API-Key` header set to the first entry of `API_KEYS` in `server/src/config/local-config.json`, the unique local key `setup.sh` generated (not your MangroveAI key). `/health`, `status` and `list_tools` need no key, so a wrong key looks fine until the first authenticated call returns 401.
 
----
+**Backtests and the Strategy Engine.** Backtests run on MangroveAI, never in the agent. For a saved strategy, `run_backtest` submits the run and `get_backtest` reads the result. `screen_candidates` ranks up to 99 candidates cheaply with the SIEVE model, and `find_sweep_runs` searches what the Strategy Engine has already measured. To size and launch a new sweep, the agent loads MangroveAI's `sweeps` skill, shows the estimated run count and waits for your agreement before it launches compute. Deeper dives: the knowledge base [SIEVE guide](https://mangrove.io/docs/guides/using-sieve-prefilter) and [Experiments reference](https://mangrove.io/docs/api-reference/experiments).
 
 ## How it works
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Your machine                                               │
-│                                                             │
-│  Claude Code ─MCP──┐                                        │
-│  Python/curl ─REST─┤                                        │
-│                    ▼                                        │
-│  ┌─ mangrove-agent (single FastAPI process, port 9080) ──┐     │
-│  │   • auth middleware (X-API-Key)                   │     │
-│  │   • service layer (one for REST + MCP)            │     │
-│  │   • APScheduler (in-process cron, SQLite jobstore)│     │
-│  │   • local Fernet-encrypted wallets                │     │
-│  └───────────────────────────────────────────────────┘     │
-│           │                        │                        │
-│           ▼                        ▼                        │
-│  ┌── SQLite: agent.db ─┐  ┌── OS Keychain (Fernet key) ─┐  │
-│  └─────────────────────┘  └──────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-              │                      │
-              ▼                      ▼
-    MangroveAI /mcp/ +        mangrovemarkets SDK
-    mangroveai SDK            (DEX swap, portfolio,
-    (every MangroveAI tool,    wallet)
-     strategy evaluation)
++-------------------------------------------------------------+
+|  Your machine                                               |
+|                                                             |
+|  AI client --MCP--+                                         |
+|  curl/Python -REST+                                         |
+|                   v                                         |
+|  +- mangrove-agent (one FastAPI process, port 9080) ------+ |
+|  |  - auth middleware (X-API-Key)                          | |
+|  |  - service layer shared by REST and MCP                 | |
+|  |  - APScheduler (paper clock, reconciliation workers)    | |
+|  |  - locally encrypted wallets and signing                | |
+|  +----------------------------------------------------------+ |
+|        |                                  |                 |
+|        v                                  v                 |
+|  agent-data/agent.db (SQLite)    agent-data/master.key      |
++-------------------------------------------------------------+
+        |                                  |
+        v                                  v
+  MangroveAI /mcp/                   MangroveMarkets
+  (every MangroveAI tool:            (DEX quotes, routing,
+   strategies, backtests,             broadcast; read tools)
+   paper evaluation)
 ```
 
-Strategy evaluation happens inside `mangroveai.execution.evaluate()` — the agent does **not** re-implement signal logic, risk gates, position sizing, or cooldowns. It orchestrates: fetch strategy → call SDK → dispatch returned `OrderIntent[]` to the executor → log.
+The agent does not re-implement signal logic, risk gates, position sizing or cooldowns; those run on MangroveAI. The agent orchestrates: it forwards tools, supplies the paper clock, and handles everything that needs your keys, wallets or local records. For a live trade it decrypts the wallet secret in-process, signs the unsigned transaction that MangroveMarkets prepared, and sends only the signed transaction back to be broadcast. MangroveMarkets never sees your key.
 
-For live trades the agent decrypts your wallet's secret in-process, signs the unsigned transaction returned by `mangrovemarkets`, broadcasts the signed bytes, and zeroes the secret. The SDK never sees your key.
+## Documentation
 
----
-
-## Architecture docs
-
-| Doc | What's in it |
+| Doc | What is in it |
 |---|---|
-| [docs/api-reference.md](docs/api-reference.md) | The Mangrove API surface we call |
-| [docs/user-stories.md](docs/user-stories.md) | 18 user stories + 4 flow diagrams |
+| [docs/user-guide.md](docs/user-guide.md) | Installing with your AI client, naming the agent, returning and switching clients |
+| [docs/clients.md](docs/clients.md) | Client adapters, instruction loading, install-from-an-agent steps, progressive discovery |
+| [SETUP.md](SETUP.md) | Step-by-step prerequisites and manual setup for macOS and Windows |
+| [docs/setup-x402.md](docs/setup-x402.md) | API-key and x402 access, the wallet commands, spend budget and payment recovery |
+| [docs/configuration.md](docs/configuration.md) | Config files, keys, environments and secrets |
+| [docs/restricted-chat.md](docs/restricted-chat.md) | The restricted Claude session started by `./scripts/chat.sh` |
+| [docs/strategy-lifecycle.md](docs/strategy-lifecycle.md) | Strategy states, transitions, scheduling and execution |
+| [docs/paper-scheduling.md](docs/paper-scheduling.md) | Server-owned paper schedules |
+| [docs/robinhood-execution.md](docs/robinhood-execution.md) | The Robinhood execution venue |
+| [docs/marketplace-wallets.md](docs/marketplace-wallets.md) | Wallet-approved marketplace actions |
+| [docs/markets-read-tools.md](docs/markets-read-tools.md) | MangroveMarkets read tools, names and units |
+| [docs/defi-pro.md](docs/defi-pro.md) | DeFi analytics tools served by MangroveAI |
+| [docs/remote-mcp-payments.md](docs/remote-mcp-payments.md) | How tool calls to MangroveAI and MangroveMarkets are paid in wallet mode |
+| [docs/x402-payment-uncertainty.md](docs/x402-payment-uncertainty.md) | What happens when a payment outcome is unknown, and how it is recovered |
+| [docs/x402-sync-transport.md](docs/x402-sync-transport.md) | The x402 payment transport used by the MangroveAI client |
+| [docs/x402-payment-scripts.md](docs/x402-payment-scripts.md) | Standalone x402 demo and test scripts |
+| [docs/api-reference.md](docs/api-reference.md) | The REST API reference |
 | [docs/specification.md](docs/specification.md) | API contracts, Pydantic models, SQLite schema, error codes |
-| [docs/architecture.md](docs/architecture.md) | System diagrams, sequence diagrams, file tree |
-| [docs/implementation-plan.md](docs/implementation-plan.md) | 24-task phased build plan |
+| [docs/architecture.md](docs/architecture.md) | System and sequence diagrams, live execution diagram, code layout |
+| [docs/mcp-contracts.md](docs/mcp-contracts.md) | Tool ownership and the offline MCP contract check |
+| [docs/contributing.md](docs/contributing.md) | How to add a route, tool, migration or config key |
+| [docs/incidents/2026-04-24-eip7702-drain.md](docs/incidents/2026-04-24-eip7702-drain.md) | Security post-mortem and the signing defenses it led to |
+| [tutorials/trading-app/](tutorials/trading-app/00-index.md) | Self-paced chapters from a fresh clone to a paper strategy and, optionally, a live swap |
 
 ## Development
 
-Extending the agent — adding a new endpoint, MCP tool, signal, or strategy — follows the service-layer pattern documented in [`docs/contributing.md`](docs/contributing.md). Strategy creation and backtesting instructions are loaded live from MangroveAI through the MCP `load_skill` tool. The agent ships no copies of server skills or strategy generators. Contributor skills remain in `.claude/skills/`.
+Extending the agent (a new endpoint, MCP tool, signal or strategy) follows the service-layer pattern in [`docs/contributing.md`](docs/contributing.md). Strategy creation and backtesting instructions are loaded live from MangroveAI through the MCP `load_skill` tool; the agent ships no copies of server skills or strategy generators. Contributor skills live in `.claude/skills/`.
 
-## Tests
+### Tests
 
-```bash
-docker run --rm -v "$(pwd)/server:/app" -w /app -e ENVIRONMENT=test \
-  $(docker compose build -q app && docker compose images -q app) \
-  pytest tests/
-```
-
-Or from inside the running container:
+From a clone that has run `setup.sh`:
 
 ```bash
-docker compose exec app pytest tests/
+cd server
+ENVIRONMENT=test ../.venv/bin/python3 -m pytest tests/ -v
 ```
 
-Expect everything to pass apart from the 2 opt-in live-swap tests, which are skipped.
-
-To run the opt-in live swaps:
+CI runs the same suite. The two live-swap tests in `tests/e2e/test_live_swap.py` are skipped unless you opt in:
 
 ```bash
-# Testnet (Base Sepolia)
-ENABLE_SEPOLIA_TEST=1 BASE_SEPOLIA_PRIVATE_KEY=0x... pytest tests/e2e/test_live_swap.py::test_sepolia_live_swap
+# Base Sepolia testnet (run from server/)
+ENABLE_SEPOLIA_TEST=1 BASE_SEPOLIA_PRIVATE_KEY=0x... ENVIRONMENT=test ../.venv/bin/python3 -m pytest tests/e2e/test_live_swap.py::test_sepolia_live_swap
 
-# Mainnet — real funds; we tested at 0.10 USDC
-ENABLE_MAINNET_TEST=1 BASE_MAINNET_PRIVATE_KEY=0x... pytest tests/e2e/test_live_swap.py::test_mainnet_live_swap
+# Base mainnet, real funds (budget cap 0.10 USDC per run)
+ENABLE_MAINNET_TEST=1 BASE_MAINNET_PRIVATE_KEY=0x... ENVIRONMENT=test ../.venv/bin/python3 -m pytest tests/e2e/test_live_swap.py::test_mainnet_live_swap
 ```
 
-## Deployment
+### Deployment
 
-Local-only for v1 (Docker Compose). Cloud deployment (Cloud Run with persistent storage, Cloud SQL) is roadmap, not shipped.
+The agent is a local, single-user service. Cloud deployment is not provided.
 
-## Project layout
+### Project layout
 
 ```
 mangrove-agent/
-├── .claude/                  # Claude Code framework (skills, agents, rules)
-├── server/
-│   ├── src/
-│   │   ├── app.py            # FastAPI factory
-│   │   ├── config/           # Per-env JSON configs
-│   │   ├── api/routes/       # REST routes — one file per resource
-│   │   ├── mcp/              # MCP tool registration
-│   │   ├── models/           # Pydantic domain + DB models
-│   │   ├── services/         # Business logic (wallet, strategy, executor, scheduler, trade_log, …)
-│   │   └── shared/           # auth, db/sqlite.py, crypto/fernet.py, clients/mangrove.py, errors, logging
-│   └── tests/                # unit / integration / e2e
-├── docs/                     # Design docs (requirements, spec, architecture, plan)
-├── scripts/verify_quickstart.sh
-├── docker-compose.yml
-├── .mcp.json.example         # Drop-in Claude Code MCP config
-└── SAGE.md                   # Shared identity and operating instructions
+|-- .claude/                  # Claude Code framework (skills, hooks, rules, agents)
+|-- .claude-plugin/           # Claude Code plugin manifest and hooks
+|-- .agents/plugins/          # Codex marketplace file
+|-- server/
+|   |-- src/
+|   |   |-- app.py            # FastAPI factory
+|   |   |-- config/           # Per-environment JSON configs
+|   |   |-- api/routes/       # REST routes, one file per resource
+|   |   |-- mcp/              # MCP tool registration and proxies
+|   |   |-- models/           # Pydantic domain and DB models
+|   |   |-- services/         # Business logic (wallets, execution, scheduling, payments, trade log)
+|   |   `-- shared/           # auth, db (SQLite), crypto, clients, x402, errors, logging
+|   `-- tests/                # unit, integration, e2e
+|-- scripts/                  # setup.sh, chat.sh, verify_quickstart.sh, wallet and client helpers
+|-- docs/                     # Design and operations docs
+|-- tutorials/trading-app/    # Guided walkthrough
+|-- docker-compose.yml
+|-- .mcp.json.example         # Drop-in Claude Code MCP config
+`-- SAGE.md                   # Shared identity and operating instructions
 ```
 
 ## License
 
 MIT
-
-### Robinhood execution venue
-
-Mangrove strategies can use Robinhood as their broker execution venue through its
-official MCP service. See [connection, allocation, and recovery instructions](docs/robinhood-execution.md).
-
-Server-owned paper portfolios can be evaluated on an agent-owned clock. See
-[paper scheduling](docs/paper-scheduling.md) for controls, recovery, costs and rollout.

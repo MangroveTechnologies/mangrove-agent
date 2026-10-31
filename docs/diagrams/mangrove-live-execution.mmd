@@ -1,0 +1,45 @@
+---
+config:
+  theme: default
+  layout: elk
+---
+flowchart TB
+    User["You and your AI client"]
+
+    subgraph Local["Your machine - Mangrove agent"]
+        Control["Control interface<br/>MCP tools and REST API"]
+        Scheduler["Local scheduler<br/>One job per live strategy,<br/>fired at its timeframe"]
+        Coordinator["Evaluation coordinator"]
+        Gate{"Portfolio kill switch<br/>live-book drawdown check"}
+        Executor["Execution adapter<br/>validates and submits orders"]
+        Signer["Local wallet signer<br/>keys never leave this machine;<br/>signs only 1inch swaps and approvals"]
+        Reconcile["Broker reconciliation<br/>every 15 seconds and before each tick"]
+        DB[("Local SQLite database<br/>strategies, jobs, evaluations,<br/>orders, trades, positions")]
+    end
+
+    subgraph Hosted["Hosted Mangrove services"]
+        Engine["MangroveAI strategy engine<br/>signals, sizing, risk gates, exits"]
+        Markets["MangroveMarkets<br/>keyless DEX quotes, routing, broadcast"]
+    end
+
+    subgraph Venues["Execution venues"]
+        Robinhood["Robinhood<br/>official MCP, agent-held OAuth grant"]
+        Chain["EVM chains<br/>via 1inch routers"]
+    end
+
+    User -->|"configure, activate, pause, inspect"| Control
+    Control -->|"save settings"| DB
+    Control -->|"register or cancel job"| Scheduler
+    Scheduler -->|"tick"| Coordinator
+    Coordinator <-->|"evaluation request / order intents"| Engine
+    Coordinator -->|"record evaluation"| DB
+    Coordinator -->|"order intents"| Gate
+    Gate -->|"allowed"| Executor
+    Gate -.->|"tripped: pause every live strategy"| Scheduler
+    Executor -->|"stock and crypto orders"| Robinhood
+    Executor <-->|"quote, unsigned swap, broadcast, status"| Markets
+    Executor <-->|"sign"| Signer
+    Markets -->|"signed transaction"| Chain
+    Executor -->|"DEX trades and positions"| DB
+    Reconcile <-->|"order status and confirmed fills"| Robinhood
+    Reconcile -->|"fills, trades, positions"| DB

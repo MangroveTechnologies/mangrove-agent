@@ -22,8 +22,9 @@ denial. Client instructions guide concise presentation without duplicating
 Markets authorization rules.
 
 The same local service is available through authenticated REST:
-`POST /api/v1/agent/marketplace/prepare` and `/marketplace/submit`.
-Local requests use the existing `X-API-Key` protection. The upstream credential
+`POST /api/v1/agent/marketplace/prepare`, `POST /api/v1/agent/marketplace/submit` and
+`GET /api/v1/agent/marketplace/readiness`, which checks ownership discovery without
+signing or creating an approval. Local requests use the agent's `X-API-Key` header. The upstream credential
 comes from configuration, never from a tool argument or challenge.
 
 ## One-time setup
@@ -56,16 +57,9 @@ must match it. XRPL wallets must also match the advertised network. Existing
 `MARKETPLACE_XRPL_NETWORK` values remain optional pins; mismatches fail closed.
 This ownership selection does not change x402 payment settings.
 
-Markets operators configure a distinct `MARKETPLACE_OWNERSHIP_AUDIENCE` per
-production deployment. Explicit `ENVIRONMENT=local` (or `APP_ENV=local`) provides
-the local test audience automatically. Production has no default identity.
 Discovery and signature verification use the same identity. Before submission,
 the agent rediscovers settings and checks the selected wallet against the saved
 approval; changes invalidate approval before signing.
-
-For isolated local acceptance, keep the existing local Markets and MangroveAI
-URLs. No manual ownership configuration edit is needed. Configuration examples
-do not isolate existing wallet or payment data automatically.
 
 ## Example conversation
 
@@ -161,24 +155,17 @@ Each approval binds the configured API key using PBKDF2-HMAC-SHA256 with
 binding with a constant-time comparison before signing or returning a cached
 result. Changing the API key invalidates the approval.
 
-Approvals created with the earlier plain SHA-256 fingerprint are rejected after
-this upgrade. Unsubmitted actions need a fresh preview and approval. For completed
-or uncertain actions, inspect the existing Markets record instead of preparing a
-replacement. Existing records are retained; no schema migration is required.
-
-Automated tests use test keys, isolated SQLite and synthetic remote services.
-Actual Claude Code acceptance and Base Sepolia payment settlement are separate
-release checks; no deployment or payment is performed by adding this integration.
 
 ## Marketplace reads
 
-Markets currently advertises `marketplace_search` and `marketplace_get_listing`.
-The agent exposes their server-owned schemas with a reserved `_agent` object for
+Markets advertises read tools such as `marketplace_search` and
+`marketplace_get_listing`. The agent exposes their server-owned schemas with a reserved `_agent` object for
 local credentials, wallet selection and recovery operation IDs. Those controls are
 stripped before forwarding; server business arguments and native MCP results are
-preserved. Search freshness guidance is owned by Markets. Their upstream mode follows the same configuration rule as signals:
-a configured `MANGROVE_API_KEY` selects API-key access and server-enforced quota;
-without a key, the agent uses `pay_mcp()` and its local EVM wallet.
+preserved. Search freshness guidance is owned by Markets. The upstream mode follows the same
+configuration rule as other MangroveAI calls: a configured `MANGROVE_API_KEY` selects
+API-key access and server-enforced quota; without a key, the agent pays per read from
+its local EVM wallet over x402.
 The caller's local agent API key is never forwarded to Markets.
 
 API-key mode does not require a wallet, backup confirmation, encryption key or
@@ -212,17 +199,15 @@ operation is idempotent. A fresh operation ID requests a new billable read.
 
 ## Discovery compatibility
 
-Start the updated Markets service before restarting the agent and reconnecting
-Claude. If Markets is unavailable or has incompatible metadata, its dynamic tools
-are not advertised; local wallet tools remain available. MCP discovery is bounded
+If Markets is unavailable or has incompatible metadata, its dynamic tools are not
+advertised; local wallet tools remain available. MCP discovery is bounded
 by deadlines, schema size/depth and pagination limits. Tool names cannot replace
 local preparation or submission controls. No new endpoint may be supplied by a
 remote tool description.
 
-Static agent contract snapshots cover local controls only. Remote schemas are
-validated at runtime and exercised through MCP integration tests; they are not
-copied into the agent's production registry. Test fixtures contain representative
-server contracts solely for isolated signing regression tests.
+Remote schemas are validated at runtime and are never copied into the agent's own
+tool registry; only the local controls (`marketplace_prepare` and `marketplace_submit`)
+are static.
 
 ## Server-owned network binding
 
@@ -234,8 +219,7 @@ The approval preview includes `settlement_network` (`eip155:84532` for Base Sepo
 `eip155:8453` for Base mainnet). `price.chain: base` in a listing is a family label;
 use its recorded `price.network` to determine the purchase network.
 
-Upgrade Markets and agents together and prepare fresh approvals. Older servers
-without network discovery fail closed; there is no wallet-derived fallback.
+Servers without network discovery fail closed; there is no wallet-derived fallback.
 
 
 ## Approved USDC purchases
@@ -262,7 +246,9 @@ recipient; dataset payments go to the seller. API-key quota covers reads, not th
 purchase price. No private keys or signed payment payloads are included in logs.
 
 Before signing an approved purchase, the agent checks the wallet's USDC balance
-using the configured network RPC, verifies the chain ID, and reads the token at a
+using the RPC URL configured for that network in `X402_RECONCILIATION_RPC_URLS`
+(without one, the check returns `PURCHASE_BALANCE_UNAVAILABLE` and nothing is signed),
+verifies the chain ID, and reads the token at a
 canonical block hash. It checks before creating the offer and again before payment
 signing. Insufficient funds returns `PURCHASE_INSUFFICIENT_FUNDS` with the balance,
 price and shortfall; an unverifiable balance returns `PURCHASE_BALANCE_UNAVAILABLE`.

@@ -2,7 +2,7 @@
 # block-main-commits.sh — refuse git write operations on main/master.
 #
 # Why this exists:
-#   The git-workflow rule (.claude/rules/git-workflow.md) says NEVER
+#   The git workflow in CONTRIBUTING.md says NEVER
 #   commit directly to main. Agents have slipped this rule twice in
 #   recent sessions and had to move commits to feature branches after
 #   the fact. This hook makes the rule harness-enforced instead of
@@ -111,7 +111,7 @@ Refusing to run this git command while on branch "$CURRENT_BRANCH":
 
   $COMMAND
 
-The git-workflow rule (.claude/rules/git-workflow.md) requires every
+The git workflow in CONTRIBUTING.md requires every
 change to go through a feature branch + PR. No direct commits to main.
 
 Fix:

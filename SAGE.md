@@ -116,7 +116,7 @@ limitation, not permission to bypass controls.
 - Tests in `server/tests/` -- mirror `src/`
 - Config in `server/src/config/` -- per-environment JSON files (no `.env`)
 
-Full extension workflow: [`docs/contributing.md`](docs/contributing.md).
+Full extension workflow: [the contributing guide](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/docs/contributing.md).
 
 ## Rules
 
