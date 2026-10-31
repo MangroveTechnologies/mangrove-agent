@@ -123,6 +123,21 @@ discovery through `discover_tools`; the agent forwards the request. See the
 If the configured server does not advertise `discover_tools`, the client must
 report the limitation and use the host's own tool search.
 
+## Example: strategies on X attention
+
+Three signals in the `social` category read how much people post about an asset on X,
+not what they say: `x_post_count_spike`, `x_attention_elevated` and
+`x_attention_price_divergence`. Ask in plain words:
+
+> Which signals use X post counts? Show me BTC's hourly X post counts for the last week,
+> then backtest a BTC strategy that enters on an X post count spike.
+
+The agent finds them with `list_signals` (category `social`) or `search_signals`, reads
+counts with `get_x_post_counts`, and backtests with `run_backtest`. MangroveAI fetches
+the counts on demand and caches them. A backtest reads only buckets that had closed by
+each bar, so results never use future posts. If X is not configured on the service,
+these calls report that it is unavailable. They do not return empty data.
+
 ## If something is unavailable
 
 - **Local status fails:** the connection is not verified. Keep the checkout and
