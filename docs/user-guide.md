@@ -140,11 +140,12 @@ these calls report that it is unavailable. They do not return empty data.
 
 ## Example: strategies on social sentiment and holder signals
 
-Six signals read Cambrian data. Four are in the `social` category and read the
+Seven signals read Cambrian data. Five are in the `social` category and read the
 sentiment of posts about an asset: `social_sentiment_surge` and
 `social_sentiment_capitulation` (triggers on an unusually bullish or bearish
 reading), `social_crowd_bullish` (a filter: recent posts lean more bullish than
-the asset's norm) and `social_price_divergence` (a trigger: price fell while the
+the asset's norm), `social_crowd_cooling` (a filter: recent posts lean no more
+bullish than the norm) and `social_price_divergence` (a trigger: price fell while the
 crowd stayed as bullish as usual). Two are in the `onchain` category and read a
 token's holders: `holder_growth_trend` (a filter: the holder count is growing) and
 `whale_share_divergence` (a trigger: price fell while wallets holding $100,000 or
@@ -161,7 +162,7 @@ backtests it with `run_backtest`. You do not supply any data: MangroveAI attache
 the sentiment and holder columns itself, in a backtest as in live evaluation, and
 a bar sees only values already known when it closes.
 
-If the data source is off on the service, each of the six signals shows as
+If the data source is off on the service, each of the seven signals shows as
 non-composable in `list_signals`. A new strategy cannot be built on it, and a
 strategy that already names one gets `False` from it rather than an error. The
 agent should report that the signal is unavailable instead of substituting another
