@@ -30,7 +30,8 @@ def clean_clients(monkeypatch):
     reset_clients()
 
 
-def test_mangroveai_singleton_returns_same_instance():
+def test_mangroveai_singleton_returns_same_instance(monkeypatch):
+    monkeypatch.setattr(app_config, "MANGROVEAI_BASE_URL", "https://api.test/api/v1")
     reset_clients()
     a = mangrove_ai_client()
     b = mangrove_ai_client()
@@ -46,7 +47,8 @@ def test_mangrovemarkets_singleton_returns_same_instance():
     assert isinstance(a, MangroveMarkets)
 
 
-def test_reset_clients_creates_new_instance():
+def test_reset_clients_creates_new_instance(monkeypatch):
+    monkeypatch.setattr(app_config, "MANGROVEAI_BASE_URL", "https://api.test/api/v1")
     reset_clients()
     a = mangrove_ai_client()
     reset_clients()

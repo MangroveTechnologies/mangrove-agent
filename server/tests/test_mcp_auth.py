@@ -30,7 +30,7 @@ async def _call_tool(server, tool_name: str, args: dict | None = None):
 
 
 @pytest.mark.asyncio
-async def test_hello_mangrove_returns_payment_requirements_without_credentials():
+async def test_hello_mangrove_returns_payment_requirements_without_credentials(offline_x402_facilitator):
     server = create_mcp_server()
     result = await _call_tool(server, "hello_mangrove")
     assert result.isError is True

@@ -13,14 +13,17 @@ import os
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
+import httpx  # noqa: E402
 import pytest  # noqa: E402
 
 
 @pytest.fixture
 def mcp_server(tmp_path, monkeypatch):
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, Mock
     monkeypatch.setattr("src.mcp.mangrove_proxy.catalog", AsyncMock(return_value=[]))
     monkeypatch.setattr("src.mcp.marketplace_proxy.list_tools", AsyncMock(return_value=[]))
+    monkeypatch.setattr("src.services.tool_pricing._fetch_prices",
+                        Mock(side_effect=httpx.ConnectError("offline pricing fixture")))
     db_file = tmp_path / "mcp.db"
     from src.config import app_config
     from src.services import scheduler_service as ss
@@ -66,7 +69,7 @@ def test_all_expected_tools_registered(mcp_server):
 @pytest.mark.asyncio
 async def test_status_free_no_auth(mcp_server):
     result = await _call(mcp_server, "status")
-    assert result["version"] == "0.2.0"
+    assert result["version"] == "0.3.0"
     assert "wallets_count" in result
 
 
