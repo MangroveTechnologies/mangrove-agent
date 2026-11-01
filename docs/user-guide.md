@@ -153,11 +153,11 @@ more held a larger share of the value). The holder signals work on Solana tokens
 only. Ask in plain words:
 
 > Which social and holder signals are available? Build a BTC strategy that buys an
-> RSI dip only while the crowd is running bullish, then backtest it.
+> RSI dip only while the crowd is cooling, then backtest it.
 
 The agent finds the signals with `list_signals` (category `social` or `onchain`),
 builds the strategy with the server's `strategy-composition` skill and
-`save_strategy`, using `social_crowd_bullish` as a filter beside a trigger, and
+`save_strategy`, using `social_crowd_cooling` as a filter beside a trigger, and
 backtests it with `run_backtest`. You do not supply any data: MangroveAI attaches
 the sentiment and holder columns itself, in a backtest as in live evaluation, and
 a bar sees only values already known when it closes.
