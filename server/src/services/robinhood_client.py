@@ -98,13 +98,13 @@ async def session(*, redirect_handler=None, callback_handler=None, storage=None)
 
 
 async def catalog(client):
-    from src.mcp.mangrove_proxy import validate_tool
+    from src.mcp.mangrove_proxy import prepare_tool
 
     result, cursors, cursor = {}, set(), None
     for _ in range(16):
         page = await client.list_tools(cursor=cursor)
-        for tool in page.tools:
-            validate_tool(tool)
+        for listed in page.tools:
+            tool = prepare_tool(listed)
             if tool.name in result or len(result) >= 512:
                 raise SdkError("Invalid Robinhood tool catalog.")
             result[tool.name] = tool
