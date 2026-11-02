@@ -196,8 +196,9 @@ Each local record has an `evaluation_lane`. When it is empty the record uses `se
 
 | Lane | Call | Source of truth for state |
 |------|------|---------------------------|
-| `server` | Evaluate the saved strategy by ID, `persist=True` | MangroveAI's database |
-| `stateless` | Evaluate the full strategy object with the agent's `execution_state` and open positions, `persist=False` | The agent's `strategies.execution_state_json` and `open_positions_json` |
+| `server` paper | Evaluate the saved strategy by ID, `persist=True` | MangroveAI's database |
+| `stateless` paper | Evaluate the full strategy object with confirmed simulated fills and `persist=False` | Separate local paper state and fill journal |
+| Externally executed LIVE | Evaluate by object with confirmed cash, positions, net closes and `persist=False` | Local confirmed execution journal, regardless of a legacy lane setting |
 
 A stateless strategy can carry explicit market data (`base_token`, `quote_token`,
 `market_data_venue`), which `PATCH /strategies/{id}/market` sets while the strategy is
@@ -211,7 +212,8 @@ MangroveAI's evaluation returns `new_orders`. The agent converts each order with
 evaluation-time `ref_price`, and the engine's position and order IDs and bracket levels.
 Resting orders such as pending stop-loss and take-profit brackets are logged and skipped until
 the engine reports them filled. An order that fails to convert is skipped with a logged
-warning.
+warning. A LIVE `filled` engine order is still a proposal: it cannot book a
+venue fill or update the physical account without confirmed execution evidence.
 
 ### Paper schedules
 
@@ -233,6 +235,22 @@ the agent supplies. See [Paper scheduling](paper-scheduling.md).
 - Start errors map to `PAPER_START_REJECTED` (409, MangroveAI refused) and
   `PAPER_START_UNCONFIRMED` (502, outcome unknown).
 
+### Confirmed execution and lifecycle holds
+
+Externally executed LIVE records use `evaluate_by_object(..., persist=False)`
+with actual cash, holdings and net close history. Engine orders are proposals;
+only confirmed fills create or change physical positions. Revision fences and
+durable close receipts preserve reset state and idempotent ingestion. Partial
+exits retain principal and aggregate actual fees and PnL into one net close per
+fully closed engine position. DEX receipts and broker execution have separate
+journals; see [confirmed execution](confirmed-execution.md).
+
+Setting a LIVE record inactive or tripping the portfolio latch holds entries.
+An exit-only cron and its capital allocation remain while exposure or unresolved
+orders exist; both are released only after confirmed flatness. Unknown valuations
+hold entries without stranding protective exits for known holdings. Paper state,
+positions and close history remain separate from LIVE execution.
+
 ### Portfolio kill switch
 
 MangroveAI enforces risk per strategy. Only the agent sees the whole live book, so the agent
@@ -244,13 +262,15 @@ enforces aggregate drawdown.
   re-baselined whenever a strategy enters or leaves `live`, so changing the live set is not
   read as drawdown.
 - **Trip.** When drawdown from the high-water mark reaches `PORTFOLIO_MAX_DRAWDOWN_PCT`
-  (default 0.30), the switch trips: every live strategy is moved to `inactive` (which cancels
-  its job and releases its allocation) and the switch latches.
-- **Latched.** While tripped, no live tick places an order. The switch never resets itself. A
+  (default 0.30), the switch trips: every live strategy is moved to `inactive`.
+  Entry execution stops; exit-only jobs and allocations remain while exposure or
+  unresolved orders exist. The switch latches.
+- **Latched.** While tripped, no live tick opens a new position; protective exits
+  continue for confirmed holdings. The switch never resets itself. A
   human clears it with `POST /api/v1/agent/portfolio/risk/reset`, which re-baselines to the
   current book. There is no MCP tool for the reset.
-- The check runs at the start of each live tick, after the evaluation is logged, so a trip
-  caused by losses on other strategies still stops this tick's orders.
+- The portfolio check and lifecycle changes use the owning tick fence so a trip
+  caused by another strategy cannot race a new entry. Exit monitoring continues.
 
 The state appears in `GET /status` under `portfolio_risk` and at `GET /portfolio/risk`.
 
@@ -442,6 +462,8 @@ status, so trades from direct swaps satisfy the foreign key. Status counts exclu
 | `018_paper_schedules` | `paper_schedules` |
 | `019_paper_payment_attempt` | `paper_schedules.payment_request_id` |
 | `020_x402_shared_recovery` | `x402_recovery_state` |
+| `021_confirmed_execution` | Revision fences, exit-only lifecycle, DEX orders/holdings and capital journal, broker position fences |
+| `022_paper_confirmed_execution` | Separate paper risk state, simulated capital and idempotent paper-fill journal |
 
 The migration runner applies SQL files in lexicographic filename order and records the
 full filename in `_migrations.filename`; the numeric prefix is not a unique migration ID.
@@ -631,7 +653,9 @@ duplicated between the two interfaces.
 | `wallet_manager` | Key generation, Fernet encryption, the signing guard, local signing, backup gate |
 | `secret_vault` | In-memory, single-read, expiring store behind `vault_token` |
 | `strategy_service` | Lifecycle transitions and the scheduler tick for local records |
-| `order_executor` | The single execution path for swaps and paper fills; maintains positions |
+| `order_executor` | Direct user swaps and paper helpers; shared quote/signing boundaries |
+| `confirmed_execution`, `dex_confirmed` | Confirmed account, revision fences and durable DEX execution journal |
+| `receipt_settlement` | Raw receipt verification and exact settlement flows |
 | `scheduler_service` | APScheduler wrapper and fixed-interval jobs |
 | `paper_schedule_service` | Server-owned paper schedules |
 | `trade_log` | Writes and reads of evaluations, trades and positions |

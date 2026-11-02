@@ -116,7 +116,8 @@ on payment-gated routes.
 The agent runs scheduled evaluations for two kinds of strategy:
 
 - **Server-owned paper execution** of a MangroveAI strategy. MangroveAI keeps the balances,
-  positions and trades; the agent supplies the clock. See
+  positions and trades; the agent supplies the clock. The default saved-strategy
+  paper lane uses `persist=True`. See
   [Paper schedules](#paper-schedules).
 - **Local execution records**, which the agent can run on a cron schedule in `paper` or
   `live` status. The agent keeps its own trade, position and allocation records for these.
@@ -140,6 +141,8 @@ schedules are not shown; they place no orders.
 
 The diagram source is [diagrams/mangrove-live-execution.mmd](diagrams/mangrove-live-execution.mmd).
 Re-render it with Mermaid CLI 11 or later, which supports the ELK layout it uses.
+An entry hold keeps protective-exit monitoring active for confirmed exposure;
+it does not cancel those exit jobs.
 
 ### Lifecycle and activation
 
@@ -172,8 +175,10 @@ sequenceDiagram
 - Moving to `live` requires an allocation (wallet, token, amount, `slippage_pct`) and a
   wallet whose backup the user has confirmed. A strategy bound to a Robinhood venue uses its
   venue mandate instead of a wallet allocation.
-- `paper` and `live` register a cron job named `eval-<strategy_id>`. Any other status cancels
-  it. Leaving `live` also releases the allocation.
+- `paper` and `live` register a cron job named `eval-<strategy_id>`. Leaving `live`
+  holds new entries but retains an exit-only cron and its allocation while confirmed
+  exposure or unresolved orders remain. The cron is cancelled and the allocation
+  released only after confirmed flatness. Other inactive records have no evaluation cron.
 - Any change into or out of `live` re-baselines the portfolio high-water mark, so a deliberate
   change in the live set is not read as drawdown.
 
@@ -203,58 +208,42 @@ evaluation.
 Each local record evaluates in one of two lanes, stored in its `evaluation_lane` column. A
 record without an explicit lane uses `server`.
 
-- **`server`**: the agent asks MangroveAI to evaluate the saved strategy by ID, with
-  `persist=True` for both paper and live. MangroveAI's database is authoritative for the
-  strategy's execution state and open positions.
-- **`stateless`**: the agent sends the full strategy definition with its own saved
-  `execution_state` and open positions, and MangroveAI writes nothing server-side
-  (`persist=False`). The agent stores the returned state and echoes it on the next tick.
-  Robinhood-bound strategies always use this lane.
+- **`server` paper**: the agent evaluates the saved strategy by ID with
+  `persist=True`. MangroveAI owns its simulated account and positions.
+- **`stateless` paper**: the agent sends its separate simulated account, paper
+  positions, net paper close history and paper risk state with `persist=False`.
+  The local simulated-fill journal commits each fill once.
+- **Externally executed LIVE**: DEX and Robinhood always use
+  `evaluate_by_object(..., persist=False)`, regardless of a legacy record's lane.
+  They send confirmed local cash, physical holdings, net close history and saved
+  risk state. Prospective engine positions become local positions only after
+  actual fills. Valuation uncertainty holds entries while protective exits stay
+  available for known holdings.
 
-In both lanes the agent keeps its own record of evaluations, trades and positions.
+The local execution journal and revision fences bind these calls to the account
+snapshot. The engine owns signals, sizing, exits and per-strategy risk rules.
+See [confirmed execution](confirmed-execution.md).
 
 ### The evaluation tick
 
-```mermaid
-flowchart TD
-    A[Scheduler fires] --> B{Venue route<br/>bound?}
-    B -->|Yes| BR[Robinhood tick]
-    B -->|No| C[Load record, check status]
-    C --> D[Evaluate on MangroveAI<br/>server or stateless lane]
-    D -->|error| E[Log evaluation with error]
-    D --> F[Extract order intents]
-    F --> G[Log evaluation, save execution state]
-    G --> H{Status live?}
-    H -->|Yes| I{Kill switch<br/>allows?}
-    I -->|No| J[Stop: no orders this tick]
-    I -->|Yes| K[Execute intents]
-    H -->|No, paper| K
-    K --> L{Mode}
-    L -->|paper| M[Simulated fill at mark price]
-    L -->|live| N[DEX swap: quote, approve, sign, broadcast, poll]
-    M --> O[Log trade, update positions]
-    N --> O
-```
+Each tick loads the current revision and reconciles outstanding execution before
+requesting another proposal. LIVE calls supply the confirmed account by object;
+default paper calls use the server-owned account. An entry hold, portfolio latch
+or inactive strategy denies new entries while the exit-only monitor remains for
+exposure and unresolved orders.
 
-MangroveAI returns new orders with the evaluation. The agent turns each `filled` engine order
-into an order intent (action, side, symbol, asset-unit amount, reference price, stop and
-take-profit levels). Orders that are only resting, such as a pending stop-loss bracket, are
-logged and skipped, so a position is not exited the moment it opens. An order that cannot be
-mapped is skipped with a logged warning and never silently dropped.
+The engine's orders are proposals, not venue fills. DEX execution uses
+`dex_confirmed` and the verified receipt journal. Broker execution uses
+`broker_execution` and `broker_store`; partial fills update the physical book,
+and one aggregate net close is delivered only when an engine position is fully
+closed. State commits use revision fences and durable close receipts so retries
+do not book a close twice. Native gas charges remain explicit when their USD
+valuation is unavailable. A failed or uncertain submission is reconciled by its
+existing identity, never automatically duplicated.
 
-Execution of the intents goes through `order_executor`, the single path for every swap:
-
-- **Paper** fetches the current mark price from MangroveAI and records a simulated trade at
-  that price. No wallet is involved.
-- **Live** requires a wallet allocation and a backup-confirmed wallet. It runs the DEX swap
-  described in [Swaps](#swaps), using the allocation's wallet, chain and slippage tolerance,
-  and caps the input-token spend at the allocation amount.
-- After each fill the agent opens or closes a local position and sets the profit and loss on
-  exit trades.
-
-A failure on one intent is logged and does not stop the rest. A failure of the evaluation
-call itself is recorded as an evaluation with `status: error`; the strategy stays active and
-the next tick tries again.
+`order_executor` remains the shared helper for paper and direct user swaps;
+LIVE strategy ticks use the confirmed execution paths above. Marks used for
+local fills or holdings valuation do not replace MangroveAI's signal evaluation.
 
 ### Paper schedules
 
@@ -274,9 +263,9 @@ while the agent supplies the clock. See [Paper scheduling](paper-scheduling.md).
 
 ### Swaps
 
-User-initiated swaps and strategy-driven swaps share one execution path. The `/dex/swap`
-route and the `execute_swap` tool build an order intent from the request and hand it to
-`order_executor` in live mode.
+The `/dex/swap` route and the `execute_swap` tool build a user-initiated order
+intent and hand it to `order_executor` in live mode. LIVE strategy swaps use the
+durable `dex_confirmed` journal and share quote and token-unit helpers in `dex_service`.
 
 1. Convert the human-unit amount to base units and fetch a quote.
 2. If the token needs approval, sign the approval locally, broadcast it and poll until it
@@ -294,7 +283,9 @@ The SDK never sees a key. Before signing, the agent requires a confirmed wallet 
 A strategy can be bound to a Robinhood execution venue with a capital mandate. The agent
 evaluates it through MangroveAI's stateless lane, then submits the resulting intent to
 Robinhood's MCP endpoint. Each tick reconciles pending orders first, checks the portfolio
-kill switch, and allows at most one pending order per strategy. Order intents are stored
+kill switch, and allows at most one pending entry per strategy. Distinct position
+exits submit serially; pending orders fence their own position, while unknown
+position identities fence the strategy. Order intents are stored
 durably before submission, and an unknown submission outcome is marked `uncertain` and
 reconciled rather than retried. See [Robinhood execution](robinhood-execution.md).
 
@@ -322,7 +313,8 @@ These controls are enforced in the agent, independent of the AI client.
   percent.
 - **Portfolio kill switch.** See [the specification](specification.md#portfolio-kill-switch).
   Aggregate drawdown across live strategies past `PORTFOLIO_MAX_DRAWDOWN_PCT` (default 0.30)
-  pauses every live strategy and latches until a human resets it.
+  pauses every live strategy and latches until a human resets it. Strategies with
+  exposure or unresolved orders retain exit-only monitors and capital until flat.
 - **x402 spend budget.** See [the specification](specification.md#x402-spend-budget). Every
   outbound payment is reserved against an agent-wide budget (default $25) before it is signed.
   When the budget is spent, payments stop until a human authorizes more.
