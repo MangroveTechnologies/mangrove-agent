@@ -49,6 +49,9 @@ jobs:
       - name: Lint MCP contract checks
         run: ruff check --config server/pyproject.toml scripts/mcp_contract.py server/tests/unit/test_mcp_contract.py
 
+      - name: Lint installed SDK compatibility checks
+        run: ruff check --config server/pyproject.toml server/tests/integration/test_installed_sdk_local_deployment.py
+
       # Offline: imports test config in an isolated child with networking,
       # database connections and writes blocked. No receiver credentials needed.
       - name: Verify MCP registration, schemas, pricing and adapter contracts
@@ -62,4 +65,5 @@ jobs:
       - name: Run tests
         env:
           ENVIRONMENT: test
+          MANGROVE_LOCAL_DEPLOYMENT_EXPECTED: absent
         run: cd server && pytest tests/ -v

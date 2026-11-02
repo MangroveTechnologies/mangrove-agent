@@ -42,9 +42,9 @@ PyJWT>=2.9.0
 # around the old ~15s gateway ceiling (https://github.com/MangroveTechnologies/mangrove-agent/pull/154).
 # 1.19.0 adds market-qualified benchmarks and complete market-data read contracts.
 # 2.0.0 adds regime-window/venue metadata and removes obsolete market_era.
-# 2.1.0 publishes the reviewed Python contracts, public offline schemas,
-# authentication corrections and execution configuration guidance.
-mangroveai>=2.1.0,<3.0.0
+# 2.2.0 is the qualified published default. Local deployment needs the later
+# SDK/API release gates documented in docs/release-compatibility.md.
+mangroveai>=2.2.0,<3.0.0
 # mangrovemarkets 1.0.0 moved EVM wallet keypair generation client-side.
 # The agent's wallet_manager.create_wallet() is unaffected — the SDK
 # call signature is unchanged, only the implementation shifted from

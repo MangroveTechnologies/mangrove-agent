@@ -58,6 +58,10 @@ You pay for MangroveAI access with a free API key from https://mangrovedeveloper
 
 Every path runs the same agent. Use one path per machine: the agent listens on `127.0.0.1:9080`, so a plugin install and a clone cannot run side by side on that port.
 
+The normal locked installation uses released SDK packages. New local-deployment
+tools have separate [SDK and API release gates](docs/release-compatibility.md);
+installing the current released SDK does not enable that prepared workflow.
+
 ### Install with an AI client
 
 One-step Claude Code install (Claude Code 2.1.275 or later):
