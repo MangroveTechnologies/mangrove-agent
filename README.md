@@ -110,12 +110,20 @@ Continue with your client using the [user guide](docs/user-guide.md#come-back-or
 ./scripts/setup.sh --auth oauth                    # sign in and approve access in your browser
 ./scripts/setup.sh --auth api-key                  # keep existing key or enter a new one (hidden)
 ./scripts/setup.sh --auth x402                     # explicitly switch to wallet payments
+./scripts/setup.sh --robinhood connect             # connect Robinhood now (optional, bare-metal)
+./scripts/setup.sh --robinhood skip                # skip the optional broker connection
 ./scripts/setup.sh --foreground                    # run uvicorn in your terminal (Ctrl+C to stop)
 ./scripts/setup.sh --no-mcp                        # skip Claude Code registration
 ./scripts/setup.sh --no-verify                     # skip the post-start verify pass
 ./scripts/setup.sh --docker                        # use Docker instead of bare-metal
 BARE_PORT=9085 ./scripts/setup.sh                  # use a different port (9080 busy/squatted)
 ```
+
+Interactive setup offers an optional Robinhood connection after the access checks.
+Choose **Connect now** or **Skip for now**; `--yes` skips broker login. Connecting
+reuses the existing OAuth flow and does not activate trading. The browser step
+currently supports bare-metal setup only; Docker setup reports that it is deferred.
+See [Robinhood execution](docs/robinhood-execution.md#connect-once).
 
 `BARE_PORT` is honored end-to-end (server + health check + MCP registration + verify). If 9080 is occupied, `setup.sh` refuses to start and tells you to free it or set `BARE_PORT` — it will not silently bind-fail or report a false success.
 

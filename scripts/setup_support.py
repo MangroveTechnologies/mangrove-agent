@@ -1350,14 +1350,74 @@ def oauth_command(cfg, command, scopes, *, yes=False):
             pass
 
 
+def robinhood_setup(cfg, *, action=None, yes=False, docker=False):
+    later = './scripts/setup.sh --robinhood connect'
+    if docker:
+        if action == 'connect':
+            raise SetupError('Robinhood browser connection is currently supported by bare-metal setup only.')
+        flow_text('Robinhood: connection deferred. Docker browser login needs container callback routing; '
+                  'the host connector cannot configure Docker credentials.')
+        return
+    if action == 'skip' or (action is None and (yes or not sys.stdin.isatty())):
+        flow_text(f'Robinhood: skipped; existing connection unchanged. Connect later: {later}')
+        return
+    if yes or not sys.stdin.isatty():
+        raise SetupError('Run --robinhood connect in an interactive terminal without --yes.')
+    flow_text('Robinhood is optional and separate from Mangrove sign-in. '
+              'Connecting does not activate a strategy or place orders.')
+    if cfg.get('MANGROVE_ACCESS_MODE') == 'oauth':
+        flow_text('Saved-strategy deployment currently requires Mangrove API-key or x402 access. '
+                  'Connecting Robinhood does not change your Mangrove access mode.')
+    if action != 'connect' and choose('Connect Robinhood?', {
+            '1': 'Connect now / check saved connection', '2': 'Skip for now'}, '1') == '2':
+        flow_text(f'Robinhood: skipped; existing connection unchanged. Connect later: {later}')
+        return
+    while True:
+        # Use the running agent for verification so saved grants are read and
+        # refreshed with its own encryption key and existing broker lock.
+        try:
+            with flow_busy('Checking Robinhood connection'):
+                ready = request(cfg, '/api/v1/agent/brokers/robinhood/status', timeout=60)
+            if isinstance(ready, dict) and ready.get('connected') is True:
+                flow_success('Robinhood: connected and verified. No strategy activated or order placed.')
+                return
+        except SetupError:
+            pass
+        try:
+            result = subprocess.run(
+                [str(ROOT / '.venv/bin/python3'), str(ROOT / 'scripts/robinhood_connect.py')],
+                cwd=ROOT, env=dict(os.environ, ENVIRONMENT='local',
+                                   PYTHONPATH=str(ROOT / 'server') +
+                                   (os.pathsep + os.environ['PYTHONPATH'] if os.environ.get('PYTHONPATH') else '')),
+                check=False, timeout=360,
+            )
+            if result.returncode == 2:
+                flow_text(f'Robinhood: skipped; any saved grant is retained. Connect later: {later}')
+                return
+            if result.returncode == 0:
+                with flow_busy('Verifying Robinhood access'):
+                    ready = request(cfg, '/api/v1/agent/brokers/robinhood/status', timeout=60)
+                if isinstance(ready, dict) and ready.get('connected') is True:
+                    flow_success('Robinhood: connected and verified. No strategy activated or order placed.')
+                    return
+        except (SetupError, OSError, subprocess.TimeoutExpired, KeyboardInterrupt):
+            # Do not expose upstream error bodies or authorization credentials.
+            pass
+        flow_text('Robinhood connection was not verified. Setup can continue without it.')
+        if choose('Robinhood connection', {'1': 'Retry connection', '2': 'Skip for now'}, '2') == '2':
+            flow_text(f'Robinhood: not verified; any saved grant is retained. Try later: {later}')
+            return
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['banner', 'configure', 'check', 'markets-check', 'verify', 'guide', 'onboard', 'onboard-finish', 'wallet', 'fingerprint', 'headers', 'register', 'chat', 'oauth-login', 'oauth-status', 'oauth-disconnect', 'oauth-setup'])
+    parser.add_argument('command', choices=['banner', 'configure', 'check', 'markets-check', 'verify', 'guide', 'onboard', 'onboard-finish', 'wallet', 'fingerprint', 'headers', 'register', 'chat', 'oauth-login', 'oauth-status', 'oauth-disconnect', 'oauth-setup', 'robinhood-setup'])
     parser.add_argument('--auth', choices=['api-key', 'x402', 'oauth'])
     parser.add_argument('--scope', action='append', choices=['backtests:run', 'signals:evaluate'], default=[])
     parser.add_argument('--api-key-stdin', action='store_true')
     parser.add_argument('--yes', action='store_true')
     parser.add_argument('--docker', action='store_true')
+    parser.add_argument('--robinhood', choices=['connect', 'skip'])
     parser.add_argument('--url', default='http://127.0.0.1:9080')
     parser.add_argument('--markets-url')
     parser.add_argument('--action', choices=['create', 'import', 'list', 'select'])
@@ -1375,7 +1435,9 @@ def main():
             print(digest.hexdigest())
         else:
             cfg = read_config()
-            if args.command.startswith('oauth-'):
+            if args.command == 'robinhood-setup':
+                robinhood_setup(cfg, action=args.robinhood, yes=args.yes, docker=args.docker)
+            elif args.command.startswith('oauth-'):
                 oauth_command(cfg, args.command, args.scope, yes=args.yes)
             elif args.command == 'chat':
                 return launch_chat(cfg)

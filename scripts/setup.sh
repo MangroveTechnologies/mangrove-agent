@@ -59,6 +59,7 @@ AUTH_MODE=""
 OAUTH_ACTION=""
 OAUTH_ARGS=()
 WALLET_ACTION=""
+ROBINHOOD_ACTION=""
 CONFIG_ARGS=(--url "$BASE_URL")
 MARKETS_URL_DEFAULT="https://mangrovemarkets-pcqgpciucq-uc.a.run.app"
 MARKETS_URL_ARG=""
@@ -106,9 +107,11 @@ Options:
                         Interactive users should use --auth api-key instead.
   --wallet ACTION       Run an explicit user-requested create/import/list/select
                         action, then exit. Interactive setup includes a guided wallet flow.
+  --robinhood ACTION    connect or skip. Interactive setup offers an optional connection.
+                        Connection uses a private terminal and browser (bare-metal only).
   --markets-url URL     Non-interactive: set MANGROVEMARKETS_BASE_URL.
                         Default: $MARKETS_URL_DEFAULT
-  --yes                 Skip prompts; new installs default to x402. No wallet actions.
+  --yes                 Skip prompts; new installs default to x402. No wallet actions or Robinhood login.
   -h, --help            Show this help.
 EOF
   exit 0
@@ -131,6 +134,7 @@ while [ $# -gt 0 ]; do
       case "$2" in signals:evaluate|backtests:run) ;; *) fail "Unsupported OAuth scope" ;; esac
       OAUTH_ARGS+=(--scope "$2"); shift 2 ;;
     --wallet) [ $# -ge 2 ] || fail "--wallet needs create/import/list/select"; WALLET_ACTION="$2"; shift 2 ;;
+    --robinhood) [ $# -ge 2 ] || fail "--robinhood needs connect or skip"; ROBINHOOD_ACTION="$2"; shift 2 ;;
     --markets-url) [ $# -ge 2 ] && [ -n "$2" ] || fail "--markets-url needs a value"; MARKETS_URL_ARG="$2"; shift 2 ;;
     --yes) ASSUME_YES="yes"; shift ;;
     -h|--help) usage ;;
@@ -139,6 +143,15 @@ while [ $# -gt 0 ]; do
 done
 
 # -- 0. validate before changing configuration or state -----------------------
+case "$ROBINHOOD_ACTION" in ""|connect|skip) ;; *) fail "--robinhood must be connect or skip" ;; esac
+if [ "$ROBINHOOD_ACTION" = connect ]; then
+  [ "$MODE" = bare ] || fail "Robinhood browser connection is currently supported by bare-metal setup only; Docker needs container callback routing."
+  [ "$ASSUME_YES" = no ] && [ -t 0 ] || fail "Run --robinhood connect in an interactive terminal without --yes."
+fi
+[ -z "$ROBINHOOD_ACTION" ] || [ -z "$WALLET_ACTION" ] || fail "Run --wallet without Robinhood setup options."
+if [ "$OAUTH_ACTION" = status ] || [ "$OAUTH_ACTION" = disconnect ]; then
+  [ -z "$ROBINHOOD_ACTION" ] || fail "Run --oauth status or disconnect without Robinhood setup options."
+fi
 case "$AUTH_MODE" in ""|api-key|oauth|x402) ;; *) fail "--auth must be api-key, oauth or x402" ;; esac
 case "$OAUTH_ACTION" in ""|login|status|disconnect) ;; *) fail "--oauth must be login, status or disconnect" ;; esac
 if [ -n "$OAUTH_ACTION" ] || [ "${#OAUTH_ARGS[@]}" -gt 0 ]; then
@@ -434,6 +447,13 @@ else
   "$PY" "$SUPPORT" oauth-setup ${OAUTH_ARGS[@]+"${OAUTH_ARGS[@]}"}
 fi
 "$PY" "$SUPPORT" markets-check
+
+# Optional broker authorization uses the existing connector, never trading tools.
+ROBINHOOD_ARGS=(robinhood-setup)
+[ -z "$ROBINHOOD_ACTION" ] || ROBINHOOD_ARGS+=(--robinhood "$ROBINHOOD_ACTION")
+[ "$ASSUME_YES" = no ] || ROBINHOOD_ARGS+=(--yes)
+[ "$MODE" = bare ] || ROBINHOOD_ARGS+=(--docker)
+"$PY" "$SUPPORT" "${ROBINHOOD_ARGS[@]}"
 
 # -- 5. register MCP ---------------------------------------------------------
 

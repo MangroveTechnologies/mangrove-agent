@@ -481,7 +481,7 @@ pathlib.Path(os.environ['CHAT_CAPTURE']).write_text(json.dumps(args))
     claude.chmod(0o700)
     env = dict(env, PATH=f'{binary}{os.pathsep}{env["PATH"]}', CHAT_CAPTURE=str(capture))
     master, slave = pty.openpty()
-    command = ['bash', str(repo / 'scripts/setup.sh'), '--auth', 'x402', '--no-verify']
+    command = ['bash', str(repo / 'scripts/setup.sh'), '--auth', 'x402', '--no-verify', '--robinhood', 'skip']
     if option:
         command.append(option)
     proc = subprocess.Popen(command, cwd=repo, env=env, stdin=slave, stdout=slave, stderr=slave)
@@ -1961,10 +1961,14 @@ class Handler''')
     source = source.replace("        else: body, code = [], 200 if valid else 401", '''        elif self.path.endswith('/wallet/list'):
             body = json.loads(Path('wallets.json').read_text()) if Path('wallets.json').exists() else []
             code = 200 if valid else 401
+        elif self.path.endswith('/brokers/robinhood/status'):
+            body, code = {'connected': Path('robinhood-connected').exists()}, 200
         elif self.path.endswith('/x402/spend'):
             body, code = {'cap_usd': 25, 'cap_source': 'config', 'exhausted': False}, 200
         else: body, code = [], 200 if valid else 401''')
     server.write_text(source)
+    (repo / 'scripts/robinhood_connect.py').write_text(
+        "from pathlib import Path\nPath('robinhood-connected').touch()\n")
     env = dict(env, TERM=terminal_type)
     master, terminal = pty.openpty()
     def control_terminal():
@@ -2018,6 +2022,9 @@ class Handler''')
         expect('Type SELECT')
         send('SELECT')
         expect('Wallet configuration complete.')
+        expect('Connect Robinhood?')
+        send('1' if action == 'import' else '2')
+        expect('Robinhood: connected and verified.' if action == 'import' else 'Robinhood: skipped;')
         expect('Setup complete')
         if foreground:
             expect('Agent attached to this terminal')
@@ -2042,6 +2049,7 @@ class Handler''')
         assert '/confirm-backup' not in mutations
         assert not (repo / 'agent-data/wallet-setup.json').exists()
         assert not (repo / 'agent-data/.setup.lock').exists()
+        assert (repo / 'robinhood-connected').exists() == (action == 'import')
         assert b'synthetic-secret' not in output
     finally:
         if proc.poll() is None:
@@ -2314,3 +2322,126 @@ def test_missing_api_key_can_return_to_x402_without_secret_entry(config, monkeyp
     setup.configure(args)
     assert json.loads(config.read_text()) == before
     secret.assert_not_called()
+
+
+@pytest.mark.parametrize('options', [{'yes': True}, {'action': 'skip'}, {}])
+def test_robinhood_skip_never_contacts_broker_or_opens_browser(monkeypatch, capsys, options):
+    monkeypatch.setattr(setup.sys.stdin, 'isatty', lambda: False)
+    request, run = Mock(), Mock()
+    monkeypatch.setattr(setup, 'request', request)
+    monkeypatch.setattr(setup.subprocess, 'run', run)
+    setup.robinhood_setup({}, **options)
+    request.assert_not_called()
+    run.assert_not_called()
+    assert '--robinhood connect' in capsys.readouterr().out
+
+
+def test_robinhood_interactive_connect_is_default_and_skip_is_available(monkeypatch):
+    monkeypatch.setattr(setup.sys.stdin, 'isatty', lambda: True)
+    choose, request = Mock(return_value='2'), Mock()
+    monkeypatch.setattr(setup, 'choose', choose)
+    monkeypatch.setattr(setup, 'request', request)
+    setup.robinhood_setup({})
+    assert choose.call_args.args[2] == '1'
+    request.assert_not_called()
+
+
+def test_robinhood_reuses_verified_connection_without_launching_connector(monkeypatch, capsys):
+    monkeypatch.setattr(setup.sys.stdin, 'isatty', lambda: True)
+    request, run = Mock(return_value={'connected': True}), Mock()
+    monkeypatch.setattr(setup, 'request', request)
+    monkeypatch.setattr(setup.subprocess, 'run', run)
+    setup.robinhood_setup({}, action='connect')
+    request.assert_called_once_with({}, '/api/v1/agent/brokers/robinhood/status', timeout=60)
+    run.assert_not_called()
+    assert 'connected and verified' in capsys.readouterr().out
+
+
+def test_robinhood_connect_uses_existing_connector_and_verifies_result(monkeypatch, capsys):
+    monkeypatch.setattr(setup.sys.stdin, 'isatty', lambda: True)
+    request = Mock(side_effect=[setup.SetupError('private broker error'), {'connected': True}])
+    run = Mock(return_value=argparse.Namespace(returncode=0))
+    monkeypatch.setattr(setup, 'request', request)
+    monkeypatch.setattr(setup.subprocess, 'run', run)
+    cfg = {'MANGROVE_ACCESS_MODE': 'oauth'}
+    setup.robinhood_setup(cfg, action='connect')
+    assert run.call_args.args[0] == [str(ROOT / '.venv/bin/python3'), str(ROOT / 'scripts/robinhood_connect.py')]
+    assert run.call_args.kwargs['env']['ENVIRONMENT'] == 'local'
+    assert run.call_args.kwargs['cwd'] == ROOT
+    assert cfg == {'MANGROVE_ACCESS_MODE': 'oauth'}
+    output = capsys.readouterr().out
+    assert 'connected and verified' in output
+    assert 'requires Mangrove API-key or x402' in output
+    assert 'private broker error' not in output
+
+
+@pytest.mark.parametrize('outcome', [argparse.Namespace(returncode=1),
+                                   subprocess.TimeoutExpired('connector', 360), KeyboardInterrupt()])
+def test_robinhood_failure_or_cancel_can_skip_without_false_success(monkeypatch, capsys, outcome):
+    monkeypatch.setattr(setup.sys.stdin, 'isatty', lambda: True)
+    monkeypatch.setattr(setup, 'request', Mock(side_effect=setup.SetupError('private error')))
+    run = Mock(side_effect=outcome) if isinstance(outcome, BaseException) else Mock(return_value=outcome)
+    monkeypatch.setattr(setup.subprocess, 'run', run)
+    monkeypatch.setattr(setup, 'choose', lambda *a: '2')
+    setup.robinhood_setup({}, action='connect')
+    output = capsys.readouterr().out
+    assert 'not verified; any saved grant is retained' in output
+    assert 'connected and verified' not in output
+    assert 'private error' not in output
+
+
+def test_robinhood_retry_rechecks_saved_connection(monkeypatch):
+    monkeypatch.setattr(setup.sys.stdin, 'isatty', lambda: True)
+    request = Mock(side_effect=[setup.SetupError('unavailable'), {'connected': True}])
+    monkeypatch.setattr(setup, 'request', request)
+    run = Mock(return_value=argparse.Namespace(returncode=1))
+    monkeypatch.setattr(setup.subprocess, 'run', run)
+    monkeypatch.setattr(setup, 'choose', lambda *a: '1')
+    setup.robinhood_setup({}, action='connect')
+    assert request.call_count == 2
+    assert run.call_count == 1
+
+
+def test_robinhood_docker_does_not_launch_host_connector(monkeypatch, capsys):
+    monkeypatch.setattr(setup.sys.stdin, 'isatty', lambda: True)
+    run = Mock()
+    monkeypatch.setattr(setup.subprocess, 'run', run)
+    setup.robinhood_setup({}, docker=True)
+    assert 'Docker browser login needs container callback routing' in ' '.join(capsys.readouterr().out.split())
+    with pytest.raises(setup.SetupError, match='bare-metal'):
+        setup.robinhood_setup({}, docker=True, action='connect')
+    run.assert_not_called()
+
+
+@pytest.mark.parametrize('options', [ ['--robinhood', 'wrong'], ['--robinhood'],
+    ['--robinhood', 'connect', '--yes'], ['--robinhood', 'connect', '--docker'],
+    ['--robinhood', 'skip', '--wallet', 'list'], ['--robinhood', 'skip', '--oauth', 'status']])
+def test_robinhood_invalid_options_fail_before_config_changes(checkout, options):
+    repo, _ = checkout
+    result = run_setup(checkout, *options)
+    assert result.returncode != 0
+    assert not (repo / 'server/src/config/local-config.json').exists()
+    assert not (repo / 'agent-data').exists()
+
+
+def test_robinhood_shell_passes_skip_option_to_setup_helper(checkout):
+    result = run_setup(checkout, '--yes', '--no-mcp', '--no-verify', '--robinhood', 'skip')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'Robinhood: skipped; existing connection unchanged.' in result.stdout
+    repo, _ = checkout
+    assert '/brokers/' not in (repo / 'requests.jsonl').read_text()
+
+
+def test_robinhood_mid_login_skip_continues_without_retry_prompt(monkeypatch, capsys):
+    monkeypatch.setattr(setup.sys.stdin, 'isatty', lambda: True)
+    request = Mock(side_effect=setup.SetupError('not connected'))
+    monkeypatch.setattr(setup, 'request', request)
+    monkeypatch.setattr(setup.subprocess, 'run', Mock(return_value=argparse.Namespace(returncode=2)))
+    choose = Mock()
+    monkeypatch.setattr(setup, 'choose', choose)
+    setup.robinhood_setup({}, action='connect')
+    choose.assert_not_called()
+    assert request.call_count == 1
+    output = capsys.readouterr().out
+    assert 'Robinhood: skipped;' in output
+    assert 'connected and verified' not in output

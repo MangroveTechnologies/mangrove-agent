@@ -63,6 +63,20 @@ def _validate_status_transition(current: str, target: str) -> None:
         )
 
 
+def _exit_monitor_mode(strategy_id: str, row: dict, current: str) -> str | None:
+    """Retain monitoring until confirmed exposure and unresolved orders are gone."""
+    from src.services import confirmed_execution
+
+    paper_monitor = row["exit_only_mode"] == "paper" or (current == "paper" and _resolve_evaluation_lane(row) == "stateless")
+    if paper_monitor:
+        from src.services import paper_confirmed
+
+    exposure = paper_confirmed.has_exposure(strategy_id) if paper_monitor else confirmed_execution.has_exposure(strategy_id)
+    if (current == "live" or row["exit_only_mode"] == "live" or paper_monitor) and exposure:
+        return "paper" if paper_monitor else "live"
+    return None
+
+
 def _apply_scheduler_effects(strategy_id: str, row: dict, target: str, current: str) -> None:
     """Register or cancel the cron job and release allocation based on target status."""
     if target in {"paper", "live"}:
@@ -72,16 +86,10 @@ def _apply_scheduler_effects(strategy_id: str, row: dict, target: str, current: 
             "src.services.strategy_service:tick",
         )
     else:
-        from src.services import confirmed_execution
-
-        paper_monitor = row["exit_only_mode"] == "paper" or (current == "paper" and _resolve_evaluation_lane(row) == "stateless")
-        if paper_monitor:
-            from src.services import paper_confirmed
-
-        exposure = paper_confirmed.has_exposure(strategy_id) if paper_monitor else confirmed_execution.has_exposure(strategy_id)
-        if (current == "live" or row["exit_only_mode"] == "live" or paper_monitor) and exposure:
+        exit_only_mode = _exit_monitor_mode(strategy_id, row, current)
+        if exit_only_mode:
             conn = get_connection()
-            conn.execute("UPDATE strategies SET exit_only_mode=? WHERE id=?", ("paper" if paper_monitor else "live", strategy_id))
+            conn.execute("UPDATE strategies SET exit_only_mode=? WHERE id=?", (exit_only_mode, strategy_id))
             conn.commit()
             scheduler_service.register_job(strategy_id, row["timeframe"], "src.services.strategy_service:tick")
         else:
@@ -359,6 +367,9 @@ def _market_context(row: Any) -> dict[str, str]:
 
 def configure_market(strategy_id: str, market: StrategyMarketContext) -> StrategyDetailResponse:
     """Set the market for a fresh inactive, caller-owned strategy. No evaluation or activation."""
+    from src.services.local_deployment import binding
+    if binding(strategy_id):
+        raise StrategyInvalidStatusTransition("An adopted definition is immutable; edit it on MangroveAI and explicitly rebind.")
     from src.services.broker_execution import _lock
 
     with _lock:
@@ -445,6 +456,9 @@ def update_status(strategy_id: str, update: StrategyStatusUpdate) -> StrategyDet
     from src.services.confirmed_execution import tick_lock
 
     with _lock:
+        from src.services.local_deployment import binding
+        if binding(strategy_id):
+            raise StrategyInvalidStatusTransition("Use the local deployment activate/stop operations for adopted strategies.")
         with tick_lock(strategy_id, purpose="status") as acquired:
             if not acquired:
                 raise SdkError("Strategy evaluation is in progress; retry the status transition after it completes.")
@@ -457,8 +471,15 @@ def pause_for_portfolio(strategy_id):
     Public status calls still acquire their own lock and refuse a busy tick.
     Other strategies and threads follow that ordinary serialized path too.
     """
+    from src.services import local_deployment
     from src.services.broker_execution import _lock
     from src.services.confirmed_execution import owns_strategy_tick
+
+    if local_deployment.binding(strategy_id):
+        if owns_strategy_tick(strategy_id):
+            with _lock:
+                return local_deployment._stop(strategy_id, confirm=True)
+        return local_deployment.stop(strategy_id, confirm=True)
 
     update = StrategyStatusUpdate(status="inactive", confirm=True)
     if owns_strategy_tick(strategy_id):

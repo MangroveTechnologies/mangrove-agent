@@ -8,11 +8,25 @@ The existing DEX execution path remains available for wallet allocations.
 
 ## Connect once
 
-Run setup normally, then authorize the local agent:
+Run `./scripts/setup.sh` and choose **Connect now** at the optional Robinhood
+step, or **Skip for now** to finish without connecting. To connect later:
 
 ```sh
-./scripts/connect-robinhood.sh
+./scripts/setup.sh --robinhood connect
 ```
+
+Setup checks any saved connection first and verifies access after authorization.
+While browser authorization is pending, **Skip for now** is selected in the
+terminal. Press Enter to continue setup without connecting. Successful login is detected
+automatically; closing the browser alone does not cancel the wait. If
+authorization fails or is canceled, choose retry or skip. `--yes` and
+`--robinhood skip` never start Robinhood login or change a saved connection.
+The existing `./scripts/connect-robinhood.sh` remains available as a standalone
+helper; setup uses the same Python connector, not a separate OAuth implementation.
+This browser step currently supports bare-metal setup only. Docker setup defers
+it because Docker needs its own callback routing and encryption-key context.
+Robinhood authorization is separate from Mangrove sign-in; connecting it does
+not change Mangrove access mode or enable SDK deployments in OAuth-only mode.
 
 This opens Robinhood authorization for **Mangrove Agent**, with a loopback callback
 on port 8766. It does not place orders. OAuth credentials are encrypted using the
@@ -29,27 +43,24 @@ multiple independent processes must not concurrently refresh the same OAuth gran
 
 ## Configure a Mangrove strategy
 
-Venue configuration applies to a local execution record in `draft` or `inactive`
-status. Local strategy creation is retired (the create routes return HTTP 410), and
-the agent has no supported flow that turns a saved MangroveAI strategy into a local
-record. MangroveAI's `evaluate_strategy` tool checks signals on the server; it does
-not create or activate this runner.
-
-1. Start with a fresh local record whose asset is USD quoted. A record with trade
-   history or broker orders cannot change venues. Give it an explicit market with
-   `agent_configure_strategy_market` (or `PATCH /api/v1/agent/strategies/{id}/market`):
-   `market_context` holds `base_token`, `quote_token` and `market_data_venue`, all
-   uppercase, and `base_token` must match the strategy asset. This works only on a
-   `draft` or `inactive` record that uses the stateless evaluation lane, and it never
-   activates or trades. The market-data source can differ from the execution venue.
+1. Use Mangrove's existing research, save, verify and backtest tools. The saved
+   strategy needs an explicit USD quote and market-data venue, long-only rules,
+   v1/v2 sizing, and a timeframe supported by the existing local scheduler.
+   Call `agent_adopt_strategy(server_strategy_id, asset_class="crypto"|"equity")`.
+   This owner-scoped server read returns a local `deployment_id` and pins a
+   validated snapshot and fingerprint. It neither schedules nor trades. Drafts
+   can be prepared, but activation requires an inactive server strategy and a
+   passing backtest of its exact rules, sizing configuration and market.
+   The market-data source can differ from the execution venue. No rule copying
+   in chat or local strategy authoring is needed.
 2. Call `agent_robinhood_status` to verify the eligible account, approval setting,
    and available buying power. Only the account authorized for this agent is used.
-3. Call `agent_configure_execution_venue` with the local strategy ID and the
+3. Call `agent_configure_execution_venue` with the returned deployment ID and the
    user's capital mandate. For example (illustrative values, not trade advice):
 
    ```json
    {
-     "strategy_id": "<local strategy UUID>",
+     "strategy_id": "<deployment_id returned by agent_adopt_strategy>",
      "allocation": {
        "venue": "robinhood",
        "asset_class": "crypto",
@@ -66,12 +77,77 @@ not create or activate this runner.
    bounds each order, and `slippage_pct` bounds its limit price relative to the
    Mangrove evaluation price (maximum 0.25%). The strategy must size exits within
    the same order cap. Configuration selects caller-owned stateless evaluation.
-4. Activate with the status route, `PATCH /api/v1/agent/strategies/{id}/status`, using
-   `{"status": "live", "confirm": true}`. There is no local MCP tool for activation.
-   Do not send an `allocation` block: a Robinhood route is rejected if it carries a
-   wallet allocation. Activation runs a Robinhood preflight, then registers the
-   strategy's cron job. Activation does not change Robinhood's approval preference.
-   See [strategy lifecycle](strategy-lifecycle.md) for the status rules.
+4. After explicit authorization for live execution and recurring API/x402
+   charges, call `agent_activate_deployment(deployment_id, confirm=true)`.
+   This revalidates the definition, ownership and passing backtest, checks the
+   configured broker account and uses the existing local APScheduler job.
+   Server `evaluate_strategy` alone does not activate this runner. Generic
+   status-setting and market-edit operations cannot modify adopted deployments.
+
+### Binding, changes and recovery
+
+The server's read-only `GET /strategies/{id}/local-deployment?asset_class=crypto`
+contract (version 1) contains the owned server ID, owner, complete execution
+snapshot, timeframe and SHA-256 fingerprint. The fingerprint includes market
+context and resolved execution defaults, not just the existing deduplication
+hash. It excludes names and mutable execution balances. Local records retain
+both IDs; a remote ID cannot be substituted for the local deployment ID.
+
+Each broker tick validates the binding before evaluation or order submission.
+A changed, archived, inaccessible or no-longer-approved definition stops new
+entries without discarding pending orders. Exit-only jobs remain while exposure
+or unresolved orders exist, but evaluation and submission require successful
+binding validation. Reconciliation continues independently. Resuming entries
+requires explicit activation after resolution.
+The existing object evaluator receives the pinned server snapshot and confirmed
+local holdings/state. There is no new local strategy engine.
+
+Repeated adoption of the same definition returns the same durable deployment.
+Repeated identical venue configuration preserves execution state. Different
+configuration is refused after any execution history. Explicit
+`agent_adopt_strategy(..., rebind=true)` can accept a revised snapshot only while
+inactive with no execution history; it clears the old allocation for review.
+After execution history, use a new server-owned strategy for new rules.
+
+Activation persists local lifecycle state and registers the existing stable
+`eval-<deployment_id>` job. Startup repairs a crash between those steps. Retries
+do not create another deployment or scheduler. Stopping atomically saves inactive
+status and any required exit-only monitoring, so restart also repairs an
+interrupted stop without resuming new entries. Pending/uncertain broker orders
+remain in the existing durable journal and block new activation/submissions.
+
+The REST equivalents are `POST /api/v1/agent/strategies/deployments`,
+`GET /api/v1/agent/strategies/deployments/{id}`, and `POST` to its `/activate` and
+`/stop` subpaths. They use the same services and local authentication as MCP.
+
+### Access and rollout
+
+Deploy the server contract and release/install the SDK containing
+`strategies.local_deployment` before using the new agent tools. Older SDKs fail
+with an explicit capability error; older servers cannot silently adopt records.
+The current `server/requirements.lock` still pins `mangroveai==2.1.0`, which
+lacks this method. After publishing the compatible SDK through its existing
+release workflow, update the SDK minimum in `server/requirements.txt` and
+regenerate the lockfile using the documented dependency workflow. Verify the
+installed package, not just the SDK source checkout, before enabling deployments:
+
+```sh
+.venv/bin/python -c 'from mangrove_ai._services.strategies import StrategiesService; assert callable(getattr(StrategiesService, "local_deployment", None)), "Installed SDK lacks local_deployment support"'
+```
+
+This uses the existing SDK API-key/x402 access configuration, quota meter and
+payment recovery. OAuth-only managed MCP access is not an SDK identity and is
+refused without falling back to a wallet or linking platform identities.
+Recurring ticks incur the existing strategy-detail validation charge as well
+as evaluation charges. Broker credentials and activation authorization stay
+local. The server definition's status is not changed by local start/stop.
+
+This is separate from server-owned paper scheduling. Adopted deployments use
+the existing confirmed-execution journal, close-history delivery, evaluation
+locks and exit-only monitoring described in [confirmed execution](confirmed-execution.md).
+Strategy rules remain pinned to the adopted snapshot; fills and risk inputs come
+from the current local execution book. Live broker authorization and execution
+still require end-to-end verification before production rollout.
 
 The agent leaves Robinhood's approval preference unchanged. If approvals are off,
 orders can execute directly. If Robinhood requires approval for a particular
@@ -90,9 +166,11 @@ until its outcome is known. It never bypasses broker controls.
   confirmed trades and holdings; it never submits or retries an order.
 - `agent_cancel_venue_order(order_id)` requests cancellation of a known pending
   order. A cancel acknowledgement is not proof that it did not fill.
-- Set the strategy `inactive` with `PATCH /api/v1/agent/strategies/{id}/status`
-  (`confirm: true`) to stop new entries.
-  The exit-only strategy monitor and capital allocation remain while exposure or unresolved orders remain. Already submitted orders remain at Robinhood; cancel them separately if desired.
+- Call `agent_stop_deployment(deployment_id, confirm=true)` to stop new entries.
+  This works without a server read, including after upstream credentials change.
+  It does not cancel orders already submitted. Reconciliation continues.
+  Already submitted orders remain at Robinhood; cancel them separately if desired.
+  The exit-only strategy monitor and capital allocation remain while exposure or unresolved orders remain.
   The 15-second reconciliation worker continues while the agent is running,
   including for paused strategies.
 

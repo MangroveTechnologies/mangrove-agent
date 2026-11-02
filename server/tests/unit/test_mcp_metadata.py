@@ -12,7 +12,7 @@ from mcp.types import Tool, ToolAnnotations
 from starlette.testclient import TestClient
 
 # readOnlyHint, destructiveHint, idempotentHint, openWorldHint. Mutations use
-# conservative idempotency hints even where one receiver supports recovery.
+# conservative idempotency hints except for explicitly retry-safe deployment operations.
 EXPECTED_HINTS = {
     "status": (True, False, True, True),
     "set_agent_name": (False, True, False, False),
@@ -27,6 +27,10 @@ EXPECTED_HINTS = {
     "cex_sync_fills": (False, False, False, True),
     "execute_swap": (False, True, False, True),
     "agent_robinhood_status": (True, False, True, True),
+    "agent_adopt_strategy": (False, True, True, True),
+    "agent_get_deployment": (True, False, True, False),
+    "agent_activate_deployment": (False, True, True, True),
+    "agent_stop_deployment": (False, True, True, False),
     "agent_configure_execution_venue": (False, True, False, True),
     "agent_configure_strategy_market": (False, True, False, False),
     "agent_list_venue_orders": (True, False, True, False),
