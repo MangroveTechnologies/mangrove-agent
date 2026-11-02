@@ -149,35 +149,44 @@ not configured on the service, `get_x_post_counts` returns 503 and `run_backtest
 the X rules. Depleted credits, a rate limit or a gap make the X rules evaluate False and
 the condition is logged.
 
-## Example: strategies on social sentiment and holder signals
+## Example: a social sentiment exit
 
-Seven signals read Cambrian data. Five are in the `social` category and read the
-sentiment of posts about an asset: `social_sentiment_surge` and
-`social_sentiment_capitulation` (triggers on an unusually bullish or bearish
-reading), `social_crowd_bullish` (a filter: recent posts lean more bullish than
-the asset's norm), `social_crowd_cooling` (a filter: recent posts lean no more
-bullish than the norm) and `social_price_divergence` (a trigger: price fell while the
-crowd stayed as bullish as usual). Two are in the `onchain` category and read a
-token's holders: `holder_growth_trend` (a filter: the holder count is growing) and
-`whale_share_divergence` (a trigger: price fell while wallets holding $100,000 or
-more held a larger share of the value). The holder signals work on Solana tokens
-only. Ask in plain words:
+One Cambrian-backed signal is available for new strategies: `social_price_divergence`,
+in the `social` category. It is an exit for long positions, never an entry. It fires
+when the price fell at least 3% over 7 days while the crowd's net bullish share of posts
+(bullish minus bearish) stayed at or above its mean over the prior 60 days: the price is
+dropping and the crowd is not reacting yet. Those are the defaults (`window=7`,
+`min_drop_pct=3.0`, `window_baseline=60`). The knowledge base types it as a trigger
+because it has no exit-only type, so it belongs in a strategy's exit rules only. As a
+long entry it lost money in every form tested. As the exit of an `rsi_cross_up` entry
+with an `is_above_sma` filter it raised the holdout return from 3.25% to 4.00% and was
+better on 6 of 7 coins; the effect is small. Ask in plain words:
 
-> Which social and holder signals are available? Build a BTC strategy that buys an
-> RSI dip only while the crowd is cooling, then backtest it.
+> Build a BTC strategy that enters on an RSI cross up while price is above its 60-day
+> SMA and exits when the price drops while the crowd stays bullish, then backtest it.
 
-The agent finds the signals with `list_signals` (category `social` or `onchain`),
-builds the strategy with the server's `strategy-composition` skill and
-`save_strategy`, using `social_crowd_cooling` as a filter beside a trigger, and
-backtests it with `run_backtest`. You do not supply any data: MangroveAI attaches
-the sentiment and holder columns itself, in a backtest as in live evaluation, and
-a bar sees only values already known when it closes.
+The agent finds the signal with `list_signals` (category `social`), builds the strategy
+with the server's `strategy-composition` skill and `save_strategy`, with a price trigger
+and a price filter for entry and `social_price_divergence` in the exit rules, and
+backtests it with `run_backtest`. You do not supply any data: MangroveAI attaches the
+sentiment columns itself, in a backtest as in live evaluation, and a bar sees only
+values already known when it closes.
 
-If the data source is off on the service, each of the seven signals shows as
-non-composable in `list_signals`. A new strategy cannot be built on it, and a
-strategy that already names one gets `False` from it rather than an error. The
-agent should report that the signal is unavailable instead of substituting another
-signal.
+Six other Cambrian signals are disabled for new strategies: `social_sentiment_surge`,
+`social_sentiment_capitulation`, `social_crowd_bullish`, `social_crowd_cooling`
+(`social`), and `whale_share_divergence` and `holder_growth_trend` (`onchain`, Solana
+holder data). They lost money or added nothing in Oracle strategy backtests (424
+configurations, every strategy with a trigger and a price filter, settings chosen on an
+early window and checked untouched on a later one). Once MangroveAI pins the
+knowledge-base release with this change, `list_signals` shows them as non-composable,
+so a new strategy cannot use them; a stored strategy that already names one keeps
+evaluating it. The agent should not suggest them.
+
+MangroveAI attaches Cambrian data only when its Cambrian data flag is on, and that
+service change is not released yet. With the flag off, `social_price_divergence` also
+shows as non-composable in `list_signals`, and a strategy that already names it gets
+`False` from it, so it never exits on it. The agent should report that the signal is
+unavailable instead of substituting another signal.
 
 ## If something is unavailable
 
