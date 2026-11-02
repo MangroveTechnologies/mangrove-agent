@@ -5,7 +5,7 @@ import re
 import sys
 from pathlib import Path
 
-from setup_support import SetupError, origin, read_config, request, require_auth
+from setup_support import SetupError, origin, read_config, request, require_auth, ROOT, address
 
 
 def wallet_address(value):
@@ -15,9 +15,18 @@ def wallet_address(value):
     return value
 
 
-def run(action, value, by_address=False):
-    cfg = read_config(Path(os.environ['CONFIG_FILE']))
-    cfg['LOCAL_AGENT_URL'] = origin(os.environ['LOCAL_AGENT_URL'])
+def run(action, value, by_address=False, *, setup=False):
+    if setup:
+        cfg = read_config(ROOT / 'server/src/config/local-config.json')
+        progress = read_config(ROOT / 'agent-data/wallet-setup.json')
+        if (progress.get('stage') not in {'wallet', 'selected'}
+                or progress.get('network') != cfg.get('X402_NETWORK')):
+            raise SetupError('No matching wallet setup is waiting for backup. Return to the setup window.')
+        value = address(progress.get('address'))
+        by_address = True
+    else:
+        cfg = read_config(Path(os.environ['CONFIG_FILE']))
+        cfg['LOCAL_AGENT_URL'] = origin(os.environ['LOCAL_AGENT_URL'])
     require_auth(cfg)
     if action == 'confirm' or by_address:
         value = wallet_address(value)
@@ -40,8 +49,14 @@ def run(action, value, by_address=False):
         # fetching the secret. Redacting this would make wallet backup impossible.
         print(secret)
         print('\nClear terminal scrollback after saving your backup.')
-        print('Then run: ./scripts/confirm-backup.sh ' + (addr or '<wallet-address>'))
+        print('Then run: ./scripts/confirm-backup.sh ' + ('--setup' if setup else addr or '<wallet-address>'))
     else:
+        if setup:
+            if not sys.stdin.isatty():
+                raise SetupError('Backup confirmation requires your private terminal.')
+            print('Wallet: ' + value)
+            if input('Type BACKED UP only if you saved this wallet’s secret: ').strip() != 'BACKED UP':
+                raise SetupError('Backup was not confirmed.')
         result = request(cfg, f'/api/v1/agent/wallet/{value}/confirm-backup', {})
         if not result.get('backup_confirmed_at'):
             raise SetupError('Backup confirmation was not acknowledged.')
@@ -52,10 +67,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['reveal', 'confirm'])
     parser.add_argument('--address', action='store_true')
-    parser.add_argument('value')
+    parser.add_argument('value', nargs='?')
+    parser.add_argument('--setup', action='store_true', help='Use the wallet waiting in this checkout’s setup wizard')
     args = parser.parse_args()
     try:
-        run(args.action, args.value, args.address)
+        if args.setup and (args.value is not None or args.address):
+            raise SetupError('Use --setup by itself, without an address or token.')
+        if not args.setup and args.value is None:
+            raise SetupError('Provide a wallet address/token, or use --setup during wallet setup.')
+        run(args.action, args.value, args.address, setup=args.setup)
         return 0
     except SetupError as exc:
         print(str(exc), file=sys.stderr)

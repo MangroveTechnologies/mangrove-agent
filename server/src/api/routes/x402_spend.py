@@ -14,7 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
-from src.services import spend_service
+from src.services import payment_identity, spend_service
 from src.shared.auth.dependency import require_api_key
 
 
@@ -40,8 +40,8 @@ router = APIRouter(
 
 @router.get("", summary="Outbound x402 spend budget")
 async def get_spend_status() -> dict:
-    """Spent, remaining, the budget and where it came from."""
-    return spend_service.get_status()
+    """Agent-wide budget and configured default payer (authenticated metadata)."""
+    return {**spend_service.get_status(), "payer": payment_identity.get_status(), "budget_scope": "agent"}
 
 
 @router.get("/payments", summary="Outbound x402 payment ledger")

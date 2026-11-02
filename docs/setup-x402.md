@@ -4,8 +4,9 @@ Run `./scripts/setup.sh` from your clone. This is the setup entry point for both
 access methods. Plugin installation is a separate API-key path. For a client-neutral
 walkthrough, start with the [user guide](user-guide.md).
 
-On every interactive setup run, choose an API key or x402. Enter keeps the current
-mode (x402 is the default for a fresh install). API-key input is hidden.
+On interactive setup runs, choose API-key, x402, or browser sign-in access.
+API-key input is hidden. Fresh x402 installations use Base Mainnet and USDC on Base;
+an existing different network is changed only after an explicit menu choice.
 The script always creates or preserves a separate local credential for the AI client's
 access to the agent. Omitting an upstream key never disables local authentication.
 Select either mode from this menu, or use `--auth api-key` / `--auth x402` to
@@ -43,16 +44,58 @@ Verification checks local authentication, required tools and scheduler readiness
 It can read upstream discovery and, in API-key mode, verify the configured key.
 It does not sign payments or establish wallet/payment readiness.
 
-## The x402 wallet menu prints instructions
+## Guided x402 wallet setup
 
-After the server is authenticated and MCP registration is saved (if Claude is
-installed), select **create**, **import**, **use saved wallet**, or **finish later**.
-Selecting a menu item only prints instructions. Execute the commands yourself in
-a private terminal in this checkout. Never give any AI client a private key or mnemonic.
+Interactive setup keeps one session open through wallet creation/import, backup,
+payer review, and applying settings. Fresh installations use **Base Mainnet**;
+x402 payments spend real USDC. Creating/importing a wallet makes no payment.
 
-The following explicit commands are separate from the normal setup run. They
-call existing local wallet services and do not install packages or restart the
-agent. They read the configured local URL, including a custom port.
+- **Create:** select Create, review the network, and type `CREATE`. Setup creates
+  the wallet directly and displays its public address. Keep setup open while you
+  run the displayed reveal command in a separate private terminal, save the
+  secret, and run the displayed backup-confirmation command. The short `reveal-secret.sh --setup` and `confirm-backup.sh --setup` commands
+  read the wallet address and local URL from this checkout’s setup progress,
+  ignoring environment overrides from other agents. The confirmation command
+  shows the address and asks you to type `BACKED UP`. Return to the wizard and
+  choose **Check backup and continue** using the arrow keys and Enter. Setup
+  verifies the recorded confirmation; Enter alone never confirms backup.
+- **Import:** select Import, type `IMPORT`, acknowledge `BACKED UP` only if the
+  secret is saved outside the agent, and enter it at the hidden terminal prompt.
+  Confirm that the derived public address matches your intended wallet. An
+  already-confirmed backup skips the reveal step. Existing imports that still
+  need backup confirmation follow the same private-terminal backup flow.
+- **Use saved:** choose from all saved EVM wallets. Each entry shows its address,
+  backup status, and whether it is the current payer. The current payer is
+  highlighted by default. Keeping it preserves spending settings without another
+  budget prompt; choosing another wallet completes any missing backup and opens
+  payment-settings review.
+- **Finish later:** complete local installation without enabling a new payer.
+
+The new/imported address is carried into payment-settings review automatically.
+Review the effective spending cap and type `SELECT` to save. Setup applies the
+configuration, restarts its agent if necessary, and verifies local authenticated
+access without asking you to rerun commands. Existing spending records and
+budget authorizations are preserved. Funding and paid access are not verified;
+setup never transfers funds or makes a paid test call.
+
+Interrupted flows use `agent-data/wallet-setup.json`, which contains only
+public wallet/workflow metadata, never secrets or vault tokens. When a saved
+wallet still needs setup, choose **Resume this wallet**, **Choose a different
+setup option**, or **Finish later**. Choosing a different option returns to the
+Create/Import/Use saved menu; it dismisses only the setup checkpoint and keeps
+the wallet, backup status, payer settings, and spending history intact. If a create/import
+response is uncertain, setup does not repeat the mutation: it asks you to refresh
+saved wallets and identify the intended public address. If none appears, finish
+later and investigate the operation before retrying. Changing access modes does
+not discard unfinished wallet progress. `--yes` never creates/imports a wallet.
+
+### Standalone wallet commands
+
+The following commands remain available for manual administration outside the
+wizard. They call existing local wallet services and do not install packages or
+restart the agent. They read the configured local URL, including a custom port.
+Do not run a second `setup.sh` while the wizard owns the setup lock. Backup reveal
+and confirmation commands can run while the wizard waits.
 
 ### Create a wallet
 

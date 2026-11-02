@@ -17,6 +17,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import textwrap
+import threading
+from contextlib import contextmanager
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -546,16 +549,25 @@ def configure(args):
         if not supplied or upstream_key({'MANGROVE_API_KEY': supplied}) != supplied:
             raise SetupError('Provide a nonempty API key, not a placeholder.')
         key, mode = supplied, 'api-key'
-    # Interactive runs offer sign-in, API-key and wallet access; existing numbering is stable.
-    if mode is None:
-        if not args.yes:
-            mode = {'1': 'api-key', '2': 'x402', '3': 'oauth'}[choose(
-                'How would you like to access MangroveAI?',
-                {'1': 'Use an API key', '2': 'Pay with a wallet (x402; no signup)',
-                 '3': 'Sign in to Mangrove in your browser (OAuth)'},
-                '1')]
-        else:
-            mode = cfg.get('MANGROVE_ACCESS_MODE') or ('api-key' if key else 'x402')
+    while True:
+        # Interactive runs offer sign-in, API-key and wallet access; existing numbering is stable.
+        if mode is None:
+            if not args.yes:
+                mode = {'1': 'api-key', '2': 'x402', '3': 'oauth'}[choose(
+                    'How would you like to access MangroveAI?',
+                    {'1': 'Use an API key', '2': 'Pay with a wallet (x402; no signup)',
+                     '3': 'Sign in to Mangrove in your browser (OAuth)'},
+                    '1')]
+            else:
+                mode = cfg.get('MANGROVE_ACCESS_MODE') or ('api-key' if key else 'x402')
+        if mode == 'api-key' and not key and not args.yes and not args.api_key_stdin:
+            choice = choose('No MangroveAI API key is saved in this checkout.', {
+                '1': 'Enter a new API key',
+                '2': 'Choose another access method'}, '1')
+            if choice == '2':
+                mode = None
+                continue
+        break
     if mode == 'api-key' and key and not args.yes and not args.api_key_stdin:
         choice = choose(
             'An upstream API key is already configured. Which key should setup use?',
@@ -575,6 +587,13 @@ def configure(args):
     cfg['MANGROVE_API_KEY'] = key or ''
     cfg['MANGROVE_ACCESS_MODE'] = mode
     if mode == 'x402':
+        if not args.yes and cfg.get('X402_NETWORK') != 'eip155:8453':
+            selection = choose('Payment network (mainnet payments use real USDC):', {
+                '1': 'Base Mainnet — USDC on Base',
+                '2': 'Keep the currently configured network'}, '1')
+            if selection == '1':
+                cfg['X402_NETWORK'] = 'eip155:8453'
+                cfg['X402_USDC_CONTRACT'] = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
         configure_reconciliation(cfg)
     raw = cfg.get('API_KEYS', '')
     if raw is None:
@@ -605,7 +624,7 @@ def configure(args):
     else:
         print(f'Payment network: {network(cfg)[2]}. Existing network selections are preserved on reruns.')
         print('Automatic payment reconciliation configured for the selected network; RPC availability is checked during recovery.')
-        print('Setup will not create/import a wallet, confirm a backup, or make a payment.')
+        print('Interactive wallet setup follows after local startup. Wallet actions require confirmation; no payment is made.')
 
 
 def network(cfg):
@@ -681,30 +700,341 @@ def guide(cfg, *, yes=False, docker=False):
     print('See docs/setup-x402.md for the complete steps and recovery instructions.')
 
 
-def wallet_action(action, cfg):
+@contextmanager
+def flow_busy(label):
+    """Transient progress in a terminal; never animate redirected output."""
+    if not _menu_supported():
+        yield
+        return
+    out = sys.stdout
+    frames = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' if _supports_unicode(out, '⠋') else '|/-\\'
+    stopped = threading.Event()
+
+    def animate():
+        index = 0
+        while not stopped.is_set():
+            text = f'  {frames[index % len(frames)]} {label}'
+            if _supports_color(out):
+                text = '\x1b[36m' + text + _RESET
+            out.write('\r\x1b[2K' + text)
+            out.flush()
+            index += 1
+            stopped.wait(0.1)
+
+    worker = threading.Thread(target=animate, daemon=True)
+    out.write('\x1b[?25l')
+    worker.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        worker.join()
+        out.write('\r\x1b[2K\x1b[?25h')
+        out.flush()
+
+
+def flow_text(text, *, tone=None):
+    """Small, readable blocks; ANSI is optional and plain terminals stay usable."""
+    width = max(24, min(76, _terminal_columns() - 4))
+    for line in textwrap.wrap(text, width=width, break_long_words=False, break_on_hyphens=False) or ['']:
+        rendered = f'\x1b[{tone}m{line}{_RESET}' if tone and _supports_color(sys.stdout) else line
+        print('  ' + rendered)
+
+
+def flow_step(number, title, note=None):
+    print()
+    flow_text(f'WALLET SETUP  {number} / 4', tone='2')
+    flow_text(title, tone='1;36')
+    if note:
+        print()
+        flow_text(note)
+    print()
+
+
+def flow_success(text):
+    mark = '✓' if _supports_unicode(sys.stdout, '✓') else '+'
+    flow_text(f'{mark} {text}', tone='32')
+
+
+def payment_network(cfg):
+    return 'Base Mainnet' if network(cfg)[0] == 8453 else 'Base Sepolia'
+
+
+def onboarding_path():
+    return ROOT / 'agent-data/wallet-setup.json'
+
+
+def save_onboarding(state):
+    # Public addresses and workflow state only: never secrets, tokens or credentials.
+    atomic_config(state, path=onboarding_path())
+
+
+def saved_wallets(cfg):
+    wallets = check(cfg)
+    result = []
+    for item in wallets:
+        if not isinstance(item, dict):
+            raise SetupError('Invalid saved wallet response.')
+        if item.get('chain') == 'evm':
+            address(item.get('address'))
+            result.append(item)
+    return result
+
+
+def choose_saved_wallet(wallets, *, payer=None):
+    if not wallets:
+        raise SetupError('No saved EVM wallet is available yet.')
+    choices, addresses = {}, {}
+    default = '1'
+    for i, wallet in enumerate(wallets, 1):
+        key = str(i)
+        addr = address(wallet['address'])
+        addresses[key] = addr
+        status = 'Backed up' if wallet.get('backup_confirmed_at') else 'Backup needed'
+        if addr.lower() == str(payer).lower():
+            status = 'Current · ' + status
+            default = key
+        # Status comes first so it remains visible in narrow terminals. The
+        # selected wallet's full address is shown again before payer approval.
+        choices[key] = f'{status} · {addr}'
+    choices['l'] = 'Finish later'
+    print()
+    choice = choose('Choose a saved wallet:', choices, default)
+    return None if choice == 'l' else addresses[choice]
+
+
+def wait_for_backup(cfg, addr):
+    shown = False
+    while True:
+        with flow_busy('Checking backup…'):
+            wallet = next((w for w in saved_wallets(cfg) if w['address'].lower() == addr.lower()), None)
+        if wallet is None:
+            raise SetupError('Wallet is no longer available. No payer was selected.')
+        if wallet.get('backup_confirmed_at'):
+            flow_success('Backup confirmed')
+            return True
+        if not shown:
+            flow_step(2, 'Save your backup', 'Keep this window open. In a second private terminal:')
+            flow_text('1. Open this checkout', tone='2')
+            print('     cd ' + shlex.quote(str(ROOT)))
+            print()
+            flow_text('2. Reveal your secret and save it somewhere safe', tone='2')
+            print('     ./scripts/reveal-secret.sh --setup')
+            print()
+            flow_text('3. Confirm only after you have saved it', tone='2')
+            print('     ./scripts/confirm-backup.sh --setup')
+            print()
+            shown = True
+        else:
+            print()
+            flow_text('Backup not confirmed yet. Complete step 3 in your other terminal.', tone='33')
+            print()
+        reply = choose('Ready to continue?', {
+            '1': 'Check backup and continue', '2': 'Finish later'}, '1')
+        if reply == '2':
+            return False
+
+
+def onboard(cfg, *, yes=False):
+    # Return to the menu without recursive stack growth on invalid confirmation.
+    while _onboard(cfg, yes=yes) == 'menu':
+        pass
+
+
+def _onboard(cfg, *, yes=False):
+    """One interactive session; read-only checks may retry, wallet mutations never do."""
+    if cfg.get('MANGROVE_ACCESS_MODE') == 'oauth' or upstream_key(cfg):
+        return
+    if yes:
+        print('Wallet onboarding deferred (--yes). No wallet action or payment was made.')
+        return
+    if not sys.stdin.isatty():
+        raise SetupError('Wallet setup requires an interactive terminal; use --yes to defer it.')
+    print()
+    flow_text('PAYMENT WALLET', tone='1;36')
+    flow_text(f'{payment_network(cfg)} · USDC', tone='2')
+    print()
+    path = onboarding_path()
+    state = read_config(path) if path.exists() or path.is_symlink() else None
+    if state is not None:
+        if (state.get('stage') not in {'pending', 'wallet', 'selected'}
+                or state.get('action') not in {'create', 'import', 'existing'}
+                or state.get('network') not in NETWORKS):
+            raise SetupError('Invalid wallet setup checkpoint; inspect agent-data/wallet-setup.json.')
+        if state.get('address') is not None:
+            address(state['address'])
+        if state['stage'] == 'wallet':
+            flow_text('Unfinished wallet setup', tone='1')
+            flow_text(address(state.get('address')), tone='2')
+            flow_text('Choosing another option keeps this wallet saved locally.', tone='2')
+            print()
+            choice = choose('How would you like to continue?', {
+                '1': 'Resume this wallet',
+                '2': 'Choose a different setup option',
+                '3': 'Finish later'}, '1')
+            if choice == '3':
+                return
+            if choice == '2':
+                # Only dismiss a confirmed wallet checkpoint. An uncertain
+                # mutation must still go through recovery, never be forgotten.
+                path.unlink()
+                return 'menu'
+        if state['network'] != cfg['X402_NETWORK']:
+            choice = choose('Wallet setup was started on another network.', {
+                '1': 'Review that saved wallet on the currently configured network',
+                '2': 'Finish wallet setup later'}, '2')
+            if choice == '2':
+                return
+            state['network'] = cfg['X402_NETWORK']
+            state['stage'] = 'wallet' if state.get('address') else 'pending'
+            save_onboarding(state)
+    wallets = saved_wallets(cfg)
+    if state is None:
+        payer = cfg.get('X402_PAYER_WALLET')
+        active = next((w for w in wallets if w['address'].lower() == str(payer).lower()), None)
+        options = {'1': 'Create a new wallet', '2': 'Import an existing wallet',
+                   '3': 'Use a wallet already saved in this agent', '4': 'Finish wallet setup later'}
+        choice = choose('Set up your payment wallet:', options, '1')
+        if choice == '4':
+            print('Local setup continues. Wallet configuration is incomplete.')
+            return
+        action = {'1': 'create', '2': 'import', '3': 'existing'}[choice]
+        state = {'stage': 'wallet', 'action': action, 'network': cfg['X402_NETWORK']}
+        if action == 'existing':
+            if not wallets:
+                print('No saved EVM wallet is available. Choose create, import, or finish later.')
+                return 'menu'
+            addr = choose_saved_wallet(wallets, payer=payer)
+            if addr is None:
+                return
+            if active and active['address'].lower() == addr.lower() and active.get('backup_confirmed_at'):
+                flow_success('Keeping your current wallet and spending settings')
+                flow_text(addr, tone='2')
+                return
+        else:
+            flow_step(1, 'Create your wallet' if action == 'create' else 'Import your wallet',
+                      f'{payment_network(cfg)} · Encrypted on this computer. No payment now.')
+            def pending():
+                state['stage'] = 'pending'
+                save_onboarding(state)
+            try:
+                addr = wallet_action(action, cfg, guided=True, before_mutation=pending)
+            except SetupError as exc:
+                print(str(exc))
+                if state['stage'] != 'pending':
+                    print('No wallet mutation was sent. Returning to the wallet menu.')
+                    return 'menu'
+                # Remain in the session, but require explicit identification of
+                # the wallet. Never infer which wallet a timed-out import meant.
+                print('The result is uncertain. No automatic create/import retry will be made.')
+                return 'menu'
+        state.update(stage='wallet', address=addr)
+        save_onboarding(state)
+    else:
+        print('Resuming unfinished wallet setup; no wallet will be created or imported again.')
+        if state['stage'] == 'pending':
+            print('The previous operation did not return a confirmed result. Review saved wallets.')
+            while True:
+                choice = choose('Recover the existing operation:', {
+                    '1': 'Refresh saved wallets and choose the intended address',
+                    '2': 'Finish wallet setup later'}, '1')
+                if choice == '2':
+                    return
+                wallets = saved_wallets(cfg)
+                if not wallets:
+                    print('No saved wallet found yet. The operation may still be completing.')
+                    continue
+                addr = choose_saved_wallet(wallets)
+                if addr is None:
+                    return
+                state.update(stage='wallet', address=addr)
+                save_onboarding(state)
+                break
+        else:
+            addr = address(state.get('address'))
+    print()
+    flow_text('Wallet address', tone='2')
+    flow_text(addr)
+    print()
+    if (state['stage'] == 'selected' and cfg.get('X402_PAYER_WALLET') == addr):
+        print('Payment settings already confirmed. Continuing application and verification.')
+        return
+    if state['action'] == 'import':
+        choice = choose('Does this address match the wallet you intended to import?', {
+            '1': 'Yes, continue', '2': 'No, leave it saved but do not select it as payer'}, '1')
+        if choice == '2':
+            path.unlink()
+            print('Wallet remains saved locally. No new payer was selected. Returning to wallet options.')
+            return 'menu'
+    while True:
+        try:
+            if not wait_for_backup(cfg, addr):
+                print('Progress saved. Next time, you can resume or choose another setup option.')
+                return
+            flow_step(3, 'Review payment settings',
+                      'Paid calls use real USDC within your spending cap.' if network(cfg)[0] == 8453
+                      else 'Paid calls use test USDC within your spending cap.')
+            wallet_action('select', cfg, guided=True, selected_address=addr)
+            state['stage'] = 'selected'
+            save_onboarding(state)
+            flow_step(4, 'Applying your settings', 'Setup will restart the agent if needed.')
+            return
+        except SetupError as exc:
+            print(str(exc))
+            choice = choose('Wallet is saved. Continue from this step?', {
+                '1': 'Retry backup/settings verification', '2': 'Finish wallet setup later'}, '1')
+            if choice == '2':
+                return
+
+
+def finish_onboarding(cfg):
+    path = onboarding_path()
+    if cfg.get('MANGROVE_ACCESS_MODE') != 'x402' or not path.exists():
+        return
+    state = read_config(path)
+    if (state.get('stage') == 'selected'
+            and state.get('address') == cfg.get('X402_PAYER_WALLET')
+            and state.get('network') == cfg.get('X402_NETWORK')):
+        # Called only after the shell has applied config and verified local access.
+        path.unlink()
+        print()
+        flow_success('Wallet configuration complete.')
+        flow_text('Fund with USDC on ' + payment_network(cfg) + ' when ready.', tone='2')
+        flow_text('Funding and paid access have not been verified.', tone='2')
+        print()
+
+
+def wallet_action(action, cfg, *, guided=False, selected_address=None, before_mutation=None):
     if not sys.stdin.isatty():
         raise SetupError('Run wallet commands yourself in an interactive terminal.')
     if upstream_key(cfg):
         raise SetupError('These payment-wallet commands require x402 mode; run setup --auth x402 first.')
     wallets = check(cfg)
     chain, net, label = network(cfg)
-    print(f'Payment network: {label} (chain {chain}).')
-    print('Saved EVM wallets can be selected on either Base network; balances are network-specific.')
+    if not guided:
+        print(f'Payment network: {label} (chain {chain}).')
+        print('Saved EVM wallets can be selected on either Base network; balances are network-specific.')
     if action in {'list', 'select'}:
         eligible = []
         for item in wallets:
             addr = address(item.get('address'))
             if item.get('chain') == 'evm':
                 eligible.append(item)
-                print(f'{len(eligible)}. {addr} | backup {"confirmed" if item.get("backup_confirmed_at") else "needed"}')
+                if selected_address is None:
+                    print(f'{len(eligible)}. {addr} | backup {"confirmed" if item.get("backup_confirmed_at") else "needed"}')
         if action == 'list':
             if not eligible:
                 print('No saved wallet matches this payment network.')
             return
         if not eligible:
             raise SetupError('No matching wallet. Create/import one using the printed instructions first.')
-        choice = choose('Select a payment wallet:', {str(i): address(w['address']) for i, w in enumerate(eligible, 1)}, '1')
-        item = eligible[int(choice) - 1]
+        if selected_address is not None:
+            item = next((w for w in eligible if address(w['address']).lower() == selected_address.lower()), None)
+            if item is None:
+                raise SetupError('The selected wallet is no longer available. No settings were saved.')
+        else:
+            choice = choose('Select a payment wallet:', {str(i): address(w['address']) for i, w in enumerate(eligible, 1)}, '1')
+            item = eligible[int(choice) - 1]
         addr = address(item['address'])
         if not item.get('backup_confirmed_at'):
             raise SetupError('Back up this wallet and run confirm-backup.sh with its address before selecting it.')
@@ -716,7 +1046,13 @@ def wallet_action(action, cfg):
                 raise ValueError
         except (KeyError, InvalidOperation, ValueError, TypeError):
             raise SetupError('Cannot verify the active spending cap; no configuration was changed.') from None
-        print(f'Current effective cap: {active_cap} USD ({source}).')
+        if guided:
+            flow_text('Network   ' + payment_network(cfg))
+            flow_text('Wallet    ' + addr)
+            flow_text(f'Cap       ${active_cap:g} USDC')
+            print()
+        else:
+            print(f'Current effective cap: {active_cap} USD ({source}).')
         if budget.get('exhausted'):
             print('The budget is exhausted. Setup will not reset or unlock it.')
         raw = input(f'Spending cap in USD [{active_cap}]: ').strip()
@@ -729,28 +1065,50 @@ def wallet_action(action, cfg):
         if source == 'authorized' and cap != active_cap:
             raise SetupError('An authorized period cap overrides config. Use the explicit budget-management workflow '
                              'to change it, or rerun selection keeping the displayed active cap. Nothing was saved.')
-        print(f'Payer: {addr}\nNetwork: {label}\nConfigured cap: {cap} USD. Existing spend and latches are preserved.')
-        print('A previously authorized period cap takes precedence over this config value.\n'
-              'Check x402_spend_status with your AI client before paid use; setup never resets the budget.')
-        if input('Type SELECT to save this payment configuration: ').strip() != 'SELECT':
+        if guided:
+            print()
+            flow_text(f'Use this wallet with a ${cap:g} USDC cap?')
+            flow_text('Existing spending and budget authorizations stay unchanged.', tone='2')
+            print()
+        else:
+            print(f'Payer: {addr}\nNetwork: {label}\nConfigured cap: {cap} USD. Existing spend and latches are preserved.')
+            print('A previously authorized period cap takes precedence over this config value.\n'
+                  'Check x402_spend_status with your AI client before paid use; setup never resets the budget.')
+        prompt = '  Type SELECT to confirm: ' if guided else 'Type SELECT to save this payment configuration: '
+        if input(prompt).strip() != 'SELECT':
             raise SetupError('Selection cancelled; configuration unchanged.')
         cfg['X402_PAYER_WALLET'] = addr
         cfg['X402_SPEND_CAP_USD'] = float(cap)
         atomic_config(cfg)
-        print('Saved. Run ./scripts/setup.sh --yes (add --docker for Docker) to apply it.')
-        print(f'Funding address: {addr}\nAsset/network: USDC on {label}. Funding and receiver compatibility are not verified.')
+        if guided:
+            flow_success('Payment settings saved')
+        else:
+            print('Saved. Run ./scripts/setup.sh --yes (add --docker for Docker) to apply it.')
+        if not guided:
+            print(f'Funding address: {addr}\nAsset/network: USDC on {label}. Funding and receiver compatibility are not verified.')
         return
-    print('This imports or creates a wallet only when you confirm below. No payment is made.')
-    print('Step 1. Confirm the wallet operation - type the word shown to continue, or Ctrl+C to cancel.')
-    if input(f'Type {action.upper()} to {action} a payment wallet: ').strip() != action.upper():
+    if not guided:
+        print('This imports or creates a wallet only when you confirm below. No payment is made.')
+        print('Step 1. Confirm the wallet operation - type the word shown to continue, or Ctrl+C to cancel.')
+    prompt = f'  Type {action.upper()} to continue: ' if guided else f'Type {action.upper()} to {action} a payment wallet: '
+    if input(prompt).strip() != action.upper():
         raise SetupError('Cancelled; no wallet request was sent.')
     payload = {'chain': 'evm', 'network': net, 'chain_id': chain, 'label': 'x402 payments'}
     if action == 'import':
-        print('Step 2. Confirm your backup - continue only if the secret is safely saved outside this agent.')
+        if guided:
+            print()
+            flow_text('You need a backup saved outside this agent.')
+        else:
+            print('Step 2. Confirm your backup - continue only if the secret is safely saved outside this agent.')
         if input('Type BACKED UP to confirm you have saved its secret outside the agent: ').strip() != 'BACKED UP':
             raise SetupError('Import cancelled; backup was not confirmed.')
-        print('Step 3. Enter the wallet secret - paste it at the hidden prompt below, in this terminal only.')
-        print('You do not enter an address; the agent derives it from the secret and displays it after import.')
+        if guided:
+            print()
+            flow_text('Paste your secret below. Input is hidden; never paste it into chat.')
+            print()
+        else:
+            print('Step 3. Enter the wallet secret - paste it at the hidden prompt below, in this terminal only.')
+            print('You do not enter an address; the agent derives it from the secret and displays it after import.')
         secret = hidden('Private key or recovery phrase (hidden; never paste into chat): ')
         if not secret:
             raise SetupError('Empty secret; nothing was sent.')
@@ -758,13 +1116,29 @@ def wallet_action(action, cfg):
             result = request(cfg, '/api/v1/agent/wallet/stash-secret', {'secret': secret})
         finally:
             del secret
+        if not isinstance(result, dict):
+            raise SetupError('Invalid vault response; no wallet import was sent.')
         token = result.get('vault_token')
         if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9_-]{20,128}', token):
             raise SetupError('Invalid vault handoff; nothing was imported.')
         payload['vault_token'] = token
-    result = request(cfg, '/api/v1/agent/wallet/' + action, payload)
+    # Persist only public recovery metadata before sending a mutation. An uncertain
+    # response must never result in an automatic second create/import request.
+    if before_mutation is not None:
+        before_mutation()
+    if guided:
+        with flow_busy('Creating wallet…' if action == 'create' else 'Importing wallet…'):
+            result = request(cfg, '/api/v1/agent/wallet/' + action, payload)
+    else:
+        result = request(cfg, '/api/v1/agent/wallet/' + action, payload)
+    if not isinstance(result, dict):
+        raise SetupError('Invalid wallet result. Inspect saved wallets before retrying.')
     addr = address(result.get('address'))
     # Never print arbitrary server responses, vault tokens or reveal commands.
+    if guided:
+        print()
+        flow_success('Wallet created' if action == 'create' else 'Wallet imported')
+        return addr
     print(f'Wallet {action} completed. Public address: {addr}')
     if action == 'import':
         print('Step 4. Check the address above - it should match the wallet you intended to import.')
@@ -904,7 +1278,7 @@ def oauth_command(cfg, command, scopes, *, yes=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['banner', 'configure', 'check', 'markets-check', 'verify', 'guide', 'wallet', 'fingerprint', 'headers', 'register', 'chat', 'oauth-login', 'oauth-status', 'oauth-disconnect', 'oauth-setup'])
+    parser.add_argument('command', choices=['banner', 'configure', 'check', 'markets-check', 'verify', 'guide', 'onboard', 'onboard-finish', 'wallet', 'fingerprint', 'headers', 'register', 'chat', 'oauth-login', 'oauth-status', 'oauth-disconnect', 'oauth-setup'])
     parser.add_argument('--auth', choices=['api-key', 'x402', 'oauth'])
     parser.add_argument('--scope', action='append', choices=['backtests:run', 'signals:evaluate'], default=[])
     parser.add_argument('--api-key-stdin', action='store_true')
@@ -956,7 +1330,7 @@ def main():
                                          json.dumps(registration)], capture_output=True, check=False)
                 if result.returncode:
                     raise SetupError('Claude MCP registration failed; update Claude Code and retry setup.')
-                print('Registration saved. Start ./scripts/chat.sh; approve the header helper if prompted.')
+                print('Registration saved. Approve the header helper in Claude if prompted.')
             elif args.command == 'markets-check':
                 check_markets(cfg)
             elif args.command in {'check', 'verify'}:
@@ -988,6 +1362,10 @@ def main():
                             + ', '.join(sorted(required - names))
                         )
                 print('Local wallet access authenticated; unauthenticated access refused. No payment made.')
+            elif args.command == 'onboard-finish':
+                finish_onboarding(cfg)
+            elif args.command == 'onboard':
+                onboard(cfg, yes=args.yes)
             elif args.command == 'guide':
                 guide(cfg, yes=args.yes, docker=args.docker)
             elif args.command == 'wallet':

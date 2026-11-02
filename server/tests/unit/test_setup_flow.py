@@ -482,7 +482,7 @@ pathlib.Path(os.environ['CHAT_CAPTURE']).write_text(json.dumps(args))
         while proc.poll() is None and time.monotonic() < deadline:
             if select.select([master], [], [], 0.1)[0]:
                 try:
-                    output.extend(os.read(master, 65536))
+                    output += os.read(master, 65536)
                 except OSError:
                     break
         assert proc.wait(timeout=3) == 0, output.decode(errors='replace')
@@ -583,10 +583,10 @@ def test_wallet_mode_reports_unavailable_platform_but_requires_local_tools(check
     if missing_local_tool:
         assert result.returncode != 0
         assert 'Required onboarding tools are missing from discovery: import_wallet' in result.stdout
-        assert 'Done.' not in result.stdout
+        assert 'Setup complete' not in result.stdout
     else:
         assert result.returncode == 0, result.stdout + result.stderr
-        assert 'Done.' in result.stdout
+        assert 'Setup complete' in result.stdout
     requests = [json.loads(line)['path'] for line in (repo / 'requests.jsonl').read_text().splitlines()]
     assert '/api/v1/agent/signals?limit=1' not in requests
 
@@ -597,7 +597,7 @@ def test_shell_verification_failure_is_failure(checkout):
     result = run_setup(checkout, '--yes', '--no-mcp')
     assert result.returncode != 0
     assert 'Verification failed' in result.stderr
-    assert 'Done.' not in result.stdout
+    assert 'Setup complete' not in result.stdout
 
 
 def test_shell_lock_conflict_does_not_write_config(checkout):
@@ -761,6 +761,11 @@ def test_mcp_registration_uses_local_key_and_saved_port(checkout):
     assert denied.returncode != 0
     assert cfg['API_KEYS'] not in denied.stdout + denied.stderr
     assert cfg['API_KEYS'] not in result.stdout + result.stderr
+    assert 'Setup complete' in result.stdout
+    assert 'Run Claude from your agent folder:' in result.stdout
+    launch = next(line.strip() for line in result.stdout.splitlines() if line.strip().startswith('cd '))
+    assert shlex.split(launch) == ['cd', str(repo), '&&', 'claude']
+    assert './scripts/chat.sh' not in result.stdout
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX socketpair subprocess stdout')
@@ -832,7 +837,7 @@ def test_existing_install_always_offers_access_menu(config, monkeypatch, existin
     args.yes = False
     setup.configure(args)
     expects_key_menu = bool(existing_key) and selection in {'1', 'default'}
-    assert menu.call_count == (2 if expects_key_menu else 1)
+    assert menu.call_count == (2 if selection in {'1', 'default'} else 1)
     assert set(menu.call_args_list[0].args[1]) == {'1', '2', '3'}
     assert menu.call_args_list[0].args[2] == '1'
     if expects_key_menu:
@@ -991,7 +996,7 @@ def test_verifier_rejects_stopped_scheduler(checkout):
     result = run_setup(checkout, '--yes', '--no-mcp')
     assert result.returncode != 0
     assert 'Scheduler is not ready' in result.stdout + result.stderr
-    assert 'Done.' not in result.stdout
+    assert 'Setup complete' not in result.stdout
 
 
 @pytest.mark.parametrize('addr', [ADDR, '1' * 32])
@@ -1460,3 +1465,571 @@ def test_oauth_reconnect_reports_required_local_cleanup(monkeypatch, capsys):
     assert './scripts/setup.sh --oauth disconnect' in output
     assert 'Portal revocation alone does not clear the local cleanup receipt.' in output
     assert 'sign in again after cleanup' in output
+
+# Guided onboarding: isolated state and synthetic wallets only.
+@pytest.fixture
+def wizard(tmp_path, monkeypatch, interactive):
+    checkpoint = tmp_path / 'wallet-setup.json'
+    monkeypatch.setattr(setup, 'onboarding_path', lambda: checkpoint)
+    cfg = dict(wallet_config(), X402_NETWORK='eip155:8453', MANGROVE_ACCESS_MODE='x402')
+    wallets = []
+    monkeypatch.setattr(setup, 'check', lambda cfg: list(wallets))
+    return cfg, wallets, checkpoint
+
+
+@pytest.mark.parametrize('action', ['create', 'import'])
+def test_wizard_creates_or_imports_once_then_selects_same_wallet(wizard, monkeypatch, capsys, action):
+    cfg, wallets, checkpoint = wizard
+    choices = iter(['1' if action == 'create' else '2', '1'])
+    monkeypatch.setattr(setup, 'choose', lambda *a: next(choices))
+    responses = iter([action.upper()] + (['BACKED UP'] if action == 'import' else []) + ['', 'SELECT'])
+    monkeypatch.setattr('builtins.input', lambda _: next(responses))
+    monkeypatch.setattr(setup, 'hidden', lambda _: 'synthetic-secret')
+    real_write = setup.atomic_config
+    writes = []
+    monkeypatch.setattr(setup, 'atomic_config', lambda value, **kw: real_write(value, **kw) if kw else writes.append(dict(value)))
+    def wire(config, path, payload=None):
+        if path.endswith('/stash-secret'):
+            return {'vault_token': 'synthetic_token_1234567890'}
+        if path.endswith('/' + action):
+            assert json.loads(checkpoint.read_text())['stage'] == 'pending'
+            assert payload['chain_id'] == 8453 and payload['network'] == 'mainnet'
+            wallets.append(dict(address=ADDR, chain='evm', backup_confirmed_at='confirmed'))
+            return {'address': ADDR, 'vault_token': 'must-not-print'}
+        assert path.endswith('/x402/spend')
+        return {'cap_usd': 25, 'cap_source': 'config', 'exhausted': False}
+    request = Mock(side_effect=wire)
+    monkeypatch.setattr(setup, 'request', request)
+    setup.onboard(cfg)
+    assert sum(c.args[1].endswith('/' + action) for c in request.call_args_list) == 1
+    assert writes[0]['X402_PAYER_WALLET'] == ADDR
+    assert json.loads(checkpoint.read_text())['stage'] == 'selected'
+    assert checkpoint.stat().st_mode & 0o777 == 0o600
+    output = capsys.readouterr().out
+    assert 'synthetic-secret' not in output and 'must-not-print' not in output
+    assert 'testnet' not in output.lower()
+    assert '--wallet select' not in output and 'Run ./scripts/setup.sh --yes' not in output
+    assert 'synthetic_token' not in checkpoint.read_text()
+
+
+def test_backup_enter_does_not_confirm_and_commands_pin_target(wizard, monkeypatch, capsys):
+    cfg, wallets, _ = wizard
+    wallets.append(dict(address=ADDR, chain='evm', backup_confirmed_at=None))
+    monkeypatch.setattr(setup, 'ROOT', Path('/tmp/checkout with spaces'))
+    turns = []
+    def answer(prompt):
+        turns.append(prompt)
+        if len(turns) == 2:
+            wallets[0]['backup_confirmed_at'] = 'confirmed-in-private-terminal'
+        return ''
+    monkeypatch.setattr('builtins.input', answer)
+    monkeypatch.setattr(setup, 'request', Mock(side_effect=AssertionError('No mutation allowed')))
+    assert setup.wait_for_backup(cfg, ADDR)
+    assert len(turns) == 2
+    output = capsys.readouterr().out
+    assert "cd '/tmp/checkout with spaces'" in output
+    assert './scripts/reveal-secret.sh --setup' in output
+    assert './scripts/confirm-backup.sh --setup' in output
+    assert output.count('./scripts/reveal-secret.sh') == 1
+    assert 'Backup not confirmed yet' in output
+    assert 'SETUP_PYTHON=' not in output
+    assert 'WALLET_ADDRESS' not in output
+
+
+def test_backup_defer_and_resume_never_recreates(wizard, monkeypatch):
+    cfg, wallets, checkpoint = wizard
+    wallets.append(dict(address=ADDR, chain='evm', backup_confirmed_at=None))
+    setup.save_onboarding(dict(stage='wallet', action='create', network=cfg['X402_NETWORK'], address=ADDR))
+    choices = iter(['1', '2', '1'])  # resume, defer backup, resume next run
+    monkeypatch.setattr(setup, 'choose', lambda *a: next(choices))
+    action = Mock(side_effect=AssertionError('Must not repeat mutation'))
+    monkeypatch.setattr(setup, 'wallet_action', action)
+    setup.onboard(cfg)
+    assert checkpoint.exists() and not action.called
+    wallets[0]['backup_confirmed_at'] = 'confirmed'
+    monkeypatch.setattr(setup, 'wallet_action', Mock())
+    setup.onboard(cfg)
+    setup.wallet_action.assert_called_once_with('select', cfg, guided=True, selected_address=ADDR)
+    assert json.loads(checkpoint.read_text())['stage'] == 'selected'
+
+
+def test_uncertain_create_recovers_without_repeating(wizard, monkeypatch):
+    cfg, wallets, checkpoint = wizard
+    choices = iter(['1', '1', '1'])  # create, recover, choose known public address
+    monkeypatch.setattr(setup, 'choose', lambda *a: next(choices))
+    monkeypatch.setattr('builtins.input', lambda _: 'CREATE')
+    def action(name, config, **kwargs):
+        if name == 'create':
+            kwargs['before_mutation']()
+            wallets.append(dict(address=ADDR, chain='evm', backup_confirmed_at='confirmed'))
+            raise setup.SetupError('Response lost')
+        assert name == 'select' and kwargs['selected_address'] == ADDR
+    operation = Mock(side_effect=action)
+    monkeypatch.setattr(setup, 'wallet_action', operation)
+    setup.onboard(cfg)
+    assert [c.args[0] for c in operation.call_args_list] == ['create', 'select']
+    assert json.loads(checkpoint.read_text())['address'] == ADDR
+
+
+def test_pending_operation_without_wallet_can_defer(wizard, monkeypatch):
+    cfg, _, checkpoint = wizard
+    setup.save_onboarding(dict(stage='pending', action='import', network=cfg['X402_NETWORK']))
+    choices = iter(['1', '2'])
+    monkeypatch.setattr(setup, 'choose', lambda *a: next(choices))
+    mutation = Mock(side_effect=AssertionError('No repeated import'))
+    monkeypatch.setattr(setup, 'wallet_action', mutation)
+    setup.onboard(cfg)
+    assert json.loads(checkpoint.read_text())['stage'] == 'pending'
+    assert not mutation.called
+
+
+@pytest.mark.parametrize('mode,yes', [('x402', True), ('api-key', False), ('oauth', False)])
+def test_nonwallet_or_automated_setup_never_mutates(wizard, monkeypatch, mode, yes):
+    cfg, _, _ = wizard
+    cfg.update(MANGROVE_ACCESS_MODE=mode, MANGROVE_API_KEY='prod_existing' if mode == 'api-key' else '')
+    monkeypatch.setattr(setup, 'choose', Mock(side_effect=AssertionError('No prompts')))
+    monkeypatch.setattr(setup, 'request', Mock(side_effect=AssertionError('No requests')))
+    setup.onboard(cfg, yes=yes)
+
+
+def test_existing_valid_payer_does_not_prompt_for_budget(wizard, monkeypatch):
+    cfg, wallets, checkpoint = wizard
+    cfg['X402_PAYER_WALLET'] = ADDR
+    wallets.append(dict(address=ADDR, chain='evm', backup_confirmed_at='confirmed'))
+    choices = iter(['3', '1'])
+    monkeypatch.setattr(setup, 'choose', lambda *a: next(choices))
+    monkeypatch.setattr(setup, 'wallet_action', Mock(side_effect=AssertionError('No selection mutation')))
+    setup.onboard(cfg)
+    assert not checkpoint.exists()
+
+
+def test_import_address_rejection_keeps_wallet_but_not_payer(wizard, monkeypatch):
+    cfg, wallets, checkpoint = wizard
+    wallets.append(dict(address=ADDR, chain='evm', backup_confirmed_at='confirmed'))
+    setup.save_onboarding(dict(stage='wallet', action='import', network=cfg['X402_NETWORK'], address=ADDR))
+    choices = iter(['1', '2', '4'])  # resume, reject address, finish later
+    monkeypatch.setattr(setup, 'choose', lambda *a: next(choices))
+    monkeypatch.setattr(setup, 'wallet_action', Mock(side_effect=AssertionError('Do not select')))
+    setup.onboard(cfg)
+    assert wallets and not checkpoint.exists() and not cfg.get('X402_PAYER_WALLET')
+
+
+def test_invalid_cap_can_retry_without_recreating(wizard, monkeypatch):
+    cfg, wallets, checkpoint = wizard
+    wallets.append(dict(address=ADDR, chain='evm', backup_confirmed_at='confirmed'))
+    setup.save_onboarding(dict(stage='wallet', action='create', network=cfg['X402_NETWORK'], address=ADDR))
+    choices = Mock(return_value='1')
+    monkeypatch.setattr(setup, 'choose', choices)
+    operation = Mock(side_effect=[setup.SetupError('Invalid cap'), None])
+    monkeypatch.setattr(setup, 'wallet_action', operation)
+    setup.onboard(cfg)
+    assert [c.args[0] for c in operation.call_args_list] == ['select', 'select']
+    assert json.loads(checkpoint.read_text())['stage'] == 'selected'
+
+
+def test_selected_checkpoint_resumes_application_without_reapproval(wizard, monkeypatch):
+    cfg, wallets, checkpoint = wizard
+    cfg['X402_PAYER_WALLET'] = ADDR
+    wallets.append(dict(address=ADDR, chain='evm', backup_confirmed_at='confirmed'))
+    setup.save_onboarding(dict(stage='selected', action='create', network=cfg['X402_NETWORK'], address=ADDR))
+    monkeypatch.setattr(setup, 'wallet_action', Mock(side_effect=AssertionError('Already selected')))
+    setup.onboard(cfg)
+    assert checkpoint.exists()
+    setup.finish_onboarding(cfg)
+    assert not checkpoint.exists()
+
+
+@pytest.mark.parametrize('selection,expected', [('1', 'eip155:8453'), ('2', 'eip155:84532')])
+def test_existing_network_switch_is_explicit(config, monkeypatch, selection, expected):
+    cfg = setup.read_config(setup.EXAMPLE)
+    cfg.update(MANGROVE_ACCESS_MODE='x402', X402_NETWORK='eip155:84532',
+               X402_USDC_CONTRACT='original-test-contract')
+    config.write_text(json.dumps(cfg))
+    args = arguments()
+    args.auth, args.yes = 'x402', False
+    monkeypatch.setattr(setup, 'choose', lambda *a: selection)
+    setup.configure(args)
+    after = json.loads(config.read_text())
+    assert after['X402_NETWORK'] == expected
+    assert after['X402_USDC_CONTRACT'] == ('original-test-contract' if selection == '2' else
+                                           '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913')
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX interactive terminal')
+@pytest.mark.parametrize('action,foreground', [('create', False), ('import', False), ('create', True)])
+@pytest.mark.parametrize('terminal_type', ['dumb', 'xterm-256color'])
+def test_guided_shell_one_session_applies_wallet_and_restarts(checkout, action, foreground, terminal_type):
+    """Actual shell + PTY + synthetic HTTP wallet service. No real keys or payments."""
+    import pty
+    import select
+    import termios
+    import fcntl
+    repo, env = checkout
+    server = repo / 'server/uvicorn.py'
+    source = server.read_text()
+    source = source.replace('class Handler', '''with open('starts.jsonl', 'a') as f: f.write(json.dumps(cfg)+'\\n')
+class Handler''')
+    source = source.replace("        message = json.loads(self.rfile.read(int(self.headers['Content-Length'])))", '''        message = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        if self.path.startswith('/api/v1/agent/wallet/'):
+            with open('mutations.jsonl', 'a') as f: f.write(json.dumps({'path':self.path})+'\\n')
+            if self.path.endswith('/stash-secret'):
+                body = {'vault_token': 'synthetic_token_1234567890'}
+            else:
+                body = {'address': '0x' + '1'*40}
+                Path('wallets.json').write_text(json.dumps([dict(body, chain='evm', backup_confirmed_at='confirmed' if self.path.endswith('/import') else None)]))
+            self.send_response(200); self.end_headers(); self.wfile.write(json.dumps(body).encode()); return''')
+    source = source.replace("        else: body, code = [], 200 if valid else 401", '''        elif self.path.endswith('/wallet/list'):
+            body = json.loads(Path('wallets.json').read_text()) if Path('wallets.json').exists() else []
+            code = 200 if valid else 401
+        elif self.path.endswith('/x402/spend'):
+            body, code = {'cap_usd': 25, 'cap_source': 'config', 'exhausted': False}, 200
+        else: body, code = [], 200 if valid else 401''')
+    server.write_text(source)
+    env = dict(env, TERM=terminal_type)
+    master, terminal = pty.openpty()
+    def control_terminal():
+        os.setsid()
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+    args = ['bash', str(repo / 'scripts/setup.sh'), '--auth', 'x402', '--no-mcp', '--no-verify']
+    if foreground:
+        args.append('--foreground')
+    proc = subprocess.Popen(args, cwd=repo, env=env, stdin=terminal, stdout=terminal, stderr=terminal,
+                            preexec_fn=control_terminal)
+    output = b''
+    def expect(text, timeout=25):
+        nonlocal output
+        deadline = time.monotonic() + timeout
+        while text.encode() not in output:
+            if time.monotonic() > deadline:
+                pytest.fail('Missing prompt: ' + text + '\\n' + output.decode(errors='replace'))
+            if select.select([master], [], [], 0.1)[0]:
+                try:
+                    chunk = os.read(master, 65536)
+                except OSError:
+                    chunk = b''
+                if not chunk:
+                    pytest.fail('Unexpected exit: ' + output.decode(errors='replace'))
+                output += chunk
+    def send(text):
+        os.write(master, (text + '\n').encode())
+    try:
+        expect('Set up your payment wallet:')
+        send('1' if action == 'create' else '2')
+        expect('Type ' + action.upper())
+        send(action.upper())
+        if action == 'import':
+            expect('Type BACKED UP')
+            send('BACKED UP')
+            expect('Private key or recovery phrase (hidden; never paste into chat):')
+            send('synthetic-secret')
+            expect('Does this address match')
+            send('1')
+        else:
+            expect('Ready to continue?')
+            # This emulates the independently confirmed backup state, without
+            # revealing any secret in the test harness.
+            wallet_file = repo / 'wallets.json'
+            wallets = json.loads(wallet_file.read_text())
+            wallets[0]['backup_confirmed_at'] = 'confirmed-in-private-terminal'
+            wallet_file.write_text(json.dumps(wallets))
+            send('')
+        expect('Spending cap in USD [25]')
+        send('')
+        expect('Type SELECT')
+        send('SELECT')
+        expect('Wallet configuration complete.')
+        expect('Setup complete')
+        if foreground:
+            expect('Agent attached to this terminal')
+            proc.terminate()
+        # Keep draining the PTY after the completion heading: the launch
+        # instructions follow it, and terminal output can block process exit.
+        deadline = time.monotonic() + 15
+        while proc.poll() is None and time.monotonic() < deadline:
+            readable, _, _ = select.select([master], [], [], 0.1)
+            if readable:
+                try:
+                    output += os.read(master, 65536)
+                except OSError:
+                    break
+        proc.wait(timeout=5)
+        assert proc.returncode == (143 if foreground else 0), output.decode(errors='replace')
+        starts = [json.loads(line) for line in (repo / 'starts.jsonl').read_text().splitlines()]
+        assert len(starts) == 2 and starts[-1]['X402_PAYER_WALLET'] == ADDR
+        assert starts[-1]['X402_NETWORK'] == 'eip155:8453'
+        mutations = (repo / 'mutations.jsonl').read_text()
+        assert mutations.count('/' + action + '"') == 1
+        assert '/confirm-backup' not in mutations
+        assert not (repo / 'agent-data/wallet-setup.json').exists()
+        assert not (repo / 'agent-data/.setup.lock').exists()
+        assert b'synthetic-secret' not in output
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill(); proc.wait()
+        os.close(terminal)
+        os.close(master)
+
+
+def test_empty_saved_wallet_selection_returns_to_menu(wizard, monkeypatch, capsys):
+    cfg, _, checkpoint = wizard
+    choices = iter(['3', '4'])
+    monkeypatch.setattr(setup, 'choose', lambda *a: next(choices))
+    setup.onboard(cfg)
+    assert not checkpoint.exists()
+    assert 'No saved EVM wallet' in capsys.readouterr().out
+
+
+def test_checkpoint_symlink_is_rejected(wizard, tmp_path):
+    cfg, _, checkpoint = wizard
+    target = tmp_path / 'other.json'
+    target.write_text('{}')
+    checkpoint.symlink_to(target)
+    with pytest.raises(setup.SetupError, match='symlink'):
+        setup.onboard(cfg)
+    assert target.read_text() == '{}'
+
+
+def test_finish_does_not_discard_unfinished_or_other_mode_progress(wizard):
+    cfg, _, checkpoint = wizard
+    state = dict(stage='wallet', action='create', network=cfg['X402_NETWORK'], address=ADDR)
+    setup.save_onboarding(state)
+    setup.finish_onboarding(cfg)
+    assert checkpoint.exists()
+    state['stage'] = 'selected'
+    setup.save_onboarding(state)
+    cfg.update(X402_PAYER_WALLET=ADDR, MANGROVE_ACCESS_MODE='oauth')
+    setup.finish_onboarding(cfg)
+    assert checkpoint.exists()
+
+
+def test_docker_wizard_recreates_after_selection_without_recursive_setup(checkout):
+    """Shell orchestration only: a fake Docker executable never touches a daemon."""
+    repo, env = checkout
+    env.pop('BARE_PORT')
+    docker = repo / '.venv/bin/docker'
+    docker.write_text(f'#!{sys.executable}\nimport json,sys\nwith open("docker-calls.jsonl","a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n')
+    docker.chmod(0o755)
+    env['PATH'] = str(docker.parent) + os.pathsep + env['PATH']
+    helper = repo / 'scripts/setup_support.py'
+    hook = '''
+def check(cfg):
+    return []
+def check_markets(cfg):
+    pass
+def onboard(cfg, *, yes=False):
+    assert (ROOT / 'agent-data/.setup.lock/pid').exists()
+    cfg['X402_PAYER_WALLET'] = '0x' + '1'*40
+    atomic_config(cfg)
+    save_onboarding(dict(stage='selected', action='create', address=cfg['X402_PAYER_WALLET'], network=cfg['X402_NETWORK']))
+'''
+    helper.write_text(helper.read_text().replace("if __name__ == '__main__':", hook + "\nif __name__ == '__main__':"))
+    result = run_setup(checkout, '--docker', '--yes', '--no-mcp', '--no-verify')
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = [json.loads(line) for line in (repo / 'docker-calls.jsonl').read_text().splitlines()]
+    assert calls == [['info'], ['compose', 'up', '-d', '--build', '--force-recreate'],
+                     ['compose', 'up', '-d', '--force-recreate']]
+    assert 'Wallet configuration complete' in result.stdout
+    assert not (repo / 'agent-data/wallet-setup.json').exists()
+    assert not (repo / 'agent-data/.setup.lock').exists()
+
+
+@pytest.mark.parametrize('action', ['reveal', 'confirm'])
+def test_setup_backup_ignores_other_agent_environment(backup, tmp_path, monkeypatch, capsys, action):
+    root = tmp_path / 'checkout'
+    (root / 'server/src/config').mkdir(parents=True)
+    (root / 'agent-data').mkdir()
+    cfg = dict(wallet_config(), X402_NETWORK='eip155:8453')
+    (root / 'server/src/config/local-config.json').write_text(json.dumps(cfg))
+    (root / 'agent-data/wallet-setup.json').write_text(json.dumps({
+        'stage': 'wallet', 'network': 'eip155:8453', 'address': ADDR}))
+    monkeypatch.setattr(backup, 'ROOT', root)
+    monkeypatch.setenv('CONFIG_FILE', '/other-agent/config.json')
+    monkeypatch.setenv('LOCAL_AGENT_URL', 'https://untrusted.invalid')
+    monkeypatch.setattr(sys.stdout, 'isatty', lambda: True)
+    monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
+    monkeypatch.setattr('builtins.input', lambda _: 'BACKED UP')
+    wire = Mock(return_value={'address': ADDR, 'secret': 'synthetic private backup',
+                              'backup_confirmed_at': 'confirmed'})
+    monkeypatch.setattr(backup, 'request', wire)
+    backup.run(action, None, setup=True)
+    assert wire.call_args.args[0]['LOCAL_AGENT_URL'] == cfg['LOCAL_AGENT_URL']
+    assert ADDR in wire.call_args.args[1]
+    assert ('synthetic private backup' in capsys.readouterr().out) == (action == 'reveal')
+
+
+@pytest.mark.parametrize('stage,network', [('pending', 'eip155:8453'), ('wallet', 'eip155:84532')])
+def test_setup_backup_rejects_incomplete_or_changed_network(backup, tmp_path, monkeypatch, stage, network):
+    monkeypatch.setattr(backup, 'ROOT', tmp_path)
+    cfg = dict(wallet_config(), X402_NETWORK='eip155:8453')
+    monkeypatch.setattr(backup, 'read_config', Mock(side_effect=[cfg,
+        {'stage': stage, 'network': network, 'address': ADDR}]))
+    wire = Mock()
+    monkeypatch.setattr(backup, 'request', wire)
+    with pytest.raises(setup.SetupError, match='No matching wallet setup'):
+        backup.run('confirm', None, setup=True)
+    wire.assert_not_called()
+
+
+def test_setup_backup_does_not_confirm_without_acknowledgment(backup, monkeypatch):
+    cfg = dict(wallet_config(), X402_NETWORK='eip155:8453')
+    monkeypatch.setattr(backup, 'read_config', Mock(side_effect=[cfg,
+        {'stage': 'wallet', 'network': 'eip155:8453', 'address': ADDR}]))
+    monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
+    monkeypatch.setattr('builtins.input', lambda _: '')
+    wire = Mock()
+    monkeypatch.setattr(backup, 'request', wire)
+    with pytest.raises(setup.SetupError, match='not confirmed'):
+        backup.run('confirm', None, setup=True)
+    wire.assert_not_called()
+
+
+def test_wizard_step_plain_text_wraps_without_escape_codes(monkeypatch, capsys):
+    monkeypatch.setattr(setup, '_terminal_columns', lambda: 40)
+    monkeypatch.setenv('NO_COLOR', '1')
+    setup.flow_step(2, 'Save your backup', 'Keep this window open. In a second private terminal:')
+    output = capsys.readouterr().out
+    assert '\x1b' not in output
+    assert 'WALLET SETUP  2 / 4' in output
+    assert max(map(len, output.splitlines())) <= 40
+    assert '\n\n' in output
+
+
+@pytest.mark.parametrize('backed_up', [True, False])
+def test_saved_wallet_menu_can_switch_away_from_current(wizard, monkeypatch, backed_up):
+    cfg, wallets, checkpoint = wizard
+    other = '0x' + '2' * 40
+    cfg['X402_PAYER_WALLET'] = ADDR
+    wallets.extend([
+        dict(address=ADDR, chain='evm', backup_confirmed_at='confirmed'),
+        dict(address=other, chain='evm', backup_confirmed_at='confirmed' if backed_up else None),
+    ])
+    menus = []
+    answers = iter(['3', '2'])
+    def choose(prompt, options, default):
+        menus.append((prompt, options, default))
+        return next(answers)
+    monkeypatch.setattr(setup, 'choose', choose)
+    backup_check = Mock(return_value=backed_up)
+    monkeypatch.setattr(setup, 'wait_for_backup', backup_check)
+    select_wallet = Mock()
+    monkeypatch.setattr(setup, 'wallet_action', select_wallet)
+    setup.onboard(cfg)
+    options = menus[1][1]
+    assert 'Current' in options['1'] and 'Backed up' in options['1']
+    assert ADDR in options['1'] and other in options['2']
+    assert ('Backed up' if backed_up else 'Backup needed') in options['2']
+    backup_check.assert_called_once_with(cfg, other)
+    if backed_up:
+        select_wallet.assert_called_once_with('select', cfg, guided=True, selected_address=other)
+    else:
+        select_wallet.assert_not_called()
+    assert json.loads(checkpoint.read_text())['address'] == other
+
+
+def test_saved_wallet_menu_defaults_to_current_and_can_defer(monkeypatch):
+    other = '0x' + '2' * 40
+    wallets = [dict(address=ADDR, backup_confirmed_at=None),
+               dict(address=other, backup_confirmed_at='confirmed')]
+    menu = Mock(return_value='l')
+    monkeypatch.setattr(setup, 'choose', menu)
+    assert setup.choose_saved_wallet(wallets, payer=other.upper()) is None
+    assert menu.call_args.args[2] == '2'
+    assert 'Current' in menu.call_args.args[1]['2']
+
+
+@pytest.mark.parametrize('has_payer', [False, True])
+def test_wallet_action_menu_always_highlights_first_option(wizard, monkeypatch, has_payer):
+    cfg, wallets, _ = wizard
+    if has_payer:
+        cfg['X402_PAYER_WALLET'] = ADDR
+        wallets.append(dict(address=ADDR, chain='evm', backup_confirmed_at='confirmed'))
+    menu = Mock(return_value='4')
+    monkeypatch.setattr(setup, 'choose', menu)
+    setup.onboard(cfg)
+    menu.assert_called_once()
+    assert menu.call_args.args[2] == '1'
+    assert menu.call_args.args[1]['1'] == 'Create a new wallet'
+
+
+
+def test_unfinished_create_can_switch_to_import_without_deleting_wallet(wizard, monkeypatch):
+    cfg, wallets, checkpoint = wizard
+    other = '0x' + '2' * 40
+    cfg['X402_PAYER_WALLET'] = ADDR
+    wallets.append(dict(address=ADDR, chain='evm', backup_confirmed_at=None))
+    setup.save_onboarding(dict(stage='wallet', action='create', network=cfg['X402_NETWORK'], address=ADDR))
+    choices = iter(['2', '2', '1'])  # change setup option, import, verify imported address
+    monkeypatch.setattr(setup, 'choose', lambda *a: next(choices))
+    monkeypatch.setattr(setup, 'wait_for_backup', lambda *a: False)
+    def operation(action, config, **kwargs):
+        assert action == 'import'
+        kwargs['before_mutation']()
+        wallets.append(dict(address=other, chain='evm', backup_confirmed_at=None))
+        return other
+    action = Mock(side_effect=operation)
+    monkeypatch.setattr(setup, 'wallet_action', action)
+    setup.onboard(cfg)
+    action.assert_called_once()
+    assert [w['address'] for w in wallets] == [ADDR, other]
+    assert cfg['X402_PAYER_WALLET'] == ADDR  # switching menus doesn't authorize a payer change
+    saved = json.loads(checkpoint.read_text())
+    assert saved['action'] == 'import' and saved['address'] == other
+
+
+def test_unfinished_wallet_finish_later_preserves_checkpoint(wizard, monkeypatch):
+    cfg, _, checkpoint = wizard
+    setup.save_onboarding(dict(stage='wallet', action='create', network=cfg['X402_NETWORK'], address=ADDR))
+    before = checkpoint.read_bytes()
+    monkeypatch.setattr(setup, 'choose', lambda *a: '3')
+    mutation = Mock(side_effect=AssertionError('No wallet mutation'))
+    monkeypatch.setattr(setup, 'wallet_action', mutation)
+    setup.onboard(cfg)
+    assert checkpoint.read_bytes() == before
+    mutation.assert_not_called()
+
+
+def test_pending_mutation_does_not_offer_discard(wizard, monkeypatch):
+    cfg, _, checkpoint = wizard
+    setup.save_onboarding(dict(stage='pending', action='create', network=cfg['X402_NETWORK']))
+    menu = Mock(return_value='2')
+    monkeypatch.setattr(setup, 'choose', menu)
+    setup.onboard(cfg)
+    assert menu.call_args.args[0] == 'Recover the existing operation:'
+    assert 'Choose a different setup option' not in menu.call_args.args[1].values()
+    assert json.loads(checkpoint.read_text())['stage'] == 'pending'
+
+
+@pytest.mark.parametrize('value', ['', None, 'null', 'REPLACE_WITH_YOUR_DEV_OR_PROD_KEY'])
+def test_missing_api_key_explains_before_secret_prompt(config, monkeypatch, value):
+    cfg = setup.read_config(setup.EXAMPLE)
+    cfg.update(MANGROVE_API_KEY=value, MANGROVE_ACCESS_MODE='x402')
+    config.write_text(json.dumps(cfg))
+    menu = Mock(return_value='1')
+    monkeypatch.setattr(setup, 'choose', menu)
+    secret = Mock(return_value='prod_synthetic')
+    monkeypatch.setattr(setup, 'hidden', secret)
+    args = arguments()
+    args.auth, args.yes = 'api-key', False
+    setup.configure(args)
+    menu.assert_called_once_with('No MangroveAI API key is saved in this checkout.', {
+        '1': 'Enter a new API key', '2': 'Choose another access method'}, '1')
+    secret.assert_called_once()
+    assert json.loads(config.read_text())['MANGROVE_API_KEY'] == 'prod_synthetic'
+
+
+def test_missing_api_key_can_return_to_x402_without_secret_entry(config, monkeypatch):
+    setup.configure(arguments())
+    before = json.loads(config.read_text())
+    choices = iter(['1', '2', '2'])  # API key, go back, x402
+    monkeypatch.setattr(setup, 'choose', lambda *a: next(choices))
+    secret = Mock(side_effect=AssertionError('No key should be requested'))
+    monkeypatch.setattr(setup, 'hidden', secret)
+    args = arguments()
+    args.yes = False
+    setup.configure(args)
+    assert json.loads(config.read_text()) == before
+    secret.assert_not_called()

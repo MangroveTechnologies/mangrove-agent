@@ -105,7 +105,7 @@ Options:
   --api-key-stdin       Read upstream key from stdin (use a private pipe).
                         Interactive users should use --auth api-key instead.
   --wallet ACTION       Run an explicit user-requested create/import/list/select
-                        action, then exit. Normal setup only prints instructions.
+                        action, then exit. Interactive setup includes a guided wallet flow.
   --markets-url URL     Non-interactive: set MANGROVEMARKETS_BASE_URL.
                         Default: $MARKETS_URL_DEFAULT
   --yes                 Skip prompts; new installs default to x402. No wallet actions.
@@ -274,27 +274,39 @@ if [ "$MODE" != "docker" ] && [ -d agent-data ] && [ ! -w agent-data ]; then
 fi
 ok "agent-data/ ready"
 
+apply_runtime() {
 # -- 3. install + start the server ------------------------------------------
 
 if [ "$MODE" = "docker" ]; then
-  step "3. docker compose up -d --build"
   # Config is atomically replaced; recreate to refresh the single-file bind mount.
-  docker compose up -d --build --force-recreate >/dev/null
-  ok "container built + started"
-else
-  step "3. venv + pip install"
-  if [ ! -d .venv ]; then
-    PY="$(pick_python 11)" || fail "Python >= 3.11 is required (requirements.lock is resolved for 3.11+) but none was found. Install it (e.g. 'brew install python@3.12') and re-run."
-    "$PY" -m venv .venv
-    info "created .venv ($PY -> $("$PY" --version 2>&1))"
+  if [ "${RUNTIME_APPLIED:-no}" = no ]; then
+    step "3. Build and start Docker agent"
+    docker compose up -d --build --force-recreate >/dev/null
+  else
+    step "Apply settings to Docker agent"
+    docker compose up -d --force-recreate >/dev/null
   fi
-  # shellcheck disable=SC1091
-  source .venv/bin/activate
-  python3 -m pip install --quiet --upgrade pip
-  python3 -m pip install --quiet -r server/requirements.lock
-  ok "deps installed"
+  ok "container started"
+else
+  if [ "${RUNTIME_APPLIED:-no}" = no ]; then
+    step "3. venv + pip install"
+    if [ ! -d .venv ]; then
+      PY="$(pick_python 11)" || fail "Python >= 3.11 is required (requirements.lock is resolved for 3.11+) but none was found. Install it (e.g. 'brew install python@3.12') and re-run."
+      "$PY" -m venv .venv
+      info "created .venv ($PY -> $("$PY" --version 2>&1))"
+    fi
+    # shellcheck disable=SC1091
+    source .venv/bin/activate
+    python3 -m pip install --quiet --upgrade pip
+    python3 -m pip install --quiet -r server/requirements.lock
+    ok "deps installed"
+  fi
 
-  step "4. start uvicorn"
+  if [ "${RUNTIME_APPLIED:-no}" = yes ]; then
+    step "Restart local agent"
+  else
+    step "4. start uvicorn"
+  fi
   # Run from repo root so relative config paths (./agent-data/…) resolve
   # the same way Docker resolves them (CWD=/app, agent-data/ alongside src/).
   export PYTHONPATH="$REPO_ROOT/server:${PYTHONPATH:-}"
@@ -310,7 +322,7 @@ else
         *"uvicorn src.app:app --app-dir $REPO_ROOT/server --host 127.0.0.1 --port "*) ;;
         *) fail "Recorded PID cannot be identified as this setup's agent. Stop your existing agent manually, then rerun setup." ;;
       esac
-      if [ "$FOREGROUND" = "yes" ]; then
+      if [ "$FOREGROUND" = "yes" ] && [ "${CHILD_PID:-}" != "$OLD_PID" ]; then
         fail "An agent is already running. Stop it before using --foreground."
       fi
       if [ "$(cat agent-data/bare.fingerprint 2>/dev/null || true)" != "$FINGERPRINT" ]; then
@@ -381,7 +393,11 @@ fi
 
 # -- 4. wait for /health -----------------------------------------------------
 
-step "5. Verify local authenticated access"
+if [ "${RUNTIME_APPLIED:-no}" = yes ]; then
+  step "Check local access"
+else
+  step "5. Verify local authenticated access"
+fi
 READY="no"
 DEADLINE=$((SECONDS + 60))
 while [ "$SECONDS" -lt "$DEADLINE" ]; do
@@ -393,6 +409,24 @@ while [ "$SECONDS" -lt "$DEADLINE" ]; do
 done
 [ "$READY" = "yes" ] || fail "Local authenticated readiness failed. Inspect agent logs and config; MCP was not registered."
 ok "local authentication verified; no paid request made"
+if [ "$MODE" = "bare" ]; then
+  printf '%s\n' "$FINGERPRINT" > agent-data/bare.fingerprint
+fi
+RUNTIME_APPLIED=yes
+}
+apply_runtime
+
+# The parent owns the setup lock throughout wallet onboarding and application.
+# Do not recursively invoke setup.sh: that would conflict with this lock.
+ONBOARD_ARGS=(onboard)
+[ "$ASSUME_YES" = "no" ] || ONBOARD_ARGS+=(--yes)
+BEFORE_WALLET_CONFIG="$("$PY" "$SUPPORT" fingerprint)"
+"$PY" "$SUPPORT" "${ONBOARD_ARGS[@]}"
+if [ "$BEFORE_WALLET_CONFIG" != "$("$PY" "$SUPPORT" fingerprint)" ]; then
+  apply_runtime
+fi
+"$PY" "$SUPPORT" onboard-finish
+
 if [ "$OAUTH_ACTION" = login ]; then
   "$PY" "$SUPPORT" oauth-login ${OAUTH_ARGS[@]+"${OAUTH_ARGS[@]}"}
 else
@@ -400,9 +434,6 @@ else
   "$PY" "$SUPPORT" oauth-setup ${OAUTH_ARGS[@]+"${OAUTH_ARGS[@]}"}
 fi
 "$PY" "$SUPPORT" markets-check
-if [ "$MODE" = "bare" ]; then
-  printf '%s\n' "$FINGERPRINT" > agent-data/bare.fingerprint
-fi
 
 # -- 5. register MCP ---------------------------------------------------------
 
@@ -426,8 +457,21 @@ if [ "$DO_VERIFY" = "yes" ]; then
 fi
 
 echo
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
+  printf '\033[1;32m  Setup complete\033[0m\n'
+else
+  echo "  Setup complete"
+fi
+printf '  Local agent: %s\n\n' "$BASE_URL"
 if [ "$DO_MCP" = "yes" ]; then
-  echo "Claude MCP registration saved. Start ./scripts/chat.sh when ready."
+  if [ "$FOREGROUND" = "yes" ]; then
+    echo "  Open another terminal and run Claude from your agent folder:"
+  else
+    echo "  Run Claude from your agent folder:"
+  fi
+  echo
+  printf '    cd %q && claude\n' "$REPO_ROOT"
+  echo
 else
   echo "Local agent ready. Claude MCP registration was skipped."
   echo "Any command-capable AI client can load the shared instructions and use the agent in this session:"
@@ -437,11 +481,6 @@ else
   printf '  %q scripts/local_mcp_bridge.py --call discover_tools\n' "$CLIENT_PY"
   printf '  %q scripts/local_mcp_bridge.py --call status\n' "$CLIENT_PY"
 fi
-GUIDE_ARGS=(guide)
-[ "$ASSUME_YES" = "no" ] || GUIDE_ARGS+=(--yes)
-[ "$MODE" != "docker" ] || GUIDE_ARGS+=(--docker)
-"$PY" "$SUPPORT" "${GUIDE_ARGS[@]}"
-printf "${GREEN}Done.${CLR} Local agent authenticated at %s. Payment readiness is separate.\n" "$BASE_URL"
 if [ "$SKIP_TOUR" = "yes" ]; then
   echo "First-run tour suppressed; ask for it later if desired."
 fi

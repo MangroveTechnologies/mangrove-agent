@@ -196,7 +196,7 @@ When it's finished:
 - `./scripts/verify_quickstart.sh --bare` passed: local authentication and required local tools were checked. Unavailable remote tools are reported separately.
 - Claude registration is saved when available and not skipped; other clients use the command client or their own MCP connection.
 
-**After setup, continue with your chosen client** using the [user guide](docs/user-guide.md#come-back-or-switch-clients). Claude users can start `./scripts/chat.sh` for a session with shell/file tools disabled and only Mangrove MCP; see [restricted chat](docs/restricted-chat.md). In x402 mode, complete the printed payment-wallet instructions before requesting paid data or backtests. API-key users can paper-trade without a payment wallet. Simulated trades do not make upstream API calls free.
+**After setup, continue with your chosen client** using the [user guide](docs/user-guide.md#come-back-or-switch-clients). Claude users can start `./scripts/chat.sh` for a session with shell/file tools disabled and only Mangrove MCP; see [restricted chat](docs/restricted-chat.md). In x402 mode, complete the guided payment-wallet setup before requesting paid data or backtests. API-key users can paper-trade without a payment wallet. Simulated trades do not make upstream API calls free.
 
 ### Useful `./scripts/setup.sh` flags
 
