@@ -158,11 +158,37 @@ All three files live in `scripts/contracts/`:
 | File | Purpose |
 |------|---------|
 | `local.json` | Generated local input schemas, access labels and price bindings; no amounts |
-| `upstream.json` | Public MangroveAI input schemas and billing IDs from an anonymous `tools/list`, with its source URL and retrieval time; no amounts or descriptions |
+| `upstream.json` | Public MangroveAI input schemas and billing IDs from an anonymous `tools/list`, with its source URL and retrieval time; no pricing amounts or tool descriptions. Schema extensions are retained. |
 | `policy.json` | Reasons for tools without upstream pricing, reasons for unknown prices, and fingerprinted direct-SDK exceptions |
 
 `upstream.json` is an observation of one running receiver at one time. It does not assert
 that the receiver ran a particular commit or represents every hosted environment.
+
+The November 2, 2026 refresh observes the anonymous production `/mcp/` catalog:
+84 input schemas and 152 billing identifiers. It replaces the October 19 local
+receiver observation. Twelve names were added, including progressive discovery,
+Sweep operations and `get_x_post_counts`; `update_strategy_status`,
+`get_marketplace_strategy` and `search_marketplace` were absent. The existing
+`save_strategy` and `update_strategy` constraints now include the server's nested
+authoring schema, including descriptive metadata inside its schema extensions.
+These are observed differences, not instructions to restore missing tools or
+expose an alias.
+The two marketplace operations are platform-internal under MangroveAI's external
+MCP policy. The advertised X-post-count operation still has a server-side feature
+gate; discovery is not proof that this feature is enabled.
+
+Anonymous discovery does not mean anonymous execution. The snapshot is neither
+an API-key entitlement list nor the restricted OAuth `/mcp/connect` catalog, and
+does not prove a discovered operation is enabled, paid successfully or authorized
+for a caller. Billing identifiers can outlive a visible tool and are not tool
+counts or price promises. Runtime forwarding still discovers the configured
+receiver; it never loads this file as a fallback.
+
+For workflow guidance, load the receiver's current `strategy-management`,
+`sweeps` or `sweep-results` skill and check its required capabilities against live
+discovery. Do not copy those server workflows into this repository or infer an
+available replacement from a retired name. The snapshot refresh does not change
+local scheduling, wallet custody, payment recovery or execution policy.
 
 ### Live receiver comparison
 
