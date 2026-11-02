@@ -14,6 +14,7 @@ _OAUTH_UNSUPPORTED_LOCAL = frozenset({
     'agent_pause_paper_schedule', 'agent_get_paper_schedule',
     'agent_reconcile_paper_schedule', 'execute_swap', 'cex_sync_fills',
     'marketplace_prepare', 'marketplace_submit',
+    'agent_adopt_strategy', 'agent_activate_deployment', 'agent_get_deployment',
 })
 
 

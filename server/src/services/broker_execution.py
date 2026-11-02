@@ -19,7 +19,7 @@ from src.models.domain import Evaluation
 from src.services import broker_store as store
 from src.services import confirmed_execution, robinhood_client, trade_log
 from src.services.robinhood_venue import RobinhoodVenue
-from src.shared.errors import SdkError
+from src.shared.errors import AgentError, SdkError
 from src.shared.logging import get_logger
 
 _lock = threading.RLock()
@@ -81,15 +81,38 @@ async def preflight(venue, route):
 
 
 async def configure(venue, strategy_id, allocation):
+    from src.services import local_deployment
+
     config = VenueAllocation.model_validate(allocation)
     if config.max_order_usd > config.capital:
         raise SdkError("Per-order maximum cannot exceed committed capital.")
+    with store.connection() as conn:
+        if not conn.execute("SELECT 1 FROM strategies WHERE id=?", (strategy_id,)).fetchone():
+            raise SdkError("No local execution record. Adopt the saved server strategy first, then use its deployment_id.")
+    bound = local_deployment.binding(strategy_id)
+    if bound:
+        await anyio.to_thread.run_sync(lambda: local_deployment.validate(strategy_id))
+        if bound["asset_class"] != config.asset_class:
+            raise SdkError("Allocation asset class does not match the adopted strategy.")
     account = await venue.account()
     if config.asset_class == "crypto" and not account.get("rhc_account_number"):
         raise SdkError("Robinhood crypto account onboarding is incomplete.")
+    if bound:
+        snapshot = json.loads(bound["snapshot_json"])
+        await venue.quote({**account, "asset_class": config.asset_class}, snapshot["asset"])
     with store.connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT status FROM strategies WHERE id=?", (strategy_id,)).fetchone()
+        previous = conn.execute("SELECT * FROM broker_routes WHERE strategy_id=?", (strategy_id,)).fetchone()
+        if bound and previous and (
+            previous["account_number"] == account["account_number"]
+            and previous["rhs_account_number"] == account["rhs_account_number"]
+            and previous["asset_class"] == config.asset_class
+            and all(store.decimal(previous[key]) == getattr(config, key)
+                    for key in ("capital", "max_order_usd", "slippage_pct"))
+        ):
+            return {"strategy_id": strategy_id, **config.model_dump(mode="json"),
+                    "account": "****" + account["account_number"][-4:], "active": row["status"] == "live"}
         if not row or row["status"] not in {"draft", "inactive"}:
             raise SdkError("Configure the execution venue while the strategy is draft or inactive.")
         if (
@@ -189,6 +212,18 @@ async def _tick(venue, strategy_id):
     row = strategy_service._get_row(strategy_id)
     if row["status"] != "live" and row["exit_only_mode"] != "live":
         return
+    from src.services import local_deployment
+    bound = local_deployment.binding(strategy_id)
+    if bound:
+        # Revalidate ownership, archive status, definition and passing backtest
+        # before evaluation or submission. A failed read never uses stale rules.
+        try:
+            await anyio.to_thread.run_sync(lambda: local_deployment.validate(strategy_id, require_ready=True))
+        except Exception:
+            # Already inside the broker lock; do not reacquire it in another
+            # worker. Preserve fills and pending orders while stopping new work.
+            strategy_service.pause_for_portfolio(strategy_id)
+            raise
     portfolio = portfolio_risk_service.check_before_live_execution()
     row = strategy_service._get_row(strategy_id)
     pending = store.orders(strategy_id, pending=True)
@@ -203,6 +238,8 @@ async def _tick(venue, strategy_id):
     state["allow_entries"] = bool(portfolio["allowed"] and row["status"] == "live" and not pending and history_complete)
     delivered, bootstrap = confirmed_execution.close_delivery(state, closes, complete=history_complete)
     payload = strategy_service._stateless_strategy_dict(row)
+    if bound:
+        payload = {**json.loads(bound["snapshot_json"]), "name": row["name"]}
     payload["closed_positions"] = delivered
     payload["closed_positions_bootstrap_complete"] = bootstrap
     payload["execution_state"] = state
@@ -363,7 +400,7 @@ def tick(strategy_id):
     except Exception as exc:
         message = (
             exc.message
-            if isinstance(exc, SdkError)
+            if isinstance(exc, AgentError)
             else "Broker execution stopped; inspect venue status and order journal."
         )
         trade_log.log_evaluation(

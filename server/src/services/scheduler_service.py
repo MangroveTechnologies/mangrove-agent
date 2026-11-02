@@ -121,6 +121,8 @@ def _on_job_event(event: Any) -> None:
 def start() -> None:
     """Start the scheduler. Called from the FastAPI lifespan startup."""
     sched = get_scheduler()
+    from src.services.local_deployment import restore_jobs
+    restore_jobs()
     sched.add_job('src.services.paper_schedule_service:dispatch', trigger='interval', seconds=5,
                   id='paper-dispatch', replace_existing=True, coalesce=True, max_instances=1)
     sched.add_job('src.services.broker_execution:reconcile_pending', trigger='interval', seconds=15,

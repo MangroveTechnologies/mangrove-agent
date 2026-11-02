@@ -16,6 +16,9 @@ class PriceBinding:
 
 
 TOOL_PRICING: dict[str, PriceBinding] = {
+    "agent_adopt_strategy": PriceBinding(("rest:strategy_detail",)),
+    "agent_configure_execution_venue": PriceBinding(("rest:strategy_detail",), variable=True),
+    "agent_activate_deployment": PriceBinding(("rest:strategy_detail", "rest:managers_evaluate_by_object"), variable=True),
     "agent_start_paper_schedule": PriceBinding(("rest:strategy_status_update", "rest:managers_evaluate_by_id"), variable=True),
     "agent_pause_paper_schedule": PriceBinding(("rest:strategy_status_update",)),
     "agent_get_paper_schedule": PriceBinding(("rest:strategy_detail",), variable=True),

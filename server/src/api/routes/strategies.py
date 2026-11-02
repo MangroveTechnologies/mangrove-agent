@@ -1,6 +1,7 @@
 """Strategy routes — auth-gated. All thin wrappers over strategy_service."""
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,6 +21,42 @@ router = APIRouter(
     dependencies=[Depends(require_api_key)],
     tags=["strategies"],
 )
+
+
+class AdoptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    server_strategy_id: UUID
+    asset_class: Literal["crypto", "equity"]
+    rebind: bool = False
+
+
+class DeploymentConfirmation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm: bool = False
+
+
+@router.post('/deployments')
+async def adopt_strategy(req: AdoptRequest):
+    from src.services import local_deployment
+    return await run_in_threadpool(local_deployment.adopt, str(req.server_strategy_id), req.asset_class, req.rebind)
+
+
+@router.get('/deployments/{deployment_id}')
+async def get_deployment(deployment_id: UUID):
+    from src.services import local_deployment
+    return await run_in_threadpool(local_deployment.inspect, str(deployment_id))
+
+
+@router.post('/deployments/{deployment_id}/activate')
+async def activate_deployment(deployment_id: UUID, req: DeploymentConfirmation):
+    from src.services import local_deployment
+    return await run_in_threadpool(local_deployment.activate, str(deployment_id), req.confirm)
+
+
+@router.post('/deployments/{deployment_id}/stop')
+async def stop_deployment(deployment_id: UUID, req: DeploymentConfirmation):
+    from src.services import local_deployment
+    return await run_in_threadpool(local_deployment.stop, str(deployment_id), req.confirm)
 
 
 @router.post("/autonomous", include_in_schema=False)

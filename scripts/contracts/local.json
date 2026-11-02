@@ -1,5 +1,24 @@
 {
   "bindings": {
+    "agent_activate_deployment": {
+      "meters": [
+        "rest:strategy_detail",
+        "rest:managers_evaluate_by_object"
+      ],
+      "variable": true
+    },
+    "agent_adopt_strategy": {
+      "meters": [
+        "rest:strategy_detail"
+      ],
+      "variable": false
+    },
+    "agent_configure_execution_venue": {
+      "meters": [
+        "rest:strategy_detail"
+      ],
+      "variable": true
+    },
     "agent_get_paper_schedule": {
       "meters": [
         "rest:strategy_detail"
@@ -27,6 +46,54 @@
     }
   },
   "tools": {
+    "agent_activate_deployment": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "type": "boolean"
+          },
+          "deployment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deployment_id"
+        ],
+        "type": "object"
+      }
+    },
+    "agent_adopt_strategy": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "asset_class": {
+            "type": "string"
+          },
+          "rebind": {
+            "default": false,
+            "type": "boolean"
+          },
+          "server_strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_class",
+          "server_strategy_id"
+        ],
+        "type": "object"
+      }
+    },
     "agent_cancel_venue_order": {
       "access": "auth",
       "inputSchema": {
@@ -87,6 +154,24 @@
         "required": [
           "market_context",
           "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
+    "agent_get_deployment": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "deployment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deployment_id"
         ],
         "type": "object"
       }
@@ -235,6 +320,28 @@
           "interval_seconds",
           "max_evaluations",
           "strategy_id"
+        ],
+        "type": "object"
+      }
+    },
+    "agent_stop_deployment": {
+      "access": "auth",
+      "inputSchema": {
+        "properties": {
+          "api_key": {
+            "default": "",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "type": "boolean"
+          },
+          "deployment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deployment_id"
         ],
         "type": "object"
       }

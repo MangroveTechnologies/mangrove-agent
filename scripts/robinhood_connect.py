@@ -3,14 +3,83 @@
 import asyncio
 import json
 import os
+import select
+import sys
 import threading
 import webbrowser
+from contextlib import suppress
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from src.config import app_config
 from src.services.robinhood_client import CALLBACK, catalog, session
+
+
+def show_pending_menu():
+    # A single available action needs no navigation; Enter selects it. Keep
+    # the layout consistent with setup, without blocking OAuth completion.
+    try:
+        "◆│●".encode(sys.stdout.encoding or "ascii")
+        symbols = ("◆", "│", "●")
+    except UnicodeEncodeError:
+        symbols = ("?", "|", ">")
+    title, bar, selected = symbols
+    if sys.stdout.isatty() and os.environ.get("TERM", "dumb") != "dumb" and "NO_COLOR" not in os.environ:
+        selected = f"\x1b[34m{selected}\x1b[0m"
+    print(f"{title}  Complete Robinhood login in your browser\n"
+          f"{bar}  {selected} Skip for now", flush=True)
+
+
+async def wait_for_skip():
+    """Read terminal input without leaving a blocking reader after OAuth finishes."""
+    pending = ""
+    while True:
+        if os.name == "nt":
+            import msvcrt
+
+            if msvcrt.kbhit():
+                char = msvcrt.getwch()
+                if char in {"\r", "\n"}:
+                    print(flush=True)
+                    if pending.strip().lower() in {"", "skip", "1"}:
+                        return
+                    pending = ""
+                elif char == "\b":
+                    pending = pending[:-1]
+                elif char.isprintable():
+                    pending += char
+                    print(char, end="", flush=True)
+        elif select.select([sys.stdin], [], [], 0)[0]:
+            line = sys.stdin.readline()
+            if not line or line.strip().lower() in {"", "skip", "1"}:
+                return
+            print("Press Enter to skip.", flush=True)
+        await asyncio.sleep(0.1)
+
+
+async def run_connection():
+    if not sys.stdin.isatty():
+        await connect()
+        return 0
+    show_pending_menu()
+    connection = asyncio.create_task(connect())
+    skip = asyncio.create_task(wait_for_skip())
+    try:
+        done, _ = await asyncio.wait({connection, skip}, return_when=asyncio.FIRST_COMPLETED)
+        # Prefer a completed connection if login and terminal input race.
+        if connection in done:
+            await connection
+            return 0
+        await skip
+        connection.cancel()
+        with suppress(asyncio.CancelledError):
+            await connection
+        return 2
+    finally:
+        for task in (connection, skip):
+            task.cancel()
+        await asyncio.gather(connection, skip, return_exceptions=True)
 
 
 async def connect():
@@ -43,9 +112,10 @@ async def connect():
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     async def redirect(url):
-        print("Authorize Mangrove Agent in the Robinhood browser window. No trades will be placed.", flush=True)
         if not webbrowser.open(url):
             print("Open this authorization URL in your private browser:\n" + url, flush=True)
+            if sys.stdin.isatty():
+                show_pending_menu()
 
     async def callback():
         return await asyncio.wait_for(response, timeout=300)
@@ -65,7 +135,7 @@ async def connect():
 
 if __name__ == "__main__":
     try:
-        asyncio.run(connect())
+        raise SystemExit(asyncio.run(run_connection()))
     except KeyboardInterrupt:
         print("Authorization canceled. No trades placed.")
         raise SystemExit(1)

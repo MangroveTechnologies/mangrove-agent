@@ -18,6 +18,9 @@ def scheduler_in_tmp(tmp_path, monkeypatch):
 
     monkeypatch.setattr(app_config, "DB_PATH", str(db_file))
     ss.reset_scheduler_cache()
+    from src.shared.db import sqlite as db
+    db.reset_connection()
+    db.init_db()
     ss.start()  # get_jobs() needs a running (or at least initialized) scheduler
     yield ss
     ss.reset_scheduler_cache()
