@@ -1,35 +1,101 @@
 # Setup with an API key or x402
 
-`./scripts/setup.sh` is the setup entry point for both ways of paying for MangroveAI. Claude Code plugin installation is a separate, API-key-only path. For a client-neutral walkthrough, start with the [user guide](user-guide.md).
+Run `./scripts/setup.sh` from your clone. This is the setup entry point for both
+access methods. Plugin installation is a separate API-key path. For a client-neutral
+walkthrough, start with the [user guide](user-guide.md).
 
-## Choosing an access mode
+On interactive setup runs, choose API-key, x402, or browser sign-in access.
+API-key input is hidden. Fresh x402 installations use Base Mainnet and USDC on Base;
+an existing different network is changed only after an explicit menu choice.
+The script always creates or preserves a separate local credential for the AI client's
+access to the agent. Omitting an upstream key never disables local authentication.
+Select either mode from this menu, or use `--auth api-key` / `--auth x402` to
+choose explicitly without the menu. Invalid API keys never fall back to payment.
+The choice is saved as `MANGROVE_ACCESS_MODE` (`api-key` or `x402`). Switching to
+x402 preserves a previously saved upstream key but does not send it to MangroveAI
+or Markets for these calls. Switching back can reuse it. Existing configurations
+without this setting continue to select API-key mode when a key is present.
+Local wallets, approvals, payment history and the AI client's local credential are not
+reset by changing access mode.
 
-MangroveAI access works in one of two modes:
+`--yes` preserves existing settings; on a fresh install it selects x402 and defers
+wallet onboarding. It never creates/imports a wallet, confirms a backup or makes
+a payment. Use the hidden interactive prompt for API keys. The old `--api-key KEY`
+argument is rejected because it exposed keys in process arguments and shell history.
+Automation can pipe a key from a private secret source into `--api-key-stdin --yes`;
+never type a literal key into a shell command.
 
-- **API key.** You hold a MangroveAI API key and calls count against its allowance.
-- **x402.** The agent pays per call in USDC from a local wallet you control. There is no signup and no upstream key.
+Claude registration uses a dynamic `headersHelper` to read the local credential
+at connection time. No key is passed to the Claude CLI or stored in its server
+registration. Use a current Claude Code version, restart it in this checkout, and
+approve the helper/workspace if prompted. The helper requires the matching MCP
+server name and URL; if you change the local port, rerun setup to register it.
+Its credential output is restricted to subprocess pipes or sockets (Claude's
+runtime may use either); terminals and regular files are rejected. This checks
+the output channel and configured target, not the identity of the receiving process.
+After setup or a helper update, reconnect from `/mcp` and ask for your x402 spend
+status. That local read should work without shell commands or an explicit key
+argument. A connected status alone does not prove authenticated tool execution.
+See [Claude's dynamic-header documentation](https://code.claude.com/docs/en/mcp#use-dynamic-headers-for-custom-authentication).
 
-On an interactive run, setup asks which mode you want. The menu highlights the API-key option, so press Enter to take it or move the selection to choose a wallet. API-key input is hidden, and when a key is already saved, setup asks whether to keep it or enter a new one. To skip the menu, pass `--auth api-key` or `--auth x402`. The choice is saved as `MANGROVE_ACCESS_MODE` (`api-key` or `x402`) in `server/src/config/local-config.json`.
+The explicit reveal command only writes secrets to a terminal; redirecting its
+output is refused. Use a private terminal and clear scrollback after backing up.
+Verification checks local authentication, required tools and scheduler readiness.
+It can read upstream discovery and, in API-key mode, verify the configured key.
+It does not sign payments or establish wallet/payment readiness.
 
-- `--yes` skips every prompt and keeps the saved mode. On a fresh install it selects x402 and defers wallet setup. If an older configuration has no saved mode but contains a key, it selects API-key mode.
-- API-key mode never falls back to paying from a wallet. A rejected key is an error, not a trigger for payment.
-- Switching to x402 keeps a previously saved upstream key in the config but does not send it to MangroveAI or MangroveMarkets for paid calls. Switching back can reuse it.
-- Changing the mode does not reset local wallets, approvals, payment history or the AI client's local credential.
-- The old `--api-key KEY` argument is rejected because it exposed keys in process arguments and shell history. Automation can pipe a key from a private secret source into `--api-key-stdin --yes`; never type a literal key into a shell command.
+## Guided x402 wallet setup
 
-Setup always creates or preserves a separate local credential (`API_KEYS`) that your AI client uses to reach the agent. Omitting an upstream key never disables local authentication.
+Interactive setup keeps one session open through wallet creation/import, backup,
+payer review, and applying settings. Fresh installations use **Base Mainnet**;
+x402 payments spend real USDC. Creating/importing a wallet makes no payment.
 
-## How Claude connects
+- **Create:** select Create, review the network, and type `CREATE`. Setup creates
+  the wallet directly and displays its public address. Keep setup open while you
+  run the displayed reveal command in a separate private terminal, save the
+  secret, and run the displayed backup-confirmation command. The short `reveal-secret.sh --setup` and `confirm-backup.sh --setup` commands
+  read the wallet address and local URL from this checkout’s setup progress,
+  ignoring environment overrides from other agents. The confirmation command
+  shows the address and asks you to type `BACKED UP`. Return to the wizard and
+  choose **Check backup and continue** using the arrow keys and Enter. Setup
+  verifies the recorded confirmation; Enter alone never confirms backup.
+- **Import:** select Import, type `IMPORT`, acknowledge `BACKED UP` only if the
+  secret is saved outside the agent, and enter it at the hidden terminal prompt.
+  Confirm that the derived public address matches your intended wallet. An
+  already-confirmed backup skips the reveal step. Existing imports that still
+  need backup confirmation follow the same private-terminal backup flow.
+- **Use saved:** choose from all saved EVM wallets. Each entry shows its address,
+  backup status, and whether it is the current payer. The current payer is
+  highlighted by default. Keeping it preserves spending settings without another
+  budget prompt; choosing another wallet completes any missing backup and opens
+  payment-settings review.
+- **Finish later:** complete local installation without enabling a new payer.
 
-Claude registration uses a dynamic `headersHelper` that reads the local credential at connection time, so no key is passed to the Claude CLI or stored in its server registration. Use a current Claude Code version, restart it in this checkout, and approve the helper or workspace if prompted. The helper requires the matching MCP server name and URL, so if you change the local port, rerun setup to register it. It prints the credential only to a subprocess pipe or socket and rejects terminals and regular files. That checks the output channel and the configured target, not the identity of the receiving process.
+The new/imported address is carried into payment-settings review automatically.
+Review the effective spending cap and type `SELECT` to save. Setup applies the
+configuration, restarts its agent if necessary, and verifies local authenticated
+access without asking you to rerun commands. Existing spending records and
+budget authorizations are preserved. Funding and paid access are not verified;
+setup never transfers funds or makes a paid test call.
 
-After setup or a helper update, reconnect from `/mcp` and ask for your x402 spend status. That local read works without shell commands or an explicit key argument. A connected status alone does not prove authenticated tool execution. See Claude's [dynamic-header documentation](https://code.claude.com/docs/en/mcp#use-dynamic-headers-for-custom-authentication).
+Interrupted flows use `agent-data/wallet-setup.json`, which contains only
+public wallet/workflow metadata, never secrets or vault tokens. When a saved
+wallet still needs setup, choose **Resume this wallet**, **Choose a different
+setup option**, or **Finish later**. Choosing a different option returns to the
+Create/Import/Use saved menu; it dismisses only the setup checkpoint and keeps
+the wallet, backup status, payer settings, and spending history intact. If a create/import
+response is uncertain, setup does not repeat the mutation: it asks you to refresh
+saved wallets and identify the intended public address. If none appears, finish
+later and investigate the operation before retrying. Changing access modes does
+not discard unfinished wallet progress. `--yes` never creates/imports a wallet.
 
-## Wallet instructions for x402
+### Standalone wallet commands
 
-After the server is authenticated and Claude registration is saved (if Claude is installed), an interactive x402 run offers four choices: create a new wallet, import an existing wallet, use a wallet already saved in the agent, or finish later. Choosing one only prints instructions. Run the commands yourself in a private terminal in this checkout. Never give any AI client a private key or recovery phrase.
-
-The `--wallet` commands below are separate from a normal setup run. They call the agent's local wallet services, do not install packages or restart the agent, and read the configured local URL, including a custom port. Each must be run on its own (not combined with other setup options), in an interactive terminal, and only in x402 mode; they refuse to run while an upstream API key is selected.
+The following commands remain available for manual administration outside the
+wizard. They call existing local wallet services and do not install packages or
+restart the agent. They read the configured local URL, including a custom port.
+Do not run a second `setup.sh` while the wizard owns the setup lock. Backup reveal
+and confirmation commands can run while the wizard waits.
 
 ### Create a wallet
 

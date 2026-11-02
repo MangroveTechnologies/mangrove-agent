@@ -526,6 +526,7 @@ class WalletListItem(BaseModel):
     label: str | None = None
     created_at: datetime
     backup_confirmed_at: datetime | None = None
+    is_configured_x402_payer: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -941,6 +942,9 @@ def require_backup_confirmed(address: str) -> None:
 
 def list_wallets() -> list[WalletListItem]:
     """Return all stored wallets. Secrets are NEVER returned."""
+    from src.services.payment_identity import configured_payer_address
+
+    payer = configured_payer_address()
     rows = get_connection().execute(
         """SELECT address, chain, network, chain_id, label, created_at,
                   backup_confirmed_at
@@ -949,6 +953,7 @@ def list_wallets() -> list[WalletListItem]:
     return [
         WalletListItem(
             address=r["address"],
+            is_configured_x402_payer=bool(payer and r["chain"] == "evm" and r["address"].lower() == payer.lower()),
             chain=r["chain"],
             network=r["network"],
             chain_id=r["chain_id"],

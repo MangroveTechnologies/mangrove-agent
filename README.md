@@ -102,6 +102,7 @@ When it finishes:
 - `setup.sh` has run `scripts/verify_quickstart.sh`, which checks authenticated local access, scheduler readiness and that the onboarding tools are discoverable.
 - Claude registration is saved when the CLI is available and you did not pass `--no-mcp`. Other clients use the command client or their own MCP connection.
 
+**After setup, continue with your chosen client** using the [user guide](docs/user-guide.md#come-back-or-switch-clients). For Claude, run the command displayed at the end of setup—it changes to your checkout folder and launches `claude`. In x402 mode, complete the guided payment-wallet setup before requesting paid data or backtests. API-key users can paper-trade without a payment wallet. Simulated trades do not make upstream API calls free.
 Continue with your client using the [user guide](docs/user-guide.md#come-back-or-switch-clients). Claude users can run `./scripts/chat.sh` for a session with shell and file tools disabled and only the Mangrove MCP server; see [restricted chat](docs/restricted-chat.md). In x402 mode, finish the printed payment-wallet steps before you request paid data or backtests ([details](docs/setup-x402.md)). With an API key you can paper trade without a payment wallet. Paper trades are simulated, but the upstream data and evaluation calls behind them still count against your API-key allowance or cost x402 payments.
 
 ```

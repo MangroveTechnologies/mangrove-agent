@@ -620,7 +620,9 @@ def _register_x402_spend(server: FastMCP) -> None:
             # payloads into one namespace works until the day a field name
             # appears in both, at which point one silently wins and no test
             # notices.
-            return json.dumps({"budget": status, **payments})
+            payer = status.pop("payer")
+            budget_scope = status.pop("budget_scope")
+            return json.dumps({"budget": status, "budget_scope": budget_scope, "payer": payer, **payments})
         except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
             return _handle_agent_error(e)
 
