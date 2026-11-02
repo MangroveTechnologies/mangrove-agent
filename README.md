@@ -181,7 +181,7 @@ The local agent exposes `list_tools` for its own MCP catalog, including local he
 | Backtests | `run_backtest`, `get_backtest`, `get_backtest_trades`, `list_backtests`, `get_benchmark`, `screen_candidates` |
 | Sweeps | `find_sweep_runs`, `size_sweep`, `create_sweep`, `launch_sweep`, `list_sweeps`, `get_sweep`, `pause_sweep` |
 | Signals and regime | `list_signals`, `get_signal`, `search_signals`, `match_signals`, `query_signal_behavior`, `get_market_regime` |
-| Market, on-chain, DeFi, social | `get_ohlcv`, `get_market_data`, `get_trending`, `get_token_holders`, `get_smart_money_sentiment`, `get_chain_tvl`, `get_social_sentiment`, and more |
+| Market, on-chain, DeFi, social | `get_ohlcv`, `get_market_data`, `get_trending`, `get_token_holders`, `get_smart_money_sentiment`, `get_chain_tvl`, `get_social_sentiment`, `get_x_post_counts`, and more |
 | Knowledge base | `kb_search`, `kb_glossary_get`, `kb_get_document`, `query_knowledge` |
 | Marketplace | `search_marketplace`, `get_marketplace_strategy` |
 | Your MangroveAI positions and trades | `list_positions`, `list_trades` |

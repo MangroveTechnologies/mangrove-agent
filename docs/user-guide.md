@@ -123,6 +123,32 @@ discovery through `discover_tools`; the agent forwards the request. See the
 If the configured server does not advertise `discover_tools`, the client must
 report the limitation and use the host's own tool search.
 
+## Example: strategies on X attention
+
+Three signals in the `social` category read how much people post about an asset on X,
+not what they say: `x_post_count_spike`, `x_attention_elevated` and
+`x_attention_price_divergence`. Ask in plain words:
+
+> Which signals use X post counts? Show me BTC's hourly X post counts for the last week,
+> then backtest a BTC strategy that enters on an X post count spike.
+
+The agent finds them with `list_signals` (category `social`) or `search_signals`, reads
+counts with `get_x_post_counts` (1 to 31 days per read, hourly or daily), and backtests
+with `run_backtest`. All three signals take `x_query`, either `all` or `en_original`
+(English, no reposts); a strategy uses one value across its X rules. The counts are
+hourly, stamped on the bar open time, and work on any timeframe. A bucket becomes visible
+to a bar only once it has ended plus a 5-minute ingest lag before that bar closes, live
+and in backtests alike, so results never use future posts. Sub-hourly bars reuse the
+latest visible hourly bucket, and any gap makes the signal evaluate False.
+
+MangroveAI fetches the counts on demand from the X API and caches them. Each X request
+is billed: $0.005 for the last 7 days and $0.010 for the full archive, and one request
+covers up to 31 days of hourly buckets. Repeated reads and backtests over cached ranges
+cost nothing. Backfills stop when the shared credit balance falls under a floor. If X is
+not configured on the service, `get_x_post_counts` returns 503 and `run_backtest` rejects
+the X rules. Depleted credits, a rate limit or a gap make the X rules evaluate False and
+the condition is logged.
+
 ## If something is unavailable
 
 - **Local status fails:** the connection is not verified. Keep the checkout and
