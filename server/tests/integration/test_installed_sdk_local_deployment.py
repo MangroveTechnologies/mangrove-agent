@@ -1,8 +1,10 @@
 """Exercise the installed SDK and Agent adapter against a loopback HTTP API."""
 
 import copy
+import ipaddress
 import json
 import os
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -21,6 +23,23 @@ FIXTURE = Path(__file__).parents[1] / "fixtures" / "local-deployment-not-ready.j
 @pytest.fixture
 def installed_api(monkeypatch):
     """Only the API response is synthetic; SDK serialization and HTTP are real."""
+    connect = socket.socket.connect
+    resolve = socket.getaddrinfo
+
+    def local_address(host):
+        assert ipaddress.ip_address(host).is_loopback, "External SDK connection denied"
+
+    def local_connect(connection, address):
+        if isinstance(address, tuple):
+            local_address(address[0])
+        return connect(connection, address)
+
+    def local_resolve(host, *args, **kwargs):
+        local_address(host)
+        return resolve(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "connect", local_connect)
+    monkeypatch.setattr(socket, "getaddrinfo", local_resolve)
     payload = json.loads(FIXTURE.read_text())
     requests = []
 

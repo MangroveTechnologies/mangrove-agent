@@ -67,3 +67,44 @@ jobs:
           ENVIRONMENT: test
           MANGROVE_LOCAL_DEPLOYMENT_EXPECTED: absent
         run: cd server && pytest tests/ -v
+
+  prepared-sdk-compatibility:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install released default dependencies
+        run: pip install -r server/requirements.lock
+
+      # This source is a prepared candidate, not a registry release or serving API.
+      - name: Check out exact prepared SDK source
+        uses: actions/checkout@v6
+        with:
+          repository: MangroveTechnologies/MangroveAI-SDK
+          ref: f7ced9ad1d961f3d13041aae11854b328e1eaa77
+          path: sdk-candidate
+          persist-credentials: false
+
+      - name: Build and install the prepared SDK wheel separately
+        run: |
+          pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/mangrove-sdk" ./sdk-candidate
+          pip install --no-deps --force-reinstall "$RUNNER_TEMP/mangrove-sdk/mangroveai-2.3.0-py3-none-any.whl"
+          python -c 'from importlib.metadata import version; assert version("mangroveai") == "2.3.0"'
+          cmp server/tests/fixtures/local-deployment-not-ready.json sdk-candidate/contracts/mangroveai/fixtures/local-deployment-not-ready.json
+
+      - name: Test installed candidate through the Agent adapter
+        env:
+          ENVIRONMENT: test
+          MANGROVE_LOCAL_DEPLOYMENT_EXPECTED: present
+        run: >-
+          cd server && pytest
+          tests/integration/test_installed_sdk_local_deployment.py
+          tests/integration/test_local_deployment.py -v

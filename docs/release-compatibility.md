@@ -31,7 +31,9 @@ its risk decisions, audit data, error and recovery behavior.
    verify the exact serving image and published package artifacts.
 2. Update the Agent SDK floor and lock to the qualified published 2.3.0 release.
    Use the dependency regeneration command in `server/requirements.txt`; keep
-   unrelated locked packages unchanged.
+   unrelated locked packages unchanged. Change the normal CI capability expectation
+   to `present` in the same update; it currently requires the released default
+   to lack the helper.
 3. Run the normal Agent CI and an installed-package compatibility check for the
    local-deployment contract. Source mocks alone do not prove installed support.
 4. Verify the intended authenticated workflow only under its separate user
