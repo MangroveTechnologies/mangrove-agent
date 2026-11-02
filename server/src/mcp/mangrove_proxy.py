@@ -337,24 +337,45 @@ def _has_reference(item) -> bool:
     return False
 
 
+_SCHEMA_KEYWORDS = frozenset({
+    'items', 'additionalItems', 'additionalProperties', 'unevaluatedItems', 'unevaluatedProperties',
+    'not', 'if', 'then', 'else', 'contains', 'propertyNames', 'contentSchema',
+})
+_SCHEMA_LIST_KEYWORDS = frozenset({'allOf', 'anyOf', 'oneOf', 'prefixItems', 'items'})
+_SCHEMA_MAP_KEYWORDS = frozenset({
+    'properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas', 'dependencies',
+})
+
+
 def _drop_inert_ids(item, depth=0):
-    """Copy ``item`` without each ``$id`` that cannot change how a reference resolves.
+    """Copy the schema ``item`` without each ``$id`` that cannot change how a reference resolves.
 
     A ``$id`` names a schema; it only matters to a ``$ref`` that resolves against it.
     One with no reference anywhere beneath it (MangroveAI's execution-config schema
     carries ``urn:mangrove:execution-config:1``) is dropped, so the advertised schema
     stays local-only. A ``$id`` that scopes a reference is kept, and ``validate_tool``
     refuses it.
+
+    Only schema positions are visited: subschema keywords, the values of maps of
+    subschemas (``properties``, ``$defs`` ...), and ``x-`` annotation keywords. The values
+    of ``const``, ``enum``, ``default``, ``examples`` and every other keyword are data and
+    are copied unchanged, so a ``$id`` key inside them is never removed.
     """
-    if depth > 48:
+    if depth > 48 or not isinstance(item, dict):
         return item
-    if isinstance(item, dict):
-        inert = isinstance(item.get('$id'), str) and not _has_reference(item)
-        return {key: _drop_inert_ids(value, depth + 1) for key, value in item.items()
-                if not (inert and key == '$id')}
-    if isinstance(item, list):
-        return [_drop_inert_ids(value, depth + 1) for value in item]
-    return item
+    inert = isinstance(item.get('$id'), str) and not _has_reference(item)
+    result = {}
+    for key, value in item.items():
+        if inert and key == '$id':
+            continue
+        if key in _SCHEMA_MAP_KEYWORDS and isinstance(value, dict):
+            value = {name: _drop_inert_ids(sub, depth + 1) for name, sub in value.items()}
+        elif key in _SCHEMA_LIST_KEYWORDS and isinstance(value, list):
+            value = [_drop_inert_ids(sub, depth + 1) for sub in value]
+        elif key in _SCHEMA_KEYWORDS or key.startswith('x-'):
+            value = _drop_inert_ids(value, depth + 1)
+        result[key] = value
+    return result
 
 
 def normalize_tool(tool: Tool) -> Tool:
@@ -391,6 +412,13 @@ def validate_tool(tool: Tool) -> None:
         Draft202012Validator.check_schema(tool.outputSchema)
 
 
+def prepare_tool(tool: Tool) -> Tool:
+    """Normalize ``tool`` and validate the result; the step every upstream catalogue goes through."""
+    tool = normalize_tool(tool)
+    validate_tool(tool)
+    return tool
+
+
 async def _read_catalog(target: str) -> list[Tool]:
     try:
         with anyio.fail_after(15):
@@ -401,8 +429,7 @@ async def _read_catalog(target: str) -> list[Tool]:
                 for _ in range(16):
                     page = await client.list_tools(cursor=cursor)
                     for listed in page.tools:
-                        tool = normalize_tool(listed)
-                        validate_tool(tool)
+                        tool = prepare_tool(listed)
                         size += len(tool.model_dump_json())
                         if tool.name in names or len(result) >= 2048 or size > 8 * 1024 * 1024:
                             raise ValueError('Invalid catalogue bounds or duplicate tools')

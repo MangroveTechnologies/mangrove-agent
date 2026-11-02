@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from jsonschema import Draft202012Validator
 from mcp.types import CallToolResult, TextContent, Tool
 from src.mcp import mangrove_proxy as proxy
 
@@ -176,6 +177,62 @@ async def test_catalog_loads_a_schema_with_an_inert_id_and_calls_through(transpo
 def test_an_id_that_scopes_a_reference_is_still_refused(schema):
     with pytest.raises(ValueError, match='Only local schema references'):
         proxy.validate_tool(proxy.normalize_tool(Tool(name='scoped', inputSchema={'type': 'object', **schema})))
+
+
+def _normalized(schema):
+    return proxy.normalize_tool(Tool(name='scoped', inputSchema={'type': 'object', **schema})).inputSchema
+
+
+@pytest.mark.parametrize('schema', [
+    {'properties': {'cfg': {'const': {'$id': 'abc'}}}},
+    {'properties': {'cfg': {'enum': [{'$id': 'abc'}, 'plain']}}},
+    {'properties': {'cfg': {'type': 'object', 'default': {'$id': 'abc'}}}},
+    {'properties': {'cfg': {'type': 'object', 'examples': [{'$id': 'abc'}]}}},
+    {'default': {'$id': 'abc'}},
+])
+def test_an_id_inside_a_data_value_is_kept(schema):
+    assert _normalized(schema) == {'type': 'object', **schema}
+
+
+def test_a_data_value_id_does_not_change_what_the_schema_accepts():
+    schema = {'properties': {'cfg': {'const': {'$id': 'abc'}}}}
+    normalized = _normalized(schema)
+    for value in ({'cfg': {'$id': 'abc'}}, {'cfg': {}}):
+        assert (Draft202012Validator({'type': 'object', **schema}).is_valid(value)
+                == Draft202012Validator(normalized).is_valid(value))
+
+
+def test_an_id_at_a_schema_position_is_dropped_and_data_beside_it_is_kept():
+    schema = {'$id': 'urn:root', 'properties': {'cfg': {'$id': 'urn:cfg', 'type': 'object', 'default': {'$id': 'abc'}}}}
+    assert _normalized(schema) == {
+        'type': 'object',
+        'properties': {'cfg': {'type': 'object', 'default': {'$id': 'abc'}}},
+    }
+
+
+def test_ids_are_dropped_through_defs_items_and_combinators():
+    schema = {
+        '$defs': {'row': {'$id': 'urn:row', 'type': 'object', 'properties': {'n': {'$id': 'urn:n', 'type': 'number'}}}},
+        'properties': {
+            'rows': {'type': 'array', 'items': {'$id': 'urn:item', 'type': 'string'}},
+            'pair': {'type': 'array', 'prefixItems': [{'$id': 'urn:first', 'type': 'string'}]},
+            'either': {'anyOf': [{'$id': 'urn:a', 'type': 'string'}, {'$id': 'urn:b', 'type': 'null'}]},
+            'extra': {'type': 'object', 'additionalProperties': {'$id': 'urn:extra', 'type': 'string'}},
+            'note': {'type': 'object', 'x-annotation': {'$id': 'urn:note', 'title': 'note'}},
+        },
+    }
+    assert '$id' not in json.dumps(_normalized(schema))
+
+
+def test_a_property_named_id_is_not_a_keyword():
+    schema = {'properties': {'$id': {'type': 'string'}}}
+    assert _normalized(schema) == {'type': 'object', **schema}
+
+
+def test_an_id_inside_a_data_value_is_still_refused_by_validation():
+    with pytest.raises(ValueError, match='Only local schema references'):
+        proxy.validate_tool(proxy.normalize_tool(
+            Tool(name='data_id', inputSchema={'type': 'object', 'properties': {'cfg': {'const': {'$id': 'abc'}}}})))
 
 
 @pytest.mark.asyncio
