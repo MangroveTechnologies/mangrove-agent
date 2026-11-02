@@ -5,7 +5,7 @@ import re
 import sys
 from pathlib import Path
 
-from setup_support import SetupError, origin, read_config, request, require_auth, ROOT, address
+from setup_support import ROOT, SetupError, address, origin, read_config, request, require_auth
 
 
 def wallet_address(value):

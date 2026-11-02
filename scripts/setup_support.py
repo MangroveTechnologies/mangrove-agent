@@ -16,15 +16,15 @@ import stat
 import subprocess
 import sys
 import tempfile
-import time
 import textwrap
 import threading
-from contextlib import contextmanager
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import warnings
 import webbrowser
+from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 

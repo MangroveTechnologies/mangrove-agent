@@ -940,7 +940,8 @@ def test_foreground_completes_checks_and_cleans_up_on_term(checkout):
         if proc.poll() is None:
             proc.kill()
             proc.wait()
-    assert 'Local agent authenticated' in ''.join(output)
+    assert 'local authentication verified' in ''.join(output)
+    assert 'Setup complete' in ''.join(output)
     assert not (repo / 'agent-data/.setup.lock').exists()
     assert not (repo / 'agent-data/bare.pid').exists()
 
@@ -1939,10 +1940,10 @@ def test_existing_network_switch_is_explicit(config, monkeypatch, selection, exp
 @pytest.mark.parametrize('terminal_type', ['dumb', 'xterm-256color'])
 def test_guided_shell_one_session_applies_wallet_and_restarts(checkout, action, foreground, terminal_type):
     """Actual shell + PTY + synthetic HTTP wallet service. No real keys or payments."""
+    import fcntl
     import pty
     import select
     import termios
-    import fcntl
     repo, env = checkout
     server = repo / 'server/uvicorn.py'
     source = server.read_text()
@@ -2048,7 +2049,8 @@ class Handler''')
             try:
                 proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
-                proc.kill(); proc.wait()
+                proc.kill()
+                proc.wait()
         os.close(terminal)
         os.close(master)
 
