@@ -149,6 +149,36 @@ not configured on the service, `get_x_post_counts` returns 503 and `run_backtest
 the X rules. Depleted credits, a rate limit or a gap make the X rules evaluate False and
 the condition is logged.
 
+## Example: strategies on social sentiment and holder signals
+
+Seven signals read Cambrian data. Five are in the `social` category and read the
+sentiment of posts about an asset: `social_sentiment_surge` and
+`social_sentiment_capitulation` (triggers on an unusually bullish or bearish
+reading), `social_crowd_bullish` (a filter: recent posts lean more bullish than
+the asset's norm), `social_crowd_cooling` (a filter: recent posts lean no more
+bullish than the norm) and `social_price_divergence` (a trigger: price fell while the
+crowd stayed as bullish as usual). Two are in the `onchain` category and read a
+token's holders: `holder_growth_trend` (a filter: the holder count is growing) and
+`whale_share_divergence` (a trigger: price fell while wallets holding $100,000 or
+more held a larger share of the value). The holder signals work on Solana tokens
+only. Ask in plain words:
+
+> Which social and holder signals are available? Build a BTC strategy that buys an
+> RSI dip only while the crowd is cooling, then backtest it.
+
+The agent finds the signals with `list_signals` (category `social` or `onchain`),
+builds the strategy with the server's `strategy-composition` skill and
+`save_strategy`, using `social_crowd_cooling` as a filter beside a trigger, and
+backtests it with `run_backtest`. You do not supply any data: MangroveAI attaches
+the sentiment and holder columns itself, in a backtest as in live evaluation, and
+a bar sees only values already known when it closes.
+
+If the data source is off on the service, each of the seven signals shows as
+non-composable in `list_signals`. A new strategy cannot be built on it, and a
+strategy that already names one gets `False` from it rather than an error. The
+agent should report that the signal is unavailable instead of substituting another
+signal.
+
 ## If something is unavailable
 
 - **Local status fails:** the connection is not verified. Keep the checkout and
