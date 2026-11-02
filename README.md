@@ -6,7 +6,7 @@
   <h1>mangrove-agent</h1>
 
   <p>
-    <strong>A local MCP server (Model Context Protocol) and provider agnostic plugin for AI trading agents.</strong><br>
+    <strong>Mangrove gives trading agents guardrails.</strong> A local MCP server (Model Context Protocol) and provider agnostic plugin with built-in risk management on every order: circuit breakers, automatic risk-based position sizing, and automatically generated stop-loss and take-profit orders.<br>
     Built on the Mangrove API, with a REST API alongside. FastAPI + MCP. Strategies are authored and backtested on MangroveAI; this agent supplies the clock, local custody and execution, and a full audit trail.<br>
     Kraken and Robinhood venues, and DEX execution via <strong>1inch</strong> across 10 EVM chains
   </p>
