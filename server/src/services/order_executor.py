@@ -22,6 +22,7 @@ Callers:
 - POST /dex/swap route (user-initiated): builds an OrderIntent from the
   request body + hands to execute_one(mode='live').
 """
+
 from __future__ import annotations
 
 import time
@@ -59,7 +60,7 @@ def _fetch_mark_price(symbol: str) -> float:
     )
 
 
-def _paper_fill(intent: OrderIntent, strategy_id: str, evaluation_id: str | None) -> Trade:
+def _paper_fill(intent: OrderIntent, strategy_id: str, evaluation_id: str | None, *, record: bool = True) -> Trade:
     """Simulate a paper fill at the current mark price."""
     mark = _fetch_mark_price(intent.symbol)
     # Convention: "buy" spends USDC for the asset; "sell" does the reverse.
@@ -90,16 +91,18 @@ def _paper_fill(intent: OrderIntent, strategy_id: str, evaluation_id: str | None
         status="simulated",
         executed_at=trade_log.now_utc(),
     )
-    trade_log.log_trade(trade)
-    _log.info(
-        "order.paper.simulated",
-        trade_id=trade.id,
-        strategy_id=strategy_id,
-        symbol=intent.symbol,
-        side=intent.side,
-        amount=intent.amount,
-        fill_price=mark,
-    )
+    if record:
+        trade_log.log_trade(trade)
+    if record:
+        _log.info(
+            "order.paper.simulated",
+            trade_id=trade.id,
+            strategy_id=strategy_id,
+            symbol=intent.symbol,
+            side=intent.side,
+            amount=intent.amount,
+            fill_price=mark,
+        )
     return trade
 
 
@@ -195,7 +198,9 @@ def _handle_approval(
         return None
 
     signed_approval = wallet_sign(
-        getattr(approval_tx, "payload", {}), wallet_address, chain_id=chain_id,
+        getattr(approval_tx, "payload", {}),
+        wallet_address,
+        chain_id=chain_id,
     )
     _log.info("order.live.signed", kind="approval", wallet=wallet_address)
     try:
@@ -276,9 +281,15 @@ def _live_swap(
         venue_id=venue_id,
     )
 
-    _log.info("order.executing", trade_symbol=intent.symbol, side=intent.side,
-              input_token=input_token, output_token=output_token,
-              input_amount=input_amount, quote_id=quote.get("quote_id"))
+    _log.info(
+        "order.executing",
+        trade_symbol=intent.symbol,
+        side=intent.side,
+        input_token=input_token,
+        output_token=output_token,
+        input_amount=input_amount,
+        quote_id=quote.get("quote_id"),
+    )
 
     fees: dict[str, Any] = {
         "venue_fee": quote.get("venue_fee", 0.0),
@@ -319,9 +330,10 @@ def _live_swap(
     final = _poll_tx(tx_hash, chain_id, venue_id) if tx_hash else {"status": "failed", "error": "no tx_hash"}
     status_str = final["status"]
     confirmed_at = trade_log.now_utc() if status_str in ("confirmed", "success") else None
-    trade_status = "confirmed" if status_str in ("confirmed", "success") else ("failed" if status_str == "failed" else "pending")
-    _log.info("order.live.confirmed", tx_hash=tx_hash, status=status_str,
-              block_number=final.get("block_number"))
+    trade_status = (
+        "confirmed" if status_str in ("confirmed", "success") else ("failed" if status_str == "failed" else "pending")
+    )
+    _log.info("order.live.confirmed", tx_hash=tx_hash, status=status_str, block_number=final.get("block_number"))
 
     # dex_service already converted output_amount back to human units
     # (the raw value is quote["output_amount_base_units"]).
@@ -391,6 +403,7 @@ def execute_one(
         # disaster-recovery path if the master key is ever lost; we will
         # not move real funds without it. Paper mode is exempt (above).
         from src.services.wallet_manager import require_backup_confirmed
+
         require_backup_confirmed(wallet_address)
         trade = _live_swap(
             intent,
@@ -424,24 +437,30 @@ def _maintain_position(trade: Trade, strategy_id: str) -> None:
     intent = trade.order_intent
     if intent is None or strategy_id == "user-initiated":
         return
-    if trade.status == "failed":
+    if trade.status not in {"confirmed", "simulated"}:
+        return
+    if trade.mode == "live" and not (trade.fees.get("settlement") or {}).get("asset_fill_verified"):
+        # Legacy status labels and quote amounts do not prove a physical fill.
+        # Strategy LIVE uses dex_confirmed's atomic receipt journal instead.
         return
     try:
         if intent.action == "enter":
             # Asset quantity acquired: for a buy, the output leg.
             entry_amount = trade.output_amount if intent.side == "buy" else trade.input_amount
-            trade_log.update_position(Position(
-                id=intent.engine_position_id or str(uuid.uuid4()),
-                strategy_id=strategy_id,
-                asset=intent.symbol,
-                entry_trade_id=trade.id,
-                entry_price=trade.fill_price,
-                entry_amount=float(entry_amount or 0.0),
-                entry_time=trade.executed_at,
-                status="open",
-                stop_loss=intent.stop_loss,
-                take_profit=intent.take_profit,
-            ))
+            trade_log.update_position(
+                Position(
+                    id=intent.engine_position_id or str(uuid.uuid4()),
+                    strategy_id=strategy_id,
+                    asset=intent.symbol,
+                    entry_trade_id=trade.id,
+                    entry_price=trade.fill_price,
+                    entry_amount=float(entry_amount or 0.0),
+                    entry_time=trade.executed_at,
+                    status="open",
+                    stop_loss=intent.stop_loss,
+                    take_profit=intent.take_profit,
+                )
+            )
             return
 
         # Exit: close the engine-keyed row, else oldest open (FIFO).
@@ -470,9 +489,7 @@ def _maintain_position(trade: Trade, strategy_id: str) -> None:
         trade_log.update_position(position)
 
         # P&L on the exit trade, pro-rata for partial exits.
-        closed_fraction = (
-            min(exit_amount / position.entry_amount, 1.0) if position.entry_amount else 1.0
-        )
+        closed_fraction = min(exit_amount / position.entry_amount, 1.0) if position.entry_amount else 1.0
         entry_cost = position.entry_price * position.entry_amount * closed_fraction
         exit_proceeds = trade.fill_price * exit_amount
         trade_log.set_trade_pnl(trade.id, exit_proceeds - entry_cost)

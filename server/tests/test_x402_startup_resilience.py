@@ -17,7 +17,9 @@ import os
 os.environ.setdefault("ENVIRONMENT", "test")
 
 import concurrent.futures
+from unittest.mock import Mock
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -46,6 +48,8 @@ def test_unreachable_facilitator_does_not_block_startup(monkeypatch):
 def test_hello_mangrove_remains_registered_but_hidden_when_facilitator_down(monkeypatch):
     """Facilitator failure preserves direct diagnostics without advertising the demo."""
     monkeypatch.setattr(x402_server, "_ensure_initialized", _boom)
+    monkeypatch.setattr("src.services.tool_pricing._fetch_prices",
+                        Mock(side_effect=httpx.ConnectError("offline pricing fixture")))
 
     app = create_app()
     with TestClient(app) as client:

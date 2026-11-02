@@ -23,7 +23,8 @@ which the local REST routes and the `agent_*` Robinhood tools take.
 There are two execution paths:
 
 - **Paper.** The agent supplies the clock and MangroveAI runs the paper evaluation,
-  holding the balances, positions and trades. See [paper scheduling](paper-scheduling.md).
+  holding the balances, positions and trades. Explicit stateless paper instead
+  uses a separate local simulated-fill journal. See [paper scheduling](paper-scheduling.md).
 - **Live.** The agent evaluates a local execution record through MangroveAI, then
   executes the resulting orders itself: as a DEX swap signed by a local wallet, or as
   a Robinhood limit order. See [Robinhood execution](robinhood-execution.md).
@@ -101,7 +102,7 @@ The confirm rules:
 
 - A transition to `live` requires `confirm: true`.
 - Leaving `live` for `inactive` or `archived` also requires `confirm: true`, because
-  it stops real execution.
+  it stops new entries; protective exits continue while exposure remains.
 - A missing confirmation raises `ConfirmationRequired` and changes nothing.
 
 A successful transition then:
@@ -109,8 +110,9 @@ A successful transition then:
 1. Syncs the status to MangroveAI (`strategies.update_status`). If that call fails
    during a promotion to live, the allocation just recorded is released and the
    transition fails.
-2. Registers the cron job for `paper` and `live`, or cancels it for any other target.
-   Leaving `live` also releases the strategy's active allocation.
+2. Registers the cron job for `paper` and `live`. Leaving `live` retains an
+   exit-only cron and allocation while confirmed exposure or unresolved orders
+   remain. Cancellation and release wait until the account is confirmed flat.
 3. Writes the new status to the local record.
 4. When the strategy enters or leaves `live`, re-baselines the portfolio
    high-water mark so the change is not read as drawdown (section 6).
@@ -177,51 +179,37 @@ venue mandate sets the capital, and a Robinhood preflight runs instead. See
 
 ### What a tick does
 
-`tick` first checks whether the strategy is bound to Robinhood and, if so, hands off
-to the broker path. Otherwise it:
+`tick` reconciles execution and loads the confirmed account before requesting a
+proposal. Robinhood-bound records use the broker adapter; DEX LIVE uses
+`dex_confirmed`. Both call `execution.evaluate_by_object(..., persist=False)`
+with actual cash, physical holdings, net close history and retained risk state,
+regardless of a legacy record's evaluation lane. Signal evaluation and sizing
+remain in MangroveAI. Marks used to value holdings do not become simulated fills.
 
-1. Loads the local record and skips it unless its status is `paper` or `live`.
-2. Asks MangroveAI to evaluate. The default evaluation lane is `server`:
-   `execution.evaluate(mangrove_id, persist=True)`, and the engine keeps the
-   position state for both paper and live so stop-loss, take-profit and time exits
-   keep evaluating. A record on the `stateless` lane sends its own execution state and
-   open positions with each call (`execution.evaluate_by_object`) and stores the
-   returned values. Robinhood-bound strategies are always stateless.
-3. Extracts order intents from the response. Only engine orders with
-   `status: "filled"` are executed. Resting orders, such as the pending
-   stop-loss and take-profit orders that accompany an entry, are logged and skipped.
-   They execute on the tick where the engine reports them filled.
-4. Logs the evaluation before any trade, so trades can reference it.
-5. On a live tick, runs the portfolio kill-switch check (section 6) and stops
-   without placing orders if it does not allow execution.
-6. Dispatches each intent to `order_executor.execute_many`. A failure on one intent
-   is logged and does not abort the rest.
+The journal acknowledges complete close history and preserves booked-time cursors
+and stable position identities. Unknown history, pending submissions or incomplete
+fee valuation hold new entries. Known holdings retain their protective exits.
+Risk responses commit only against the same account revision; returned account
+estimates never replace actual settlement facts.
 
-An exception in a tick is logged as an `error` evaluation and never propagates.
+Engine orders, including `status: "filled"`, are proposals. An entry creates no
+position before an actual fill. DEX execution reserves the intent and locally
+computed signed transaction hash before broadcast, then verifies finalized raw
+receipts for the signed transaction, chain, wallet, router and ERC-20 flows.
+Approvals, reverts and native gas charges retain their own evidence. Native fees
+without a quote valuation hold entry/close-history acknowledgment; no USD
+conversion is guessed. Broker partial fills update only confirmed quantities,
+and one fully closed position produces one aggregate net close including fees.
 
-For a live DEX swap, `order_executor._live_swap`:
+Distinct exits are processed before entries. Uncertain submissions are reconciled
+by the existing identity rather than automatically resubmitted. A strategy made
+inactive or stopped by the portfolio latch retains exit-only monitoring until
+confirmed flatness. Revision fences and the owning tick lock protect status and
+allocation changes. See [confirmed execution](confirmed-execution.md).
 
-1. Validates `slippage_pct` again (see below).
-2. Caps the input amount at the allocation's `amount`. The engine sizes intents from
-   its own simulated account, so the allocation is the limit on real spend.
-3. Gets a quote through `dex_service`.
-4. Approves the input token if needed, signs the approval locally, broadcasts it and
-   polls until it confirms.
-5. Prepares the swap, signs it locally, broadcasts it and polls the transaction for
-   up to 60 seconds.
-6. Writes a `trades` row with `mode="live"`, the transaction hash and a status of
-   `confirmed`, `failed` or `pending`.
-
-Live execution adds these guarantees over paper:
-
-- **Local signing.** The SDK never sees a private key. `wallet_manager.sign`
-  decrypts the key in process only after the signing guard accepts the payload, and
-  discards the plaintext after signing. The guard allows only 1inch router swaps and
-  the ERC-20 `approve()` calls that feed them.
-- **Backup gate.** `execute_one` calls `require_backup_confirmed` before any live
-  swap and refuses a wallet whose backup is unconfirmed.
-- **Slippage cap.** A `slippage_pct` above 0.0025 is rejected at the request boundary
-  and again in `_live_swap` as defense in depth.
+Live DEX signing still requires a backed-up wallet, the 1inch-only signing guard
+and the configured slippage cap (at most 0.25%). No private key reaches the SDK.
+An exception is logged as an `error` evaluation and never propagates.
 
 ## 6. Portfolio kill switch
 
@@ -233,7 +221,8 @@ reaches `PORTFOLIO_MAX_DRAWDOWN_PCT` (default 0.30), the switch trips:
 
 - Every live strategy is set to `inactive`.
 - The switch stays latched. It does not resume on its own.
-- No new orders are placed until a person resets it.
+- New entries stop until a person resets it; protective exits and reconciliation
+  continue. Allocations and exit-only jobs remain until confirmed flatness.
 
 Read the state with `GET /api/v1/agent/portfolio/risk`. After a trip, clear it with
 `POST /api/v1/agent/portfolio/risk/reset`, which re-baselines to the current book
@@ -247,10 +236,11 @@ it:
 | Table or column | Written by | Content |
 | --- | --- | --- |
 | `evaluations` | `strategy_service.tick` | The engine response for each tick, with status `ok`, `error` or `skipped` |
-| `strategies.execution_state_json` | `strategy_service.tick` | The latest engine account and risk state |
-| `strategies.open_positions_json` | `strategy_service.tick` | The engine's open-positions blob on the stateless lane, echoed on the next tick |
-| `trades` | `order_executor` | Every fill, with `mode` set to `paper` or `live`; exit trades carry `p_and_l` |
-| `positions` | `order_executor._maintain_position` | Opened on entry fills and closed with P&L on exit fills |
+| `strategies.execution_state_json` | Confirmed execution | Accepted risk and candle state; actual account facts are overlaid from the journal |
+| `strategies.paper_execution_state_json` | Stateless paper execution | Separate paper risk state |
+| `strategies.open_positions_json` | Confirmed execution | Retained protective templates, activated only against actual fills |
+| `trades` | The owning execution journal | Confirmed LIVE or simulated PAPER fills; actual exit PnL is retained |
+| `positions` | The owning execution journal | Physical or simulated positions created and changed only by their fills |
 
 Read them over REST (all under `/api/v1/agent`):
 

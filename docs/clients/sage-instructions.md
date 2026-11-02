@@ -14,7 +14,7 @@ before claiming operational access. Respect the host instruction hierarchy.
 
 ## SOURCE: SAGE.md
 
-<!-- sha256: c5006b90caf3ef38be14113b5b1d7fd0a6395e21bbd27f52609e9eac9c824563 -->
+<!-- sha256: 3fba8bde537f40956e2d226c84ce727fc0a3f67c008a0f52e502d250ace07070 -->
 
 # Mangrove Agent
 
@@ -124,7 +124,7 @@ limitation, not permission to bypass controls.
 
 **Service-layer pattern:** Routes and MCP tools both call shared services in `server/src/services/`. Never duplicate business logic.
 
-**State ownership:** THIS agent owns the tick and the record. APScheduler here fires every strategy evaluation (MangroveAI never schedules for the agent), and the local SQLite (`agent-data/agent.db`) persists every trade, evaluation, position, and per-strategy `execution_state` -- unconditionally, regardless of evaluation lane. Evaluation itself (signals, sizing, exits) happens in the MangroveAI engine via `evaluation_lane`: `server` (default -- by-id; engine DB is authoritative for engine position state) or `stateless` (object-lane; the agent supplies and receives all state, persisted locally and echoed each tick). The engine decides *what* to trade; the agent decides *when to ask*, executes, and keeps the books.
+**State ownership:** The agent owns ticks and its local execution journal. LIVE always evaluates by object with `persist=False`, confirmed cash, holdings and net close history; proposals become positions only after fills. Default engine-owned paper uses `persist=True`; stateless paper has separate simulated fills and risk state. MangroveAI owns signals, sizing, exits and risk rules. [Confirmed execution](docs/confirmed-execution.md) defines settlement, entry holds and retained exit monitors.
 
 ## Conventions
 
@@ -419,7 +419,7 @@ it does not enable arbitrary messages or XRPL transaction/payment signing.
 
 ## SOURCE: .claude/rules/risk-management.md
 
-<!-- sha256: 3bcb3bf5831a579862857fa84aa9c12138b1bab1f644434087dea2e4835c9301 -->
+<!-- sha256: dec80a934bc49b2b9df4113a9e4e0a7561a65ff167234bc9876ae7208fe7ae3d -->
 
 # Risk Management -- What Happens Behind the Scenes
 
@@ -444,21 +444,27 @@ the strategy's `execution_config`):
 
 - **`max_open_positions`** -- caps concurrent open positions. Denial: `max_positions`.
 - **`max_trades_per_day`** -- daily entry cap. Denial: `daily_limit`.
-- **Loss-streak cooldown** (`cooldown_config`, per timeframe) -- after N losing
-  trades on an asset within a rolling window, that asset is put on a cooldown
-  (short and long windows). Denial: `cooldown`.
+- **Loss pause** (`cooldown_model='trades'`, canonical) -- four consecutive net
+  losing closes or cumulative net losses of 6% of the reset baseline start a
+  nominal 36-primary-bar pause, with configured floor/cap (defaults 24h/14d).
+  After all pauses end, new alpha entries use half size until three alpha
+  positions close; a negative net resume result starts another pause. Three
+  consecutive pauses latch a stop. Core allocations honor holds but do not scale
+  or consume alpha resume counts. Explicit `bars` retains per-timeframe rolling
+  windows in `cooldown_config`. Denial: `cooldown`.
 - **`max_hold_bars`** -- force-exits a position held too long (a time-based exit,
   not an entry gate).
-- **Max-drawdown circuit breaker** (`max_drawdown_limit`, default **20%**) -- a
-  binary halt: once a strategy's **closed (realized) equity** draws down 20%
-  from its **high-water mark** (peak-relative), new entries are denied. Closed
-  equity is cash plus open positions valued at entry cost; unrealized price
-  swings do not change it. Denial:
-  `max_drawdown`. **Remediation is automatic:** on trip it latches the
-  strategy's per-timeframe long cooldown, then re-baselines the high-water mark
-  to current equity and resumes -- so a strategy is never permanently stuck, even
-  if it is flat. This is *enforcement* (deny the entry), shared by backtest and
-  live. It resizes nothing.
+- **Peak-drawdown pause** (`max_drawdown_limit`, default **20%**) -- `trades`
+  measures marked cash plus holdings, including unrealized PnL, against its
+  high-water mark. A breach denies entries (`max_drawdown`), starts a nominal
+  72-primary-bar pause with the same duration bounds and counts a strike.
+  Expiry re-baselines the peak and opens the alpha resume window. Explicit
+  `bars` instead measures closed equity (cash plus holdings at entry cost) and
+  uses its per-timeframe long cooldown. Protective exits continue in both.
+- **Deposit stop** (`max_drawdown_halt_limit`, default **20%**) -- both models
+  compare closed-equity losses with cumulative gross deposits and latch an entry
+  halt. Unrealized price swings do not trip this stop. Protective exits remain
+  monitored until the actual book is flat; restart requires explicit user action.
 
 **Position sizing** (also engine-side): risk-per-trade budget, volatility
 adjustment, and the `v1`/`v2` cash-reserve clamp. Not a halt -- it scales the
@@ -470,18 +476,16 @@ duplicate them.
 
 ## Layer 2 -- Agent-side, portfolio-wide (this repo -- the kill switch)
 
-The engine only ever sees **one strategy's account** per evaluation, so it
-cannot see aggregate risk across everything the user is running live. This agent
-can, because it owns the whole live book locally (allocations + trades +
-positions in SQLite). So the **portfolio kill switch** lives here
-(`portfolio_risk_service`):
+The engine sees one strategy per evaluation. The agent owns the aggregate live
+book (allocations, trades and positions in SQLite), so `portfolio_risk_service`
+enforces the **portfolio kill switch**:
 
 - **What it measures:** live-book drawdown on a **realized-P&L** basis --
   `book_value = sum active live allocations + sum realized P&L of live strategies` --
   against a persisted high-water mark.
 - **Trip:** when book drawdown reaches **`PORTFOLIO_MAX_DRAWDOWN_PCT`
   (default 30%)**, on the next live tick it **pauses ALL live strategies**
-  (sets them `inactive`, cancels their crons, releases allocations).
+  (sets them `inactive` and denies new entries; strategies with exposure or unresolved orders retain exit-only crons and allocations until confirmed flat).
 - **Latched -- no auto-resume.** Unlike the engine's per-strategy breaker, the
   portfolio switch stays tripped until a **human** clears it. This is
   deliberate: a 30% loss across the whole book warrants human review, not an

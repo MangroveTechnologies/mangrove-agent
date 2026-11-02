@@ -191,3 +191,22 @@ async def test_crossed_quote_rejected_before_order_preview(venue, asset_class):
         await adapter.quote({**ROUTE, "asset_class": asset_class}, "BTC")
     assert all(name not in {"preview_crypto_order", "review_equity_order", "place_crypto_order", "place_equity_order"}
                for name, _ in calls)
+
+
+async def test_catalog_accepts_a_tool_schema_with_an_inert_id():
+    from mcp.types import Tool
+    inert = Tool(name="get_accounts", inputSchema={"$id": "urn:robinhood:get-accounts", "type": "object"})
+    client = SimpleNamespace(list_tools=AsyncMock(return_value=SimpleNamespace(tools=[inert], nextCursor=None)))
+    tools = await robinhood_client.catalog(client)
+    assert tools["get_accounts"].inputSchema == {"type": "object"}
+
+
+async def test_catalog_still_refuses_an_id_that_scopes_a_reference():
+    from mcp.types import Tool
+    scoped = Tool(name="get_accounts", inputSchema={
+        "$id": "https://untrusted/base/", "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/a"}}, "$defs": {"a": {"type": "string"}},
+    })
+    client = SimpleNamespace(list_tools=AsyncMock(return_value=SimpleNamespace(tools=[scoped], nextCursor=None)))
+    with pytest.raises(ValueError, match="Only local schema references"):
+        await robinhood_client.catalog(client)

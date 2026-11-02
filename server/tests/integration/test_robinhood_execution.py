@@ -73,6 +73,9 @@ def reserve(side="buy", qty=2, oid="local", key="entry", sid="s1"):
         {"quantity": str(qty)},
         {"id": "p1", "asset": "BTC-USD", "position_size": 2, "orders": [{"position_size": 2, "price": 90}]},
         oid,
+        expected_revision=__import__(
+            "src.services.confirmed_execution", fromlist=["snapshot_revision"]
+        ).snapshot_revision(sid),
     )
 
 
@@ -112,7 +115,7 @@ def test_partial_fill_repeat_cancel_and_exit(ledger):
     assert state["account_value"] == 1009
     assert positions[0]["position_size"] == 1
     assert positions[0]["orders"][0]["position_size"] == 1
-    assert state["risk_state"]["daily_trade_counter"] == {"2026-10-15": 1}
+    assert state.get("risk_state") is None  # modeled fill state is never booked
     assert reserve(side="sell", qty=1, oid="exit", key="exit")
     store.apply_snapshot(
         "exit", snapshot(qty="1", price="110", state="filled", side="sell", oid="exit", net="109"), asset_class="crypto"
@@ -137,10 +140,7 @@ def test_unfilled_crypto_null_fees(ledger):
 def test_duplicate_intent_and_single_pending(ledger):
     reserve()
     assert not reserve(oid="duplicate")
-    import sqlite3
-
-    with pytest.raises(sqlite3.IntegrityError):
-        reserve(oid="other", key="other")
+    assert not reserve(oid="other", key="other")
     db.reset_connection()  # Process restart must preserve reservations.
     assert len(store.orders(pending=True)) == 1
 
@@ -171,9 +171,8 @@ def test_regression_and_cross_strategy_position_rejected(ledger):
     store.apply_snapshot("local", snapshot(qty="2", state="filled"), asset_class="crypto")
     with pytest.raises(SdkError):
         store.apply_snapshot("local", snapshot(), asset_class="crypto")
-    reserve(sid="s2", oid="other")
-    with pytest.raises(SdkError, match="another strategy"):
-        store.apply_snapshot("other", snapshot(oid="other"), asset_class="equity")
+    # Reject a cross-owner position identity before any order is submitted.
+    assert not reserve(sid="s2", oid="other")
     assert row("positions")["entry_amount"] == 2
 
 
@@ -212,8 +211,9 @@ async def test_tick_uses_mangrove_stateless_then_broker_not_dex(ledger, monkeypa
     sdk = MagicMock()
     modeled = {
         "success": True,
-        "execution_state": {"cash_balance": 800, "bar_index": 1},
-        "open_positions": [{"id": "p1", "position_size": 2}],
+        "execution_state": {"cash_balance": 800, "bar_index": 1, "risk_state": {"close_history_bootstrapped": True}},
+        "proposed_positions": [{"id": "p1", "position_size": 2, "execution_confirmed": False}],
+        "open_positions": [],
         "new_orders": [
             {
                 "order_id": "engine",
@@ -309,8 +309,12 @@ def test_actual_loss_does_not_silently_preserve_modeled_win(ledger):
         "exit", snapshot(qty="1", price="99.9", state="filled", side="sell", oid="exit"), asset_class="crypto"
     )
     state, _ = store.execution_inputs("s1", 100)
-    assert state["risk_state"]["hard_floor_tripped"] is True
-    assert state["halt"]["reason"] == "broker_loss_diverged_from_model"
+    from src.services.confirmed_execution import broker_history
+
+    closes, complete = broker_history("s1")
+    assert complete
+    assert closes[0]["realized_pnl"] == pytest.approx(-0.1)
+    assert not state.get("halt")  # engine alone derives risk from delivered actual losses
 
 
 async def test_mcp_status_dispatches_without_nested_event_loop(ledger, monkeypatch):
@@ -344,7 +348,8 @@ async def test_rest_activation_runs_on_worker_thread(ledger, monkeypatch):
 
     monkeypatch.setattr(strategy_service, "update_status", update)
     result = await strategies.update_status(
-        "s1", strategy_service.StrategyStatusUpdate(status="live", confirm=True),
+        "s1",
+        strategy_service.StrategyStatusUpdate(status="live", confirm=True),
     )
     assert result.model_dump() == {"status": "live"}
 
@@ -369,15 +374,20 @@ async def test_rest_evaluation_runs_broker_tick_on_worker_thread(ledger, monkeyp
 async def test_execution_record_preserves_broker_mandate_without_account_ids(ledger):
     result = strategy_service.get_strategy("s1").model_dump(mode="json")
     assert result["execution_venue"] == {
-        "venue": "robinhood", "asset_class": "crypto", "capital": "1000",
-        "max_order_usd": "500", "slippage_pct": "0.0025",
+        "venue": "robinhood",
+        "asset_class": "crypto",
+        "capital": "1000",
+        "max_order_usd": "500",
+        "slippage_pct": "0.0025",
     }
     assert "eligible" not in json.dumps(result)
     assert "numeric" not in json.dumps(result)
 
 
 @pytest.mark.parametrize("cancel_state,cancel_qty", [("canceled", "1"), ("filled", "2"), ("partially_filled", "1")])
-async def test_pending_entry_evaluates_exits_cancels_then_rechecks_holdings(ledger, monkeypatch, cancel_state, cancel_qty):
+async def test_pending_entry_evaluates_exits_cancels_then_rechecks_holdings(
+    ledger, monkeypatch, cancel_state, cancel_qty
+):
     from src.services import portfolio_risk_service
     from src.shared.clients import mangrove
 
@@ -389,9 +399,22 @@ async def test_pending_entry_evaluates_exits_cancels_then_rechecks_holdings(ledg
     def evaluate(payload, *, persist, open_positions):
         assert persist is False
         qty = open_positions[0]["position_size"]
-        modeled = {"success": True, "execution_state": {"cash_balance": 99999}, "open_positions": [],
-                   "new_orders": [dict(order_id="exit", asset="BTC-USD", side="exit_long", status="filled",
-                                       position_size=qty, price=100, position_id="p1")]}
+        modeled = {
+            "success": True,
+            "execution_state": {"cash_balance": 99999},
+            "open_positions": [],
+            "new_orders": [
+                dict(
+                    order_id="exit",
+                    asset="BTC-USD",
+                    side="exit_long",
+                    status="filled",
+                    position_size=qty,
+                    price=100,
+                    position_id="p1",
+                )
+            ],
+        }
         return SimpleNamespace(new_orders=modeled["new_orders"], model_dump=lambda: modeled)
 
     sdk.execution.evaluate_by_object.side_effect = evaluate
@@ -399,9 +422,13 @@ async def test_pending_entry_evaluates_exits_cancels_then_rechecks_holdings(ledg
     monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": True})
     after_cancel = snapshot(qty=cancel_qty, state=cancel_state)
     venue = SimpleNamespace(
-        account=AsyncMock(), quote=AsyncMock(return_value={"ask_price": "100", "bid_price": "100"}),
-        find_order=AsyncMock(side_effect=[initial, after_cancel]), cancel=AsyncMock(),
-        prepare=AsyncMock(), submit=AsyncMock(), sellable=AsyncMock(return_value=Decimal(cancel_qty)),
+        account=AsyncMock(),
+        quote=AsyncMock(return_value={"ask_price": "100", "bid_price": "100"}),
+        find_order=AsyncMock(side_effect=[initial, after_cancel]),
+        cancel=AsyncMock(),
+        prepare=AsyncMock(),
+        submit=AsyncMock(),
+        sellable=AsyncMock(return_value=Decimal(cancel_qty)),
     )
     await execution._tick(venue, "s1")
     venue.cancel.assert_awaited_once_with(store.route("s1"), "broker-local")
@@ -426,9 +453,11 @@ async def test_pending_entry_evaluates_exits_cancels_then_rechecks_holdings(ledg
     venue.find_order.side_effect = None
     venue.prepare.return_value = ({"quantity": cancel_qty}, Decimal(cancel_qty) * 100)
     venue.submit.return_value = {"order": snapshot(qty=cancel_qty, state="filled", side="sell", oid="exit")}
+
     # Have the fake broker echo the newly reserved client ID.
     async def submit(route, args, ref_id):
         return {"order": snapshot(qty=args["quantity"], state="filled", side="sell", oid=ref_id)}
+
     venue.submit.side_effect = submit
     await execution._tick(venue, "s1")
     assert sdk.execution.evaluate_by_object.call_count == 2
@@ -449,17 +478,36 @@ async def test_exit_evaluation_never_duplicates_uncertain_order_or_pending_sell(
     if pending_side == "sell":
         pending_snapshot = snapshot(qty="0", price=None, side="sell", state="queued", oid="pending")
         store.apply_snapshot("pending", pending_snapshot, asset_class="crypto")
-    modeled = {"success": True, "execution_state": {"cash_balance": 99999}, "open_positions": [],
-               "new_orders": [dict(order_id="exit", asset="BTC-USD", side="exit_long", status="filled",
-                                   position_size=2, price=100, position_id="p1")]}
+    modeled = {
+        "success": True,
+        "execution_state": {"cash_balance": 99999},
+        "open_positions": [],
+        "new_orders": [
+            dict(
+                order_id="exit",
+                asset="BTC-USD",
+                side="exit_long",
+                status="filled",
+                position_size=2,
+                price=100,
+                position_id="p1",
+            )
+        ],
+    }
     sdk = MagicMock()
     sdk.execution.evaluate_by_object.return_value = SimpleNamespace(
-        new_orders=modeled["new_orders"], model_dump=lambda: modeled)
+        new_orders=modeled["new_orders"], model_dump=lambda: modeled
+    )
     monkeypatch.setattr(mangrove, "mangrove_ai_client", lambda: sdk)
     monkeypatch.setattr(portfolio_risk_service, "check_before_live_execution", lambda: {"allowed": True})
-    venue = SimpleNamespace(account=AsyncMock(), find_order=AsyncMock(return_value=pending_snapshot),
-                            quote=AsyncMock(return_value={"ask_price": "100", "bid_price": "100"}),
-                            cancel=AsyncMock(), prepare=AsyncMock(), submit=AsyncMock())
+    venue = SimpleNamespace(
+        account=AsyncMock(),
+        find_order=AsyncMock(return_value=pending_snapshot),
+        quote=AsyncMock(return_value={"ask_price": "100", "bid_price": "100"}),
+        cancel=AsyncMock(),
+        prepare=AsyncMock(),
+        submit=AsyncMock(),
+    )
     await execution._tick(venue, "s1")
     sdk.execution.evaluate_by_object.assert_called_once()
     venue.cancel.assert_not_awaited()

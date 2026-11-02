@@ -185,7 +185,12 @@ async def test_ownership_tool_only_prepares(monkeypatch, remote, denied):
 @pytest.mark.asyncio
 async def test_local_tools_survive_unavailable_markets(monkeypatch):
     from src.mcp.server import PricedFastMCP
+    from src.shared.errors import AgentError
     monkeypatch.setattr(proxy, 'list_tools', AsyncMock(side_effect=MarketplaceError('unavailable')))
+    monkeypatch.setattr('src.mcp.mangrove_proxy.catalog',
+                        AsyncMock(side_effect=AgentError('offline catalog fixture')))
+    monkeypatch.setattr('src.services.tool_pricing._fetch_prices',
+                        Mock(side_effect=httpx.ConnectError('offline pricing fixture')))
     server = PricedFastMCP('test')
     @server.tool()
     def local_wallet() -> str:
