@@ -1,280 +1,261 @@
 # Chapter 01 - AI clients + safety
 
-*15 minutes. No funds required. No commands to run — this chapter is
+*15 minutes. No funds required. No commands to run - this chapter is
 orientation.*
 
 Claude Code, Codex, Grok Build and Perplexity Computer can drive this agent.
-The Claude terminal controls below are examples; other clients have their own
-interfaces and do not automatically inherit Claude hooks. Read the
+The Claude Code controls described below are examples of what one client adds
+on top of the agent's own checks. Other clients have their own interfaces and
+do not inherit Claude's hooks or its restricted launcher. Read the
 [user guide](../../docs/user-guide.md) for your client.
 
-Before you touch the trading bot, it's worth understanding two things:
+Before you touch the agent, it helps to understand two things:
 
-1. **What Claude Code actually is**, because you'll be driving the bot
-   through it and the mental model matters when things go weird.
-2. **How this particular bot handles the dangerous parts** — keys,
-   signed transactions, slippage — because trust is earned by
-   understanding the seams, not by taking someone's word.
+1. **What an AI client does for you**, because you drive the agent through it
+   and the mental model matters when something behaves unexpectedly.
+2. **Which safety checks run where**, because trust comes from understanding
+   the seams, not from taking anyone's word.
 
-If you already know Claude Code inside-out, skim to "The three safety
-nets." If you're new, read straight through.
+If you already know Claude Code well, skip to "Where each safety check runs".
 
-## What Claude Code is, briefly
+## What an AI client is, briefly
 
 Claude Code is a terminal-based AI coding assistant. You type natural
-language; Claude reads files, runs commands, edits code, and answers.
-It runs locally on your laptop and connects to Anthropic's API for the
-language model itself.
+language; it reads files, runs commands and calls tools. It runs on your
+machine and connects to Anthropic's API for the language model. The other
+supported clients work the same way in outline: you talk, the client chooses
+tools, and the tool calls are visible to you.
 
-Five concepts are worth naming so you recognize them when they
-show up.
+Five concepts are worth naming so you recognize them.
 
 ### 1. The conversation is the interface
 
-You don't click buttons. You type. When you say "create a momentum
-strategy for ETH on 1h," Claude figures out which tools to call,
-in what order, and hands you back the results. If you say "list my
-trades," it calls a tool and summarizes. The whole session is a
-conversation — which means the transcript builds up over time, and
-you can refer back to anything.
+You do not click buttons. You type. When you say "Build me a BTC 1h strategy,"
+the client decides which tools to call and in what order, then summarizes the
+results. The conversation accumulates, so you can refer back to anything in it.
 
-### 2. Skills, rules, and hooks shape how the agent behaves
+### 2. Skills, rules and hooks shape behavior
 
-Open `.claude/` in this repo and you'll see three subdirectories:
+The `.claude/` directory in this repository holds four things:
 
-- **`skills/`** - local playbooks for custody and venue setup, loaded only
-  when relevant. Strategy and backtest workflows come from the live server's
-  `load_skill`, not a local create-strategy file or a remembered recipe.
-- **`rules/`** - shared guardrails loaded once with `SAGE.md` at session start.
-  They cover server workflow discovery, wallet handling and risk controls.
+- **`skills/`** - task playbooks the client loads when relevant, for example
+  `setup-kraken`, `connect-kraken` and `setup-robinhood` for venue setup and
+  `audit-security` for reviewing custody code. Strategy and backtest workflows
+  are not local files: they come from MangroveAI at run time through the
+  `load_skill` tool.
+- **`rules/`** - shared guardrails that are loaded once at session start along
+  with `SAGE.md`: `trading-bot-workflow.md` (how to load MangroveAI's
+  workflows), `wallet-presentation.md` (how to create, import and present
+  wallets) and `risk-management.md` (the risk controls that already exist).
   Codex and other clients read the same sources; the directory name does not
   make them Claude-only policy.
-- **`hooks/`** — scripts that intercept Claude Code's inputs and
-  outputs. `.claude/hooks/block-wallet-secrets.sh` scans every
-  message you send for private-key patterns and blocks the submit
-  if it finds one.
+- **`hooks/`** - scripts that Claude Code runs automatically around prompts and
+  tool calls. They are described below.
+- **`settings.json`** - registers the hooks for Claude Code sessions opened in
+  this repository.
 
-You won't need to edit these while working through the tutorial. But knowing they
-exist is how you debug surprising behavior: if the bot refused to do
-something, it's almost always a rule or hook, not a mystery.
+You do not need to edit these while following the tutorial. Knowing they exist
+helps you explain why the agent refused something: it is usually a rule, a
+hook or a server-side check, not a mystery.
 
-### 3. MCP connects the bot's tools to Claude
+### 3. MCP connects the agent's tools to the client
 
-Claude Code doesn't know about trading out of the box. It gets
-trading capabilities from a **Model Context Protocol (MCP) server** —
-in this repo, that's the local FastAPI process running on your
-laptop. On session start, Claude fetches the list of tools the MCP
-server exposes: its own local tools (`create_wallet`, `get_balances`,
-`execute_swap`, ...) and MangroveAI's tools, which it forwards
-(`save_strategy`, `run_backtest`, `get_backtest`, ...). Ask for
-`list_tools` to see the current set.
+The client gets trading capabilities from a **Model Context Protocol (MCP)
+server**, which here is the local FastAPI process (the mangrove-agent). There
+are two kinds of tools:
 
-If the MCP server isn't running, the bot has no tools and will fall
-through to "I can't actually do anything" behavior. Chapter 03 gets
-you past that.
+- **Local tools** that the agent implements itself: `status`,
+  `set_agent_name`, `list_tools`, wallet tools (`create_wallet`,
+  `import_wallet`, `list_wallets`), `execute_swap`, Kraken tools (`cex_*`),
+  Robinhood venue tools (`agent_robinhood_status` and related), paper-schedule
+  tools (`agent_start_paper_schedule` and related) and spend-budget tools
+  (`x402_spend_status`, `x402_spend_reset`).
+- **MangroveAI tools** that the agent forwards without keeping a copy:
+  `load_skill`, `build_strategy_for_regime`, `save_strategy`, `run_backtest`,
+  `get_backtest`, signal, market-data and knowledge-base tools, and
+  `discover_tools` for compact discovery.
+
+Ask for `list_tools` to see the live catalog. If the MCP server is not
+running, the client has no tools; Chapter 03 gets you past that.
 
 ### 4. Tool calls are visible
 
-When the bot runs `create_wallet` or `execute_swap`, you see it
-happen: the tool name, the arguments, the result. Nothing is
-invisible. If the bot does something you didn't expect, the tool call
-log tells you exactly what it did. **Read the tool calls.** This is
-the single best habit for catching mistakes early.
+When the agent runs `create_wallet` or `execute_swap`, you see the tool name,
+the arguments and the result. If something unexpected happens, the tool call
+log tells you exactly what ran. **Read the tool calls.** It is the best habit
+for catching mistakes early.
 
-### 5. `/clear` vs `/compact`
+### 5. Managing long conversations
 
-Two commands worth learning now:
+Claude Code's `/clear` starts a fresh conversation and `/compact` summarizes a
+long one. Other clients have equivalents. After compaction or a new
+conversation, restore any missing shared policy and check free `status` before
+operating, and avoid loading every full tool schema; use targeted discovery as
+described in the [context reference](../../docs/clients.md#context-at-session-start).
 
-- **`/clear`** wipes the conversation history. Use this when you want
-  a fresh start — e.g., you've been exploring and the transcript is
-  cluttered, and you want the bot to reorient without old context
-  biasing it.
-- **`/compact`** summarizes the conversation so far into a compressed
-  context, keeping the important parts and throwing away the noise.
-  Use this when the session is getting long (thousands of lines) and
-  the bot is starting to forget things.
+Neither command changes the agent's state. Wallets, paper schedules and
+payment records live in the local database, not in the conversation.
 
-After compaction or a new conversation, restore any missing shared policy
-and check free status before operating. Avoid loading every full tool schema;
-use targeted tool search or compact command discovery as described in the
-[context reference](../../docs/clients.md#context-at-session-start).
+## Where each safety check runs
 
-Neither affects your trading bot's state — strategies, trades, and
-wallets live in the local database, not the conversation. You can
-`/clear` and everything you've built is still there.
+The checks fall into two groups. Server-side checks run inside the agent
+process and apply to every client. Client-side checks run in Claude Code only.
 
-## The three safety nets
+| Check | Where it runs | Applies to |
+|---|---|---|
+| Wallet backup gate | Agent (`wallet_manager`) | Every client |
+| Slippage cap and explicit `confirm` on swaps | Agent (`execute_swap`) | Every client |
+| Signing allowlist (1inch routers only) | Agent (`wallet_manager`) | Every client |
+| x402 spend budget | Agent (`spend_service`) | Every client |
+| Key-paste block | Claude Code hook | Claude Code sessions with the hooks configured |
+| Empty-wallet swap pre-check | Claude Code hook | Claude Code sessions with the hooks configured |
+| No shell or file tools | `./scripts/chat.sh` launcher | The restricted Claude session only |
 
-New users repeatedly make the same three mistakes, and each one
-costs money or leaks secrets.
-The server enforces signing and backup gates. Claude's configured hooks add
-client-side checks; other clients do not automatically enforce those hooks. You should know what they are
-because the bot's refusals will sometimes feel annoying, and the
-annoyance is the feature.
+The reason for this layering is that an AI agent that reads untrusted content
+and can move funds is a recognized attack shape. A prompt is not a security
+boundary; policy at the signing layer is. That is why the agent's strongest
+guardrails are validators and a hard signing allowlist in code, with the hooks
+as an additional layer rather than the foundation. The
+[EIP-7702 drain post-mortem](../../docs/incidents/2026-04-24-eip7702-drain.md)
+shows the attack these controls are built to stop.
 
-Why so paranoid? Because "an AI agent that reads untrusted content
-and can move funds" is the exact shape of nearly every agent-wallet
-drain of 2025–2026: the Grok/Bankr drain (May 2026, ~$200K moved by
-instructions hidden in Morse code in a tweet reply), the AiXBT
-exploit (~$100K ETH via crafted social inputs), and the ElizaOS
-memory-injection research that "gaslit" agents into bad trades.
-The industry lesson from all of them is the same: **prompts are not
-a security boundary — policy at the signing layer is.** That's why
-this bot's guardrails live in hooks, validators, and a hard signing
-allowlist (only known 1inch routers and token approvals to them;
-EIP-7702 delegations refused outright), not in the LLM's judgment.
-Security researchers call the dangerous combination the "lethal
-trifecta" — private data + untrusted content + the ability to act
-externally — and this repo's design goal is to never hand all three
-to the model at once.
+### Server-side check 1 - the backup gate
 
-### Safety net 1 — the key-paste block
+**Problem it prevents:** you create a wallet and fund it, but never save its
+secret. The machine fails and the funds are unrecoverable.
 
-**Problem it prevents:** you accidentally paste your private key or
-seed phrase into the chat, and it ends up in your transcript file,
-Anthropic's API logs, and potentially your clipboard history.
+**How it works:** every wallet has a `backup_confirmed_at` value in the local
+database, empty at creation. `create_wallet` returns a `vault_token` and a
+`reveal_cmd`. You run `./scripts/reveal-secret.sh <vault_token>` in a terminal,
+save the secret somewhere durable, then run
+`./scripts/confirm-backup.sh <address>` to set the value. Until it is set,
+`execute_swap` refuses to sign for that wallet.
 
-**How it works:** `.claude/hooks/block-wallet-secrets.sh` runs on
-every prompt you submit. It scans for the regex pattern of a 64-char
-hex private key and common mnemonic shapes. If it matches, the hook
-refuses the submit and prints a message pointing you at
-`./scripts/stash-secret.sh` — a terminal-only tool that takes the
-key with hidden input.
+**What you see:** a refusal that names the two commands. That is the gate
+working, not a bug. Chapter 06 walks through the steps.
 
-**What you'll see:** if you ever fat-finger a key, Claude Code shows
-a refusal message and your prompt never reaches the agent. The bot
-doesn't see it. The transcript doesn't contain it. Clean.
+### Server-side check 2 - slippage cap and confirmation
 
-**The tradeoff:** occasionally the regex matches something that
-looks like a key but isn't. If you hit that, rephrase your message
-— the refusal is intentional.
+**Problem it prevents:** a swap with very loose slippage on an illiquid pair
+can be sandwiched for most of its value.
 
-### Safety net 2 — the backup gate
+**How it works:** `execute_swap` requires `confirm=true` and an explicit
+`slippage_pct` with no default. The value is a decimal (0.002 is 0.2%) and must
+be greater than 0 and at most `0.0025` (0.25%). Anything else is refused before
+a quote is requested.
 
-**Problem it prevents:** you create a wallet, the bot gives you a
-`reveal_cmd`, and you promote a strategy to live *before* saving
-the secret. The strategy fires a real swap. The swap succeeds. Then
-your laptop dies. You lose the funds because you never backed up
-the key.
+### Server-side check 3 - the signing allowlist
 
-**How it works:** every wallet has a `backup_confirmed_at` column
-in the local database, initially NULL. You create a wallet, the bot
-returns a `vault_token`; you run `./scripts/reveal-secret.sh <id>`
-in a terminal, save the key somewhere durable (password manager,
-paper, hardware wallet), then run `./scripts/confirm-backup.sh
-<address>` to flip the flag. Only after that flag is set will
-`execute_swap` or live-strategy promotion actually run for that
-wallet.
+The agent signs only a call to a 1inch AggregationRouter, or an ERC-20
+`approve()` whose spender is a 1inch router. Transfers to other addresses,
+other contracts, EIP-7702 set-code transactions and authorization lists are
+refused before the private key is decrypted. This limits what a compromised
+dependency or a manipulated prompt could get the agent to sign.
 
-**What you'll see:** if you try to promote a strategy to live before
-confirming backup, the bot refuses with a clear message pointing at
-the two commands. Not a bug — that's the gate working.
+### Server-side check 4 - the spend budget
 
-### Safety net 3 — the slippage cap
+When the agent pays MangroveAI over x402, `X402_SPEND_CAP_USD` (default 25)
+bounds what it authorizes in a budget period. A payment that does not fit is
+refused before it is signed. `x402_spend_status` shows the ledger and
+`x402_spend_reset` records a fresh budget that you authorize. Chapter 05 and
+Chapter 08 cover what this means in practice.
 
-**Problem it prevents:** you tell the bot "swap $100 of USDC for ETH
-with 10% slippage" on an illiquid pair, and a sandwich attacker
-extracts nearly all your value because 10% is enough room to front-run
-you.
+### Client-side check - the Claude Code hooks
 
-**How it works:** the `execute_swap` API (and the live strategy
-allocation block) has a Pydantic validator that caps `slippage_pct`
-at `0.0025` — that's 0.25%. Anything higher is rejected at the HTTP
-boundary, before a quote is even fetched. The value is in decimal
-form (0.002 = 0.2%) and the bot always suggests 0.001–0.002 for
-liquid pairs.
+Three scripts in `.claude/hooks/` are registered in `.claude/settings.json`.
+All three block by exiting with status 2, and each block message names the hook
+file. Only a person should edit or remove a hook.
 
-**What you'll see:** if you (or a bot confused about units) ask for
-0.01 thinking it's "1 basis point," you get a 422 error. If you
-genuinely need more slippage, you're trading an illiquid pair and
-should reconsider rather than raise the cap.
+- **`block-wallet-secrets.sh`** runs on every prompt you submit and on tool
+  output. It blocks a private-key shape (`0x` plus 64 hex characters) and any
+  run of 12 or more consecutive words from the BIP-39 word list. In tool output
+  it blocks only when such a value sits in a key-named field, so transaction
+  hashes do not trip it. Its message points you to `./scripts/stash-secret.sh`.
+  If you paste a key by mistake, the prompt never reaches the model. Prose
+  rarely contains 12 BIP-39 words in a row, but if a message is blocked
+  unexpectedly, rephrase it.
+- **`preflight-swap.sh`** runs before `execute_swap` and blocks the call when
+  the wallet holds none of the input token on the target chain. It passes the
+  call through if the balance is non-zero or cannot be read, and the agent
+  reports its own error in that case.
+- **`block-main-commits.sh`** applies to developers: it blocks commits and
+  pushes to `main` from a Bash tool call.
+
+See the [hooks README](../../.claude/hooks/README.md) for the full table.
+
+**Other clients do not run these hooks.** Codex, Grok Build and Perplexity
+Computer have their own permission models. In any client, never paste a
+private key or recovery phrase, and use the terminal-only scripts for secrets.
+
+### The restricted Claude session
+
+`./scripts/chat.sh` starts Claude Code with a locked-down profile. It takes no
+arguments. It removes the built-in tools, denies shell, file, search, web and
+skill access, loads only the Mangrove MCP server, allows only that server's
+tools, and registers the key-paste and swap pre-check hooks by absolute path.
+It refuses to start if a required hook or policy file is missing. The session's
+working directory is `agent-data/chat`.
+
+Use it when you want a session that can talk to the agent but cannot touch your
+files or run commands. It is a configuration of Claude Code, not a security
+boundary against the machine's owner, who can edit the installation or start an
+unrestricted session. See [restricted chat](../../docs/restricted-chat.md).
 
 ## Paper before live, always
 
-Every new strategy starts in `inactive` state (unscheduled) or `paper`
-state (scheduled, but fills are simulated at current market price —
-no real swap, no real funds). You can watch paper evaluations fire
-on the strategy's cron for as long as you want, see exactly when and
-why the bot would have traded, and refine before any money moves.
+Paper mode in this agent is a schedule of evaluations of a backtested strategy
+that MangroveAI runs against a simulated portfolio. It moves no funds and needs
+no wallet. Chapter 05 sets one up.
 
-Promotion to `live` is a separate, explicit step with four
-requirements: user asks for it, wallet is backup-confirmed, allocation
-block is complete, and `confirm=true` is set on the call. All four
-or it doesn't happen.
+Going live is separate and explicit. The only live execution path the agent
+exposes as an MCP tool for DEX trading is `execute_swap`, which needs your
+explicit request, a backup-confirmed wallet, a slippage tolerance and
+`confirm=true`. Chapter 07 covers it.
 
-The time-saving version of this advice: if a strategy works in paper
-for at least a full cycle of its timeframe (e.g., a few hours for a
-1h strategy, a day or two for a 4h), and the evaluations look
-reasonable, *then* consider live. Not before.
-
-This isn't just our house rule — it's the standard across mature
-open-source trading bots. freqtrade's docs put it flatly: "always
-dry run your strategy after backtesting it to see if backtesting and
-dry run results are sufficiently similar", because live behavior
-reveals latency, partial fills, and rejections that backtests don't.
-The comparison matters as much as the paper run itself: if paper
-results diverge badly from the backtest, that gap is information —
-investigate it before real funds, don't average it away. And set
-expectations like a regulator would: the CFTC's standing advisory on
-AI trading bots is that "AI technology can't predict the future or
-sudden market changes," and a 2026 study of 925K wallets found AI
-trading agents lost their users ~$192M net in aggregate. Backtests
-and paper runs earn a strategy a small live allocation — nothing
-earns it blind trust.
+Treat paper results as evidence, not proof. If paper behavior diverges from the
+backtest, investigate the gap before committing real funds. Live trading
+reveals latency, partial fills and rejections that neither a backtest nor a
+simulation shows. Start with a small amount and scale only as live results
+justify it.
 
 ## The audit trail
 
-Everything the bot does is logged to SQLite in `agent-data/agent.db`:
+The agent records what it does in a SQLite database at `agent-data/agent.db`:
 
-- Every strategy evaluation (what the bot saw, what it decided)
-- Every trade (paper or live, including the on-chain tx hash for
-  live ones)
-- Every wallet creation / import / backup-confirmation
-- The scheduler's registered jobs (so it survives restart)
+- Wallet metadata, including when each wallet was created and when its backup
+  was confirmed (secrets are stored only as ciphertext)
+- Swaps you execute, with the transaction hash
+- Paper schedule state: interval, evaluation count, pending slot and the last
+  result
+- The x402 payment ledger behind `x402_spend_status`
 
-You can inspect any of this via the bot (`list_evaluations`,
-`list_trades`, `list_wallets`) or directly with `sqlite3
-agent-data/agent.db` if you want to run your own queries.
-
-**Nothing is hidden.** If the bot claims to have done something, the
-database row is there. If a row is missing, it didn't happen.
+You can inspect wallets with `list_wallets`, payments with `x402_spend_status`,
+and paper schedules with `agent_list_paper_schedules`. You can also query the
+database directly with `sqlite3 agent-data/agent.db` if you want your own
+reports. Strategy definitions, backtests and the paper portfolio's trades live
+on MangroveAI and are read through its tools.
 
 ## Transcript hygiene
 
-Two habits worth forming early:
+1. **Start a fresh conversation between major phases.** It keeps the client
+   focused and the transcript readable.
+2. **Review transcripts before sharing them.** Even with the key-paste block,
+   transcripts can contain addresses, position sizes and strategy logic.
 
-1. **`/clear` between major phases.** Finish authoring a strategy
-   and promoting it to paper? Start a fresh conversation for the
-   next task. Keeps the bot focused and the transcript readable.
-2. **Don't share transcripts publicly without reviewing them.** Even
-   with the key-paste block, transcripts can contain addresses,
-   position sizes, and strategy logic you may not want on the
-   internet.
+Claude Code stores transcripts under `~/.claude/projects/` by default as
+readable JSONL files. Other clients store theirs elsewhere.
 
-Claude Code stores transcripts at `~/.claude/projects/<hash>/` —
-readable JSONL, one file per session. Handy for reviewing what
-happened; also a thing to be aware of.
+## What this agent is not
 
-## What this bot is NOT
+- **Not financial advice.** Strategies and signals are informational.
+- **Not a high-frequency trader.** Strategy candle sizes start at 5 minutes and
+  paper evaluations run at most once a minute.
+- **Not a portfolio manager.** It does not rebalance or optimize across
+  strategies.
+- **Not production software.** It is a local starter that you own and extend:
+  single user and beta quality. Audit it before trusting it with meaningful
+  funds.
 
-- **Not financial advice.** Mangrove's signals and strategies are
-  informational. The bot will happily backtest, paper, and execute —
-  it does not vouch for any strategy's future performance, and neither
-  do we.
-- **Not a high-frequency trader.** The minimum timeframe is 5m.
-  Cron granularity and SDK latency mean you're looking at dozens of
-  trades per month at most for a typical momentum strategy — not
-  hundreds per day.
-- **Not a portfolio manager.** It executes the strategy you tell it
-  to, on the allocation you give it. It doesn't rebalance, doesn't
-  optimize across strategies, doesn't tax-loss-harvest.
-- **Not production software.** This is a local starter you own and
-  extend — local first, single user, beta-quality. Audit it before
-  trusting it with meaningful funds. If you end up running this with
-  serious capital, you're operating it, not a team of pager-carrying
-  SREs.
+Next: what you actually have on your machine.
 
-That's the mental model. Next up: what you actually have on your
-machine, in more concrete terms.
-
-→ [Chapter 02 — What you have](02-overview.md)
+[Chapter 02 - What you have](02-overview.md)

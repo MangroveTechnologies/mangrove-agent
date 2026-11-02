@@ -121,7 +121,7 @@ async def call_sdk_workflow(name, arguments):
             'get_trending': lambda: sdk.crypto_assets.get_trending(),
             'list_docs': lambda: sdk.docs.list(),
             'kb_list_tags': lambda: sdk.kb.tags.list(),
-            'get_whale_activity': lambda: sdk.on_chain.get_whale_activity(**args),
+            'get_token_holders': lambda: sdk.on_chain.get_token_holders(**args),
         }
         result = calls[name]()
         return json.dumps(result, default=lambda item: item.model_dump())
@@ -646,7 +646,7 @@ async def test_sdk_signal_calls_preserve_cap_error(wallet, automatic_client, mon
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name,args", [
     ("get_trending", {}), ("list_docs", {}),
-    ("kb_list_tags", {}), ("get_whale_activity", {"symbol": "ETH"}),
+    ("kb_list_tags", {}), ("get_token_holders", {"symbol": "ETH"}),
 ])
 @pytest.mark.parametrize("refused_payment", [False, True])
 async def test_other_sdk_calls_sanitize_errors_and_preserve_cap(
@@ -687,7 +687,7 @@ async def test_sdk_preserves_uncertainty_without_blocking_other_operations(walle
         return httpx.Response(status, json={'error': reason or {'secret': 'SYNTHETIC_SECRET'},
             'message': 'SYNTHETIC_SECRET', 'retry_payment': False, 'correlation_id': correlation})
     automatic_client(handle)
-    first = json.loads(await call_sdk_workflow('get_whale_activity', {'api_key': 'test-key-1', 'symbol': 'BTC'}))
+    first = json.loads(await call_sdk_workflow('get_token_holders', {'api_key': 'test-key-1', 'symbol': 'BTC'}))
     assert first['code'] == 'X402_PAYMENT_UNCERTAIN'
     assert first['retry_payment'] is False
     assert first['upstream_status'] == status

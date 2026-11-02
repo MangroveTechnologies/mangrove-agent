@@ -1,66 +1,39 @@
-# DeFi Pro tools — starter
+# DeFi Pro analytics tools
 
-Five DeFiLlama **Pro** analytics tools are exposed over MCP. They surface the
-paid DeFiLlama API tier through MangroveAI, so the same access rules apply.
+MangroveAI serves a set of DeFi analytics tools backed by DeFiLlama's paid API tier.
+The agent does not implement them. It discovers them from MangroveAI's MCP server and
+forwards each call, so the plan checks, quotas and errors below are MangroveAI's, and
+the agent returns them unchanged. Their schemas and descriptions come from the live
+catalog; use `discover_tools` or your client's tool list rather than this page for the
+exact current contract.
 
 | Tool | Returns |
-|---|---|
-| `get_token_unlocks` | token unlock schedules + supply metrics (supply-shock signal) |
-| `get_perp_funding` | aggregated perpetual funding rates across venues |
-| `get_treasuries` | protocol treasury holdings (crowd-positioning signal) |
+| --- | --- |
+| `get_token_unlocks` | Token unlock schedules and supply metrics |
+| `get_perp_funding_rates` | Perpetual funding rates across venues |
+| `get_treasuries` | Protocol treasury holdings |
 | `get_etf_flows` | ETF net flows |
-| `get_lending_borrow_rates` | lending / borrow rates across markets |
+| `get_lending_rates` | Lending and borrow rates across markets |
 
-The free DeFi tools (`get_protocol_tvl`, `get_chain_tvl`, `get_stablecoin_metrics`)
-work on any plan and need no special entitlement.
+The related free tools `get_protocol_tvl`, `get_chain_tvl` and `get_stablecoin_metrics`
+are served the same way. `get_protocol_tvl` takes a `protocol_name`; the five tools in
+the table take no arguments.
 
-## Access rules
+## Access
 
-- **Plan**: the five Pro tools require a **Pro, Startup, or Enterprise** plan.
-  On an unentitled plan the tool returns an error carrying
-  `code: TIER_UPGRADE_REQUIRED` (HTTP 403 upstream) — upgrade to use them.
-- **x402**: an x402-paid call pays per request and is not subscription-checked.
-- **Monthly cap**: 1,000 Pro calls per account per month. Past the cap the tool
-  returns `error: quota_exceeded` (HTTP 429 upstream). The cap is uniform across
-  paid tiers and protects the shared DeFiLlama budget.
+Access follows how the agent is authenticated to MangroveAI:
 
-## 1. Configure the MCP server (Claude Code)
+- **API-key mode.** The key configured as `MANGROVE_API_KEY` identifies your account.
+  MangroveAI decides from your plan whether a Pro tool is available and returns an
+  error, such as a tier-upgrade or quota error, when it is not.
+- **Wallet mode.** Without a key, the agent pays per request over x402 from its local
+  wallet, within your spending limits. See [payment operations](x402-payment-uncertainty.md).
 
-Copy the drop-in config and add your MangroveAI key:
+The tools take no local credential argument. The agent applies the credential it is
+configured with.
 
-```bash
-cp .mcp.json.example .mcp.json
-# edit .mcp.json: set MANGROVE_API_KEY to a key on a Pro/Startup/Enterprise plan
-```
+## Using the tools
 
-Restart Claude Code so it picks up the MCP server, then verify the tools are
-registered:
-
-```bash
-./scripts/verify_quickstart.sh --bare   # tool catalog should include the DeFi Pro tools
-```
-
-## 2. Call a Pro tool
-
-Ask the agent (it routes to the MCP tool):
-
-> "What token unlocks are coming up? Use get_token_unlocks."
-
-Or invoke the tool directly from any MCP client. Each tool takes a single
-optional `api_key` argument (falls back to the server-configured key) and
-returns the JSON envelope:
-
-```json
-{ "success": true, "count": 338, "data": [ { "name": "Chainlink", "circSupply": 748009578.99, "events": [ ... ] }, ... ] }
-```
-
-On an unentitled plan you get `{"error": "...", "code": "TIER_UPGRADE_REQUIRED"}`;
-past the monthly cap, `{"error": "quota_exceeded", "resource_type": "defillama_pro_calls"}`.
-
-## Programmatic use (SDK)
-
-For scripts/services, the MangroveAI SDK is the quickest path —
-`pip install mangroveai`, then see `examples/defi_pro.py` in the SDK repo for one
-runnable call per Pro method with 403/429 handling. The SDK methods are
-`client.defi.get_token_unlocks()` / `get_perp_funding()` / `get_treasuries()` /
-`get_etf_flows()` / `get_lending_borrow_rates()`.
+With the agent connected to your MCP client (see the README setup), ask for the data
+in plain language, for example "What token unlocks are coming up?", or call the tool
+directly from any MCP client.

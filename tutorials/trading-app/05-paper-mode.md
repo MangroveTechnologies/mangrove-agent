@@ -1,258 +1,243 @@
-# Chapter 05 — Paper mode
+# Chapter 05 - Paper mode
 
-*15 minutes. No live trading capital required. Upstream API access can
-still cost money. The first chapter where the bot runs on a schedule.*
+*15 minutes. No live trading capital required. Upstream API access can still
+cost money. The first chapter where the agent acts on a schedule.*
 
-You ended Chapter 04 with a strategy in `inactive` status — saved but
-dormant. In this chapter you promote it to `paper`, which schedules
-it to evaluate on a cron and simulates fills at current market price.
-No real trading orders are placed. In x402 mode, data and evaluation calls
-still require a funded payment wallet; API-key usage follows your allowance.
+You ended Chapter 04 with a strategy saved on MangroveAI and a backtest of it.
+In this chapter you ask the agent to evaluate that strategy repeatedly in paper
+mode. No real orders are placed and no wallet is needed. In x402 mode the
+evaluation calls still require a funded payment wallet; with an API key they
+count against your allowance.
 
-This completes the path without live trading capital. If you want to stop here, you
-will still have accomplished the full author → backtest → paper →
-evaluate loop. Everything from Chapter 06 onward is for when you
-want to move real money.
-
-## Promote to paper
-
-In your chosen AI client:
-
-> "Promote it to paper."
-
-The bot calls `update_strategy_status(strategy_id=..., status="paper")`.
-Expected response:
-
-```
-Promoted to paper. Scheduler registered a cron job on the 1h
-timeframe — evaluations will fire at the top of each hour. Active
-cron jobs: 1.
-
-Check `list_evaluations` any time to see what the strategy saw.
-```
-
-Verify the cron registered:
-
-```bash
-KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
-curl -s -H "X-API-Key: $KEY" \
-  http://localhost:9080/api/v1/agent/status | python3 -m json.tool \
-  | grep active_cron
-```
-
-Expected: `"active_cron_jobs": 1`.
+This completes the path without live capital. If you stop here you have done
+the full compose, backtest, paper-evaluate loop. Chapters 06 and 07 are for
+when you want to move real money.
 
 ## How paper mode works
 
-Every strategy timeframe has a corresponding cron schedule:
+Paper mode is split between MangroveAI and your agent:
 
-| Timeframe | Fires at |
+- **MangroveAI owns the paper portfolio.** It holds the simulated balances,
+  positions, trades and evaluation receipts for the strategy. Nothing about the
+  strategy definition is copied to your machine.
+- **Your agent supplies the clock.** A schedule stored in the agent's SQLite
+  database decides when the next evaluation is due, and the agent asks
+  MangroveAI to run it. A small dispatcher inside the agent checks for due
+  schedules every 5 seconds.
+
+Because the agent supplies the clock, it must be running for evaluations to
+happen. Missed intervals are skipped, not replayed against old market data.
+
+### What a strategy needs first
+
+MangroveAI decides whether a strategy is eligible, and the agent reports the
+reason when a start is refused. The conditions it knows about:
+
+- The strategy is saved on MangroveAI under the same API key or payment wallet
+  the agent uses now, and is not archived.
+- A completed, passing backtest exists for this exact strategy configuration
+  and market. Changing the rules or market after the backtest makes it
+  ineligible until you backtest again.
+- It uses a position-sizing mode MangroveAI's paper execution supports. Version
+  3 sizing is not supported.
+- It has valid server-side paper balances.
+- It does not already belong to another execution flow.
+
+## Start a paper schedule
+
+In your AI client:
+
+> "Start paper trading for that strategy. Evaluate every 5 minutes, up to 12
+> times."
+
+The client calls `agent_start_paper_schedule` with:
+
+| Argument | Meaning |
 |---|---|
-| `5m` | every 5 minutes (`*/5 * * * *`) |
-| `15m` | every 15 minutes |
-| `30m` | every 30 minutes |
-| `1h` | top of every hour (`0 * * * *`) |
-| `4h` | every 4 hours (`0 */4 * * *`) |
-| `1d` | midnight UTC (`0 0 * * *`) |
+| `strategy_id` | The MangroveAI strategy ID from Chapter 04 |
+| `interval_seconds` | One of 60, 300, 900, 3600, 14400 or 86400 |
+| `max_evaluations` | How many evaluation slots to authorize, 1 to 10000 |
+| `confirm` | Must be `true`; it acknowledges the recurring API or x402 cost |
 
-When the cron fires, the scheduler calls a tick function inside the
-mangrove-agent process. That tick:
+Without `confirm=true` the call is refused. With an API key, each evaluation
+request counts against your allowance. In x402 mode each one is a paid call that
+passes through the spend budget described below. The first evaluation is due on
+the next dispatcher pass, within about five seconds.
 
-1. Pulls the current OHLCV for the strategy's asset.
-2. Calls `mangroveai.execution.evaluate()` with the strategy and
-   the current market snapshot.
-3. Logs an `evaluations` row regardless of outcome (what the bot
-   saw, duration, errors).
-4. If the evaluation returned order intents, dispatches them to
-   the executor in **paper mode**: a simulated fill at the current
-   market price, logged as a row in `trades` with `mode="paper"`
-   and `status="confirmed"`. No network call to 1inch, no signed
-   tx, no funds moved.
+The interval is independent of the strategy's candle size. A 1h strategy
+evaluated every 5 minutes is checked more often than it has new bars; choose an
+interval that matches how closely you want to watch it and how much you want to
+spend.
 
-**The key word is "simulated."** A paper trade looks identical to a
-live trade in `list_trades` — same schema, same fields — except
-the `mode` column is `"paper"` instead of `"live"` and the `tx_hash`
-is `null`. This lets you verify your strategy's trade pattern
-(frequency, size, direction) against the same surface you'll read
-later in live mode.
+## Check on it
 
-## Don't wait for the cron — force a tick
+> "List my paper schedules."
 
-If your timeframe is 1h, you don't want to wait an hour to see
-anything happen. Force an evaluation now:
+`agent_list_paper_schedules` reads only the agent's local records and makes no
+upstream call, so it is free. Each schedule shows:
 
-> "Run evaluate_strategy on it so I don't have to wait for the cron."
+| Field | Meaning |
+|---|---|
+| `id` | Schedule ID, used by the other paper tools |
+| `strategy_id` | The MangroveAI strategy |
+| `run_id` | MangroveAI's paper run, set once the start succeeds |
+| `state` | See the table below |
+| `interval_seconds`, `max_evaluations` | The limits you authorized |
+| `evaluations` | Slots attempted so far |
+| `pending_slot` | An evaluation whose outcome is not yet recorded, or empty |
+| `last_result` | MangroveAI's response to the latest evaluation |
+| `error` | The latest problem, if any |
 
-The bot calls `evaluate_strategy(strategy_id=...)`. This runs the
-same tick logic the cron would have run, right now. Response:
+For authoritative state from MangroveAI, ask for details with a refresh:
 
-```
-Evaluated. Duration: 342 ms. Orders produced: 0.
+> "Get the paper schedule status, refreshed from the server."
 
-No entry signals fired — the strategy is watching, but nothing is
-true right now.
-```
+`agent_get_paper_schedule` with `refresh=true` fetches the server's paper
+status. That is an upstream call and can use allowance or payment.
 
-Or, if signals did fire:
+### Schedule states
 
-```
-Evaluated. Duration: 487 ms. Orders produced: 1.
+| State | Meaning |
+|---|---|
+| `starting` | The start request is in flight |
+| `active` | Evaluations are being issued on the interval |
+| `exhausted` | `max_evaluations` slots have been used; no further requests |
+| `pausing` | A pause was requested and the server pause is not confirmed yet |
+| `paused` | Stopped locally and on the server |
+| `attention` | An evaluation failed or its outcome is uncertain; automatic requests stop |
+| `start_rejected` | MangroveAI refused the start; nothing is scheduled |
+| `start_uncertain` | The start outcome could not be confirmed; nothing is scheduled |
 
-Paper trade logged:
-  side:        buy
-  symbol:      ETH
-  input:       100 USDC
-  output:      0.0398 ETH (at fill_price $2,509.21)
-  mode:        paper
-  reason:      rsi_cross_up + sma_cross_up both fired
+## Read the results
 
-Check `list_trades` to see the row.
-```
+The paper portfolio lives on MangroveAI, so you read its positions, trades and
+evaluations through MangroveAI's tools:
 
-## Reading evaluations
+> "Show me the paper positions and trades for that strategy."
 
-> "Show me my evaluations."
+The client can use `list_positions`, `get_trades_for_strategy` and
+`list_evaluations` with the strategy ID. What those tools return, and its
+format, is defined by MangroveAI. A paper trade is a simulated fill in the
+server's portfolio: nothing is sent to an exchange or a chain.
 
-The bot calls `list_evaluations(strategy_id=...)` and returns the
-most recent ones.
+Many evaluations will produce no trade. A quiet strategy is normal; its
+conditions are simply not met.
 
-```
-ID       Timestamp              Status   Orders  Duration  Notes
-ev-ab12  2026-04-23 15:00:00Z   ok       0       287 ms    (no entry signal)
-ev-cd34  2026-04-23 16:00:00Z   ok       1       342 ms    rsi_cross_up
-ev-ef56  2026-04-23 17:00:00Z   ok       0       298 ms    (already in position)
-ev-gh78  2026-04-23 18:00:00Z   ok       1       401 ms    sma_cross_down (exit)
-```
+## Pause a schedule
 
-Each row tells you:
+> "Pause that paper schedule."
 
-- **Status** — `ok` means the evaluation completed cleanly. `error`
-  means the SDK call failed (Mangrove down, API key invalid,
-  etc.) — the `notes` or `error_msg` field has details.
-- **Orders** — how many order intents the strategy produced.
-  `0` is common; the strategy is watching, waiting for conditions.
-- **Duration** — how long the evaluation took. Normal range is
-  200–800 ms. If you see something over 5 seconds, Mangrove is
-  likely under load.
-- **Notes** — the bot's summary of what the strategy saw.
+`agent_pause_paper_schedule` stops new local requests at once, then asks
+MangroveAI to pause the run. An evaluation already running may finish. Pausing
+does not close or sell paper positions. If the server pause fails, the schedule
+stays in `pausing` and you retry the same call.
 
-## Reading trades
+To start again, call `agent_start_paper_schedule` with the same interval and
+`max_evaluations`. A paused or exhausted schedule renews its quota on an
+explicit, confirmed start, provided no evaluation is left unresolved. Limits on
+an existing schedule cannot be changed in place.
 
-> "Show me my trades."
+## When a schedule needs attention
 
-```
-ID       Timestamp              Mode   Side  Symbol  Input       Output      Status
-tr-11    2026-04-23 16:00:12Z   paper  buy   ETH     100 USDC    0.0398 ETH  confirmed
-tr-22    2026-04-23 18:00:08Z   paper  sell  ETH     0.0398 ETH  101.3 USDC  confirmed
-```
+If an evaluation fails or its outcome cannot be confirmed, including when a
+payment is refused, the schedule moves to `attention` and stops issuing
+requests. The cause is in its `error` field and in `pending_slot`. Ask the
+client to reconcile it:
 
-Two entries — one paper entry and one paper exit. `confirmed` in
-paper mode just means "simulated fill at the mark price recorded."
+> "Reconcile that paper schedule."
 
-The gap between input and output in the exit tells you the
-strategy's P&L on that round trip: bought 0.0398 ETH at ~$2,509 and
-sold at ~$2,545, plus or minus whatever the simulated slippage and
-fees were. About 1.3% gain before fees, not bad for a 2-hour hold.
+`agent_reconcile_paper_schedule` retries the unresolved evaluation with its
+original run, slot and payment operation identity, so it cannot double-execute
+or double-pay. The quota counts attempted slots, and a reconcile reuses the
+slot it recovers. A new start is blocked until the pending evaluation is
+resolved.
 
-## Restart the server — watch the cron survive
+## Watch the cost
 
-One of the nice properties of this setup: the scheduler persists
-across restarts because the job store is the same SQLite file as
-everything else.
+Each start, evaluation and refreshed status is a metered call. In x402 mode,
+check the budget before a long schedule:
 
-Try it:
+> "Show my x402 spend status."
+
+`x402_spend_status` reports the budget (spent, remaining and whether it is
+exhausted; the default cap is $25) and the recent payment ledger. The budget
+governs only outbound x402 payments, not API-key usage. When the budget is exhausted,
+further paid calls are refused and any schedule evaluation that needs one goes
+to `attention`. Raising the cap is your decision: `x402_spend_reset` records a
+new cap only after you agree and the client passes `confirm=true`. Do not ask
+the client to reset it just to get past a refusal.
+
+## Restart the server and keep your schedules
+
+Schedules are stored in the same SQLite file as everything else, so they
+survive a restart. Try it:
 
 ```bash
 # Stop the server
 kill $(cat agent-data/bare.pid)
 
-# Wait a second, confirm it's gone
+# Confirm it is gone
 sleep 2
 curl -s http://localhost:9080/health 2>&1 | head -1
-# → "Failed to connect" / connection refused — expected, server is down
+# Expect a connection failure
 
-# Start it back up
+# Start it again
 ./scripts/setup.sh --yes --no-mcp --no-verify
-
-# Confirm the cron came back automatically
-KEY=$(python3 -c "import json; print(json.load(open('server/src/config/local-config.json'))['API_KEYS'].split(',')[0])")
-curl -s -H "X-API-Key: $KEY" \
-  http://localhost:9080/api/v1/agent/status | python3 -m json.tool \
-  | grep active_cron
-# → "active_cron_jobs": 1
 ```
 
-No manual re-promotion needed. The strategy picks up ticking from
-wherever it left off. If the crash happened mid-tick, you lose that
-one tick; if it happened between ticks, you lose nothing.
+Then ask the client to list your paper schedules. The schedule is still
+`active` and resumes on the next due slot. If the stop interrupted an
+evaluation, that slot is kept as `pending_slot` and is retried with its original
+identity, so it is not run twice. Do not run more than one agent process
+against the same database.
+
+Schedules belong to the upstream identity (API key or payer wallet) that
+created them. If you change the API key or payer wallet, schedules created
+under the old identity are hidden from the new one.
+
+## REST equivalents
+
+The same service is available under `/api/v1/agent/strategies/paper-schedules`
+with the local API key: `POST` to start, `GET` to list, `GET /{schedule_id}` for
+status (`?refresh=true` for server state), and `POST /{schedule_id}/pause` or
+`/{schedule_id}/reconcile`. The [paper scheduling reference](../../docs/paper-scheduling.md)
+covers recovery and limits in more detail.
 
 ## How long to paper before going live?
 
-Depends on your timeframe and risk appetite. Rough heuristic:
-
-| Timeframe | Minimum paper duration | Reasoning |
-|---|---|---|
-| `5m` / `15m` | 1–2 days | Hundreds of evaluations, dozens of trades. Fast feedback. |
-| `1h` | 2–4 days | Want to see at least 10–20 evaluations cross the strategy's trigger region. |
-| `4h` / `1d` | 1–2 weeks | Slow enough that the sample size matters. |
-
-Resist the urge to rush this. A couple of hours of paper is enough
-to see the mechanics work, but not enough to judge the strategy —
-paper for at least a day or two (see the table above for your
-timeframe) before considering live. For real capital, longer.
+There is no fixed rule. A paper run should span enough of the strategy's own
+timeframe to see both winners and losers. As a rough guide, for a 1h strategy
+that means several days, and for 4h or 1D strategies one to two weeks. A
+schedule covers `interval_seconds * max_evaluations` of wall-clock time, so
+size `max_evaluations` to the period you want and start a new schedule when it
+is exhausted.
 
 ## What not to do in paper
 
-### Don't mistake a quiet day for a broken strategy
-
-If your strategy has 0 trades after 5 ticks, that's not a
-malfunction — the signal conditions just haven't been met. Quiet
-markets are the norm, not the exception.
-
-Let it run. If after a full day (for 1h timeframes) you still have
-zero evaluations with orders, that's your sign the signals are too
-strict for current conditions. Iterate.
-
-### Don't promote to live after one successful paper trade
-
-One fill is an anecdote, not a pattern. The minimum-viable sample
-size before live is "enough trades that you've seen both winners
-and losers, at both of the strategy's entry/exit paths."
-
-### Don't edit the strategy mid-paper
-
-If you want to try different parameters, create a new strategy
-and let both paper-run in parallel. Editing a strategy's params
-mid-run invalidates the history you've accumulated — you no longer
-know which fills came from which version.
-
-(Today the bot doesn't even support mid-run edits cleanly; you'd
-have to archive and recreate. That restriction is deliberate.)
-
-### Don't promote to live on a Friday night
-
-If something goes wrong with your live strategy, you want to be
-awake, sober, and in front of your laptop to pause it. The bot
-pauses on `update_strategy_status(status="inactive")`, which is a
-one-sentence command, but you have to be there to issue it.
+- **Do not mistake a quiet day for a broken strategy.** Zero trades after a few
+  evaluations usually means the conditions have not been met. If a full cycle
+  of the strategy's timeframe passes with no activity, the signals may be too
+  strict for current conditions. Iterate with a new strategy.
+- **Do not judge on one fill.** One fill is an anecdote. Wait for both winners
+  and losers on the entry and exit paths.
+- **Do not edit the strategy mid-run.** Eligibility depends on a backtest of
+  the exact configuration, and a changed strategy invalidates the history you
+  have accumulated. To try different parameters, save a new strategy,
+  backtest it, and run a second schedule.
+- **Do not schedule more than you can afford to evaluate.** Every slot is a
+  metered call.
 
 ## What to take away
 
-- Paper mode is the full author → schedule → evaluate → fill loop
-  with zero on-chain exposure.
-- Evaluations are logged whether or not the strategy fires.
-- Simulated fills surface in `list_trades` with `mode="paper"` —
-  identical schema to live trades, different mode flag.
-- The scheduler persists across server restarts. Closing the
-  laptop stops ticks; restarting the server resumes them from the
-  SQLite jobstore.
+- Paper mode is server-owned: MangroveAI keeps the simulated portfolio and the
+  agent supplies the schedule.
+- A strategy needs a passing backtest of its exact configuration before it can
+  be scheduled.
+- Starting a schedule needs `confirm=true`, and a failed or uncertain
+  evaluation stops the schedule until you reconcile it.
+- Schedules survive restarts, but they only advance while the agent is running.
 
-You now have a strategy that's running on a cron, logging
-evaluations, and simulating trades. From here, you can:
+From here you can stop and tinker with more strategies, or continue to
+Chapter 06 to set up a wallet and make a small live swap.
 
-- **Stop.** Tinker with more strategies, more timeframes, more
-  reference picks. Everything in Chapters 06–08 is optional.
-- **Continue to Chapter 06** if you want to set up a wallet and
-  eventually go live with real funds.
-
-→ [Chapter 06 — Wallet setup](06-wallet-setup.md)
+[Chapter 06 - Wallet setup](06-wallet-setup.md)

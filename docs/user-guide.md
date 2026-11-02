@@ -21,11 +21,13 @@ instructions and verify a real tool call. It should say plainly if its host
 cannot run commands or connect tools. [Client setup](clients.md) contains the
 exact instructions for the installing agent.
 
-For a fresh installation, the default setup needs no MangroveAI account or
-upstream API key. It creates a separate local credential automatically and
-defers payment-wallet setup. This is enough for connection checks and naming.
-Paid market data and backtests still require API-key access or x402 payments.
-Your chosen AI provider's own account/access requirements also apply.
+On a fresh installation, the unattended setup the client runs
+(`./scripts/setup.sh --yes --no-mcp`) needs no MangroveAI account or upstream
+API key. It creates a separate local credential automatically, selects x402
+access and defers payment-wallet setup. This is enough for connection checks
+and naming. Paid market data and backtests still require API-key access or x402
+payments. Your chosen AI provider's own account and access requirements also
+apply.
 
 ## What successful first use looks like
 
@@ -61,10 +63,11 @@ cd mangrove-agent
 ./scripts/setup.sh --yes --no-mcp
 ```
 
-This installs dependencies and starts the server. It preserves existing access
-settings; on a fresh installation it selects x402 and defers wallet setup.
-For an interactive choice of API-key or x402 access, use `./scripts/setup.sh`.
-Enter credentials only in the secure setup prompt, never in chat.
+This installs dependencies and starts the server on `http://127.0.0.1:9080`. It
+preserves existing access settings; on a fresh installation it selects x402 and
+defers wallet setup. For an interactive choice of API-key or x402 access, run
+`./scripts/setup.sh` without `--yes`. Enter credentials only in the hidden setup
+prompt, never in chat. See [setup with an API key or x402](setup-x402.md).
 
 Ask your chosen client to open this checkout and follow `docs/clients.md`.
 Claude's plugin is a separate optional installation path; use one path for an
@@ -117,8 +120,8 @@ functional area, then request full schemas for the areas or individual tools you
 need. You can select one tool or any number. MangroveAI provides this progressive
 discovery through `discover_tools`; the agent forwards the request. See the
 [discovery examples](clients.md#progressive-discovery-of-managed-services).
-If that service is not yet available on your configured server, the client must
-report the limitation and use the host's available tool search.
+If the configured server does not advertise `discover_tools`, the client must
+report the limitation and use the host's own tool search.
 
 ## If something is unavailable
 
@@ -139,7 +142,10 @@ backtests and paper mode. Paper mode avoids real trade execution, but upstream
 data and evaluation calls can still cost money. Set up access and a budget
 before paid use; live trading is a separate explicit decision.
 
-Never paste a private key or recovery phrase into any AI chat. Use
-`./scripts/stash-secret.sh` in your own private terminal and share only its
-short-lived vault token with the agent. Claude's configured secret hook is an
-extra client-specific check, not a guarantee supplied by every provider.
+Never paste a private key or recovery phrase into any AI chat. Run
+`./scripts/stash-secret.sh` in your own private terminal and enter the secret at
+its hidden prompt. It stores the secret in the agent's short-lived vault and
+writes a private, single-use handoff file; tell the agent only the path it prints,
+and it imports the wallet from the file's vault token. Claude's configured secret
+hook is an extra client-specific check, not a guarantee supplied by every
+provider.

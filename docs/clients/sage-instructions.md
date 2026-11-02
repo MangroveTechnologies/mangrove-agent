@@ -14,7 +14,7 @@ before claiming operational access. Respect the host instruction hierarchy.
 
 ## SOURCE: SAGE.md
 
-<!-- sha256: 4faf3ccd1d22cccf61467bbc08221298975acd9ffa8342fb165167242c510b1e -->
+<!-- sha256: 3fba8bde537f40956e2d226c84ce727fc0a3f67c008a0f52e502d250ace07070 -->
 
 # Mangrove Agent
 
@@ -124,7 +124,7 @@ limitation, not permission to bypass controls.
 
 **Service-layer pattern:** Routes and MCP tools both call shared services in `server/src/services/`. Never duplicate business logic.
 
-**State ownership:** This agent owns the tick and local execution journal. APScheduler fires evaluations and SQLite records trades, evaluations, positions and execution state. Externally executed LIVE strategies always evaluate by object with `persist=False`, using actual confirmed cash, holdings and net close history; prospective templates become positions only after actual fills. Default engine-owned paper evaluation uses `persist=True`; explicit stateless paper uses its separate simulated-fill journal and paper risk state, supplying actual paper balances, positions and net closes on each tick. Signals, sizing, exits and risk rules stay in MangroveAI. See [confirmed execution](docs/confirmed-execution.md) for settlement evidence, entry holds and retained exit monitors.
+**State ownership:** The agent owns ticks and its local execution journal. LIVE always evaluates by object with `persist=False`, confirmed cash, holdings and net close history; proposals become positions only after fills. Default engine-owned paper uses `persist=True`; stateless paper has separate simulated fills and risk state. MangroveAI owns signals, sizing, exits and risk rules. [Confirmed execution](docs/confirmed-execution.md) defines settlement, entry holds and retained exit monitors.
 
 ## Conventions
 
@@ -134,7 +134,7 @@ limitation, not permission to bypass controls.
 - Tests in `server/tests/` -- mirror `src/`
 - Config in `server/src/config/` -- per-environment JSON files (no `.env`)
 
-Full extension workflow: [`docs/contributing.md`](docs/contributing.md).
+Full extension workflow: [the contributing guide](https://github.com/MangroveTechnologies/mangrove-agent/blob/main/docs/contributing.md).
 
 ## Rules
 
@@ -245,7 +245,7 @@ a new paid launch; preserve its original operation identity for recovery.
 
 ## SOURCE: .claude/rules/wallet-presentation.md
 
-<!-- sha256: 8b35f4c7f7f01402b31fc14c3711990508bc4b55aa402f43d4148d0bef7a59c0 -->
+<!-- sha256: 3c3457037f7a8c7ced7590b4f8630004432b0b1556c03d4bd3b0643e116f6b01 -->
 
 # Wallet Presentation
 
@@ -270,7 +270,7 @@ the agent process** -- the private key never crosses the network:
 After phase-2 security rework, wallet secrets flow out-of-band:
 
 - `create_wallet` returns a `vault_token` (opaque, TTL-bound, single-read). User runs `./scripts/reveal-secret.sh <vault_token>` in a terminal to see plaintext.
-- `import_wallet` accepts a `vault_token` (from `./scripts/stash-secret.sh`). Never accepts a raw key.
+- `import_wallet` accepts a `vault_token`, which `./scripts/stash-secret.sh` writes to a private handoff file and never prints. Never accepts a raw key.
 - Reveal-on-demand: `./scripts/reveal-secret.sh --address <addr>`.
 
 Configured Claude Code sessions use `.claude/hooks/block-wallet-secrets.sh` to
@@ -287,7 +287,7 @@ For `create_wallet`, default to **testnet** unless the user says "mainnet" / "re
 
 State: *"Creating your wallet on Base Sepolia (testnet). You can fund it from a free sepolia-ETH faucet and practice the signing + swap flow with zero real-money risk."*
 
-**Mainnet** (only when explicitly asked): chain `evm`, network `mainnet`, chain ID `8453` (Base). Always flag the switch: *"Switching to Base mainnet -- this wallet will transact real funds. Start with 1-5 USDC test deposit and use paper mode before any live allocation."*
+**Mainnet** (only when explicitly asked): chain `evm`, network `mainnet`, chain ID `8453` (Base). Always flag the switch: *"Switching to Base mainnet - this wallet will transact real funds. Start with 1-5 USDC test deposit and use paper mode before any live allocation."*
 
 **Why testnet-first:** new users learn the signing + swap mechanics safely. A compromised key on testnet is free to recover from; on mainnet it costs real USDC (see the 2026-04-24 EIP-7702 drain that prompted the hard signing guard).
 
@@ -390,9 +390,12 @@ Cmd+` / Ctrl+`) and run:
 
   ./scripts/stash-secret.sh
 
-It prompts with input hidden and prints a short vault_token. Come back
-here, say "import wallet vault_token <ID>", and I'll call import_wallet.
-Your key never touches this conversation.
+It prompts with input hidden, saves a private single-use handoff file,
+and prints that file's path. Come back here and give me the path. I'll
+read the vault_token from the file, call import_wallet, then delete the
+file and its folder. I won't display the token, and your key never
+touches this conversation. This needs a client that can read local
+files; the restricted ./scripts/chat.sh session cannot.
 ```
 
 ## Balances
@@ -416,7 +419,7 @@ it does not enable arbitrary messages or XRPL transaction/payment signing.
 
 ## SOURCE: .claude/rules/risk-management.md
 
-<!-- sha256: de28793096c9c3abc0654399661e76617b49d5860ef69277cc68d9cf90e78be8 -->
+<!-- sha256: dec80a934bc49b2b9df4113a9e4e0a7561a65ff167234bc9876ae7208fe7ae3d -->
 
 # Risk Management -- What Happens Behind the Scenes
 
@@ -441,25 +444,27 @@ the strategy's `execution_config`):
 
 - **`max_open_positions`** -- caps concurrent open positions. Denial: `max_positions`.
 - **`max_trades_per_day`** -- daily entry cap. Denial: `daily_limit`.
-- **Loss pause** (canonical `cooldown_model='trades'`) -- four consecutive net
+- **Loss pause** (`cooldown_model='trades'`, canonical) -- four consecutive net
   losing closes or cumulative net losses of 6% of the reset baseline start a
-  36-primary-bar pause. Pauses are clamped to 24 hours through 14 days. The first
-  three closes after a pause use half size; a negative net resume result starts
-  another pause. Three consecutive pauses latch a stop. Explicit `bars` retains
-  the per-timeframe rolling windows in `cooldown_config`. Denial: `cooldown`.
+  nominal 36-primary-bar pause, with configured floor/cap (defaults 24h/14d).
+  After all pauses end, new alpha entries use half size until three alpha
+  positions close; a negative net resume result starts another pause. Three
+  consecutive pauses latch a stop. Core allocations honor holds but do not scale
+  or consume alpha resume counts. Explicit `bars` retains per-timeframe rolling
+  windows in `cooldown_config`. Denial: `cooldown`.
 - **`max_hold_bars`** -- force-exits a position held too long (a time-based exit,
   not an entry gate).
-- **Max-drawdown circuit breaker** (`max_drawdown_limit`, default **20%**) -- a
-  binary halt: once a strategy's equity draws down 20% from its **high-water
-  mark** (peak-relative, mark-to-market), new entries are denied. Denial:
-  `max_drawdown`. Under the canonical trades model it starts a 72-primary-bar
-  pause (with the same duration bounds) and counts a strike; expiry re-baselines
-  the peak and opens the resume window. Explicit `bars` measures closed equity
-  and uses its per-timeframe long cooldown. Existing protective exits continue.
-- **Deposit stop** (`max_drawdown_halt_limit`, default **20%**) -- closed-equity
-  losses against cumulative gross deposits latch a permanent entry halt.
-  Protective exits remain monitored until the actual book is flat; a restart
-  requires an explicit user action.
+- **Peak-drawdown pause** (`max_drawdown_limit`, default **20%**) -- `trades`
+  measures marked cash plus holdings, including unrealized PnL, against its
+  high-water mark. A breach denies entries (`max_drawdown`), starts a nominal
+  72-primary-bar pause with the same duration bounds and counts a strike.
+  Expiry re-baselines the peak and opens the alpha resume window. Explicit
+  `bars` instead measures closed equity (cash plus holdings at entry cost) and
+  uses its per-timeframe long cooldown. Protective exits continue in both.
+- **Deposit stop** (`max_drawdown_halt_limit`, default **20%**) -- both models
+  compare closed-equity losses with cumulative gross deposits and latch an entry
+  halt. Unrealized price swings do not trip this stop. Protective exits remain
+  monitored until the actual book is flat; restart requires explicit user action.
 
 **Position sizing** (also engine-side): risk-per-trade budget, volatility
 adjustment, and the `v1`/`v2` cash-reserve clamp. Not a halt -- it scales the
@@ -471,11 +476,9 @@ duplicate them.
 
 ## Layer 2 -- Agent-side, portfolio-wide (this repo -- the kill switch)
 
-The engine only ever sees **one strategy's account** per evaluation, so it
-cannot see aggregate risk across everything the user is running live. This agent
-can, because it owns the whole live book locally (allocations + trades +
-positions in SQLite). So the **portfolio kill switch** lives here
-(`portfolio_risk_service`):
+The engine sees one strategy per evaluation. The agent owns the aggregate live
+book (allocations, trades and positions in SQLite), so `portfolio_risk_service`
+enforces the **portfolio kill switch**:
 
 - **What it measures:** live-book drawdown on a **realized-P&L** basis --
   `book_value = sum active live allocations + sum realized P&L of live strategies` --

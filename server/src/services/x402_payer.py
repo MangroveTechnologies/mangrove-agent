@@ -571,9 +571,8 @@ async def pay_remote_mcp(
     import math
 
     import anyio
-    from mcp.client.streamable_http import streamable_http_client
-
     from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
 
     try:
         url = httpx.URL(endpoint)

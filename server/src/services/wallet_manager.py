@@ -194,6 +194,12 @@ _X402_USDC_BY_CHAIN_ID: dict[int, str] = {
     84532: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",  # Base Sepolia
 }
 
+
+def canonical_usdc_addresses() -> dict[int, str]:
+    """Copy the locally reviewed USDC deployments without exposing mutable policy."""
+    return _X402_USDC_BY_CHAIN_ID.copy()
+
+
 # The canonical EIP-3009 struct, pinned field-for-field and in order.
 #
 # Checking primaryType alone is not enough: EIP-712 derives its typehash from
@@ -862,7 +868,8 @@ def confirm_backup(address: str) -> WalletListItem:
 
     The user invokes `./scripts/confirm-backup.sh <address>` AFTER they've
     saved the plaintext secret outside the agent. This flips the flag;
-    downstream, execute_swap and update_strategy_status(live) unlock.
+    downstream, execute_swap and the live strategy transition through PATCH
+    `/api/v1/agent/strategies/{strategy_id}/status` unlock.
     """
     conn = get_connection()
     row = conn.execute(

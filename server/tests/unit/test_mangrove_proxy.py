@@ -1,11 +1,13 @@
 """MangroveAI contracts come from MCP; custody and transport remain local."""
+import json
+import socket
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from mcp.types import CallToolResult, TextContent, Tool
-
 from src.mcp import mangrove_proxy as proxy
 
 
@@ -133,6 +135,49 @@ def test_external_schema_refs_rejected():
         proxy.validate_tool(Tool(name='unsafe', inputSchema={'$ref': 'https://untrusted/schema'}))
 
 
+def save_strategy_tool(authoring_schema):
+    """The shape MangroveAI#1496 serves: a named authoring schema nested as an annotation."""
+    return Tool(name='save_strategy', description='Save a strategy', inputSchema={
+        'type': 'object', 'required': ['asset'], 'additionalProperties': False,
+        'properties': {
+            'asset': {'type': 'string'},
+            'constraints': {'type': 'object', 'x-mangrove-authoring-schema': authoring_schema},
+        },
+    })
+
+
+AUTHORING = {'$schema': 'https://json-schema.org/draft/2020-12/schema', '$id': 'urn:mangrove:execution-config:1',
+             'title': 'Execution config', 'type': 'object',
+             'properties': {'max_risk_per_trade': {'type': 'number', '$comment': 'fraction', 'examples': [0.01]}}}
+
+
+@pytest.mark.asyncio
+async def test_catalog_loads_a_schema_with_an_inert_id_and_calls_through(transport, monkeypatch):
+    client, _ = transport
+    from src.services import x402_payer
+    monkeypatch.setattr(x402_payer, 'pay_on_open_mcp_session', AsyncMock())
+    client.list_tools.return_value = SimpleNamespace(tools=[save_strategy_tool(AUTHORING), tool()], nextCursor=None)
+    listed = {t.name: t for t in await proxy.catalog()}
+    assert set(listed) == {'save_strategy', 'server_owned_tool'}
+    advertised = listed['save_strategy'].inputSchema['properties']['constraints']['x-mangrove-authoring-schema']
+    assert advertised == {key: value for key, value in AUTHORING.items() if key != '$id'}
+    assert '$id' not in json.dumps(listed['save_strategy'].inputSchema)
+    client.send_request.return_value = CallToolResult(isError=False, content=[TextContent(type='text', text='ok')])
+    result = await proxy.call_tool('save_strategy', {'asset': 'BTC', 'constraints': {}})
+    assert not result.isError
+    assert client.send_request.call_args.args[0].root.params.arguments == {'asset': 'BTC', 'constraints': {}}
+
+
+@pytest.mark.parametrize('schema', [
+    {'$id': 'https://untrusted/base/', 'properties': {'a': {'$ref': '#/$defs/a'}}, '$defs': {'a': {'type': 'string'}}},
+    {'$id': 'urn:scoped', 'properties': {'a': {'$dynamicRef': '#meta'}}},
+    {'properties': {'$id': {'type': 'string'}}},
+])
+def test_an_id_that_scopes_a_reference_is_still_refused(schema):
+    with pytest.raises(ValueError, match='Only local schema references'):
+        proxy.validate_tool(proxy.normalize_tool(Tool(name='scoped', inputSchema={'type': 'object', **schema})))
+
+
 @pytest.mark.asyncio
 async def test_server_and_discovery_use_same_dynamic_catalog(monkeypatch):
     from src.api.routes import discovery
@@ -172,6 +217,62 @@ def test_wallet_endpoint_rejects_unsafe_destination(monkeypatch, base):
         proxy.endpoint()
 
 
+@pytest.fixture
+def endpoint_config(monkeypatch):
+    catalog = json.loads((Path(__file__).parents[2] / "src/config/mangrove-endpoints.json").read_text())
+    config = SimpleNamespace(
+        MANGROVE_ACCESS_MODE="api-key", MANGROVE_API_KEY="dev_fixture",
+        MANGROVEAI_BASE_URL=None, MANGROVE_ENDPOINTS=catalog, ENVIRONMENT="local",
+        MANGROVE_SDK_TIMEOUT_SECONDS=1,
+    )
+    monkeypatch.setattr(proxy, "app_config", config)
+    monkeypatch.setattr(proxy.oauth, "app_config", config)
+
+    def blocked(*args, **kwargs):
+        pytest.fail("Runtime destination checks must not open sockets or resolve DNS")
+
+    for name in ("connect", "connect_ex"):
+        monkeypatch.setattr(socket.socket, name, blocked)
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)
+    monkeypatch.setattr(socket, "create_connection", blocked)
+    return config
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("environment", ["local", "prod", "dev", "test"])
+@pytest.mark.parametrize("base", [None, ""])
+async def test_dev_key_runtime_discovery_requires_an_explicit_origin(monkeypatch, endpoint_config, environment, base):
+    from src.shared.errors import ValidationError
+
+    endpoint_config.ENVIRONMENT = environment
+    endpoint_config.MANGROVEAI_BASE_URL = base
+    transport = Mock(side_effect=AssertionError("HTTP transport must not be constructed"))
+    monkeypatch.setattr(proxy, "_http_client", transport)
+    with pytest.raises(ValidationError, match="Development API keys require"):
+        await proxy.catalog()
+    transport.assert_not_called()
+
+
+@pytest.mark.parametrize("base", ["https://dev.example/api/v1", "http://127.0.0.1:5002/api/v1"])
+def test_dev_key_runtime_explicit_origin_is_preserved(endpoint_config, base):
+    endpoint_config.MANGROVEAI_BASE_URL = base
+    assert proxy.endpoint() == base[:-7] + "/mcp/"
+
+
+@pytest.mark.parametrize("key,mode,environment,expected", [
+    ("prod_fixture", "api-key", "prod", "https://api.mangrovedeveloper.ai/mcp/"),
+    ("local_fixture", "api-key", "test", "http://localhost:5001/mcp/"),
+    ("test_fixture", "api-key", "test", "http://localhost:5001/mcp/"),
+    (None, "x402", "local", "https://api.mangrovedeveloper.ai/mcp/"),
+    ("dev_saved", "x402", "local", "https://api.mangrovedeveloper.ai/mcp/"),
+])
+def test_other_runtime_destination_modes_are_unchanged(endpoint_config, key, mode, environment, expected):
+    endpoint_config.MANGROVE_API_KEY = key
+    endpoint_config.MANGROVE_ACCESS_MODE = mode
+    endpoint_config.ENVIRONMENT = environment
+    assert proxy.endpoint() == expected
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('status', [401, 403])
 @pytest.mark.parametrize('http_denial', [False, True])
@@ -180,7 +281,6 @@ async def test_official_client_access_denial_never_pays(monkeypatch, status, htt
     import json
 
     import httpx
-
     from src.mcp import tools
     from src.services import x402_payer
     from src.shared.errors import UpstreamAccessError
@@ -293,7 +393,6 @@ async def test_real_mcp_client_six_reads_fetch_catalog_once(monkeypatch):
     from collections import Counter
 
     import httpx
-
     from src.mcp import tools
     monkeypatch.setattr(tools, '_require', lambda _: True)
     monkeypatch.setattr(proxy, 'endpoint', lambda: 'https://receiver.test/mcp/')
