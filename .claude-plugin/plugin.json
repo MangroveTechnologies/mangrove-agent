@@ -1,7 +1,7 @@
 {
   "name": "mangrove-agent",
   "version": "0.3.0",
-  "description": "Local client for Mangrove strategy research, backtesting, paper trading, and supported execution workflows. Mangrove-owned execution software enforces deterministic risk management based on live market and account conditions; custody depends on the selected connection and wallet mode.",
+  "description": "Guardrails for AI trading agents. Local MCP server and plugin: 100+ strategy tools, circuit breakers, automatic risk-based position sizing and stop-loss/take-profit orders, execution across 12+ venues. Free API key or x402 pay per call.",
   "author": {
     "name": "Mangrove Technologies",
     "url": "https://github.com/MangroveTechnologies"
