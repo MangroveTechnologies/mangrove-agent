@@ -1,4 +1,5 @@
 """Unit tests for allocation_service — record/release/get."""
+
 from __future__ import annotations
 
 import os
@@ -17,6 +18,7 @@ def temp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(app_config, "DB_PATH", str(db_file))
     db_mod.reset_connection()
     from src.shared.db.sqlite import get_connection, init_db
+
     init_db()
 
     # Seed a strategy row.
@@ -27,8 +29,20 @@ def temp_db(tmp_path, monkeypatch):
             entry_json, exit_json, execution_config_json,
             generation_report_json, created_at, updated_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-        ("s1", "mg-s1", "test", "ETH", "1h", "paper", "[]", "[]", "{}", None,
-         "2026-04-18T00:00:00+00:00", "2026-04-18T00:00:00+00:00"),
+        (
+            "s1",
+            "mg-s1",
+            "test",
+            "ETH",
+            "1h",
+            "paper",
+            "[]",
+            "[]",
+            "{}",
+            None,
+            "2026-04-18T00:00:00+00:00",
+            "2026-04-18T00:00:00+00:00",
+        ),
     )
     # Seed a stored wallet (plausible address + placeholder encrypted secret).
     conn.execute(
@@ -36,8 +50,7 @@ def temp_db(tmp_path, monkeypatch):
            (id, address, chain, network, chain_id, encrypted_secret,
             encryption_method, label, created_at, metadata_json)
            VALUES (?,?,?,?,?,?,?,?,?,?)""",
-        ("w1", "0xabc", "evm", "testnet", 84532, b"ciphertext",
-         "fernet-v1", "test", "2026-04-18T00:00:00+00:00", None),
+        ("w1", "0xabc", "evm", "testnet", 84532, b"ciphertext", "fernet-v1", "test", "2026-04-18T00:00:00+00:00", None),
     )
     conn.commit()
 
@@ -48,6 +61,7 @@ def temp_db(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def stub_wallet_exists(monkeypatch):
     """Default: the seeded wallet 0xabc exists; anything else doesn't."""
+
     def _fake_exists(addr: str) -> bool:
         return addr == "0xabc"
 
@@ -126,21 +140,12 @@ def test_release_allocation_idempotent(temp_db):
     assert second is None  # already released
 
 
-def test_only_most_recent_active_returned(temp_db):
-    """If two allocations somehow exist for one strategy, get_active returns the newest."""
+def test_active_execution_allocation_is_immutable_and_idempotent(temp_db):
     from src.services.allocation_service import get_active_allocation, record_allocation
+    from src.shared.errors import AllocationInsufficient
 
-    a1 = record_allocation("s1", "0xabc", "0xusdc", "USDC", 100.0)
-    a2 = record_allocation("s1", "0xabc", "0xusdc", "USDC", 200.0)
-
-    active = get_active_allocation("s1")
-    assert active is not None
-    assert active.amount == 200.0  # newest wins
-
-    # Sanity: both rows exist
-    from src.shared.db.sqlite import get_connection
-    rows = get_connection().execute(
-        "SELECT COUNT(*) AS c FROM allocations WHERE strategy_id='s1' AND active=1"
-    ).fetchone()
-    assert rows["c"] == 2
-    _ = (a1, a2)  # silence unused warnings
+    first = record_allocation("s1", "0xabc", "0xusdc", "USDC", 100.0)
+    assert record_allocation("s1", "0xabc", "0xusdc", "USDC", 100.0).id == first.id
+    with pytest.raises(AllocationInsufficient, match="cannot be replaced"):
+        record_allocation("s1", "0xabc", "0xusdc", "USDC", 200.0)
+    assert get_active_allocation("s1").amount == 100.0

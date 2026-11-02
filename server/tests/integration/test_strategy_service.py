@@ -461,11 +461,9 @@ def test_tick_skips_resting_bracket_orders(temp_db, mock_ai_sdk, monkeypatch):
 
 
 def test_tick_stateless_lane_round_trips_state(temp_db, mock_ai_sdk, monkeypatch):
-    """#151 Phase 3: a strategy created with evaluation_lane='stateless'
-    ticks via evaluate_by_object (persist=False), sends the locally
-    persisted execution_state + open_positions, and persists what comes
-    back for the next tick. Engine-shaped filled orders execute the same
-    as the server lane."""
+    """Stateless paper activates templates only after local simulated fills,
+    then supplies its own cash and book despite the response's modeled values.
+    """
     import json as _json
 
     from src.services.strategy_service import (
@@ -492,9 +490,11 @@ def test_tick_stateless_lane_round_trips_state(temp_db, mock_ai_sdk, monkeypatch
     eval_resp.order_intents = None
     eval_resp.orders = None
     eval_resp.model_dump.return_value = {
-        "execution_state": {"cash_balance": 9900.0, "account_value": 10000.0,
-                            "total_trades": 0, "num_open_positions": 1},
-        "open_positions": returned_positions,
+        "success": True,
+        "execution_state": {"cash_balance": 999999.0, "account_value": 999999.0,
+                            "risk_state": {"close_history_bootstrapped": True}},
+        "open_positions": [],
+        "proposed_positions": [{**returned_positions[0], "execution_confirmed": False}],
     }
     mock_ai_sdk.execution.evaluate_by_object.return_value = eval_resp
 
@@ -527,18 +527,20 @@ def test_tick_stateless_lane_round_trips_state(temp_db, mock_ai_sdk, monkeypatch
     trades = list_trades(s.id)
     assert len(trades) == 1 and trades[0].mode == "paper"
 
-    # Returned state persisted for the NEXT tick's echo.
+    # The risk response is saved, but its proposal balances are not facts.
     row = get_connection().execute(
-        "SELECT execution_state_json, open_positions_json FROM strategies WHERE id = ?",
+        "SELECT paper_execution_state_json, open_positions_json FROM strategies WHERE id = ?",
         (s.id,),
     ).fetchone()
-    assert _json.loads(row["execution_state_json"])["cash_balance"] == 9900.0
-    assert _json.loads(row["open_positions_json"])[0]["id"] == "pos-e1"
+    assert "cash_balance" not in _json.loads(row["paper_execution_state_json"])
+    assert _json.loads(row["open_positions_json"]) == []
 
     # Second tick echoes the persisted blob back.
     tick(s.id)
     _, kwargs2 = mock_ai_sdk.execution.evaluate_by_object.call_args
-    assert kwargs2["open_positions"] == returned_positions
+    assert len(kwargs2["open_positions"]) == 1
+    assert kwargs2["open_positions"][0]["id"] == "pos-e1"
+    assert kwargs2["open_positions"][0]["entry_price"] == 2500
     sent2 = mock_ai_sdk.execution.evaluate_by_object.call_args.args[0]
     assert sent2["execution_state"]["cash_balance"] == 9900.0
 

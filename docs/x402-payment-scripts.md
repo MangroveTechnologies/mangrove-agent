@@ -10,11 +10,14 @@ are retained, with their original roles:
 | `agent_pay_hello_mangrove.py` | Noninteractive REST payment example |
 | `agent_pay_hello_mangrove_mcp.py` | Noninteractive MCP payment example using the SDK's payment metadata |
 
-The historical `test_x402_mainnet.py` filename is preserved. It does **not**
-select mainnet. Every script reads `X402_NETWORK` from application configuration;
-Base Sepolia (`eip155:84532`) is the normal local configuration. If configuration
-selects Base mainnet (`eip155:8453`), an explicit `--allow-mainnet` is also required.
-Do not add that flag unless you intend to spend real USDC.
+The `test_x402_mainnet.py` filename is historical. The script does **not** select
+mainnet. Every script reads `X402_NETWORK` from application configuration, and only
+Base Sepolia (`eip155:84532`) and Base mainnet (`eip155:8453`) are accepted. The
+example local configuration (`server/src/config/local-example-config.json`) selects
+Base mainnet, so the scripts refuse to run against it unless you also pass
+`--allow-mainnet`. Do not add that flag unless you intend to spend real USDC. To test
+without spending real funds, set `X402_NETWORK` to `eip155:84532` in the same
+configuration the running agent uses, and use a Base Sepolia wallet.
 
 ## Prerequisites
 

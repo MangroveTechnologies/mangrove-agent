@@ -7,23 +7,23 @@ argument-hint: "<tool name and purpose>"
 
 # Draft MCP Tool Specification
 
-Parse `$ARGUMENTS` as a natural-language description of the tool you want to add (no project prefix — this skill is scoped to mangrove-agent).
+Parse `$ARGUMENTS` as a natural-language description of the tool you want to add (no project prefix - this skill is scoped to mangrove-agent).
 
 Produce a complete MCP tool specification following the conventions already in `server/src/mcp/tools.py` and the service-layer pattern documented in `docs/contributing.md` and `SAGE.md`.
 
 ## Output sections
 
 ### 1. Tool name
-Lowercase snake_case. No prefix (the MCP server is single-tenant; all tools live under `mcp__mangrove-agent__*`). Match existing patterns: `get_balances`, `agent_list_trades`, `agent_evaluate_strategy`.
+Lowercase snake_case. No prefix (the MCP server is single-tenant; all tools live under `mcp__mangrove-agent__*`). Match existing patterns: `list_wallets`, `agent_list_venue_orders`, `agent_start_paper_schedule`.
 
 ### 2. Access tier
 Pick one:
-- **free** — no API key required. Reserve for `status`, `list_tools`, read-only discovery endpoints that can't leak wallet/strategy data.
-- **auth** — requires `api_key` param matching `API_KEYS` in config. Default tier for everything else.
-- **x402** — payment-gated via the x402 protocol. Currently demo-only (`hello_mangrove`). Add this tier only on explicit product decision.
+- **free** - no API key required. Reserve for `status`, `list_tools`, read-only discovery endpoints that can't leak wallet/strategy data.
+- **auth** - requires `api_key` param matching `API_KEYS` in config. Default tier for everything else.
+- **x402** - payment-gated via the x402 protocol. Currently demo-only (`hello_mangrove`). Add this tier only on explicit product decision.
 
 ### 3. Description
-One sentence. Match the tone of existing tool descriptions — direct, imperative, and it should state any guard or precondition ("Requires backup-confirmed wallet", "Paper mode only", etc.).
+One sentence. Match the tone of existing tool descriptions - direct, imperative, and it should state any guard or precondition ("Requires backup-confirmed wallet", "Paper mode only", etc.).
 
 ### 4. Parameters
 For each parameter give: `name`, `type`, `required`, `description`. Standard patterns:
@@ -33,7 +33,7 @@ For each parameter give: `name`, `type`, `required`, `description`. Standard pat
 - Token params accept either symbol or contract address (document which is preferred for the route).
 
 ### 5. Service-layer function
-Every MCP tool calls into a function in `server/src/services/<resource>.py`. Give the function signature the tool will call — the service layer owns the business logic, the tool layer only authenticates + marshals.
+Every MCP tool calls into a function in `server/src/services/<resource>.py`. Give the function signature the tool will call - the service layer owns the business logic, the tool layer only authenticates + marshals.
 
 ### 6. Response shape
 JSON dict with explicit keys. Never return raw model objects without `.model_dump(mode="json")`. Never return encrypted secrets, Fernet ciphertext, or plaintext key material (the signing guard blocks that at the wallet layer, but your tool should not be a bypass).
@@ -52,7 +52,7 @@ One positive example with realistic values (e.g. a real Base contract address, a
 
 When drafting tools that touch signing, wallets, or execution, state explicitly in the spec's description / preconditions:
 
-- Signing flows MUST route through `wallet_manager.sign()` — the hard guard there refuses non-1inch payloads (see `.claude/rules/wallet-presentation.md`).
+- Signing flows MUST route through `wallet_manager.sign()` - the hard guard there refuses non-1inch payloads (see `.claude/rules/wallet-presentation.md`).
 - New tools that take a wallet address MUST check `backup_confirmed_at` before executing anything that moves real funds.
 - New tools that take a chain_id MUST default to Base Sepolia (84532); mainnet (8453) requires an explicit user signal.
 

@@ -101,7 +101,8 @@ code or configuration changed; an upgrade or restart needs a separate request.
 2. Run `./scripts/setup.sh --yes --no-mcp`. A fresh install uses keyless x402
    mode, protects local access, installs Python dependencies, and starts the
    agent. This creates no wallet and makes no payment. Existing access settings
-   are preserved. Claude's plugin/native registration remains available below.
+   are preserved. To register the agent with Claude Code, run setup without
+   `--no-mcp` or run `./scripts/setup-mcp.sh` later (see [Claude Code](#claude-code)).
 3. Load all shared agent policy into the current conversation. Repository-aware
    clients follow `AGENTS.md` or `CLAUDE.md`. Other clients run the following
    command separately and read its complete output:
@@ -116,6 +117,11 @@ code or configuration changed; an upgrade or restart needs a separate request.
    .venv/bin/python3 scripts/local_mcp_bridge.py --call discover_tools
    .venv/bin/python3 scripts/local_mcp_bridge.py --call status
    ```
+
+   When Claude registration is skipped, `setup.sh` prints these same two commands
+   (and the `agent_context.py --stdout` command from step 3) at the end of its run,
+   using the interpreter path for your installation. For a Docker installation it
+   prints the system interpreter instead of `.venv/bin/python3`.
 
 Only report success after the status call succeeds and all four instruction
 sources are loaded. A truncated policy output or a printed command is not a
@@ -133,9 +139,9 @@ registration. Avoid dumping that full response into each conversation.
 
 ### Progressive discovery of managed services
 
-MangroveAI owns this service in `MangroveAI/src/MangroveAI/mcp/`. It selects
-from the same live exposed catalog as native MCP, using the server's functional
-categories. No category map or remote schema snapshot is maintained here.
+MangroveAI owns this service. It selects from the same live exposed catalog as
+native MCP, using the server's functional categories. This repository keeps no
+category map or remote schema snapshot.
 
 | Need | `discover_tools` arguments |
 | --- | --- |
@@ -201,8 +207,9 @@ The generated configs are gitignored. The upstream `MANGROVE_API_KEY` is a
 different credential and must not be substituted for the local one.
 
 If a project config already exists, it is preserved. Merge the `mangrove-agent`
-table from `.codex/config.toml.example` or `.grok/config.toml.example` into it,
-matching the URL printed by setup for Codex, then rerun the helper. Do not replace
+table from `.codex/config.toml.example` or `.grok/config.toml.example` into it
+and, for Codex, set `url` to your agent's origin (shown by setup) followed by
+`/mcp/`, then rerun the helper. Do not replace
 other configured servers. Codex project config requires a trusted project. An
 already-open desktop session will need to reconnect or start a fresh session;
 running the helper cannot change another process's environment.
@@ -268,71 +275,15 @@ Verify each client separately; passing in one does not prove another is ready.
 4. Ask how to import a private key. The answer must direct the user to their
    private terminal's stash flow, never invite them to paste the key into chat.
 
-### Provider acceptance (2026-10-21)
+### Naming and status behavior to expect
 
-The install-from-an-agent workflow was exercised through actual Claude Code,
-Codex, Grok Build, and Perplexity Computer sessions. These were fresh isolated
-clones with real dependency downloads, new local databases, and no existing
-Mangrove credentials. The agents ran setup, loaded the policy, and used the
-command client themselves; fake model processes were not used for this check.
+A fresh installation returns `agent_name: null` from `status`, and the client asks the user for a name instead of introducing itself under a default. The client saves only the user's choice with `set_agent_name`, which accepts 1 to 64 printable characters. A blank or invalid name is rejected: the MCP result has `isError: true` and the command client exits with status 1, and the saved name stays unchanged. The tool runs once, with no automatic retry. A later `status` call confirms which name is saved.
 
-| Client / environment | Fresh install and four policy sources | Live discovery and free status | User choice saved and retained after restart | Blank name rejected without changing the saved name |
-| --- | --- | --- | --- | --- |
-| Claude Code in Claude desktop, macOS / Python 3.13 | Pass | Pass, 120 advertised tools | Pass | Pass, MCP `isError: true`, command exit 1 |
-| Codex CLI 0.163.0-alpha.11, macOS / Python 3.13 | Pass | Pass | Pass, including a fresh-session greeting | Pass, MCP `isError: true`, command exit 1 |
-| Grok Build 1.0.67, macOS / Python 3.13 | Pass | Pass | Pass, including a fresh-session greeting | Pass, MCP `isError: true`, command exit 1 |
-| Perplexity Computer, hosted Linux / Python 3.12.15 | Pass | Pass, 120 advertised tools | Pass | Pass, MCP `isError: true`, command exit 1 |
+The command client exits nonzero for any tool failure, including errors that the agent returns as JSON text, so a script can rely on its exit status.
 
-Fresh status returned `agent_name: null`; clients asked for a name instead of
-introducing themselves as Sage. Only the supplied choice was saved. Codex,
-Grok, and Perplexity also renamed Orbit to Nova and verified it with status.
-Claude preserved the name chosen directly by its user. Invalid-name calls ran
-once, with no replacement mutation or automatic retry. Read-only checks after
-the expected rejection confirmed that the previous name remained saved.
+In x402 wallet mode, `status` skips the SDK catalog counts (`catalog.error` is `catalog_counts_unavailable_in_payment_mode`) so that checking status cannot spend money. Setup reports unavailable marketplace ownership discovery explicitly; naming, `status` and live MangroveAI tool discovery still work. None of these checks establishes marketplace ownership or payment readiness.
 
-The policy checks covered server-owned `load_skill` workflows for strategies
-and backtests, and terminal-only private-key import through `stash-secret.sh`.
-They did not execute those workflows. Final status showed no wallets, strategies,
-user jobs, or payments, with $0 spent. Only the owned disposable servers were
-stopped after testing; their files and databases were preserved.
-
-Acceptance found and corrected installation and error-handling defects before review:
-
-- A server started with `nohup` alone died when an installing agent cleaned up
-  its command process group. Setup now creates a separate process session.
-  Direct setup followed by separate later discovery/status commands passed in
-  the real clients, including Perplexity's hosted environment.
-- Tool-error JSON could be presented as a successful command or MCP result.
-  The command client now exits nonzero for tool failures, and `set_agent_name`
-  sets MCP `isError` for authentication and validation failures.
-- Claude's cold-start rerun exposed setup's 10-second HTTP timeout expiring
-  before bounded remote tool discovery finished. Catalog verification now has
-  a 45-second timeout; wallet mutations retain their existing timeout and no
-  retries. A regression test serves a healthy catalog after more than 10 seconds.
-- During the next cold start, upstream MCP discovery was temporarily unavailable
-  while the local server was healthy. Setup now reports platform tool access as
-  NOT verified instead of diagnosing the absent remote `list_signals` tool as a
-  broken local installation. It still fails for missing local onboarding tools;
-  regression tests cover both outcomes. A later separate discovery returned the
-  full 120-tool catalog again.
-
-Provider logs and private installation configs stay outside the public repository. Automated
-checks additionally cover policy export consistency, native launcher arguments,
-credential handling, existing-config preservation, authentication, persistent
-identity, stdio transport, and command failure semantics.
-
-This acceptance covers the documented command-based installation and naming
-flow. Optional native MCP registration, the restricted Claude launcher, and
-plugin injection have automated coverage; the provider sessions above used the
-command client. Paid market data, wallet custody, strategy execution and trading
-were not exercised. A normal web chat without command execution still cannot
-install software. Hosted process and file retention remain host-dependent.
-
-The live environment also reported unavailable marketplace ownership discovery
-and `catalog_counts_unavailable_in_payment_mode` for status counts. Setup
-reported the marketplace limitation explicitly; local naming/status and live
-MangroveAI tool discovery succeeded. These results do not claim marketplace
-ownership or payment readiness.
+The automated checks in the repository cover policy export consistency, native launcher arguments, credential handling, existing-config preservation, authentication, persistent identity, stdio transport and command failure semantics. They do not exercise paid market data, wallet custody, strategy execution or trading. A normal web chat without command execution still cannot install software, and hosted process and file retention remain host-dependent.
 
 ## Official client references
 

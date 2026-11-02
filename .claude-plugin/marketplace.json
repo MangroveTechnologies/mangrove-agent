@@ -9,7 +9,7 @@
     {
       "name": "mangrove-agent",
       "source": "./",
-      "description": "Local AI trading agent on the Mangrove API: author strategies, backtest, paper-trade, and go live on DEX (1inch) or Kraken. Keys and wallets stay on your machine.",
+      "description": "Local client for Mangrove strategy research, backtesting, paper trading, and supported execution workflows. Mangrove-owned execution software enforces deterministic risk management based on live market and account conditions; custody depends on the selected connection and wallet mode.",
       "category": "finance",
       "homepage": "https://github.com/MangroveTechnologies/mangrove-agent"
     }

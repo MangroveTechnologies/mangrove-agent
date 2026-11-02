@@ -24,7 +24,7 @@ jobs:
           pip install -r server/requirements.lock
 
       - name: Lint with ruff
-        run: ruff check server/src/
+        run: ruff check --config server/pyproject.toml server/src/
 
       - name: Verify shared agent instructions and client launchers
         run: |

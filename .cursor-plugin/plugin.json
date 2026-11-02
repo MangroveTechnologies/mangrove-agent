@@ -1,0 +1,17 @@
+{
+  "name": "mangrove-agent",
+  "version": "0.3.0",
+  "description": "Local client for Mangrove strategy research, backtesting, paper trading, and supported execution workflows. Mangrove-owned execution software enforces deterministic risk management based on live market and account conditions.",
+  "author": { "name": "Mangrove Technologies", "email": "team@mangrovetechnologies.ai" },
+  "homepage": "https://mangrove.ai/agents/",
+  "repository": "https://github.com/MangroveTechnologies/mangrove-agent",
+  "license": "MIT",
+  "keywords": ["mcp", "trading", "backtesting", "paper-trading", "crypto", "x402", "kraken", "robinhood"],
+  "logo": "assets/logo.svg",
+  "skills": ".claude/skills",
+  "mcpServers": {
+    "mangrove-agent": {
+      "url": "http://127.0.0.1:9080/mcp/"
+    }
+  }
+}

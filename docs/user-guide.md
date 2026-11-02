@@ -21,11 +21,13 @@ instructions and verify a real tool call. It should say plainly if its host
 cannot run commands or connect tools. [Client setup](clients.md) contains the
 exact instructions for the installing agent.
 
-For a fresh installation, the default setup needs no MangroveAI account or
-upstream API key. It creates a separate local credential automatically and
-defers payment-wallet setup. This is enough for connection checks and naming.
-Paid market data and backtests still require API-key access or x402 payments.
-Your chosen AI provider's own account/access requirements also apply.
+On a fresh installation, the unattended setup the client runs
+(`./scripts/setup.sh --yes --no-mcp`) needs no MangroveAI account or upstream
+API key. It creates a separate local credential automatically, selects x402
+access and defers payment-wallet setup. This is enough for connection checks
+and naming. Paid market data and backtests still require API-key access or x402
+payments. Your chosen AI provider's own account and access requirements also
+apply.
 
 ## What successful first use looks like
 
@@ -61,10 +63,11 @@ cd mangrove-agent
 ./scripts/setup.sh --yes --no-mcp
 ```
 
-This installs dependencies and starts the server. It preserves existing access
-settings; on a fresh installation it selects x402 and defers wallet setup.
-For an interactive choice of API-key or x402 access, use `./scripts/setup.sh`.
-Enter credentials only in the secure setup prompt, never in chat.
+This installs dependencies and starts the server on `http://127.0.0.1:9080`. It
+preserves existing access settings; on a fresh installation it selects x402 and
+defers wallet setup. For an interactive choice of API-key or x402 access, run
+`./scripts/setup.sh` without `--yes`. Enter credentials only in the hidden setup
+prompt, never in chat. See [setup with an API key or x402](setup-x402.md).
 
 Ask your chosen client to open this checkout and follow `docs/clients.md`.
 Claude's plugin is a separate optional installation path; use one path for an
@@ -117,8 +120,64 @@ functional area, then request full schemas for the areas or individual tools you
 need. You can select one tool or any number. MangroveAI provides this progressive
 discovery through `discover_tools`; the agent forwards the request. See the
 [discovery examples](clients.md#progressive-discovery-of-managed-services).
-If that service is not yet available on your configured server, the client must
-report the limitation and use the host's available tool search.
+If the configured server does not advertise `discover_tools`, the client must
+report the limitation and use the host's own tool search.
+
+## Example: strategies on X attention
+
+Three signals in the `social` category read how much people post about an asset on X,
+not what they say: `x_post_count_spike`, `x_attention_elevated` and
+`x_attention_price_divergence`. Ask in plain words:
+
+> Which signals use X post counts? Show me BTC's hourly X post counts for the last week,
+> then backtest a BTC strategy that enters on an X post count spike.
+
+The agent finds them with `list_signals` (category `social`) or `search_signals`, reads
+counts with `get_x_post_counts` (1 to 31 days per read, hourly or daily), and backtests
+with `run_backtest`. All three signals take `x_query`, either `all` or `en_original`
+(English, no reposts); a strategy uses one value across its X rules. The counts are
+hourly, stamped on the bar open time, and work on any timeframe. A bucket becomes visible
+to a bar only once it has ended plus a 5-minute ingest lag before that bar closes, live
+and in backtests alike, so results never use future posts. Sub-hourly bars reuse the
+latest visible hourly bucket, and any gap makes the signal evaluate False.
+
+MangroveAI fetches the counts on demand from the X API and caches them. Each X request
+is billed: $0.005 for the last 7 days and $0.010 for the full archive, and one request
+covers up to 31 days of hourly buckets. Repeated reads and backtests over cached ranges
+cost nothing. Backfills stop when the shared credit balance falls under a floor. If X is
+not configured on the service, `get_x_post_counts` returns 503 and `run_backtest` rejects
+the X rules. Depleted credits, a rate limit or a gap make the X rules evaluate False and
+the condition is logged.
+
+## Example: strategies on social sentiment and holder signals
+
+Seven signals read Cambrian data. Five are in the `social` category and read the
+sentiment of posts about an asset: `social_sentiment_surge` and
+`social_sentiment_capitulation` (triggers on an unusually bullish or bearish
+reading), `social_crowd_bullish` (a filter: recent posts lean more bullish than
+the asset's norm), `social_crowd_cooling` (a filter: recent posts lean no more
+bullish than the norm) and `social_price_divergence` (a trigger: price fell while the
+crowd stayed as bullish as usual). Two are in the `onchain` category and read a
+token's holders: `holder_growth_trend` (a filter: the holder count is growing) and
+`whale_share_divergence` (a trigger: price fell while wallets holding $100,000 or
+more held a larger share of the value). The holder signals work on Solana tokens
+only. Ask in plain words:
+
+> Which social and holder signals are available? Build a BTC strategy that buys an
+> RSI dip only while the crowd is cooling, then backtest it.
+
+The agent finds the signals with `list_signals` (category `social` or `onchain`),
+builds the strategy with the server's `strategy-composition` skill and
+`save_strategy`, using `social_crowd_cooling` as a filter beside a trigger, and
+backtests it with `run_backtest`. You do not supply any data: MangroveAI attaches
+the sentiment and holder columns itself, in a backtest as in live evaluation, and
+a bar sees only values already known when it closes.
+
+If the data source is off on the service, each of the seven signals shows as
+non-composable in `list_signals`. A new strategy cannot be built on it, and a
+strategy that already names one gets `False` from it rather than an error. The
+agent should report that the signal is unavailable instead of substituting another
+signal.
 
 ## If something is unavailable
 
@@ -139,7 +198,10 @@ backtests and paper mode. Paper mode avoids real trade execution, but upstream
 data and evaluation calls can still cost money. Set up access and a budget
 before paid use; live trading is a separate explicit decision.
 
-Never paste a private key or recovery phrase into any AI chat. Use
-`./scripts/stash-secret.sh` in your own private terminal and share only its
-short-lived vault token with the agent. Claude's configured secret hook is an
-extra client-specific check, not a guarantee supplied by every provider.
+Never paste a private key or recovery phrase into any AI chat. Run
+`./scripts/stash-secret.sh` in your own private terminal and enter the secret at
+its hidden prompt. It stores the secret in the agent's short-lived vault and
+writes a private, single-use handoff file; tell the agent only the path it prints,
+and it imports the wallet from the file's vault token. Claude's configured secret
+hook is an extra client-specific check, not a guarantee supplied by every
+provider.

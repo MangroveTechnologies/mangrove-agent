@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
+import httpx  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -42,7 +43,6 @@ def _stub_sdk() -> MagicMock:
 
     # on_chain
     sdk.on_chain.get_smart_money_sentiment.return_value = _resp({"sentiment": "neutral"})
-    sdk.on_chain.get_whale_activity.return_value = _resp({"whales": []})
     sdk.on_chain.get_token_holders.return_value = _resp({"holders": []})
 
     # signals
@@ -140,6 +140,9 @@ def client(tmp_path, monkeypatch):
     """TestClient for the full app with all SDK paths stubbed."""
     monkeypatch.setattr("src.mcp.mangrove_proxy.catalog", AsyncMock(return_value=[]))
     monkeypatch.setattr("src.mcp.marketplace_proxy.list_tools", AsyncMock(return_value=[]))
+    # Exercise unavailable-price fallback without probing a running API.
+    monkeypatch.setattr("src.services.tool_pricing._fetch_prices",
+                        MagicMock(side_effect=httpx.ConnectError("offline pricing fixture")))
     db_file = tmp_path / "smoke.db"
     from src.config import app_config
     from src.services import scheduler_service as ss

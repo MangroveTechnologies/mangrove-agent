@@ -71,15 +71,48 @@ def orders(strategy_id=None, *, pending=False):
         return [dict(r) for r in conn.execute(sql + " ORDER BY created_at", values).fetchall()]
 
 
-def reserve(strategy_id, evaluation_id, intent, request, template, ref_id):
+def reserve(strategy_id, evaluation_id, intent, request, template, ref_id, *, expected_revision=None):
     key = intent.engine_order_id or f"{evaluation_id}:{intent.engine_position_id}:{intent.action}"
     if intent.side == "sell":
         key += ":" + str(intent.amount)
     with connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        active = conn.execute("SELECT status FROM strategies WHERE id=?", (strategy_id,)).fetchone()
-        if not active or active["status"] != "live":
+        active = conn.execute(
+            "SELECT status,exit_only_mode,execution_revision,book_revision FROM strategies WHERE id=?", (strategy_id,)
+        ).fetchone()
+        if not active or not intent.engine_position_id:
             return False
+        if intent.action == "enter":
+            existing_position = conn.execute(
+                "SELECT status,strategy_id FROM positions WHERE id=?", (intent.engine_position_id,)
+            ).fetchone()
+            if existing_position and (
+                existing_position["status"] != "open" or existing_position["strategy_id"] != strategy_id
+            ):
+                return False
+            if active["status"] != "live" or expected_revision is None or tuple(active)[2:] != tuple(expected_revision):
+                return False
+        elif active["status"] != "live" and active["exit_only_mode"] != "live":
+            return False
+        pending = conn.execute(
+            "SELECT intent_json FROM broker_orders WHERE strategy_id=? AND status IN ('submitting','uncertain','open','partial','awaiting_approval','cancel_pending')",
+            (strategy_id,),
+        ).fetchall()
+        for row in pending:
+            other = json.loads(row[0])
+            if (
+                not other.get("engine_position_id")
+                or other["engine_position_id"] == intent.engine_position_id
+                or intent.action == "enter"
+            ):
+                return False
+        if intent.action == "exit":
+            held = conn.execute(
+                "SELECT h.quantity,p.status FROM broker_holdings h JOIN positions p ON p.id=h.position_id WHERE h.strategy_id=? AND h.position_id=?",
+                (strategy_id, intent.engine_position_id),
+            ).fetchone()
+            if not held or held["status"] != "open" or decimal(request["quantity"]) > decimal(held["quantity"]):
+                return False
         existing = conn.execute(
             "SELECT id FROM broker_orders WHERE strategy_id=? AND intent_key=?", (strategy_id, key)
         ).fetchone()
@@ -202,25 +235,14 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
             held_qty = decimal(holding["quantity"]) if holding else Decimal(0)
             held_cost = decimal(holding["unit_cost"]) if holding else Decimal(0)
             pnl = None
-            evaluation = conn.execute(
-                "SELECT sdk_response_json FROM evaluations WHERE id=?", (row["evaluation_id"],)
-            ).fetchone()
-            proposed = json.loads(evaluation[0]).get("execution_state") or {}
             saved = conn.execute(
                 "SELECT execution_state_json FROM strategies WHERE id=?", (row["strategy_id"],)
             ).fetchone()
-            next_state = proposed if old_qty == 0 else json.loads(saved[0] or "{}")
+            next_state = json.loads(saved[0] or "{}")
             if not buy:
                 if not pos or pos["status"] != "open" or held_qty < delta:
                     raise SdkError("Exit fill exceeds this strategy's confirmed holding.")
                 pnl = float(delta_gross - delta * held_cost - delta_fees)
-                # Mangrove's risk history is retained conservatively. If a modeled
-                # non-loss becomes a real loss, stop new entries until that risk
-                # history can be reconciled; never silently erase a loss gate.
-                if pnl < 0 and decimal(intent.ref_price) >= held_cost:
-                    risk = next_state.setdefault("risk_state", {})
-                    risk.update(hard_floor_tripped=True, halt={"reason": "broker_loss_diverged_from_model"})
-                    next_state["halt"] = risk["halt"]
             conn.execute(
                 """INSERT INTO trades (id,strategy_id,evaluation_id,order_intent_json,mode,input_token,
                 input_amount,output_token,output_amount,fill_price,fees_json,status,executed_at,confirmed_at,
@@ -290,7 +312,8 @@ def apply_snapshot(order_id, snapshot, *, asset_class):
                 (position_id, row["strategy_id"], str(total if buy else remaining), str(avg if buy else held_cost)),
             )
             conn.execute(
-                "UPDATE strategies SET execution_state_json=? WHERE id=?", (json.dumps(next_state), row["strategy_id"])
+                "UPDATE strategies SET execution_state_json=?,book_revision=book_revision+1 WHERE id=?",
+                (json.dumps(next_state), row["strategy_id"]),
             )
         elif delta_gross or delta_fees:
             raise SdkError("Broker revised fill cash without a new fill; reconciliation required.")
@@ -311,7 +334,8 @@ def execution_inputs(strategy_id, mark_price):
     with connection() as conn:
         strategy = dict(conn.execute("SELECT * FROM strategies WHERE id=?", (strategy_id,)).fetchone())
         positions = conn.execute(
-            "SELECT * FROM positions WHERE strategy_id=? AND status='open'", (strategy_id,)
+            "SELECT p.* FROM positions p JOIN trades t ON t.id=p.entry_trade_id WHERE p.strategy_id=? AND p.status='open' AND t.mode='live'",
+            (strategy_id,),
         ).fetchall()
         history = conn.execute("SELECT * FROM broker_orders WHERE strategy_id=?", (strategy_id,)).fetchall()
         cash = decimal(config["capital"])
@@ -346,35 +370,26 @@ def execution_inputs(strategy_id, mark_price):
                 cost=pos["entry_amount"] * pos["entry_price"],
                 entry_timestamp=pos["entry_time"],
             )
-            for order in payload.get("orders", []):
-                order["position_size"] = pos["entry_amount"]
-            payloads.append(payload)
+            from src.services.confirmed_execution import activate_template
+
+            payloads.append(activate_template(payload, dict(pos)))
         state = json.loads(strategy["execution_state_json"] or "{}")
         state.update(
             cash_balance=float(cash),
             account_value=float(cash) + sum(p["entry_amount"] * mark_price for p in positions),
             num_open_positions=len(positions),
-            total_trades=sum(
-                1
-                for o in history
-                if json.loads(o["intent_json"])["side"] == "sell" and decimal(o["filled_quantity"]) > 0
-            ),
-        )
-        if state.get("risk_state"):
-            risk = state["risk_state"]
-            risk["open_position_count"] = len(positions)
-            # A GTC exit may fill on a later day than its modeled evaluation.
-            # Count actual exit orders on the reconciliation day too, so the
-            # engine cannot reset away a real fill's daily trade budget.
-            counts = risk.setdefault("daily_trade_counter", {})
-            fills = conn.execute(
-                """SELECT substr(t.confirmed_at,1,10) AS day, count(DISTINCT o.id) AS count
-                FROM trades t JOIN broker_orders o ON t.venue_order_ref=o.broker_order_id AND t.strategy_id=o.strategy_id
-                WHERE o.strategy_id=? AND json_extract(o.intent_json,'$.side')='sell'
-                GROUP BY day""",
+            total_trades=conn.execute(
+                "SELECT count(*) FROM positions p JOIN broker_holdings h ON h.position_id=p.id WHERE p.strategy_id=? AND p.status='closed'",
                 (strategy_id,),
-            ).fetchall()
-            for fill in fills:
-                counts[fill["day"]] = max(counts.get(fill["day"], 0), fill["count"])
-            risk["today"] = now()[:10]
+            ).fetchone()[0],
+        )
+        # Capital is a recorded opening budget: configure() forbids reassignment
+        # after any execution journal exists. It is not reconstructed from PnL.
+        state["reference_capital"] = float(decimal(config["capital"]))
+        state["cumulative_deposits"] = float(decimal(config["capital"]))
+        realized = conn.execute(
+            "SELECT p_and_l FROM trades WHERE strategy_id=? AND venue='robinhood' AND status='confirmed' AND p_and_l IS NOT NULL",
+            (strategy_id,),
+        ).fetchall()
+        state["realized_pnl"] = float(sum((decimal(p[0]) for p in realized), Decimal(0)))
         return state, payloads

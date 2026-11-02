@@ -17,7 +17,22 @@ def canonical(value: dict) -> str:
 
 
 def contract_digest(tool) -> str:
-    return hashlib.sha256(canonical(tool.model_dump(mode="json", by_alias=True, exclude_none=True)).encode()).hexdigest()
+    from src.services.marketplace_status import MESSAGE, product_status
+
+    contract = tool.model_dump(mode="json", by_alias=True, exclude_none=True)
+    metadata = contract.get("_meta") or {}
+    status = product_status({"marketplace": metadata.get("mangrove/product")})
+    prefix = MESSAGE + "\n\n"
+    # This exact additive release note changes no approved business contract.
+    # Recover the prior representation so existing funded continuations retain
+    # their digest; every other schema, ownership, annotation or text change binds.
+    if (status is not None and metadata.get("mangrove/product") == status
+            and (contract.get("description") or "").startswith(prefix)):
+        contract["description"] = contract["description"][len(prefix):]
+        del metadata["mangrove/product"]
+        if not metadata:
+            contract.pop("_meta", None)
+    return hashlib.sha256(canonical(contract).encode()).hexdigest()
 
 
 def normalize(operation: str, arguments: dict, wallet: str, chain: str = "base") -> dict:

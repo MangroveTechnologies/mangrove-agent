@@ -21,19 +21,27 @@ the strategy's `execution_config`):
 
 - **`max_open_positions`** — caps concurrent open positions. Denial: `max_positions`.
 - **`max_trades_per_day`** — daily entry cap. Denial: `daily_limit`.
-- **Loss-streak cooldown** (`cooldown_config`, per timeframe) — after N losing
-  trades on an asset within a rolling window, that asset is put on a cooldown
-  (short and long windows). Denial: `cooldown`.
+- **Loss pause** (`cooldown_model='trades'`, canonical) — four consecutive net
+  losing closes or cumulative net losses of 6% of the reset baseline start a
+  nominal 36-primary-bar pause, with configured floor/cap (defaults 24h/14d).
+  After all pauses end, new alpha entries use half size until three alpha
+  positions close; a negative net resume result starts another pause. Three
+  consecutive pauses latch a stop. Core allocations honor holds but do not scale
+  or consume alpha resume counts. Explicit `bars` retains per-timeframe rolling
+  windows in `cooldown_config`. Denial: `cooldown`.
 - **`max_hold_bars`** — force-exits a position held too long (a time-based exit,
   not an entry gate).
-- **Max-drawdown circuit breaker** (`max_drawdown_limit`, default **20%**) — a
-  binary halt: once a strategy's equity draws down 20% from its **high-water
-  mark** (peak-relative, mark-to-market), new entries are denied. Denial:
-  `max_drawdown`. **Remediation is automatic:** on trip it latches the
-  strategy's per-timeframe long cooldown, then re-baselines the high-water mark
-  to current equity and resumes — so a strategy is never permanently stuck, even
-  if it is flat. This is *enforcement* (deny the entry), shared by backtest and
-  live. It resizes nothing.
+- **Peak-drawdown pause** (`max_drawdown_limit`, default **20%**) — `trades`
+  measures marked cash plus holdings, including unrealized PnL, against its
+  high-water mark. A breach denies entries (`max_drawdown`), starts a nominal
+  72-primary-bar pause with the same duration bounds and counts a strike.
+  Expiry re-baselines the peak and opens the alpha resume window. Explicit
+  `bars` instead measures closed equity (cash plus holdings at entry cost) and
+  uses its per-timeframe long cooldown. Protective exits continue in both.
+- **Deposit stop** (`max_drawdown_halt_limit`, default **20%**) — both models
+  compare closed-equity losses with cumulative gross deposits and latch an entry
+  halt. Unrealized price swings do not trip this stop. Protective exits remain
+  monitored until the actual book is flat; restart requires explicit user action.
 
 **Position sizing** (also engine-side): risk-per-trade budget, volatility
 adjustment, and the `v1`/`v2` cash-reserve clamp. Not a halt — it scales the
@@ -45,18 +53,16 @@ duplicate them.
 
 ## Layer 2 — Agent-side, portfolio-wide (this repo — the kill switch)
 
-The engine only ever sees **one strategy's account** per evaluation, so it
-cannot see aggregate risk across everything the user is running live. This agent
-can, because it owns the whole live book locally (allocations + trades +
-positions in SQLite). So the **portfolio kill switch** lives here
-(`portfolio_risk_service`):
+The engine sees one strategy per evaluation. The agent owns the aggregate live
+book (allocations, trades and positions in SQLite), so `portfolio_risk_service`
+enforces the **portfolio kill switch**:
 
 - **What it measures:** live-book drawdown on a **realized-P&L** basis —
   `book_value = Σ active live allocations + Σ realized P&L of live strategies` —
   against a persisted high-water mark.
 - **Trip:** when book drawdown reaches **`PORTFOLIO_MAX_DRAWDOWN_PCT`
   (default 30%)**, on the next live tick it **pauses ALL live strategies**
-  (sets them `inactive`, cancels their crons, releases allocations).
+  (sets them `inactive` and denies new entries; strategies with exposure or unresolved orders retain exit-only crons and allocations until confirmed flat).
 - **Latched — no auto-resume.** Unlike the engine's per-strategy breaker, the
   portfolio switch stays tripped until a **human** clears it. This is
   deliberate: a 30% loss across the whole book warrants human review, not an

@@ -3,6 +3,7 @@
 import json
 
 import anyio
+from mcp.types import ToolAnnotations
 from pydantic import ValidationError
 
 from src.mcp.registry import ToolEntry, ToolParam, register_tool
@@ -23,12 +24,18 @@ def register(server):
         except Exception as error:
             return _handle_agent_error(error)
 
-    @server.tool()
+    @server.tool(
+        title="Robinhood venue status",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True),
+    )
     async def agent_robinhood_status(api_key: str = "") -> str:
         """Read Robinhood venue readiness, masked account and available buying power. No trades."""
         return await call(api_key, broker_execution.inspect)
 
-    @server.tool()
+    @server.tool(
+        title="Configure strategy execution venue",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True),
+    )
     async def agent_configure_execution_venue(strategy_id: str, allocation: dict, api_key: str = "") -> str:
         """Bind an inactive Mangrove strategy to Robinhood and a capital mandate.
 
@@ -39,7 +46,10 @@ def register(server):
         """
         return await call(api_key, broker_execution.configure, strategy_id, allocation)
 
-    @server.tool()
+    @server.tool(
+        title="Configure strategy market",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False),
+    )
     async def agent_configure_strategy_market(strategy_id: str, market_context: dict, api_key: str = "") -> str:
         """Set explicit market data for a fresh inactive stateless strategy. Does not activate or trade."""
         if not _require(api_key):
@@ -55,19 +65,28 @@ def register(server):
         except Exception as error:
             return _handle_agent_error(error)
 
-    @server.tool()
+    @server.tool(
+        title="List local venue orders",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    )
     async def agent_list_venue_orders(strategy_id: str, api_key: str = "") -> str:
         """Read local broker order states and confirmed quantities; account IDs are masked."""
         if not _require(api_key):
             return _auth_error()
         return json.dumps(broker_execution.journal(strategy_id))
 
-    @server.tool()
+    @server.tool(
+        title="Reconcile venue order outcomes",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True),
+    )
     async def agent_reconcile_venue_orders(strategy_id: str, api_key: str = "") -> str:
         """Read broker outcomes and persist confirmed fills. Never submits or retries an order."""
         return await call(api_key, broker_execution.reconcile, strategy_id)
 
-    @server.tool()
+    @server.tool(
+        title="Cancel venue order",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True),
+    )
     async def agent_cancel_venue_order(order_id: str, api_key: str = "") -> str:
         """Request cancellation of a known local venue order and reconcile its outcome.
 

@@ -59,9 +59,9 @@ def test_cdp_keys_are_strings():
 # `X-API-Key: anything` skipped the x402 payment path entirely. The fix
 # validates the key against has_valid_api_key before bypassing.
 
-def test_invalid_api_key_does_not_bypass_x402(client):
+def test_invalid_api_key_does_not_bypass_x402(offline_x402_client):
     """An invalid X-API-Key must NOT skip x402; expect 402 Payment Required."""
-    r = client.get(
+    r = offline_x402_client.get(
         "/api/x402/hello-mangrove",
         headers={"X-API-Key": "this-is-not-a-real-key"},
     )
@@ -71,16 +71,16 @@ def test_invalid_api_key_does_not_bypass_x402(client):
     )
 
 
-def test_valid_api_key_bypasses_x402(client):
+def test_valid_api_key_bypasses_x402(offline_x402_client):
     """A valid X-API-Key skips x402 and returns 200."""
-    r = client.get(
+    r = offline_x402_client.get(
         "/api/x402/hello-mangrove",
         headers={"X-API-Key": "test-key-1"},
     )
     assert r.status_code == 200
 
 
-def test_no_api_key_returns_402(client):
+def test_no_api_key_returns_402(offline_x402_client):
     """No X-API-Key, no payment header → 402."""
-    r = client.get("/api/x402/hello-mangrove")
+    r = offline_x402_client.get("/api/x402/hello-mangrove")
     assert r.status_code == 402
