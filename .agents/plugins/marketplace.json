@@ -11,7 +11,7 @@
         "source": "local",
         "path": "./"
       },
-      "description": "Local client for Mangrove strategy research, backtesting, paper trading, and supported execution workflows. Mangrove-owned execution software enforces deterministic risk management based on live market and account conditions; custody depends on the selected connection and wallet mode.",
+      "description": "Mangrove gives trading agents guardrails. Built-in risk management on every order: circuit breakers, drawdown limits, automatic risk-based position sizing and automatically generated stop-loss and take-profit orders. Local MCP server and plugin with 100+ tools for strategy R&D, backtesting and live execution across 12+ venues (Kraken, Robinhood, TradeStation, DEX on 10 EVM chains). Keys and wallets stay on the user's machine. Free Mangrove API key or x402 pay per call.",
       "policy": {
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL"
