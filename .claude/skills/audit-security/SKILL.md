@@ -2,7 +2,7 @@
 name: audit-security
 description: Run a focused security audit of the mangrove-agent trading bot. Covers wallet signing surfaces, EIP-7702 / arbitrary-signing risks, MCP tool permissions, Fernet key handling, DEX executor paths, hook-enforcement gaps, OWASP Top 10, and dependency CVEs. Use when the user asks for "security audit", "audit security", "security review", "check for vulnerabilities", "OWASP audit", or "/audit-security". Adapted from the Mangrove workspace `audit-security` skill with a trading-bot lens added after the 2026-04-24 EIP-7702 incident.
 disable-model-invocation: true
-allowed-tools: Read, Grep, Glob, Bash
+allowed-tools: Read, Grep, Glob, Bash(pip-audit:*), Bash(safety:*)
 ---
 
 # Security Audit - mangrove-agent trading bot
