@@ -1,0 +1,1 @@
+{"properties":{"chain":{"default":"ethereum","type":"string"},"date_from":{"type":"string"},"date_to":{"type":"string"},"filters":{"type":"object"},"order_by":{"items":{"type":"object"},"type":"array"},"page":{"default":1,"type":"integer"},"per_page":{"default":100,"type":"integer"},"symbol":{"type":"string"}},"required":["symbol"],"type":"object"}

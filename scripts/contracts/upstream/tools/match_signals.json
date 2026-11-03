@@ -1,0 +1,1 @@
+{"properties":{"description":{"type":"string"},"regime_direction":{"type":"string"},"role":{"enum":["TRIGGER","FILTER"],"example":"TRIGGER","type":"string"},"similarity_threshold":{"default":0.3,"type":"number"},"top_k":{"default":5,"type":"integer"},"user_intent":{"type":"object"}},"required":["description"],"type":"object"}

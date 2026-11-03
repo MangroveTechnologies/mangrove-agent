@@ -1,0 +1,1 @@
+{"properties":{"acknowledge_defaults":{"default":false,"type":"boolean"},"end_date":{"type":"string"},"engine_generation":{"type":"integer"},"market_data_venue":{"type":"string"},"quote_token":{"type":"string"},"start_date":{"type":"string"},"strategy_id":{"type":"string"}},"required":["end_date","start_date","strategy_id"],"type":"object"}

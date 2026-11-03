@@ -21,6 +21,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS = ROOT / "scripts" / "contracts"
+UPSTREAM = CONTRACTS / "upstream"
 METER = re.compile(r"(?:rest|skill|proxy):[a-z][a-z0-9_]{0,127}\Z")
 NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,127}\Z")
 
@@ -369,6 +370,37 @@ def write_json(name, value):
     (CONTRACTS / name).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def read_upstream():
+    """Load the split receiver snapshot as the single dict the checks consume."""
+    index = json.loads((UPSTREAM / "index.json").read_text())
+    names = index.get("tools")
+    if not isinstance(names, list) or not all(isinstance(n, str) and NAME.fullmatch(n) for n in names):
+        raise ValueError("Invalid upstream index")
+    if len(names) != len(set(names)):
+        raise ValueError("Duplicate tool in upstream index")
+    on_disk = {p.stem for p in (UPSTREAM / "tools").glob("*.json")}
+    if on_disk != set(names):
+        raise ValueError("Upstream tool files do not match the index")
+    tools = {name: json.loads((UPSTREAM / "tools" / f"{name}.json").read_text()) for name in names}
+    return {**index, "tools": tools}
+
+
+def write_upstream(snapshot):
+    """Write index.json plus one compact file per tool, removing files for dropped tools."""
+    tools_dir = UPSTREAM / "tools"
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    names = sorted(snapshot["tools"])
+    if not all(NAME.fullmatch(n) for n in names):
+        raise ValueError("Invalid upstream tool name")
+    for name in names:
+        (tools_dir / f"{name}.json").write_text(
+            json.dumps(snapshot["tools"][name], sort_keys=True, separators=(",", ":")) + "\n")
+    for stale in tools_dir.glob("*.json"):
+        if stale.stem not in snapshot["tools"]:
+            stale.unlink()
+    write_json("upstream/index.json", {**{k: v for k, v in snapshot.items() if k != "tools"}, "tools": names})
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--upstream-url", help="Opt-in anonymous live comparison; no payment calls")
@@ -417,7 +449,7 @@ def main(argv=None):
     sys.path.insert(0, str(ROOT / "server"))
     from src.mcp.pricing_bindings import TOOL_PRICING
     policy = read_json("policy.json")
-    upstream = read_json("upstream.json") if not args.refresh_upstream else fetch_upstream(args.upstream_url)
+    upstream = read_upstream() if not args.refresh_upstream else fetch_upstream(args.upstream_url)
     if policy.get("version") != 1 or upstream.get("version") != 1:
         raise ValueError("Unsupported policy or receiver snapshot version")
     errors += check_bindings(TOOL_PRICING, set(actual["tools"]), policy, upstream)
@@ -435,7 +467,7 @@ def main(argv=None):
         write_json("local.json", actual)
         print("Wrote local contract; review the diff before committing.")
     elif args.refresh_upstream:
-        write_json("upstream.json", upstream)
+        write_upstream(upstream)
         print("Wrote price-free receiver contract; review the diff before committing.")
     else:
         print(f"PASS: {len(actual['tools'])} tools; registration, schemas, pricing bindings and adapter exceptions agree.")

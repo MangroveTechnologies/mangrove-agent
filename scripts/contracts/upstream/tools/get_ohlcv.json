@@ -1,0 +1,1 @@
+{"properties":{"lookback_days":{"default":30,"type":"integer"},"market_data_venue":{"type":"string"},"provider":{"type":"string"},"quote_token":{"type":"string"},"symbol":{"type":"string"}},"required":["symbol"],"type":"object"}

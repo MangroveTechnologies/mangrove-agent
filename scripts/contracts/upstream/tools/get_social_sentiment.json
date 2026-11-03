@@ -1,0 +1,1 @@
+{"properties":{"hours_back":{"default":24,"type":"integer"},"topic":{"type":"string"}},"required":["topic"],"type":"object"}

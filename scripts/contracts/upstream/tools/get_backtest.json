@@ -1,0 +1,1 @@
+{"properties":{"backtest_id":{"type":"string"}},"required":["backtest_id"],"type":"object"}

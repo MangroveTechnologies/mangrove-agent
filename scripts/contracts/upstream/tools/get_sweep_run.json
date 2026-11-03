@@ -1,0 +1,1 @@
+{"properties":{"config_hash":{"type":"string"},"experiment_id":{"type":"string"},"run_index":{"type":"integer"}},"required":["experiment_id","run_index"],"type":"object"}

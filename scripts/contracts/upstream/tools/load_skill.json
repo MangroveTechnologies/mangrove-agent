@@ -1,0 +1,1 @@
+{"properties":{"resource":{"type":"string"},"section":{"type":"string"},"skill":{"type":"string"}},"required":["skill"],"type":"object"}

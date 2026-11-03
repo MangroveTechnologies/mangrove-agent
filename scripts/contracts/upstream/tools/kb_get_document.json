@@ -1,0 +1,1 @@
+{"properties":{"full":{"default":false,"type":"boolean"},"max_chars":{"type":"integer"},"offset":{"default":0,"type":"integer"},"section_anchor":{"type":"string"},"slug":{"type":"string"},"view":{"default":"content","enum":["overview","section","content"],"type":"string"}},"required":["slug"],"type":"object"}

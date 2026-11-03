@@ -1,0 +1,1 @@
+{"properties":{"chains":{"items":{"type":"string"},"type":"array"},"filters":{"type":"object"},"order_by":{"items":{"type":"object"},"type":"array"},"page":{"default":1,"type":"integer"},"per_page":{"default":100,"type":"integer"}},"required":[],"type":"object"}
