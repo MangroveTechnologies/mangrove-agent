@@ -4,7 +4,7 @@ description: Connect Robinhood as Mangrove Agent's execution venue, inspect the 
 version: 0.2.0
 author: Mangrove Technologies
 license: MIT
-allowed-tools: Read, Bash(./scripts/*)
+allowed-tools: Read
 compatibility: Claude Code plugin; requires the local mangrove-agent repository, network access, and a Robinhood account that can authorize Mangrove Agent.
 tags: [mangrove, robinhood, oauth, broker, trading]
 ---
