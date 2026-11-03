@@ -76,6 +76,30 @@ Tell Claude Code, Codex, Grok Build or Perplexity Computer:
 
 The client installs the server in its own execution environment, loads the shared agent instructions, discovers the tools and calls the free `status` tool before it reports success. The [user guide](docs/user-guide.md) covers installation, choosing the agent's name, coming back later and switching clients. The installing agent follows [Install from an agent](docs/clients.md#install-from-an-agent). Perplexity Computer uses the provided command client and needs no Perplexity Project, custom cloud connector or extra desktop app.
 
+### Connect any MCP client (paste-ready config)
+
+Once the agent is running from any install path above, point an MCP client at it with this
+`mcpServers` block (the same file ships at the repo root as `.mcp.json.example`; Claude Code reads it
+as `.mcp.json` in the project root, and other clients take the block in their own config file, see
+[AI client setup](docs/clients.md)):
+
+```json
+{
+  "mcpServers": {
+    "mangrove-agent": {
+      "type": "http",
+      "url": "http://127.0.0.1:9080/mcp/",
+      "headers": {
+        "X-API-Key": "REPLACE_WITH_API_KEYS_FROM_server/src/config/local-config.json"
+      }
+    }
+  }
+}
+```
+
+The API key is written to `server/src/config/local-config.json` by `setup.sh`; the agent listens on
+loopback only.
+
 The agent's shared identity and operating instructions live in [`SAGE.md`](SAGE.md). On first run the agent asks what to name itself and saves that choice locally for every client; there is no default personal name. `AGENTS.md` points Codex and compatible clients to `SAGE.md`, and `CLAUDE.md` imports it for Claude Code. Launch helpers, MCP configuration templates and the instruction bundle for hosts without file access are in [AI client setup](docs/clients.md). Tool access is configured and verified separately for each client.
 
 ## Install with setup.sh (sign-in, API key or x402)

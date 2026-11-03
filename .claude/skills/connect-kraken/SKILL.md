@@ -12,7 +12,7 @@ description: >-
 version: 0.2.0
 author: Mangrove Technologies
 license: MIT
-allowed-tools: Read, Bash(./scripts/*)
+allowed-tools: Read
 compatibility: Claude Code plugin; requires the local mangrove-agent repository, network access, and a Kraken account that can authorize Mangrove OAuth.
 tags: [mangrove, kraken, oauth, exchange, trading]
 ---
