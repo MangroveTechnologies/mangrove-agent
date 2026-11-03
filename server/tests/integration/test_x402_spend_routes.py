@@ -27,6 +27,7 @@ def client(tmp_path, monkeypatch):
     from src.shared.db import sqlite as db_mod
 
     monkeypatch.setattr(app_config, "DB_PATH", str(db_file))
+    monkeypatch.setattr(app_config, "MANGROVE_ACCESS_MODE", "x402", raising=False)
     monkeypatch.setattr(app_config, "X402_SPEND_CAP_USD", 5, raising=False)
     db_mod.reset_connection()
     ss.reset_scheduler_cache()

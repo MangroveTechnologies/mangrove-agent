@@ -8,6 +8,7 @@ import re
 import time
 import uuid
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 
 import anyio
 import httpx
@@ -57,6 +58,23 @@ def endpoint() -> str:
     return str(url.copy_with(path=url.path.rstrip('/')[:-7] + '/mcp/'))
 
 
+async def _capture_access_denial(response: httpx.Response) -> None:
+    if response.status_code != 403:
+        return
+    from src.shared.errors import safe_denial_details
+
+    try:
+        body = bytearray()
+        with anyio.fail_after(2):
+            async for chunk in response.aiter_bytes():
+                if len(body) + len(chunk) > 16384:
+                    return
+                body.extend(chunk)
+        response.extensions["mangrove_denial"] = safe_denial_details(json.loads(body))
+    except (ValueError, UnicodeError, RecursionError, httpx.HTTPError, TimeoutError):
+        return
+
+
 def _http_client(endpoint_url: str, key: str | None) -> httpx.AsyncClient:
     timeout = float(app_config.MANGROVE_SDK_TIMEOUT_SECONDS)
     # Send the key BOTH ways. The receiver reads X-API-Key first and accepts it
@@ -72,9 +90,11 @@ def _http_client(endpoint_url: str, key: str | None) -> httpx.AsyncClient:
             token = await anyio.to_thread.run_sync(oauth.access_token)
             request.headers['Authorization'] = f'Bearer {token}'
         return httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False,
-                                 event_hooks={'request': [authorize]})
+                                 event_hooks={'request': [authorize], 'response': [_capture_access_denial]})
     headers = {'X-API-Key': key, 'Authorization': f'Bearer {key}'} if key else {}
-    hooks = {'request': [_sign_in_hook(endpoint_url)]} if key is None else {}
+    hooks = {'response': [_capture_access_denial]}
+    if key is None:
+        hooks['request'] = [_sign_in_hook(endpoint_url)]
     return httpx.AsyncClient(headers=headers, timeout=timeout, trust_env=False,
                              follow_redirects=False, event_hooks=hooks)
 
@@ -112,6 +132,51 @@ def _sign_in_hook(endpoint_url: str):
     return hook
 
 
+_request_ids: ContextVar[set | None] = ContextVar('mangrove_mcp_request_ids', default=None)
+
+
+class _TrackedWriteStream(anyio.abc.ObjectSendStream):
+    """Record SDK-assigned request IDs without changing wire messages."""
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    async def send(self, message):
+        ids = _request_ids.get()
+        request_id = getattr(message.message.root, 'id', None)
+        if ids is not None and type(request_id) in (int, str):
+            ids.add(request_id)
+        await self._stream.send(message)
+
+    async def aclose(self):
+        await self._stream.aclose()
+
+
+class _SessionInterrupted(ConnectionError):
+    """Keep transport interruption outside AgentError so signed payments stay uncertain."""
+
+
+def _request_failure(error, request_ids):
+    pending, has_http_error = [error], False
+    while pending:
+        nested = pending.pop()
+        if isinstance(nested, BaseExceptionGroup):
+            pending.extend(nested.exceptions)
+        elif isinstance(nested, httpx.HTTPStatusError):
+            has_http_error = True
+            try:
+                payload = json.loads(nested.request.content)
+            except (ValueError, UnicodeError, RecursionError, httpx.RequestNotRead):
+                continue
+            if (isinstance(payload, dict) and payload.get('jsonrpc') == '2.0'
+                    and type(payload.get('id')) in (int, str)
+                    and payload['id'] in request_ids):
+                return nested
+    if has_http_error:
+        return _SessionInterrupted('The shared MCP connection was interrupted by another request.')
+    return error
+
+
 class _SharedSession:
     """One MCP session per destination and credential, opened once and reused.
 
@@ -138,12 +203,21 @@ class _SharedSession:
         """Await one call on the session, failing it at once if the session dies.
 
         A transport error -- an HTTP 401, 403 or 429 from MangroveAI -- is raised in the
-        task that owns the session, not in the caller waiting for its response, which
-        would otherwise wait out its whole timeout. The caller gets that same error, at
-        the point it awaited the call: inside a payment, where a signed authorization is
-        then reported as uncertain rather than lost.
+        task that owns the session, not in the caller waiting for its response.
+        Only the originating request receives that HTTP error; other waiters receive
+        an interruption. Both reach the payment layer before error presentation, so
+        signed authorizations retain their uncertain outcome.
         """
-        pending = asyncio.ensure_future(call)
+        request_ids = set()
+
+        async def tracked_call():
+            token = _request_ids.set(request_ids)
+            try:
+                return await call
+            finally:
+                _request_ids.reset(token)
+
+        pending = asyncio.ensure_future(tracked_call())
         lost = asyncio.ensure_future(self._lost.wait())
         try:
             done, _ = await asyncio.wait({pending, lost}, return_when=asyncio.FIRST_COMPLETED)
@@ -159,7 +233,8 @@ class _SharedSession:
             await pending
         except BaseException:  # noqa: BLE001 -- the session's own error is the one to report
             pass
-        raise self._error or SdkError('MangroveAI MCP session closed during the call.')
+        error = self._error or SdkError('MangroveAI MCP session closed during the call.')
+        raise _request_failure(error, request_ids) from None
 
     @property
     def alive(self) -> bool:
@@ -191,7 +266,7 @@ class _SharedSession:
         try:
             async with _http_client(self.endpoint_url, self.key) as http:
                 async with streamable_http_client(self.endpoint_url, http_client=http) as (reader, writer, _):
-                    async with ClientSession(reader, writer) as client:
+                    async with ClientSession(reader, _TrackedWriteStream(writer)) as client:
                         await client.initialize()
                         self.client = client
                         self._ready.set()
@@ -229,7 +304,7 @@ class _GuardedClient:
     def __getattr__(self, name):
         client = self._shared.client
         if client is None:
-            raise self._shared._error or SdkError('MangroveAI MCP session is closed.')
+            raise _SessionInterrupted('MangroveAI MCP session closed before the request could be sent.')
         attribute = getattr(client, name)
         if not inspect.iscoroutinefunction(attribute):
             return attribute
@@ -484,13 +559,24 @@ def transport_error(error):
         if isinstance(nested, BaseExceptionGroup):
             pending.extend(nested.exceptions)
             continue
+        if isinstance(nested, _SessionInterrupted):
+            return SdkError(
+                "The shared MangroveAI connection was interrupted. This request's outcome is not confirmed.",
+                suggestion='Do not infer missing permissions from another request or automatically retry this operation.',
+            )
         if (oauth.enabled() and isinstance(nested, httpx.HTTPStatusError)
                 and nested.response.status_code in {401, 403}
                 and str(nested.request.url) == oauth.endpoint()):
+            denied = upstream_access_error(nested)
+            if nested.response.status_code == 403 and denied is not None and denied.details:
+                if denied.details.get('reason') == 'insufficient_scope':
+                    denied.suggestion = ('Reconnect with ./scripts/setup.sh --auth oauth --oauth login '
+                                         'and approve the missing permissions. No automatic retry or wallet fallback was attempted.')
+                return denied
             challenge = nested.response.headers.get('www-authenticate', '')
             match = re.search(r'\bscope="([^"]*)"', challenge)
             scopes = set(match.group(1).split()) if match else set()
-            extra = sorted(scopes & {'signals:evaluate', 'backtests:run'})
+            extra = sorted(scopes & (oauth.ALLOWED_SCOPES - {'offline_access'}))
             command = './scripts/setup.sh --auth oauth --oauth login'
             command += ''.join(' --oauth-scope ' + scope for scope in extra)
             return oauth.OAuthError('Mangrove sign-in or additional permission is required. No tool was retried and no wallet payment was attempted.',
@@ -530,6 +616,14 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
         tools = await catalog(refresh=False)
         tool = next((item for item in tools if item.name == name), None)
         if tool is None:
+            discovery = next((item for item in tools if item.name == 'discover_tools'), None)
+            if oauth.enabled() and discovery is not None:
+                with anyio.fail_after(float(app_config.MANGROVE_SDK_TIMEOUT_SECONDS)):
+                    async with session(endpoint()) as client:
+                        result = await invoke(client, discovery, {'names': [name]})
+                if (result.isError and isinstance(result.structuredContent, dict)
+                        and result.structuredContent.get('code') == 'ACCESS_DENIED'):
+                    return result
             return failure('UNKNOWN_TOOL', 'Tool is not advertised by MangroveAI MCP.')
         if not isinstance(arguments, dict) or not Draft202012Validator(tool.inputSchema).is_valid(arguments):
             return failure('VALIDATION_ERROR', 'Arguments do not match the current MangroveAI MCP inputSchema. Refresh tools/list.')

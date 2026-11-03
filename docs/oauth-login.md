@@ -64,7 +64,18 @@ Use the same setup entry point for sign-in and extra permissions. Setup automati
 ./scripts/setup.sh --oauth disconnect
 ```
 
-Additional permissions require a new human approval in the portal. Cancelling
+New sign-in requests all supported tool permissions by default. The portal presents
+selected categories with expandable permission checkboxes; users can narrow access
+before approval. Only permissions allowed by the user's current role can be granted.
+To request specific permissions instead, repeat `--oauth-scope SCOPE`; these are
+combined with the saved connection's scopes and `offline_access`. The supported
+scopes are `strategies:read`, `strategies:write`, `strategies:archive`,
+`strategies:evaluate`, `backtests:read`, `backtests:run`, `sweeps:read`, `sweeps:run`,
+`signals:read`, `signals:evaluate`, `positions:read`, `data:read`, and `offline_access`.
+The user can also disable staying connected in the portal.
+
+Existing connections keep their granted permissions when setup reuses them or
+refreshes their tokens. Additional permissions require a new human approval in the portal. Cancelling
 leaves the previous connection intact. Successful reconnect saves the new grant before
 revoking the previous one. If revocation is unavailable, its encrypted credential
 is retained for disconnect; another reconnect is blocked until cleanup. Requests are not automatically replayed
@@ -74,11 +85,19 @@ available and follow its cleanup instructions. You may also revoke the connected
 app in the portal, but that does not replace local disconnect cleanup. The local
 command confirms when all retained grants have been cleaned up.
 
+## Status reporting
+
+Agent status identifies the active `access_mode`. Its `x402_spend` field is null
+for OAuth and API-key connections; that wallet budget is not account quota.
+Saved spending records remain available through the explicit spending-status tool.
+
 ## Available operations
 
-OAuth accesses the authoritative `/mcp/connect` catalog. In backend version one,
-strategy saving/updating/archiving and sweep tools are excluded. Those capabilities
-require an appropriately authorized API-key or x402 connection. External agents
+OAuth accesses the authoritative `/mcp/connect` catalog. Available categories are
+Strategies, Backtests, Sweeps, Signals, Positions & activity, and Data & research.
+Strategy create/update, archive, and evaluation use separate permissions. Backtest
+execution and sweep creation/launch/pause require their respective run permissions.
+The catalog and calls are limited to the scopes approved in the portal. External agents
 use MangroveAI strategy definitions in every mode; platform inventory, marketplace,
 notifications and platform deployment proposals remain internal to Michael in the
 platform. OAuth permission approval does not expose those tools. Local features that depend on the REST SDK, including paper
@@ -109,7 +128,7 @@ Release acceptance still requires a real browser round trip against the deployed
 OAuth backend: login, consent cancellation, additional consent, expiry/refresh,
 revocation and reconnect; verify both bare and Docker callback paths and the
 installed client artifact. Offline tests do not establish portal or production
-availability. OAuth remains disabled by default on the backend until released.
+availability. OAuth availability depends on the configured backend deployment.
 
 ### Changing the OAuth issuer
 
@@ -132,3 +151,23 @@ each indicated issuer and disconnect in turn, then select the intended issuer an
 sign in. Each successful revocation removes only that grant's receipt. Tokens are
 never sent to an issuer selected only from stored metadata, and no database or
 credential-file deletion is needed.
+
+### Permission denial responses
+
+OAuth discovery distinguishes known tools restricted by the current permissions from
+unknown tool names. Restricted selections return `ACCESS_DENIED` with
+`data.denied_tools[].missing_scopes`; discovery never executes the selected tools.
+Direct requests remain protected by the server's scope check before dispatch.
+
+The agent preserves recognized denial reasons and allowlisted permission names from
+structured HTTP 403 and MCP permission errors. It does not forward upstream prose,
+account identifiers, or arbitrary fields. Missing or malformed details remain a generic
+access denial. API-key and pre-payment x402 access failures use the same sanitizer.
+Permission denials are correlated with the SDK-assigned JSON-RPC request IDs. If a
+shared connection fails, other pending calls report an unconfirmed outcome rather
+than inheriting another call's missing permissions. Payment uncertainty and spend-cap
+errors retain their existing semantics and never become permission errors or trigger
+automatic retries or wallet fallback.
+
+Deploy the MangroveAI denial metadata and discovery changes before restarting the
+agent. Older servers without structured details retain the generic fallback.

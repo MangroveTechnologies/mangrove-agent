@@ -191,3 +191,42 @@ def test_oauth_status_does_not_initialize_sdk_or_make_catalog_reads(client, monk
     assert all(catalog[key] is None for key in ("signals_total", "kb_indicators_total", "kb_tags_total"))
     api_key.assert_not_called()
     sdk.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["oauth", "api-key"])
+def test_status_excludes_unrelated_wallet_budget(client, monkeypatch, mode):
+    from src.api.routes import discovery
+    from src.config import app_config
+
+    monkeypatch.setattr(app_config, "MANGROVE_ACCESS_MODE", mode, raising=False)
+
+    def unexpected_budget_read():
+        pytest.fail("Non-wallet status must not read the x402 ledger")
+
+    monkeypatch.setattr(discovery, "_x402_spend_status", unexpected_budget_read)
+    body = client.get("/api/v1/agent/status").json()
+    assert body["access_mode"] == mode
+    assert body["x402_spend"] is None
+
+
+def test_status_reports_active_wallet_budget(client, monkeypatch):
+    from src.api.routes import discovery
+    from src.config import app_config
+
+    monkeypatch.setattr(app_config, "MANGROVE_ACCESS_MODE", "x402", raising=False)
+    budget = {"remaining_usd": 4.70, "exhausted": False}
+    monkeypatch.setattr(discovery, "_x402_spend_status", lambda: budget)
+    body = client.get("/api/v1/agent/status").json()
+    assert body["access_mode"] == "x402"
+    assert body["x402_spend"] == budget
+
+
+@pytest.mark.parametrize("key,expected", [("saved-key", "api-key"), (None, "x402")])
+def test_status_resolves_legacy_authentication_mode(client, monkeypatch, key, expected):
+    from src.config import app_config
+
+    monkeypatch.setattr(app_config, "MANGROVE_ACCESS_MODE", None, raising=False)
+    monkeypatch.setattr(app_config, "MANGROVE_API_KEY", key)
+    body = client.get("/api/v1/agent/status").json()
+    assert body["access_mode"] == expected
+    assert (body["x402_spend"] is None) == (expected == "api-key")

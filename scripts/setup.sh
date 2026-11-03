@@ -102,7 +102,7 @@ Options:
                         Replay it later by asking or 'rm .claude/.onboarded'.
   --auth MODE           api-key, oauth or x402. Existing mode is preserved by default.
   --oauth ACTION        login, status or disconnect. Login runs within setup.
-  --oauth-scope SCOPE   Request signals:evaluate or backtests:run with browser approval.
+  --oauth-scope SCOPE   Request a specific permission with browser approval (repeatable).
   --api-key-stdin       Read upstream key from stdin (use a private pipe).
                         Interactive users should use --auth api-key instead.
   --wallet ACTION       Run an explicit user-requested create/import/list/select
@@ -130,8 +130,8 @@ while [ $# -gt 0 ]; do
     --api-key-stdin) API_KEY_STDIN="yes"; shift ;;
     --auth) [ $# -ge 2 ] || fail "--auth needs api-key, oauth or x402"; AUTH_MODE="$2"; shift 2 ;;
     --oauth) [ $# -ge 2 ] || fail "--oauth needs login, status or disconnect"; OAUTH_ACTION="$2"; shift 2 ;;
-    --oauth-scope) [ $# -ge 2 ] || fail "--oauth-scope needs signals:evaluate or backtests:run"
-      case "$2" in signals:evaluate|backtests:run) ;; *) fail "Unsupported OAuth scope" ;; esac
+    --oauth-scope) [ $# -ge 2 ] || fail "--oauth-scope needs a permission scope"
+      case "$2" in strategies:read|strategies:write|strategies:archive|strategies:evaluate|backtests:read|backtests:run|sweeps:read|sweeps:run|signals:read|signals:evaluate|positions:read|data:read|offline_access) ;; *) fail "Unsupported OAuth scope" ;; esac
       OAUTH_ARGS+=(--scope "$2"); shift 2 ;;
     --wallet) [ $# -ge 2 ] || fail "--wallet needs create/import/list/select"; WALLET_ACTION="$2"; shift 2 ;;
     --robinhood) [ $# -ge 2 ] || fail "--robinhood needs connect or skip"; ROBINHOOD_ACTION="$2"; shift 2 ;;

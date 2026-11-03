@@ -162,12 +162,44 @@ class SdkError(AgentError):
     http_status = 502
 
 
+_DENIAL_REASONS = frozenset({"insufficient_scope", "insufficient_role", "not_org_member", "unmapped_tool"})
+_DENIAL_SCOPES = frozenset("""
+strategy:create strategy:read strategy:update_status strategy:delete
+backtest:create backtest:read signal:read signal:evaluate position:read position:create
+execution:read execution:write org:read org:update org:invite org:manage_members
+subscription:read subscription:manage admin:read admin:manage oracle:backtest oracle:sweep
+data:query service:delegate strategies:read strategies:write strategies:archive
+strategies:evaluate backtests:read backtests:run sweeps:read sweeps:run
+signals:read signals:evaluate positions:read data:read
+""".split())
+
+
+def safe_denial_details(payload) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return {}
+    data = error.get("data")
+    if (not isinstance(data, dict) or not isinstance(data.get("code"), str)
+            or data["code"] not in _DENIAL_REASONS):
+        return {}
+    result = {"reason": data["code"]}
+    for field in ("required_scopes", "missing_scopes"):
+        values = data.get(field)
+        if (isinstance(values, list) and len(values) <= 64
+                and all(isinstance(v, str) and v in _DENIAL_SCOPES for v in values)):
+            result[field] = sorted(set(values))
+    return result
+
+
 class UpstreamAccessError(SdkError):
     """Sanitized upstream access denial, distinct from local auth and spend caps."""
 
-    def __init__(self, status: int) -> None:
+    def __init__(self, status: int, *, details: dict | None = None) -> None:
         if status not in (401, 403):
             raise ValueError("UpstreamAccessError requires 401 or 403")
+        self.details = details or {}
         self.http_status = status
         self.upstream_status = status
         self.code = "UPSTREAM_AUTHENTICATION_FAILED" if status == 401 else "UPSTREAM_ACCESS_DENIED"
@@ -176,18 +208,28 @@ class UpstreamAccessError(SdkError):
             if status == 401 else
             "The upstream service denied access to the requested operation (HTTP 403)."
         )
+        reason = self.details.get("reason")
+        missing = self.details.get("missing_scopes", [])
+        if reason == "insufficient_scope" and missing:
+            message = "Access denied: the current connection lacks permissions: " + ", ".join(missing) + "."
+        elif reason == "insufficient_role":
+            message = "Access denied: your organization role does not allow this operation."
+        elif reason == "not_org_member":
+            message = "Access denied: this account is not a member of the requested organization."
+        elif reason == "unmapped_tool":
+            message = "This tool is not available through this credential's authorization rules."
         super().__init__(message, suggestion=(
             "Briefly state the failed action, the access error and its supported reason, then stop. "
             "Do not append questions, retry offers or offers of technical details. "
             + ("Explain that the configured upstream credential was rejected. "
                if status == 401 else
-               "Explain that permissions or account access may not allow the operation; do not assert a specific missing permission. ")
+               "Use the structured denial reason and missing scopes when provided; otherwise say the server did not identify the specific permission. ")
             + "Do not inspect local files, logs or configuration, print credentials, retry with another key, "
               "or switch to wallet payment. Troubleshoot only if the user explicitly requests it."
         ))
 
     def to_dict(self) -> dict:
-        return {**super().to_dict(), "upstream_status": self.upstream_status,
+        return {**super().to_dict(), **self.details, "upstream_status": self.upstream_status,
                 "retryable": False, "retry_payment": False}
 
 
@@ -198,7 +240,7 @@ def upstream_access_error(error: Exception) -> UpstreamAccessError | None:
     errors (especially payment uncertainty and spend caps), and follow only SDK
     wrappers' explicit causes, with cycle protection.
     """
-    from httpx import HTTPStatusError
+    from httpx import HTTPStatusError, ResponseNotRead
     from mangrove_ai.exceptions import APIError as AIAPIError
     from mangrove_markets.exceptions import APIError as MarketsAPIError
     from mcp.shared.exceptions import McpError
@@ -213,17 +255,36 @@ def upstream_access_error(error: Exception) -> UpstreamAccessError | None:
         if type(current) is SdkError:
             current = current.__cause__
             continue
+        payload = None
         if isinstance(current, (AIAPIError, MarketsAPIError)):
             status = current.status_code
+            if isinstance(current, MarketsAPIError):
+                payload = current.response_body
+            if payload is None and isinstance(current.code, str):
+                payload = {"error": {"data": {"code": current.code.lower()}}}
         elif isinstance(current, HTTPStatusError):
             status = current.response.status_code
-        elif isinstance(current, McpError) and current.error.code == -32010:
-            status = 401
+            if status == 403:
+                try:
+                    if len(current.response.content) <= 16384:
+                        payload = current.response.json()
+                except (ValueError, UnicodeError, RecursionError, ResponseNotRead):
+                    pass
+        elif isinstance(current, McpError) and current.error.code in {-32010, -32012}:
+            status = 401 if current.error.code == -32010 else 403
+            payload = {"error": {"data": current.error.data}}
         else:
             return None
         if status not in (401, 403):
             return None
-        result = UpstreamAccessError(status)
+        details = safe_denial_details(payload) if status == 403 else {}
+        if status == 403 and isinstance(current, HTTPStatusError):
+            captured = current.response.extensions.get("mangrove_denial")
+            if isinstance(captured, dict):
+                details = safe_denial_details({"error": {"data": {
+                    **captured, "code": captured.get("reason"),
+                }}}) or details
+        result = UpstreamAccessError(status, details=details)
         if correlation_id is not None:
             result.correlation_id = correlation_id
         return result
