@@ -157,10 +157,8 @@ when the price fell at least 3% over 7 days while the crowd's net bullish share 
 (bullish minus bearish) stayed at or above its mean over the prior 60 days: the price is
 dropping and the crowd is not reacting yet. Those are the defaults (`window=7`,
 `min_drop_pct=3.0`, `window_baseline=60`). The knowledge base types it as a trigger
-because it has no exit-only type, so it belongs in a strategy's exit rules only. As a
-long entry it lost money in every form tested. As the exit of an `rsi_cross_up` entry
-with an `is_above_sma` filter it raised the holdout return from 3.25% to 4.00% and was
-better on 6 of 7 coins; the effect is small. Ask in plain words:
+because it has no exit-only type, so it belongs in a strategy's exit rules only, in a
+strategy that has its own entry trigger and a price filter. Ask in plain words:
 
 > Build a BTC strategy that enters on an RSI cross up while price is above its 60-day
 > SMA and exits when the price drops while the crowd stays bullish, then backtest it.
@@ -172,21 +170,20 @@ backtests it with `run_backtest`. You do not supply any data: MangroveAI attache
 sentiment columns itself, in a backtest as in live evaluation, and a bar sees only
 values already known when it closes.
 
-Six other Cambrian signals are disabled for new strategies: `social_sentiment_surge`,
+Six other Cambrian signals are disabled for new strategies until they are validated in
+strategy backtests across market regimes: `social_sentiment_surge`,
 `social_sentiment_capitulation`, `social_crowd_bullish`, `social_crowd_cooling`
 (`social`), and `whale_share_divergence` and `holder_growth_trend` (`onchain`, Solana
-holder data). They lost money or added nothing in Oracle strategy backtests (424
-configurations, every strategy with a trigger and a price filter, settings chosen on an
-early window and checked untouched on a later one). Once MangroveAI pins the
-knowledge-base release with this change, `list_signals` shows them as non-composable,
-so a new strategy cannot use them; a stored strategy that already names one keeps
+holder data). `list_signals` shows them as non-composable, so a new strategy cannot use
+them, when MangroveAI runs the knowledge-base release that carries this status; that
+MangroveAI release is not yet deployed. A stored strategy that names one keeps
 evaluating it. The agent should not suggest them.
 
-MangroveAI attaches Cambrian data only when its Cambrian data flag is on, and that
-service change is not released yet. With the flag off, `social_price_divergence` also
-shows as non-composable in `list_signals`, and a strategy that already names it gets
-`False` from it, so it never exits on it. The agent should report that the signal is
-unavailable instead of substituting another signal.
+MangroveAI attaches Cambrian data only when its Cambrian data flag is on, and this
+requires a MangroveAI release that is not yet deployed. With the flag off,
+`social_price_divergence` also shows as non-composable in `list_signals`, and a strategy
+that names it gets `False` from it, so it never exits on it. The agent should report
+that the signal is unavailable instead of substituting another signal.
 
 ## If something is unavailable
 
