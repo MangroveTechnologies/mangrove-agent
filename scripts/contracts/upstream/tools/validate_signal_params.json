@@ -1,0 +1,1 @@
+{"properties":{"parameters":{"default":{},"type":"object"},"signal_name":{"type":"string"}},"required":["signal_name"],"type":"object"}

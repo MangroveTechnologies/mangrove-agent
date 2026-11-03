@@ -1,0 +1,1 @@
+{"definitions":{"MarketDataBar":{"properties":{},"type":"object"}},"properties":{"market_data":{"items":{"$ref":"#/definitions/MarketDataBar"},"type":"array"},"parameters":{"default":{},"type":"object"},"signal_name":{"type":"string"}},"required":["market_data","signal_name"],"type":"object"}

@@ -1,0 +1,1 @@
+{"properties":{"days_back":{"default":7,"type":"integer"},"granularity":{"default":"hour","type":"string"},"symbol":{"type":"string"},"x_query":{"default":"all","type":"string"}},"required":["symbol"],"type":"object"}

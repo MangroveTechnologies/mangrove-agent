@@ -9,7 +9,7 @@ description: >-
 version: 0.2.0
 author: Mangrove Technologies
 license: MIT
-allowed-tools: Read, Bash(./scripts/*)
+allowed-tools: Read
 compatibility: Claude Code plugin; requires the local mangrove-agent repository and configured Mangrove services for live discovery.
 tags: [mangrove, trading, mcp, risk-management]
 ---

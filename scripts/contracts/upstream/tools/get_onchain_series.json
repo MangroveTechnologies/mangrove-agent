@@ -1,0 +1,1 @@
+{"properties":{"chain":{"default":"ethereum","type":"string"},"date_from":{"type":"string"},"date_to":{"type":"string"},"interval":{"default":"1h","type":"string"},"metrics":{"items":{"type":"string"},"type":"array"},"provider":{"type":"string"},"symbol":{"type":"string"},"top_n":{"default":10,"type":"integer"}},"required":["metrics","symbol"],"type":"object"}

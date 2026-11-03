@@ -1,0 +1,1 @@
+{"properties":{"limit":{"type":"integer"},"strategy_id":{"type":"string"}},"required":["strategy_id"],"type":"object"}

@@ -1,0 +1,1 @@
+{"properties":{"asset":{"type":"string"},"base_token":{"type":"string"},"end_date":{"type":"string"},"market_data_venue":{"type":"string"},"quote_token":{"type":"string"},"start_date":{"type":"string"}},"required":["asset","end_date","start_date"],"type":"object"}

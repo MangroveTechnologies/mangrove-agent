@@ -153,15 +153,23 @@ guard against accidental side effects, not a sandbox for hostile code.
 
 ### Reviewed artifacts
 
-All three files live in `scripts/contracts/`:
+The reviewed artifacts live in `scripts/contracts/`:
 
 | File | Purpose |
 |------|---------|
 | `local.json` | Generated local input schemas, access labels and price bindings; no amounts |
-| `upstream.json` | Public MangroveAI input schemas and billing IDs from an anonymous `tools/list`, with its source URL and retrieval time; no pricing amounts or tool descriptions. Schema extensions are retained. |
+| `upstream/index.json` | Source URL and retrieval time, billing IDs and the sorted list of upstream tool names. |
+| `upstream/tools/<tool_name>.json` | One compact file per tool: the public MangroveAI input schema from an anonymous `tools/list`; no pricing amounts or tool descriptions. Schema extensions are retained. |
 | `policy.json` | Reasons for tools without upstream pricing, reasons for unknown prices, and fingerprinted direct-SDK exceptions |
 
-`upstream.json` is an observation of one running receiver at one time. It does not assert
+The upstream snapshot is split so that no file is large enough to be skipped by the plugin
+directory validator, which could not inspect a single 350 KB file. Every file stays plain
+JSON under 100 KB (`test_contract_files_stay_small_plain_json` enforces this; do not compress
+or bundle them). `read_upstream` assembles the files into one structure and rejects an index
+that disagrees with the tool files; `--refresh-upstream` rewrites the whole layout and removes
+files for tools that disappeared.
+
+The snapshot is an observation of one running receiver at one time. It does not assert
 that the receiver ran a particular commit or represents every hosted environment.
 
 The November 2, 2026 refresh observes the anonymous production `/mcp/` catalog:

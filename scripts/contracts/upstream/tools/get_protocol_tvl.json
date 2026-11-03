@@ -1,0 +1,1 @@
+{"properties":{"protocol_name":{"type":"string"}},"required":["protocol_name"],"type":"object"}

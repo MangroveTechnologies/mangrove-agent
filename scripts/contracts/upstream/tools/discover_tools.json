@@ -1,0 +1,1 @@
+{"additionalProperties":false,"properties":{"areas":{"items":{"minLength":1,"pattern":"\\S","type":"string"},"minItems":1,"type":"array"},"detail":{"default":"summary","enum":["areas","summary","schema"],"type":"string"},"names":{"items":{"minLength":1,"pattern":"\\S","type":"string"},"minItems":1,"type":"array"}},"type":"object"}

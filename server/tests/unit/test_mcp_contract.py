@@ -362,3 +362,49 @@ def test_client_guidance_loads_live_server_instructions():
     assert '`load_skill`' in guidance
     assert 'strategy-composition' in guidance
     assert not (root / 'scripts/sync-michael-skills.py').exists()
+
+
+MAX_CONTRACT_FILE_BYTES = 100_000
+
+
+def test_split_upstream_snapshot_round_trips(tmp_path, monkeypatch):
+    snapshot = checks.read_upstream()
+    assert set(snapshot) == {"version", "source", "billing_ids", "tools"}
+    assert snapshot["tools"] and snapshot["billing_ids"]
+    monkeypatch.setattr(checks, "CONTRACTS", tmp_path)
+    monkeypatch.setattr(checks, "UPSTREAM", tmp_path / "upstream")
+    checks.write_upstream(snapshot)
+    assert checks.read_upstream() == snapshot
+    index = json.loads((tmp_path / "upstream/index.json").read_text())
+    assert index["tools"] == sorted(snapshot["tools"])
+    assert "tools" not in json.loads((tmp_path / "upstream/tools" / f"{index['tools'][0]}.json").read_text())
+
+
+def test_split_upstream_write_drops_removed_tools_and_rejects_drift(tmp_path, monkeypatch):
+    monkeypatch.setattr(checks, "CONTRACTS", tmp_path)
+    monkeypatch.setattr(checks, "UPSTREAM", tmp_path / "upstream")
+    snap = {"version": 1, "source": {}, "billing_ids": ["rest:a"],
+            "tools": {"a": {"type": "object"}, "b": {"type": "object"}}}
+    checks.write_upstream(snap)
+    snap["tools"].pop("b")
+    checks.write_upstream(snap)
+    assert not (tmp_path / "upstream/tools/b.json").exists()
+    assert checks.read_upstream() == snap
+    (tmp_path / "upstream/tools/extra.json").write_text("{}")
+    with pytest.raises(ValueError):
+        checks.read_upstream()
+    (tmp_path / "upstream/tools/extra.json").unlink()
+    (tmp_path / "upstream/tools/a.json").unlink()
+    with pytest.raises(ValueError):
+        checks.read_upstream()
+    with pytest.raises(ValueError):
+        checks.write_upstream({**snap, "tools": {"../x": {"type": "object"}}})
+
+
+def test_contract_files_stay_small_plain_json():
+    files = [p for p in (ROOT / "scripts/contracts").rglob("*") if p.is_file()]
+    assert files and not (ROOT / "scripts/contracts/upstream.json").exists()
+    for path in files:
+        assert path.suffix == ".json", f"{path} must be plain JSON, not compressed or binary"
+        assert path.stat().st_size <= MAX_CONTRACT_FILE_BYTES, f"{path} exceeds the plugin validator size budget"
+        json.loads(path.read_text())
