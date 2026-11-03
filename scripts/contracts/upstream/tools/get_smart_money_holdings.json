@@ -1,0 +1,1 @@
+{"properties":{"chains":{"items":{"type":"string"},"type":"array"},"include_labels":{"items":{"type":"string"},"type":"array"},"limit":{"default":15,"type":"integer"},"min_value_usd":{"default":1000000,"type":"number"}},"required":[],"type":"object"}

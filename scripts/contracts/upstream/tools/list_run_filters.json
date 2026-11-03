@@ -1,0 +1,1 @@
+{"properties":{"experiment_id":{"type":"string"}},"required":["experiment_id"],"type":"object"}

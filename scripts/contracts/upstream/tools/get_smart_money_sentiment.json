@@ -1,0 +1,1 @@
+{"properties":{"chain":{"default":"ethereum","type":"string"},"symbol":{"type":"string"}},"required":["symbol"],"type":"object"}

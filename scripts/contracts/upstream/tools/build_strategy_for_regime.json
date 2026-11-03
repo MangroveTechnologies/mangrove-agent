@@ -1,0 +1,1 @@
+{"properties":{"asset":{"type":"string"},"candle_size":{"type":"string"}},"required":["asset"],"type":"object"}

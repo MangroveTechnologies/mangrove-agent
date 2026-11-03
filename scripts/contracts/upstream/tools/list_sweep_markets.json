@@ -1,0 +1,1 @@
+{"properties":{"assets":{"items":{"type":"string"},"type":"array"},"candle_sizes":{"items":{"type":"string"},"type":"array"},"include_gapped":{"default":false,"type":"boolean"},"regimes":{"items":{"type":"string"},"type":"array"},"windows":{"items":{"type":"string"},"type":"array"}},"required":[],"type":"object"}
