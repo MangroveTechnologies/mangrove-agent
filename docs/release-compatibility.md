@@ -13,8 +13,10 @@ As of this source preparation, published MangroveAI SDK 2.2.0 lacks
 refuses the new deployment workflow when it is absent. Updating only the Agent
 source, or running an unversioned pip upgrade, does not close that release gap.
 
-The coordinated candidates are Python SDK **2.3.0** and API **7.11.0**. The API
-must serve the validated strategy snapshot/local-deployment contract; a version
+The prepared Python SDK candidate is **2.3.0**. Its helper requires the validated
+strategy snapshot/local-deployment contract from API **7.11 or later** actually
+serving in the intended deployment. The coordinated API packaging candidate is
+now **7.12.0**; that is separate from the helper's minimum capability. A version
 label or merged source alone is insufficient. The TypeScript SDK **1.2.0** adds
 the corresponding `client.strategies.localDeployment` helper for external
 clients. The Agent's runtime uses Python, so it needs no npm dependency.

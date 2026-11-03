@@ -127,9 +127,11 @@ The normal installation uses published `mangroveai==2.2.0`, which does not conta
 tools while that is the latest published release. The existing adapter refuses
 the missing capability before making a request.
 
-Local deployment requires the prepared **SDK 2.3.0** and **API 7.11.0** contract.
-These are release candidates in this source preparation, not a claim of registry
-publication or production serving. Follow the
+Local deployment needs the helper in prepared **SDK 2.3.0** and the validated
+contract from **API 7.11 or later** actually serving. The coordinated API packaging
+candidate is now **7.12.0**; it does not change that minimum capability.
+Prepared SDK source does not establish registry publication or production
+serving. Follow the
 [release compatibility gates](release-compatibility.md) before enabling the
 workflow. After the compatible SDK is published and the API is qualified as
 serving, update the SDK minimum and regenerate the lock. Verify the installed
