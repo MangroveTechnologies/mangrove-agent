@@ -1,0 +1,1 @@
+{"properties":{"asset":{"type":"string"},"lookback_days":{"default":365,"type":"integer"},"market_data_venue":{"type":"string"},"provider":{"type":"string"},"quote_token":{"type":"string"}},"required":["asset"],"type":"object"}

@@ -1,0 +1,1 @@
+{"properties":{"asset":{"type":"string"},"candle_size":{"default":"1d","type":"string"},"end_date":{"type":"string"},"market_data_venue":{"type":"string"},"provider":{"type":"string"},"quote_token":{"type":"string"},"start_date":{"type":"string"},"window_file":{"type":"string"}},"required":[],"type":"object"}

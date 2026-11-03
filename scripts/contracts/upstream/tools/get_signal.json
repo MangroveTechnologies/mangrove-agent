@@ -1,0 +1,1 @@
+{"properties":{"signal_name":{"type":"string"}},"required":["signal_name"],"type":"object"}

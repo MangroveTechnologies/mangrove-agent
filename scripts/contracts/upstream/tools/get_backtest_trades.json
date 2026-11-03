@@ -1,0 +1,1 @@
+{"properties":{"backtest_id":{"type":"string"},"limit":{"default":100,"type":"integer"},"offset":{"default":0,"type":"integer"}},"required":["backtest_id"],"type":"object"}

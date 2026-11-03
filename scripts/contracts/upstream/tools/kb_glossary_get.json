@@ -1,0 +1,1 @@
+{"properties":{"term":{"type":"string"}},"required":["term"],"type":"object"}

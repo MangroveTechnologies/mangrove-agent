@@ -1,0 +1,1 @@
+{"properties":{"asset":{"type":"string"},"candidates":{"items":{"type":"object"},"type":"array"}},"required":["asset","candidates"],"type":"object"}

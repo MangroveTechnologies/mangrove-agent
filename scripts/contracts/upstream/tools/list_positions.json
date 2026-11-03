@@ -1,0 +1,1 @@
+{"properties":{"asset":{"type":"string"},"limit":{"type":"integer"},"open_only":{"type":"boolean"},"strategy_id":{"type":"string"}},"type":"object"}

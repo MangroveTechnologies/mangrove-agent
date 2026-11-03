@@ -1,0 +1,1 @@
+{"properties":{"category":{"type":"string"},"limit":{"default":30,"type":"integer"},"offset":{"default":0,"type":"integer"},"regime_direction":{"type":"string"},"role":{"type":"string"}},"type":"object"}
