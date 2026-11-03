@@ -151,6 +151,11 @@ the condition is logged.
 
 ## Example: a social sentiment exit
 
+The connected server's `list_signals` and `get_signal` results are authoritative
+for availability, composability and parameter defaults. The definitions below
+describe knowledge-base policy; a deployment on an earlier KB release can report
+a different status. Follow the server's catalogue when composing a strategy.
+
 One Cambrian-backed signal is available for new strategies: `social_price_divergence`,
 in the `social` category. It is an exit for long positions, never an entry. It fires
 when the price fell at least 3% over 7 days while the crowd's net bullish share of posts
@@ -167,8 +172,10 @@ The agent finds the signal with `list_signals` (category `social`), builds the s
 with the server's `strategy-composition` skill and `save_strategy`, with a price trigger
 and a price filter for entry and `social_price_divergence` in the exit rules, and
 backtests it with `run_backtest`. You do not supply any data: MangroveAI attaches the
-sentiment columns itself, in a backtest as in live evaluation, and a bar sees only
-values already known when it closes.
+sentiment columns itself, in a backtest as in live evaluation, aligning each Deep42
+daily bucket to bars from the next midnight UTC. Deep42 serves older buckets as
+scored today, so this alignment does not establish point-in-time historical
+availability.
 
 Six other Cambrian signals are disabled for new strategies until they are validated in
 strategy backtests across market regimes: `social_sentiment_surge`,
