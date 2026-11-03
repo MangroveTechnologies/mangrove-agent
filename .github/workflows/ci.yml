@@ -89,7 +89,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: MangroveTechnologies/MangroveAI-SDK
-          ref: cab18170289564f50f998fc46207cfefc73c4e50
+          ref: c4dc29ca9bf63575d95e1471e7e20c2056a107e9
           path: sdk-candidate
           persist-credentials: false
 
