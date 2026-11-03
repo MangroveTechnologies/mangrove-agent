@@ -14,7 +14,7 @@ description: >-
 version: 0.2.0
 author: Mangrove Technologies
 license: MIT
-allowed-tools: Read, Bash(./scripts/*)
+allowed-tools: Read
 compatibility: Claude Code plugin; requires the local mangrove-agent repository and a Kraken account for connection setup.
 tags: [mangrove, kraken, exchange, trading, byok]
 ---
