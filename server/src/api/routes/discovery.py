@@ -112,7 +112,8 @@ def reset_catalog_cache() -> None:
     description=(
         "Server + SDK versions, signal/KB catalog counts, wallet count, "
         "local execution records by status (not server-saved strategy inventory), "
-        "active cron jobs, db path, uptime. Free, no auth."
+        "active authentication mode, cron jobs, db path, uptime. "
+        "x402_spend applies only to x402 mode; it is not account quota. Free, no auth."
     ),
     tags=["discovery"],
 )
@@ -126,8 +127,13 @@ async def status() -> dict:
     counts = Counter(r["status"] for r in strategy_rows)
 
     server_version = __version__
+    access_mode = getattr(app_config, "MANGROVE_ACCESS_MODE", None)
+    if access_mode is None:
+        from src.shared.clients.mangrove import _api_key
+        access_mode = "api-key" if _api_key(app_config) else "x402"
 
     return {
+        "access_mode": access_mode,
         "agent_name": agent_identity.get_name(),
         "version": server_version,
         "server_version": server_version,
@@ -147,7 +153,7 @@ async def status() -> dict:
         },
         "active_cron_jobs": active_job_count(),
         "portfolio_risk": _portfolio_risk_status(),
-        "x402_spend": _x402_spend_status(),
+        "x402_spend": _x402_spend_status() if access_mode == "x402" else None,
         "db_path": str(app_config.DB_PATH),
         "uptime_seconds": int(time.monotonic() - _STARTUP_MONOTONIC),
     }

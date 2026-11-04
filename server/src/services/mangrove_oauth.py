@@ -24,8 +24,10 @@ from src.shared.crypto.fernet import decrypt, encrypt
 from src.shared.errors import AgentError
 
 DEFAULT_ISSUER = 'https://api.mangrovedeveloper.ai'
-SCOPES = 'data:read strategies:read backtests:read signals:read positions:read offline_access'
-ALLOWED_SCOPES = frozenset((SCOPES + ' backtests:run signals:evaluate').split())
+SCOPES = ('strategies:read strategies:write strategies:archive strategies:evaluate '
+          'backtests:read backtests:run sweeps:read sweeps:run signals:read '
+          'signals:evaluate positions:read data:read offline_access')
+ALLOWED_SCOPES = frozenset(SCOPES.split())
 _lock = threading.RLock()
 _pending: dict | None = None
 
@@ -173,6 +175,8 @@ def start(scopes: str = SCOPES):
     wanted = set(scopes.split()) | {'offline_access'}
     if not wanted <= ALLOWED_SCOPES:
         raise OAuthError('Unsupported OAuth permission requested.')
+    if not wanted - {'offline_access'}:
+        raise OAuthError('Select at least one tool permission to start Mangrove sign-in.')
     with _lock:
         with store() as conn:
             previous = read(conn)

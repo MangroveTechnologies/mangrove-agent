@@ -230,3 +230,17 @@ async def test_unsigned_receiver_refusal_does_not_invent_reconciliation(wallet, 
         assert 'reconcil' not in str(caught.value)
     assert len(session.calls) == 1
     assert spend_service.list_payments() == []
+
+
+async def test_shared_session_interruption_after_signing_keeps_payment_uncertain(wallet, sepolia_network):
+    from src.mcp.mangrove_proxy import _SessionInterrupted
+    from src.services import payment_operations
+
+    session = _RecoverableMcpSession(failure=_SessionInterrupted('another request failed'))
+    with pytest.raises(X402PaymentUncertain) as caught:
+        await x402_payer.pay_mcp(session, name='list_signals', wallet_address=wallet,
+                                 resource='https://receiver.test/mcp')
+    assert caught.value.reservation_ids
+    assert caught.value.to_dict()['retry_payment'] is False
+    assert payment_operations.pending_status()
+    assert len(session.calls) == 2

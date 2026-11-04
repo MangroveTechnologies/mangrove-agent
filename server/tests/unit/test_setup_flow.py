@@ -1666,6 +1666,7 @@ def test_oauth_setup_automatically_reuses_connection(monkeypatch, capsys, comman
     monkeypatch.setattr(setup.webbrowser, 'open', browser)
     setup.oauth_command(cfg, command, [], yes=yes)
     assert browser.call_count == int(opens)
+    assert started == ([{}] if opens else [])
     prompt.assert_not_called()
     if not opens:
         assert 'Already signed in to Mangrove. Using your saved OAuth connection.' in capsys.readouterr().out
@@ -1680,7 +1681,9 @@ def test_oauth_guide_does_not_send_user_to_internal_helper(capsys):
 
 @pytest.mark.parametrize('options,command', [
     (['--oauth', 'login'], 'oauth-login'),
-    (['--oauth-scope', 'signals:evaluate'], 'oauth-login'),
+    *[(['--oauth-scope', scope], 'oauth-login') for scope in [
+        'strategies:write', 'strategies:archive', 'strategies:evaluate',
+        'sweeps:read', 'sweeps:run', 'signals:evaluate']],
     (['--auth', 'oauth'], 'oauth-setup'),
 ])
 def test_setup_shell_routes_oauth_through_main_script(checkout, options, command):
@@ -1697,7 +1700,7 @@ def oauth_command(cfg, command, scopes, *, yes=False):
     assert result.returncode == 0, result.stderr + result.stdout
     call = json.loads((repo / 'oauth-call.json').read_text())
     assert call['command'] == command
-    assert call['scopes'] == (['signals:evaluate'] if '--oauth-scope' in options else [])
+    assert call['scopes'] == ([options[1]] if '--oauth-scope' in options else [])
     assert call['yes'] == (command == 'oauth-setup')
     assert 'setup_support.py' not in result.stdout
 
