@@ -28,6 +28,33 @@
       <img src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white" alt="Discord">
     </a>
   </p>
+
+  <p>
+    <a href="https://registry.modelcontextprotocol.io/v0.1/servers/io.github.MangroveTechnologies%2Fmangroveai/versions/latest">
+      <img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.modelcontextprotocol.io%2Fv0.1%2Fservers%2Fio.github.MangroveTechnologies%252Fmangroveai%2Fversions%2Flatest&query=%24.server.version&label=MCP%20Registry&color=0A7B5B" alt="Official MCP Registry">
+    </a>
+    <a href="https://glama.ai/mcp/connectors/io.github.MangroveTechnologies/mangroveai">
+      <img src="https://glama.ai/mcp/connectors/io.github.MangroveTechnologies/mangroveai/badges/score.svg" alt="MangroveAI MCP connector on Glama" height="20">
+    </a>
+    <a href="https://allmcps.com/mcp/mangrove-ai">
+      <img src="https://allmcps.com/api/badge/mangrove-ai?style=directory" alt="Mangrove AI on AllMCPs" height="20">
+    </a>
+    <a href="https://mcp.so/servers/mangroveai">
+      <img src="https://img.shields.io/badge/mcp.so-listed-0A7B5B" alt="Listed on mcp.so">
+    </a>
+    <a href="https://mcpmarket.com/server/mangrove-agent">
+      <img src="https://img.shields.io/badge/MCP%20Market-listed-0A7B5B" alt="Listed on MCP Market">
+    </a>
+    <a href="https://mcpservers.org/servers/mangrovetechnologies/mangrove-agent">
+      <img src="https://img.shields.io/badge/mcpservers.org-listed-0A7B5B" alt="Listed on mcpservers.org">
+    </a>
+    <a href="https://www.claudemarket.ai/mcp/MangroveTechnologies/mangrove-agent">
+      <img src="https://img.shields.io/badge/Claude%20Market-listed-0A7B5B" alt="Listed on Claude Market">
+    </a>
+    <a href="https://mcprepository.com/mangrovetechnologies/mangrove-agent">
+      <img src="https://img.shields.io/badge/MCP%20Repository-listed-0A7B5B" alt="Listed on MCP Repository">
+    </a>
+  </p>
 </div>
 
 ---

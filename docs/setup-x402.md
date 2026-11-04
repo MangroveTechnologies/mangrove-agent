@@ -173,6 +173,8 @@ Rerun `./scripts/setup.sh --yes` after editing to apply the configuration and se
 
 The agent's `X402_FACILITATOR_URL`, `X402_PAY_TO` and CDP credential settings configure its own receiving endpoint for the `hello_mangrove` demo, not the remote MangroveAI receiver. Users who pay MangroveAI do not need CDP credentials. Ordinary outbound payments follow the payment challenge the MangroveAI backend returns.
 
+Mangrove's hosted services, MangroveAI and MangroveMarkets, receive x402 payments on Base at `x402-agents.base.eth` (`0xDA913CF1D855A40560e39a1a2e0387a5f3117A2e`); the name is that address's primary Base name. The agent records the payee of every payment in its local ledger (`GET /x402/spend/payments`, see the [API reference](api-reference.md)), so you can check that your payments went to this address.
+
 Once configured, paid tools can pay automatically within the signing and spend controls. Paper trading simulates trades, but data, signals and backtests can still incur API costs. MangroveMarkets and other providers have their own access requirements, so keyless MangroveAI access does not prove that every trading capability works without other credentials.
 
 ## Readiness and recovery

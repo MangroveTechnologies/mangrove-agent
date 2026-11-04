@@ -753,3 +753,75 @@ async def test_oauth_never_uses_saved_api_key_or_wallet(transport, monkeypatch):
     assert connections[-1][1] is None
     key.assert_not_called()
     payer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_hidden_oauth_tool_only_queries_denial_metadata(transport, monkeypatch):
+    client, _ = transport
+    monkeypatch.setattr(proxy.oauth, 'enabled', lambda: True)
+    client.list_tools.return_value = SimpleNamespace(tools=[tool('discover_tools')], nextCursor=None)
+    denied = CallToolResult(isError=True, content=[], structuredContent={
+        'code': 'ACCESS_DENIED', 'data': {'denied_tools': [{
+            'name': 'save_strategy', 'missing_scopes': ['strategies:write']}]}})
+    client.send_request.return_value = denied
+    from src.services import x402_payer
+    payer = AsyncMock()
+    monkeypatch.setattr(x402_payer, 'pay_on_open_mcp_session', payer)
+    assert await proxy.call_tool('save_strategy', {}) == denied
+    request = client.send_request.call_args.args[0].root.params
+    assert request.name == 'discover_tools'
+    assert request.arguments == {'names': ['save_strategy']}
+    client.send_request.assert_awaited_once()
+    payer.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('same_tool', [False, True])
+@pytest.mark.parametrize('origin_known', [False, True])
+async def test_shared_denial_belongs_only_to_its_sdk_request(same_tool, origin_known):
+    import asyncio
+    import anyio
+    import httpx
+    from mcp import ClientSession
+    from mcp.types import CallToolRequest, CallToolRequestParams, ClientRequest
+
+    incoming, reader = anyio.create_memory_object_stream(10)
+    writer, outgoing = anyio.create_memory_object_stream(10)
+    shared = proxy._SharedSession('https://receiver.test/mcp/', 'synthetic')
+    async with incoming, outgoing, ClientSession(reader, proxy._TrackedWriteStream(writer)) as sdk:
+        shared.client = sdk
+        client = proxy._GuardedClient(shared)
+        names = ['save_strategy', 'save_strategy' if same_tool else 'list_strategies']
+
+        async def call(name):
+            try:
+                return await client.send_request(ClientRequest(CallToolRequest(
+                    params=CallToolRequestParams(name=name, arguments={}))), CallToolResult)
+            except Exception as error:
+                return error
+
+        tasks = [asyncio.create_task(call(name)) for name in names]
+        sent = [await outgoing.receive(), await outgoing.receive()]
+        request_body = sent[0].message.model_dump(by_alias=True, mode='json')
+        assert request_body['id'] != sent[1].message.root.id
+        if not origin_known:
+            request_body.pop('id')
+        request = httpx.Request('POST', shared.endpoint_url, json=request_body)
+        response = httpx.Response(403, request=request, json={'error': {'code': -32012, 'data': {
+            'code': 'insufficient_scope', 'missing_scopes': ['strategy:create']}}})
+        denied = httpx.HTTPStatusError('denied', request=request, response=response)
+        shared._error = ExceptionGroup('session failed', [ExceptionGroup('transport', [denied])])
+        shared._lost.set()
+        errors = await asyncio.gather(*tasks)
+        if origin_known:
+            assert errors[0] is denied
+            assert proxy.transport_error(errors[0]).to_dict()['missing_scopes'] == ['strategy:create']
+        else:
+            assert isinstance(errors[0], proxy._SessionInterrupted)
+        assert isinstance(errors[1], proxy._SessionInterrupted)
+        body = proxy.transport_error(errors[1]).to_dict()
+        assert 'missing_scopes' not in body and 'reason' not in body
+        assert 'outcome is not confirmed' in body['message']
+        assert 'automatically retry' in body['suggestion']
+        assert sdk._response_streams == {}
+        assert proxy._request_ids.get() is None

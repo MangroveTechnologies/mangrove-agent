@@ -530,3 +530,59 @@ def test_reconnect_cleanup_preserves_concurrently_rotated_tokens(env, monkeypatc
         record = oauth.read(conn)
         assert record['refresh_token'] == 'mgo_rt_rotated'
         assert record['retired']['refresh_token'] == 'mgo_rt_synthetic'
+
+
+def test_default_login_requests_all_supported_categories(env, monkeypatch):
+    query, _ = connect(monkeypatch)
+    assert set(query['scope'][0].split()) == {
+        'strategies:read', 'strategies:write', 'strategies:archive', 'strategies:evaluate',
+        'backtests:read', 'backtests:run', 'sweeps:read', 'sweeps:run',
+        'signals:read', 'signals:evaluate', 'positions:read', 'data:read', 'offline_access',
+    }
+
+
+@pytest.mark.parametrize('broaden', [False, True])
+def test_narrowed_consent_cannot_expand_on_refresh(env, monkeypatch, broaden):
+    granted = 'strategies:read offline_access'
+    connect(monkeypatch, dict(reply(), scope=granted))
+    assert oauth.status()['scopes'] == granted.split()
+    expired()
+    calls = []
+
+    def rotate(path, data):
+        calls.append(data)
+        return dict(reply(), scope=oauth.SCOPES if broaden else granted)
+
+    monkeypatch.setattr(oauth, 'post', rotate)
+    if broaden:
+        with pytest.raises(oauth.OAuthError, match='invalid OAuth token response'):
+            oauth.access_token()
+        assert not oauth.status()['connected']
+    else:
+        assert oauth.access_token() == 'mgo_at_synthetic'
+        assert oauth.status()['scopes'] == granted.split()
+    assert len(calls) == 1
+    assert 'scope' not in calls[0]
+
+
+@pytest.mark.parametrize('scope', ['strategies:write', 'strategies:archive', 'strategies:evaluate',
+                                 'sweeps:read', 'sweeps:run'])
+def test_new_scope_error_suggests_only_supported_explicit_access(env, scope):
+    from src.mcp import mangrove_proxy
+    request = httpx.Request('POST', oauth.endpoint())
+    response = httpx.Response(403, request=request, headers={
+        'www-authenticate': f'Bearer error="insufficient_scope", scope="{scope} admin:manage"'})
+    error = mangrove_proxy.transport_error(httpx.HTTPStatusError('denied', request=request, response=response))
+    assert f'--oauth-scope {scope}' in error.suggestion
+    assert 'admin:manage' not in error.suggestion
+
+
+@pytest.mark.parametrize('scopes', ['', ' ', 'offline_access'])
+def test_login_requires_tool_permission_before_registration(env, monkeypatch, scopes):
+    def unexpected_registration(*args, **kwargs):
+        pytest.fail('Invalid permission selection must not register an OAuth client')
+
+    monkeypatch.setattr(oauth, 'post', unexpected_registration)
+    with pytest.raises(oauth.OAuthError, match='at least one tool permission'):
+        oauth.start(scopes)
+    assert oauth._pending is None

@@ -694,7 +694,7 @@ def configure(args):
         print('Upstream API-key validity is checked by the verify step below. Failed keys never trigger wallet payments.')
     elif mode == 'oauth':
         print('Browser sign-in follows after local startup. API keys and wallet payments will not be used.')
-        print('OAuth currently supports the server connector catalog; strategy writing and sweeps require API-key mode.')
+        print('OAuth tool access follows your approved permissions and current account role.')
     else:
         print(f'Payment network: {network(cfg)[2]}. Existing network selections are preserved on reruns.')
         print('Automatic payment reconciliation configured for the selected network; RPC availability is checked during recovery.')
@@ -1315,12 +1315,13 @@ def oauth_command(cfg, command, scopes, *, yes=False):
         return
     if cfg.get('MANGROVE_ACCESS_MODE') != 'oauth':
         raise SetupError('Select --auth oauth in setup before signing in.')
-    # Existing grants are preserved when asking for additional access.
-    wanted = set(current.get('scopes', [])) | set(scopes) | set(
-        'data:read strategies:read backtests:read signals:read positions:read offline_access'.split())
+    payload = {}
+    if scopes:
+        wanted = set(current.get('scopes', [])) | set(scopes) | {'offline_access'}
+        payload['scopes'] = ' '.join(sorted(wanted))
     if current.get('pending'):
         request(cfg, '/api/v1/agent/oauth/cancel', {})
-    result = request(cfg, '/api/v1/agent/oauth/start', {'scopes': ' '.join(sorted(wanted))}, timeout=20)
+    result = request(cfg, '/api/v1/agent/oauth/start', payload, timeout=20)
     url = result.get('authorization_url', '')
     expected = (cfg.get('MANGROVE_OAUTH_ISSUER') or 'https://api.mangrovedeveloper.ai').rstrip('/')
     parsed = urllib.parse.urlsplit(url)
@@ -1413,7 +1414,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['banner', 'configure', 'check', 'markets-check', 'verify', 'guide', 'onboard', 'onboard-finish', 'wallet', 'fingerprint', 'headers', 'register', 'chat', 'oauth-login', 'oauth-status', 'oauth-disconnect', 'oauth-setup', 'robinhood-setup'])
     parser.add_argument('--auth', choices=['api-key', 'x402', 'oauth'])
-    parser.add_argument('--scope', action='append', choices=['backtests:run', 'signals:evaluate'], default=[])
+    parser.add_argument('--scope', action='append', choices=['strategies:read', 'strategies:write', 'strategies:archive',
+                                                          'strategies:evaluate', 'backtests:read', 'backtests:run',
+                                                          'sweeps:read', 'sweeps:run', 'signals:read',
+                                                          'signals:evaluate', 'positions:read', 'data:read',
+                                                          'offline_access'], default=[])
     parser.add_argument('--api-key-stdin', action='store_true')
     parser.add_argument('--yes', action='store_true')
     parser.add_argument('--docker', action='store_true')
