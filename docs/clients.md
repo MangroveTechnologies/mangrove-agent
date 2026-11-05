@@ -56,6 +56,7 @@ instructions, tool schemas, other plugins and chat history add their own cost.
 | Codex repository session | Native `AGENTS.md` discovery supplies the short pointer; the agent must read `SAGE.md` and any missing rules | A Markdown pointer is not an automatic import; a launcher file-existence check is not evidence that the model read it |
 | Grok Build repository session | Grok discovers both AGENTS/CLAUDE instruction families and compatible `.claude/rules/` files | Reuse sources already loaded by the host; read `SAGE.md` if missing; do not add a second private persona |
 | Perplexity Computer | The installing agent explicitly reads the complete `agent_context.py --stdout` output in its execution environment | Do not assume an AGENTS file, a Project attachment or a web link automatically injected the policy |
+| Grok Bot (hosted agent with a box) | Runs the checkout on its own box and reads the complete `agent_context.py --stdout` output; it does not auto-load AGENTS/CLAUDE files or `.claude/skills/`. See [Grok Bot](clients/grok-bot.md) | Do not also read `SAGE.md` and the rule files separately; call tools through the command client, not native MCP |
 
 The provider mechanisms above follow the official
 [Codex instruction guide](https://learn.chatgpt.com/docs/agent-configuration/agents-md),
@@ -245,6 +246,12 @@ Perplexity Search and other web modes that cannot execute installation commands
 need an existing agent exposed through a supported MCP connection. Merely
 uploading the instruction bundle does not install the server or connect tools.
 The same limitation applies to Grok web modes without an execution environment.
+
+## Grok Bot
+
+Grok Bot runs this repository on its own Linux box and uses the command client.
+See [Grok Bot](clients/grok-bot.md) for first run, access, the required
+watchdog routine and per-session steps.
 
 ## Optional native stdio MCP connection
 
