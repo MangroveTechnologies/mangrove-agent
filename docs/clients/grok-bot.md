@@ -13,7 +13,11 @@ repository on that box, not on the owner's computer. It does not discover
 `AGENTS.md`, `CLAUDE.md` or `.claude/skills/` on its own, and it cannot attach
 the agent's MCP server as native tools. It uses the command client instead, as
 described in [Mangrove agent across AI clients](../clients.md). Claude hooks and
-the restricted launcher's permissions do not run on this host.
+the restricted launcher's permissions do not run on this host. The agent itself
+still refuses wallet secrets in tool arguments, withholds them from tool results
+and refuses a live swap from a wallet with no input-token balance, because those
+checks run in the agent for every client. See
+[guardrails across clients](../clients.md#guardrails-across-clients).
 
 ## First run
 
@@ -120,3 +124,14 @@ When a capability is missing, report it as described in
 permission to work around a control. Never echo, log or save a credential, key,
 recovery phrase or vault token in chat, routine output or files outside the
 protected config.
+
+These guards are not enforced on this host and remain Grok Bot's duty:
+
+- A key or recovery phrase the owner types into the Grok Bot chat reaches the
+  host transcript before any tool runs. If one arrives, do not pass it to any
+  tool or file; tell the owner to run `./scripts/stash-secret.sh` in their own
+  terminal. A tool call that carries one is refused with `SECRET_IN_ARGUMENTS`.
+- Shell output on the box is not checked for secrets. Do not run commands that
+  print keys, phrases, vault tokens or config contents.
+- For repository maintenance, work on a feature branch and open a pull request;
+  never commit or push to `main`. Nothing on this host blocks it.
