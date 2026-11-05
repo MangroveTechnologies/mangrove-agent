@@ -89,15 +89,15 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: MangroveTechnologies/MangroveAI-SDK
-          ref: 3e1d4ce13df96396f5f19622267bb85d2e6a2f90
+          ref: 9d4b517a55a401c9034c0706e3c1456949fd3508
           path: sdk-candidate
           persist-credentials: false
 
       - name: Build and install the prepared SDK wheel separately
         run: |
           pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/mangrove-sdk" ./sdk-candidate
-          pip install --no-deps --force-reinstall "$RUNNER_TEMP/mangrove-sdk/mangroveai-2.3.0-py3-none-any.whl"
-          python -c 'from importlib.metadata import version; assert version("mangroveai") == "2.3.0"'
+          pip install --no-deps --force-reinstall "$RUNNER_TEMP/mangrove-sdk/mangroveai-2.4.0-py3-none-any.whl"
+          python -c 'from importlib.metadata import version; assert version("mangroveai") == "2.4.0"'
           cmp server/tests/fixtures/local-deployment-not-ready.json sdk-candidate/contracts/mangroveai/fixtures/local-deployment-not-ready.json
 
       - name: Test installed candidate through the Agent adapter
