@@ -11,3 +11,5 @@ load them twice.
 For clients without local file access, use the complete generated bundle at
 `docs/clients/sage-instructions.md`, as described in `docs/clients.md`. A pointer
 alone does not load its target, and instructions alone do not connect MCP tools.
+
+Grok Bot, which runs this repository on its own box, follows `docs/clients/grok-bot.md`.

@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -144,3 +145,46 @@ def test_plugin_injects_shared_policy_before_unconfigured_status(tmp_path):
     assert '**Name:** Unset' in result.stdout
     assert 'Client-only skills:' in result.stdout
     assert 'NOT CONFIGURED:' in result.stdout
+
+
+GROK_BOT_DOC = ROOT / 'docs/clients/grok-bot.md'
+
+
+def _documented_flags(doc: str) -> dict[str, set[str]]:
+    """Each script the doc's command blocks run, with the flags passed to it."""
+    used: dict[str, set[str]] = {}
+    for block in re.findall(r'```bash\n(.*?)```', doc, re.S):
+        for command in re.split(r'\||&&|\n', block):
+            match = re.search(r'scripts/([\w.-]+\.(?:py|sh))', command)
+            if match:
+                used.setdefault(match.group(1), set()).update(
+                    re.findall(r'(?<![\w-])--[a-z][a-z0-9-]*', command[match.end():]))
+    return used
+
+
+def test_grok_bot_doc_is_linked_and_its_links_resolve():
+    doc = GROK_BOT_DOC.read_text()
+    assert doc.isascii()
+    assert 'docs/clients/grok-bot.md' in (ROOT / 'AGENTS.md').read_text()
+    assert '(clients/grok-bot.md)' in (ROOT / 'docs/clients.md').read_text()
+    for target in re.findall(r'\]\((\.\./[^)#]+)', doc):
+        assert (GROK_BOT_DOC.parent / target).resolve().is_file(), target
+    # Policy stays in the shared sources; the host doc links to each of them.
+    for source in context.SOURCES:
+        assert source.rsplit('/', 1)[-1] in doc
+
+
+def test_grok_bot_doc_uses_only_flags_its_scripts_accept():
+    used = _documented_flags(GROK_BOT_DOC.read_text())
+    assert used['setup.sh'] >= {'--auth', '--api-key-stdin', '--yes', '--no-mcp'}
+    assert used['agent_context.py'] == {'--stdout'}
+    assert used['local_mcp_bridge.py'] >= {'--call', '--arguments-file'}
+    setup = (ROOT / 'scripts/setup.sh').read_text()
+    for flag in used.pop('setup.sh'):
+        assert re.search(rf'^\s+{re.escape(flag)}\)', setup, re.M), flag
+    for script, flags in used.items():
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts' / script), '--help'],
+                                capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        for flag in flags:
+            assert re.search(rf'(?<![\w-]){re.escape(flag)}(?![\w-])', result.stdout), (script, flag)
