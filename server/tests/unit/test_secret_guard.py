@@ -27,6 +27,17 @@ FAKE_TX = "0x" + "ab" * 32             # same shape, used as a transaction hash
 FAKE_SEED = "s" + "p" * 28             # XRPL family seed shape
 _WORDS = sorted(secret_guard.bip39_words())
 FAKE_PHRASE = " ".join(_WORDS[:12])    # 12 wordlist words, not a valid checksum
+
+
+def _real_phrase(words: int = 12) -> str:
+    """A fresh checksummed phrase generated for the test; never a real wallet's."""
+    from eth_account.hdaccount.mnemonic import Mnemonic
+    from eth_account.types import Language
+
+    return Mnemonic(Language.ENGLISH).generate(words)
+
+
+REAL_PHRASE = _real_phrase()
 PROSE = ("buy ETH when the RSI crosses above thirty and sell it when the price "
          "drops more than two percent from the entry, then wait for the next signal")
 
@@ -41,7 +52,7 @@ def test_wordlist_matches_the_claude_hook_list():
     ({"vault_token": FAKE_KEY}, secret_guard.EVM_KEY),
     ({"config": {"private_key": FAKE_KEY}}, secret_guard.EVM_KEY),
     ({"items": [{"secret": FAKE_PHRASE}]}, secret_guard.MNEMONIC),
-    ({"query": f"my words are {FAKE_PHRASE}"}, secret_guard.MNEMONIC),
+    ({"query": f"my words are {REAL_PHRASE}"}, secret_guard.MNEMONIC),
     ({"note": f"seed {FAKE_SEED} please"}, secret_guard.XRPL_SEED),
     ({"payload": json.dumps({"private_key": FAKE_KEY})}, secret_guard.EVM_KEY),
     ({"payload": f'"mnemonic": "{FAKE_KEY}"'}, secret_guard.EVM_KEY),
@@ -53,7 +64,7 @@ def test_arguments_with_secrets_are_refused(arguments, kind):
 @pytest.mark.parametrize("arguments", [
     {},
     {"tx_hash": FAKE_TX, "chain_id": 8453},
-    {"query": f"what happened in {FAKE_TX}?"},
+    {"query": f"what happened in tx {FAKE_TX}?"},
     {"vault_token": "Zx3kP0_qv7Lr9TmN2bYc4w"},
     {"description": PROSE},
     {"wallet_address": "0x" + "a" * 40, "amount": 1.5, "confirm": True},
@@ -111,3 +122,145 @@ def test_strict_text_scan_agrees_with_the_hook_user_mode(text, blocked):
     )
     assert hook.returncode == (2 if blocked else 0)
     assert (secret_guard.find_in_text(text) is not None) is blocked
+
+
+# --- Bare hex keys (MetaMask export format) ---------------------------------
+
+BARE_KEY = "1f" * 32                   # 64 hex, no 0x: what MetaMask displays
+UPPER_PREFIX_KEY = "0X" + "1f" * 32
+SHA256_DIGEST = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+
+
+@pytest.mark.parametrize("arguments", [
+    {"private_key": BARE_KEY},
+    {"vault_token": BARE_KEY},
+    {"private_key": UPPER_PREFIX_KEY},
+    {"vault_token": f"  {BARE_KEY}\n"},
+    {"query": f"import my wallet {BARE_KEY}"},
+])
+def test_bare_hex_keys_in_arguments_are_refused(arguments):
+    assert secret_guard.find_in_arguments(arguments) == secret_guard.EVM_KEY
+
+
+@pytest.mark.parametrize("result", [
+    _text_result({"private_key": BARE_KEY}),
+    _text_result({"wallet": {"private_key": UPPER_PREFIX_KEY}}),
+    [TextContent(type="text", text=f'debug "private_key": "{BARE_KEY}"')],
+])
+def test_bare_hex_keys_in_results_are_withheld(result):
+    assert secret_guard.find_in_result(result) == secret_guard.EVM_KEY
+
+
+@pytest.mark.parametrize("arguments", [
+    {"tx_hash": FAKE_TX},
+    {"tx_hash": "ab" * 32},
+    {"definition_hash": SHA256_DIGEST},
+    {"config_hash": SHA256_DIGEST, "source_config_hash": "0x" + SHA256_DIGEST},
+    {"order_id": "0x" + "cd" * 32},
+    {"digest": SHA256_DIGEST},
+    {"dataset": SHA256_DIGEST},
+    {"query": f"what happened in transaction {FAKE_TX}?"},
+    {"query": f"look up tx {SHA256_DIGEST}"},
+    {"description": f"strategy definition hash {SHA256_DIGEST}"},
+])
+def test_hashes_and_identifiers_in_arguments_pass(arguments):
+    assert secret_guard.find_in_arguments(arguments) is None
+
+
+@pytest.mark.parametrize("result", [
+    _text_result({"tx_hash": FAKE_TX, "approval_tx_hash": "0x" + "cd" * 32, "status": "confirmed"}),
+    _text_result({"transactions": [{"hash": FAKE_TX}, {"hash": "ef" * 32}]}),
+    _text_result({"definition_hash": SHA256_DIGEST, "key": "XXBT"}),
+    CallToolResult(content=[], structuredContent={"tx_hash": FAKE_TX, "block_hash": "0x" + "12" * 32}),
+    [TextContent(type="text", text=f'Swap confirmed. "key": "XXBT", tx {FAKE_TX}, digest {SHA256_DIGEST}')],
+])
+def test_results_carrying_transaction_hashes_pass(result):
+    assert secret_guard.find_in_result(result) is None
+
+
+# --- Unlisted key field names and free text -------------------------------
+
+@pytest.mark.parametrize("field", [
+    "privateKey", "secret_key", "privKey", "PRIVATE_KEY", "private-key", "evm_private_key",
+    "walletPrivateKey", "signing_key",
+])
+def test_key_like_field_names_are_normalized(field):
+    assert secret_guard.find_in_arguments({"arguments": {field: FAKE_KEY}}) == secret_guard.EVM_KEY
+    assert secret_guard.find_in_arguments({field: BARE_KEY}) == secret_guard.EVM_KEY
+    assert secret_guard.find_in_result(_text_result({field: FAKE_KEY})) == secret_guard.EVM_KEY
+
+
+@pytest.mark.parametrize("field", ["seedPhrase", "mnemonicPhrase", "recovery_phrase", "MNEMONIC"])
+def test_phrase_field_names_are_normalized(field):
+    # In a key-named field any 12-word run counts, checksum or not.
+    assert secret_guard.find_in_arguments({field: FAKE_PHRASE}) == secret_guard.MNEMONIC
+    assert secret_guard.find_in_result(_text_result({field: FAKE_PHRASE})) == secret_guard.MNEMONIC
+
+
+@pytest.mark.parametrize("arguments", [
+    {"query": f"import my wallet {FAKE_KEY}"},
+    {"query": FAKE_KEY},
+    {"description": f"use key {FAKE_KEY} for this"},
+    {"arguments": {"query": f"my key is {FAKE_KEY}"}},
+    {"messages": [f"here: {FAKE_KEY}"]},
+    {"note": f"what happened in {FAKE_TX}?"},
+])
+def test_hex_key_in_free_text_is_refused(arguments):
+    assert secret_guard.find_in_arguments(arguments) == secret_guard.EVM_KEY
+
+
+# --- Recovery phrases need a valid checksum outside key-named fields --------
+
+STRATEGY_PROSE = [
+    "price above average, volume above average, trend above zero, exit when price below average",
+    "average cross slow average above zero exit when price drop below level",
+]
+
+
+@pytest.mark.parametrize("text", STRATEGY_PROSE)
+def test_strategy_prose_made_of_wordlist_words_passes(text):
+    assert secret_guard.has_mnemonic(text)  # it is a 12+ run of wordlist words
+    assert secret_guard.find_in_arguments({"description": text}) is None
+
+
+@pytest.mark.parametrize("words", [12, 15, 18, 21, 24])
+def test_checksummed_phrase_is_refused_anywhere(words):
+    phrase = _real_phrase(words)
+    assert secret_guard.find_in_arguments({"description": phrase}) == secret_guard.MNEMONIC
+    assert secret_guard.find_in_arguments({"query": f"restore wallet: {phrase}. thanks"}) == secret_guard.MNEMONIC
+    assert secret_guard.find_in_arguments({"text": f"price above average {phrase}"}) == secret_guard.MNEMONIC
+
+
+def test_checksum_agrees_with_eth_account():
+    from eth_account.hdaccount.mnemonic import Mnemonic
+    from eth_account.types import Language
+
+    reference = Mnemonic(Language.ENGLISH)
+    for words in (12, 15, 18, 21, 24):
+        for _ in range(20):
+            phrase = reference.generate(words).split()
+            assert secret_guard.bip39_checksum_valid(phrase)
+            mutated = phrase[:-1] + [_WORDS[(_WORDS.index(phrase[-1]) + 1) % 2048]]
+            assert secret_guard.bip39_checksum_valid(mutated) == reference.is_mnemonic_valid(" ".join(mutated))
+    assert not secret_guard.bip39_checksum_valid(_WORDS[:11])
+    assert not secret_guard.bip39_checksum_valid(["notaword"] * 12)
+
+
+@pytest.mark.parametrize("layout", [
+    lambda words: " ".join(words),
+    lambda words: "\n".join(words),
+    lambda words: "\n".join(f"{i}. {w}" for i, w in enumerate(words, 1)),
+    lambda words: f'my phrase is "{" ".join(words)}".',
+    lambda words: f"restore ({' '.join(words)}) please",
+])
+def test_checksummed_phrase_layouts_are_refused(layout):
+    words = _real_phrase(12).split()
+    assert secret_guard.find_in_arguments({"query": layout(words)}) == secret_guard.MNEMONIC
+
+
+def test_punctuation_ends_a_word_run():
+    words = REAL_PHRASE.split()
+    split = " ".join(words[:6]) + ". " + " ".join(words[6:])
+    assert secret_guard.find_in_arguments({"query": split}) is None
+    # In a key-named field any 12-word run counts, punctuation or not.
+    assert secret_guard.find_in_arguments({"mnemonic": ", ".join(words)}) == secret_guard.MNEMONIC

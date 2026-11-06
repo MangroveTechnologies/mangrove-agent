@@ -57,7 +57,10 @@ async def test_key_pasted_as_vault_token_is_refused_before_the_tool_runs(mcp_ser
 async def test_secret_is_never_forwarded_upstream(mcp_server, monkeypatch):
     upstream = AsyncMock()
     monkeypatch.setattr("src.mcp.mangrove_proxy.call_tool", upstream)
-    phrase = " ".join(sorted(__import__("src.shared.secret_guard", fromlist=["x"]).bip39_words())[:12])
+    from eth_account.hdaccount.mnemonic import Mnemonic
+    from eth_account.types import Language
+
+    phrase = Mnemonic(Language.ENGLISH).generate(12)  # generated for the test
     result = await mcp_server.call_tool("kb_search", {"query": phrase})
     assert _body(result)["code"] == "SECRET_IN_ARGUMENTS"
     upstream.assert_not_called()
@@ -117,3 +120,66 @@ def test_http_transport_used_by_every_client_applies_the_guard(monkeypatch):
         service.assert_not_called()
     finally:
         server.reset_mcp_server()
+
+
+BARE_KEY = "1f" * 32  # MetaMask "Show private key" format: no 0x prefix
+
+
+def _upstream_ok():
+    return AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="{}")]))
+
+
+@pytest.mark.asyncio
+async def test_bare_hex_key_as_vault_token_is_refused_before_the_tool_runs(mcp_server, monkeypatch):
+    service = Mock()
+    monkeypatch.setattr("src.services.wallet_manager.import_wallet", service)
+    result = await mcp_server.call_tool("import_wallet", {"vault_token": BARE_KEY, "api_key": "test-key-1"})
+    assert _body(result)["code"] == "SECRET_IN_ARGUMENTS"
+    assert BARE_KEY not in json.dumps(result.model_dump())
+    service.assert_not_called()
+
+
+@pytest.mark.parametrize("arguments", [
+    {"query": f"import my wallet {FAKE_KEY}"},
+    {"query": f"import my wallet {BARE_KEY}"},
+    {"arguments": {"privateKey": FAKE_KEY}},
+    {"secret_key": BARE_KEY},
+])
+@pytest.mark.asyncio
+async def test_key_in_free_text_or_unlisted_field_is_not_forwarded(mcp_server, monkeypatch, arguments):
+    upstream = _upstream_ok()
+    monkeypatch.setattr("src.mcp.mangrove_proxy.call_tool", upstream)
+    result = await mcp_server.call_tool("search_signals", arguments)
+    assert _body(result)["code"] == "SECRET_IN_ARGUMENTS"
+    upstream.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_strategy_prose_is_forwarded(mcp_server, monkeypatch):
+    upstream = _upstream_ok()
+    monkeypatch.setattr("src.mcp.mangrove_proxy.call_tool", upstream)
+    arguments = {"description": "price above average, volume above average, trend above zero, "
+                                "exit when price below average"}
+    result = await mcp_server.call_tool("match_signals", arguments)
+    upstream.assert_awaited_once()
+    assert result is upstream.return_value
+
+
+@pytest.mark.parametrize("body", [{"privateKey": FAKE_KEY}, {"private_key": BARE_KEY}])
+@pytest.mark.asyncio
+async def test_camelcase_or_bare_hex_result_is_withheld(mcp_server, monkeypatch, body):
+    leaked = CallToolResult(content=[TextContent(type="text", text=json.dumps(body))])
+    monkeypatch.setattr("src.mcp.mangrove_proxy.call_tool", AsyncMock(return_value=leaked))
+    result = await mcp_server.call_tool("some_upstream_tool", {})
+    assert _body(result)["code"] == "SECRET_IN_RESULT"
+    assert "1f1f1f" not in json.dumps(result.model_dump())
+
+
+@pytest.mark.asyncio
+async def test_swap_result_with_transaction_hashes_passes(mcp_server, monkeypatch):
+    body = {"tx_hash": FAKE_TX, "approval_tx_hash": "0x" + "cd" * 32,
+            "explorer_url": f"https://basescan.org/tx/{FAKE_TX}", "status": "confirmed"}
+    ok = CallToolResult(content=[TextContent(type="text", text=json.dumps(body))])
+    monkeypatch.setattr("src.mcp.mangrove_proxy.call_tool", AsyncMock(return_value=ok))
+    result = await mcp_server.call_tool("some_upstream_tool", {"definition_hash": "ef" * 32})
+    assert result is ok
