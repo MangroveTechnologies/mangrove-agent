@@ -39,6 +39,9 @@
     <a href="https://allmcps.com/mcp/mangrove-ai">
       <img src="https://allmcps.com/api/badge/mangrove-ai?style=directory" alt="Mangrove AI on AllMCPs" height="20">
     </a>
+    <a href="https://mcpindex.ai/server/io-github-mangrovetechnologies-mangroveai">
+      <img src="https://mcpindex.ai/api/v1/badge/io-github-mangrovetechnologies-mangroveai" alt="mcpindex verdict" height="20">
+    </a>
     <a href="https://mcp.so/servers/mangroveai">
       <img src="https://img.shields.io/badge/mcp.so-listed-0A7B5B" alt="Listed on mcp.so">
     </a>
