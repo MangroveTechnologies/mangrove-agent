@@ -173,3 +173,48 @@ def test_quote_response_cannot_change_requested_operation(monkeypatch, changes):
     monkeypatch.setattr(dex_service, "mangrove_markets_client", lambda: client)
     with pytest.raises(SdkError, match="differs"):
         dex_service.get_quote(_USDC, _WETH, 1, 8453)
+
+
+# -- live swap preflight (server-side replacement for preflight-swap.sh) ----
+
+def _balances(mapping):
+    client = MagicMock()
+    client.dex.balances.return_value = MagicMock(balances=mapping)
+    return client
+
+
+def test_preflight_refuses_zero_balance_for_an_address():
+    from src.shared.errors import WalletInputBalanceEmpty
+
+    client = _balances({_WETH.lower(): "0"})
+    with pytest.raises(WalletInputBalanceEmpty) as exc:
+        dex_service.require_input_balance(client, _WETH, 8453, "0x" + "a" * 40)
+    assert exc.value.code == "WALLET_INPUT_BALANCE_EMPTY"
+    client.dex.balances.assert_called_once_with(chain_id=8453, wallet="0x" + "a" * 40)
+
+
+def test_preflight_maps_the_usdc_symbol_to_its_canonical_address():
+    from src.services.wallet_manager import canonical_usdc_addresses
+    from src.shared.errors import WalletInputBalanceEmpty
+
+    usdc = canonical_usdc_addresses()[8453]
+    with pytest.raises(WalletInputBalanceEmpty):
+        dex_service.require_input_balance(_balances({usdc.upper().replace("0X", "0x"): "0"}),
+                                          "usdc", 8453, "0x" + "a" * 40)
+
+
+@pytest.mark.parametrize("client,token", [
+    (_balances({_WETH.lower(): "1500"}), _WETH),          # funded
+    (_balances({}), _WETH),                               # token not tracked
+    (_balances({_WETH.lower(): "n/a"}), _WETH),           # unreadable amount
+    (MagicMock(), _WETH),                                 # unexpected shape
+    (_balances({_WETH.lower(): "0"}), "ETH"),             # symbol not resolvable offline
+])
+def test_preflight_fails_open_unless_balance_is_explicitly_zero(client, token):
+    dex_service.require_input_balance(client, token, 8453, "0x" + "a" * 40)
+
+
+def test_preflight_fails_open_when_balances_call_errors():
+    client = MagicMock()
+    client.dex.balances.side_effect = RuntimeError("offline")
+    dex_service.require_input_balance(client, _WETH, 8453, "0x" + "a" * 40)

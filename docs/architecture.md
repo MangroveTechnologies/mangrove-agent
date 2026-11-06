@@ -299,6 +299,15 @@ These controls are enforced in the agent, independent of the AI client.
 - **Isolated keys.** Wallet keys, master key, policy and signature journal live under the dedicated custody UID. Ordinary API credentials cannot export, import or confirm backups. Human administration runs directly in an independent protected terminal; [deployment requirements](custody.md) include immutable code/runtime, ACL checks and no agent root/sudo/container control over custody.
 - **Backup and policy.** Live signing requires a human-confirmed backup plus independently approved wallet/network/assets/recipients and spending/fee limits. Request `confirm=true` cannot widen custody policy.
 - **Strict signing.** Transaction ABI and immutable intent bind chain, token, router, executor, amount, output floor, recipient, value and fees. New delegation/auth-list signing and unreviewed selectors/chains fail closed. x402, SIWX and marketplace proofs retain separate guarded structures, validity and approval controls. Migration does not revoke already released signatures or recover trust in a copied key.
+- **Secret guard at the MCP boundary.** Every tool call is checked before it runs: a private
+  key (64 hex characters, with or without `0x`) in a key-named field, in `vault_token` or
+  inside free text, a recovery phrase with a valid BIP-39 checksum, or an XRPL seed is refused
+  without calling the tool or upstream. A result with a secret in a key-named field is
+  withheld. `server/src/shared/secret_guard.py` is the only detector; the Claude and Codex
+  hooks call it. See [guardrails across clients](clients.md#guardrails-across-clients).
+- **Empty-wallet swap refusal.** A live swap, or a live strategy entry, is refused before
+  quoting or approval when the wallet holds 0 of the input token on that chain. Exits are
+  never checked.
 - **Explicit confirmation.** Swaps, going live, leaving live, starting a paper schedule,
   marketplace submission and spend top-ups each need `confirm=true`.
 - **Slippage cap.** Swaps and allocations require an explicit tolerance of at most 0.25

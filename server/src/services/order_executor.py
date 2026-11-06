@@ -295,6 +295,11 @@ def _live_swap(
         )
         input_amount = max_input_amount
 
+    # 0. Preflight: refuse a wallet that holds none of the input token before
+    # quoting or signing an approval (formerly the Claude-only
+    # preflight-swap.sh hook; now enforced for every client).
+    dex_service.require_input_balance(client, input_token, chain_id, wallet_address)
+
     # 1. Quote — via dex_service, the single human<->base-units boundary.
     # `input_amount` is HUMAN units (the agent's convention everywhere);
     # dex_service resolves the token's decimals, converts to the base

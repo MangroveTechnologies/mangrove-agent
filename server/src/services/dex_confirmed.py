@@ -214,6 +214,9 @@ def execute(oid, intent, wallet_address, chain_id, slippage_pct, max_input_amoun
             raise SdkError("Native asset settlement requires a trace adapter.")
         if intent.action == "enter" and max_input_amount is not None and amount > max_input_amount:
             raise SdkError("Entry exceeds confirmed available quote cash.")
+        if intent.action == "enter":
+            # Entries only: a stale zero reading must never hold back a protective exit.
+            dex_service.require_input_balance(client, in_address, chain_id, wallet_address)
         context = dict(
             wallet_address=wallet_address,
             chain_id=chain_id,

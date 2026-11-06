@@ -269,6 +269,23 @@ def test_live_skips_approval_when_none(temp_db, mock_mangroveai, mock_markets, s
     assert kwargs["slippage"] == pytest.approx(0.2)
 
 
+def test_live_refuses_empty_input_balance_before_quote_or_approval(
+    temp_db, mock_mangroveai, mock_markets, stub_sign,
+):
+    from src.services.order_executor import execute_one
+    from src.services.wallet_manager import canonical_usdc_addresses
+    from src.shared.errors import WalletInputBalanceEmpty
+
+    usdc = canonical_usdc_addresses()[84532]
+    mock_markets.dex.balances.return_value = MagicMock(balances={usdc: "0"})
+    with pytest.raises(WalletInputBalanceEmpty):
+        execute_one(_intent("buy"), mode="live", strategy_id="s1",
+                    wallet_address="0xabc", chain_id=84532, slippage_pct=0.002)
+    assert mock_markets.dex.get_quote.call_count == 0
+    assert mock_markets.dex.approve_token.call_count == 0
+    assert mock_markets.dex.broadcast.call_count == 0
+
+
 def test_live_full_flow_with_approval(temp_db, mock_mangroveai, mock_markets, stub_sign):
     from src.services.order_executor import execute_one
 
