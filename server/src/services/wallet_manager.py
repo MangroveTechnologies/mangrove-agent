@@ -761,6 +761,8 @@ def require_backup_confirmed(address: str) -> None:
     Called by execute_swap / live-promotion paths. Paper mode does not
     call this — no real funds at risk.
     """
+    if not custody_runtime.active():
+        require_custody_signable(address)
     if not custody_runtime.active() and custody_client.configured():
         row = _get_wallet_row(address)
         if not row or not row.get("backup_confirmed_at"):
@@ -786,6 +788,72 @@ def require_backup_confirmed(address: str) -> None:
         )
 
 
+CUSTODY_MIGRATION_SUGGESTION = (
+    "A human administrator must install isolated custody and complete the migration in "
+    "docs/custody.md (migrate, retire the legacy ciphertext, then confirm the backup in the "
+    "custody administrator terminal). Paper trading is unaffected."
+)
+
+
+def _custody_status(encryption_method: str | None) -> str:
+    """Agent-side custody state of a local wallet row.
+
+    ``migration_required``: the key is still legacy agent ciphertext, which no
+    longer signs. ``custody_unconfigured``: the wallet lives in custody but this
+    agent has no custody socket. ``isolated``: custody can sign for it.
+    """
+    if encryption_method != "external-custody":
+        return "migration_required"
+    return "isolated" if custody_client.configured() else "custody_unconfigured"
+
+
+def require_custody_signable(address: str) -> None:
+    """Refuse, in the agent process, a wallet that isolated custody cannot sign for."""
+    row = get_connection().execute(
+        "SELECT encryption_method FROM wallets WHERE address = ?", (address,),
+    ).fetchone()
+    status = _custody_status(row["encryption_method"]) if row else (
+        "isolated" if custody_client.configured() else "custody_unconfigured")
+    if status == "migration_required":
+        raise SigningError(
+            f"Wallet {address} has custody_status migration_required: its key is still held by "
+            "the legacy agent database, which can no longer sign. Live promotion, live entries, "
+            "exits and payments from it are refused.",
+            suggestion=CUSTODY_MIGRATION_SUGGESTION,
+        )
+    if status == "custody_unconfigured":
+        raise SigningError(
+            "Isolated wallet custody is not configured, so no wallet can sign. Live promotion, "
+            "live entries, exits and payments are refused.",
+            suggestion=CUSTODY_MIGRATION_SUGGESTION,
+        )
+
+
+def custody_readiness() -> dict:
+    """Public custody summary for /status: counts only, no addresses.
+
+    ``unsignable_live_allocations`` counts active allocations of live or
+    exit-only strategies whose wallet custody cannot sign for, so their
+    entries, exits and protective exits would fail.
+    """
+    conn = get_connection()
+    rows = conn.execute("SELECT address, encryption_method FROM wallets").fetchall()
+    statuses = {r["address"]: _custody_status(r["encryption_method"]) for r in rows}
+    live = conn.execute(
+        """SELECT a.wallet_address FROM allocations a JOIN strategies s ON s.id = a.strategy_id
+           WHERE a.active = 1 AND (s.status = 'live' OR s.exit_only_mode = 'live')""",
+    ).fetchall()
+    unsignable = sum(1 for r in live if statuses.get(r["wallet_address"], "migration_required") != "isolated")
+    migration = sum(1 for status in statuses.values() if status == "migration_required")
+    return {
+        "configured": custody_client.configured(),
+        "migration_required_wallets": migration,
+        "unsignable_live_allocations": unsignable,
+        "action_required": bool(migration or unsignable),
+        "guide": "docs/custody.md",
+    }
+
+
 # ---------------------------------------------------------------------------
 # List / load / exists
 # ---------------------------------------------------------------------------
@@ -796,8 +864,18 @@ def list_wallets() -> list[WalletListItem]:
     if not custody_runtime.active() and custody_client.configured():
         result = [WalletListItem.model_validate(item) for item in custody_client.call("list_wallets", {})]
         for item in result:
-            _cache_wallet_metadata(item.model_dump(mode="json"))
-        return result
+            try:
+                _cache_wallet_metadata(item.model_dump(mode="json"))
+            except SigningError:
+                # Migrated into custody, but the legacy ciphertext is not retired yet.
+                item.custody_status = "migration_required"
+        listed = {item.address.lower() for item in result}
+        return result + [item for item in _local_wallets()
+                         if item.custody_status == "migration_required" and item.address.lower() not in listed]
+    return _local_wallets()
+
+
+def _local_wallets() -> list[WalletListItem]:
     from src.services.payment_identity import configured_payer_address
 
     payer = configured_payer_address()
@@ -809,7 +887,7 @@ def list_wallets() -> list[WalletListItem]:
     return [
         WalletListItem(
             address=r["address"],
-            custody_status="isolated" if custody_runtime.active() or r["encryption_method"] == "external-custody" else "migration_required",
+            custody_status="isolated" if custody_runtime.active() else _custody_status(r["encryption_method"]),
             is_configured_x402_payer=bool(payer and r["chain"] == "evm" and r["address"].lower() == payer.lower()),
             chain=r["chain"],
             network=r["network"],

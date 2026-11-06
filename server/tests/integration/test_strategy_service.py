@@ -837,3 +837,30 @@ def test_tick_warning_includes_strategy_id_for_correlation(temp_db, mock_ai_sdk)
         tick(s.id)
 
     assert mock_warn.call_args[1]["strategy_id"] == s.id
+
+
+@pytest.mark.parametrize("socket_path", [None, "/run/mangrove-custody/custody.sock"])
+def test_live_promotion_refuses_legacy_wallet_that_custody_cannot_sign(temp_db, mock_ai_sdk, monkeypatch,
+                                                                       socket_path):
+    """A pre-custody wallet row passes the old backup flag but cannot sign after upgrade."""
+    from src.config import app_config
+    from src.custody import runtime
+    from src.services.allocation_service import get_active_allocation
+    from src.services.strategy_service import StrategyAllocationInput, StrategyStatusUpdate, update_status
+    from src.shared.errors import SigningError
+
+    monkeypatch.setattr(runtime, "_active", False)
+    monkeypatch.setattr(app_config, "CUSTODY_SOCKET", socket_path, raising=False)
+    s = create_manual(StrategyManualRequest(
+        name="s", asset="ETH", timeframe="1h",
+        entry=[{"name": "rsi_oversold", "signal_type": "TRIGGER", "timeframe": "1h"}],
+    ))
+    update_status(s.id, StrategyStatusUpdate(status="inactive"))
+    with pytest.raises(SigningError, match="migration_required") as refused:
+        update_status(s.id, StrategyStatusUpdate(
+            status="live", confirm=True,
+            allocation=StrategyAllocationInput(wallet_address="0xabc", token="USDC", token_address="0xusdc",
+                                               amount=100, slippage_pct=0.002),
+        ))
+    assert "docs/custody.md" in refused.value.suggestion
+    assert get_active_allocation(s.id) is None
