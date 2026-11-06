@@ -25,7 +25,7 @@ from pydantic import Field
 
 from src.mcp.registry import ToolEntry, ToolParam, clear_tools, register_tool
 from src.shared.auth.middleware import get_request_api_key, has_valid_api_key
-from src.shared.errors import AgentError, upstream_access_error
+from src.shared.errors import AgentError, SigningError, upstream_access_error
 from src.shared.logging import get_logger
 
 _log = get_logger(__name__)
@@ -227,14 +227,11 @@ def _register_wallet(server: FastMCP) -> None:
         chain_id: int | None = 8453, label: str | None = None,
         api_key: str = "",
     ) -> str:
-        """Create + encrypt a wallet locally.
+        """Create a wallet in the isolated custody service.
 
-        The plaintext secret is NEVER returned in this response — it would
-        land in the Claude Code transcript and get sent to Anthropic. Instead
-        the response carries a `vault_token` referencing an in-process vault.
-        Tell the user to run the `reveal_cmd` in a terminal to back up the
-        secret. The id is TTL-bound (default 300s) and single-read.
-        EVM and XRPL wallets. Base mainnet (chain_id 8453) remains the default.
+        Returns public metadata and human-admin backup instructions. No usable
+        export token or plaintext is returned. A human administrator must save
+        and confirm its backup outside the agent's execution identity.
         """
         if not _require(api_key):
             return _auth_error()
@@ -248,9 +245,8 @@ def _register_wallet(server: FastMCP) -> None:
     register_tool(ToolEntry(
         name="create_wallet",
         description=(
-            "Create + encrypt a wallet. Response carries only vault_token + "
-            "reveal_cmd — plaintext never enters the Claude Code transcript. "
-            "Supports EVM and XRPL family-seed wallets."
+            "Create an isolated-custody wallet. Returns public metadata and human "
+            "administrator backup instructions; no export capability. Supports EVM and XRPL."
         ),
         access="auth",
         parameters=[
@@ -272,47 +268,23 @@ def _register_wallet(server: FastMCP) -> None:
         chain_id: int | None = 8453, label: str | None = None,
         api_key: str = "",
     ) -> str:
-        """Import an existing wallet whose secret has been stashed in the vault.
+        """Retired compatibility tool. Wallet import is a human custody-admin operation.
 
-        The user's flow: run `./scripts/stash-secret.sh` in a terminal. It
-        prompts for the private key without echoing it, writes a private
-        single-use handoff file, and prints the file path, not the token.
-        A client with local-file access can read the token from that file and
-        call this tool. The restricted `./scripts/chat.sh` client cannot read
-        the file. The private key never enters this tool or the conversation.
-
-        Supports EVM keys/mnemonics and XRPL family seeds.
-        Do NOT accept a raw private key, mnemonic or seed as input to this tool,
-        and do NOT suggest the user paste one. If a user pastes a key in
-        chat, tell them to run stash-secret.sh instead and purge the key
-        from their message.
+        Never supply a private key, mnemonic, seed, or export capability here.
+        The human administrator imports directly under the separate custody UID,
+        then the agent may select its public wallet address.
         """
         if not _require(api_key):
             return _auth_error()
-        try:
-            from src.services.wallet_manager import import_wallet as svc
-            result = svc(
-                vault_token=vault_token,
-                chain=chain, network=network,
-                chain_id=chain_id, label=label,
-            )
-            return json.dumps(result.model_dump(mode="json"))
-        except (AgentError, AIAPIError, MarketsAPIError, HTTPStatusError) as e:
-            return _handle_agent_error(e)
+        return _handle_agent_error(SigningError("Wallet import is unavailable through the agent. Use the isolated custody administrator terminal; never provide a secret in chat."))
 
     register_tool(ToolEntry(
         name="import_wallet",
-        description=(
-            "Import an existing wallet from the private handoff file created "
-            "by scripts/stash-secret.sh. That script prints the file path, "
-            "not the vault_token. A client with local-file access reads the "
-            "token and calls this tool; restricted scripts/chat.sh cannot. "
-            "Raw keys are refused."
-        ),
+        description="Retired compatibility tool. Wallet import requires the human isolated custody administrator terminal. Never provide secrets or export tokens.",
         access="auth",
         parameters=[
             ToolParam(name="vault_token", type="string", required=True,
-                      description="Read from the private handoff file printed by scripts/stash-secret.sh using a client with local-file access."),
+                      description="Deprecated compatibility argument; no token authorizes wallet import through the agent."),
             ToolParam(name="chain", type="string", required=False, description="evm (default) or xrpl"),
             ToolParam(name="network", type="string", required=False, description="mainnet (default) | testnet"),
             ToolParam(name="chain_id", type="integer", required=False, description="Default 8453 (Base mainnet)"),

@@ -151,7 +151,10 @@ def test_guide_only_prints_instructions(choice, command, monkeypatch, capsys):
     setup.guide(cfg)
     output = capsys.readouterr().out
     assert 'Payment readiness is not verified' in output
-    if command:
+    if command == 'import':
+        assert 'custody-service.py admin --config POLICY import' in output
+        assert '--wallet import' not in output
+    elif command:
         assert f'--wallet {command}' in output
     assert not request.called
 
@@ -179,19 +182,20 @@ def test_create_uses_configured_chain_and_no_automatic_backup(interactive, monke
     assert 'do-not-display' not in capsys.readouterr().out
 
 
-def test_import_uses_hidden_entry_and_in_memory_vault_handoff(interactive, monkeypatch, capsys):
+def test_retired_import_never_prompts_for_secret_or_sends_http(interactive, monkeypatch, capsys):
     monkeypatch.setattr(setup, 'check', lambda cfg: [])
-    replies = iter(['IMPORT', 'BACKED UP'])
-    monkeypatch.setattr('builtins.input', lambda _: next(replies))
-    monkeypatch.setattr(setup, 'hidden', lambda _: 'synthetic-secret')
-    token = 'synthetic_vault_token_12345'
-    wire = Mock(side_effect=[{'vault_token': token}, {'address': ADDR}])
+    monkeypatch.setattr('builtins.input', lambda _: 'IMPORT')
+    hidden = Mock(side_effect=AssertionError('Secret prompt forbidden'))
+    wire = Mock(side_effect=AssertionError('Import HTTP forbidden'))
+    before = Mock(side_effect=AssertionError('No mutation checkpoint needed'))
+    monkeypatch.setattr(setup, 'hidden', hidden)
     monkeypatch.setattr(setup, 'request', wire)
-    setup.wallet_action('import', wallet_config())
-    assert wire.call_count == 2
-    assert wire.call_args_list[0].args[1].endswith('/stash-secret')
-    assert wire.call_args_list[1].args[2]['vault_token'] == token
-    assert token not in capsys.readouterr().out
+    with pytest.raises(setup.SetupError, match='isolated custody administrator'):
+        setup.wallet_action('import', wallet_config(), before_mutation=before)
+    hidden.assert_not_called()
+    wire.assert_not_called()
+    before.assert_not_called()
+    assert 'vault_token' not in capsys.readouterr().out
 
 
 def test_select_requires_backup_before_config_mutation(interactive, monkeypatch):
@@ -200,7 +204,7 @@ def test_select_requires_backup_before_config_mutation(interactive, monkeypatch)
     monkeypatch.setattr(setup, 'choose', lambda *a: '1')
     write = Mock()
     monkeypatch.setattr(setup, 'atomic_config', write)
-    with pytest.raises(setup.SetupError, match='Back up'):
+    with pytest.raises(setup.SetupError, match='custody administrator must back up'):
         setup.wallet_action('select', wallet_config())
     assert not write.called
 
@@ -1208,8 +1212,8 @@ def test_backup_transport_never_forwards_or_prints_secrets(backup, tmp_path, mon
         with pytest.raises(setup.SetupError) as caught:
             backup.run(action, ADDR, True)
         assert 'synthetic-sensitive-body' not in str(caught.value)
-        assert len(events) == 1
-        assert '/credential-leak' not in events
+        assert events == []
+        assert 'isolated custody administrator' in str(caught.value)
         assert 'synthetic' not in capsys.readouterr().out
     finally:
         server.shutdown()
@@ -1218,29 +1222,23 @@ def test_backup_transport_never_forwards_or_prints_secrets(backup, tmp_path, mon
 
 
 @pytest.mark.parametrize('url', ['https://example.invalid', 'http://192.0.2.1', 'http://user:password@127.0.0.1'])
-def test_backup_rejects_nonlocal_targets_before_request(backup, tmp_path, monkeypatch, url):
-    cfg = tmp_path / 'local-config.json'
-    cfg.write_text(json.dumps({'API_KEYS': 'synthetic-local-key', 'AUTH_ENABLED': True}))
-    monkeypatch.setenv('CONFIG_FILE', str(cfg))
+def test_retired_backup_refuses_before_destination_or_config_access(backup, tmp_path, monkeypatch, url):
+    monkeypatch.setenv('CONFIG_FILE', str(tmp_path / 'nonexistent-config.json'))
     monkeypatch.setenv('LOCAL_AGENT_URL', url)
-    wire = Mock()
-    monkeypatch.setattr(backup, 'request', wire)
-    with pytest.raises(setup.SetupError, match='loopback'):
+    wire = Mock(side_effect=AssertionError('No HTTP allowed'))
+    monkeypatch.setattr(setup, 'request', wire)
+    with pytest.raises(setup.SetupError, match='isolated custody administrator'):
         backup.run('confirm', ADDR, True)
-    assert not wire.called
+    wire.assert_not_called()
 
 
-def test_backup_reveal_refuses_redirected_output(backup, tmp_path, monkeypatch):
-    cfg = tmp_path / 'local-config.json'
-    cfg.write_text(json.dumps({'API_KEYS': 'synthetic-local-key', 'AUTH_ENABLED': True}))
-    monkeypatch.setenv('CONFIG_FILE', str(cfg))
-    monkeypatch.setenv('LOCAL_AGENT_URL', 'http://127.0.0.1:9080')
+def test_retired_backup_refuses_with_redirected_output(backup, monkeypatch):
     monkeypatch.setattr(sys.stdout, 'isatty', lambda: False)
-    wire = Mock()
-    monkeypatch.setattr(backup, 'request', wire)
-    with pytest.raises(setup.SetupError, match='private terminal'):
+    wire = Mock(side_effect=AssertionError('No HTTP allowed'))
+    monkeypatch.setattr(setup, 'request', wire)
+    with pytest.raises(setup.SetupError, match='isolated custody administrator'):
         backup.run('reveal', ADDR, True)
-    assert not wire.called
+    wire.assert_not_called()
 
 
 def test_verifier_rejects_stopped_scheduler(checkout):
@@ -1255,21 +1253,14 @@ def test_verifier_rejects_stopped_scheduler(checkout):
 
 @pytest.mark.parametrize('addr', [ADDR, '1' * 32])
 @pytest.mark.parametrize('action', ['reveal', 'confirm'])
-def test_backup_success_preserves_both_wallet_families(backup, tmp_path, monkeypatch, capsys, addr, action):
-    cfg = tmp_path / 'local-config.json'
-    cfg.write_text(json.dumps({'API_KEYS': 'synthetic-local-key', 'AUTH_ENABLED': True}))
-    monkeypatch.setenv('CONFIG_FILE', str(cfg))
-    monkeypatch.setenv('LOCAL_AGENT_URL', 'http://localhost:9080')
+def test_retired_backup_never_exports_or_confirms_any_wallet(backup, monkeypatch, capsys, addr, action):
     monkeypatch.setattr(sys.stdout, 'isatty', lambda: True)
-    wire = Mock(return_value={'address': addr, 'secret': 'synthetic wallet backup',
-                              'backup_confirmed_at': '2026-09-18T00:00:00Z', 'message': 'untrusted message'})
-    monkeypatch.setattr(backup, 'request', wire)
-    backup.run(action, addr, True)
-    output = capsys.readouterr().out
-    assert addr in output
-    assert 'untrusted message' not in output
-    assert ('synthetic wallet backup' in output) is (action == 'reveal')
-    assert wire.call_args.args[0]['LOCAL_AGENT_URL'] == 'http://127.0.0.1:9080'
+    wire = Mock(return_value={'address': addr, 'secret': 'synthetic wallet backup'})
+    monkeypatch.setattr(setup, 'request', wire)
+    with pytest.raises(setup.SetupError, match='Ordinary API credentials cannot authorize'):
+        backup.run(action, addr, True)
+    wire.assert_not_called()
+    assert capsys.readouterr().out == ''
 
 
 @pytest.mark.parametrize('explicit_mode', [False, True])
@@ -1760,8 +1751,8 @@ def wizard(tmp_path, monkeypatch, interactive):
     return cfg, wallets, checkpoint
 
 
-@pytest.mark.parametrize('action', ['create', 'import'])
-def test_wizard_creates_or_imports_once_then_selects_same_wallet(wizard, monkeypatch, capsys, action):
+def test_wizard_creates_once_then_selects_same_wallet(wizard, monkeypatch, capsys):
+    action = 'create'
     cfg, wallets, checkpoint = wizard
     choices = iter(['1' if action == 'create' else '2', '1'])
     monkeypatch.setattr(setup, 'choose', lambda *a: next(choices))
@@ -1795,10 +1786,29 @@ def test_wizard_creates_or_imports_once_then_selects_same_wallet(wizard, monkeyp
     assert 'synthetic_token' not in checkpoint.read_text()
 
 
-def test_backup_enter_does_not_confirm_and_commands_pin_target(wizard, monkeypatch, capsys):
+def test_wizard_import_redirects_to_human_admin_without_secret_or_checkpoint(wizard, monkeypatch, capsys):
+    cfg, wallets, checkpoint = wizard
+    choices = iter(['2', '4'])  # Import instruction, then finish wallet setup later.
+    monkeypatch.setattr(setup, 'choose', lambda *a: next(choices))
+    monkeypatch.setattr('builtins.input', lambda _: 'IMPORT')
+    hidden = Mock(side_effect=AssertionError('Secret input forbidden'))
+    request = Mock(side_effect=AssertionError('No wallet HTTP mutation permitted'))
+    monkeypatch.setattr(setup, 'hidden', hidden)
+    monkeypatch.setattr(setup, 'request', request)
+    setup.onboard(cfg)
+    hidden.assert_not_called()
+    request.assert_not_called()
+    assert wallets == [] and not checkpoint.exists()
+    output = capsys.readouterr().out
+    assert 'isolated custody administrator' in output
+    assert 'No wallet mutation was sent' in output
+    assert 'Private key or recovery phrase' not in output
+
+
+def test_backup_enter_does_not_confirm_and_admin_commands_pin_wallet(wizard, monkeypatch, capsys):
     cfg, wallets, _ = wizard
     wallets.append(dict(address=ADDR, chain='evm', backup_confirmed_at=None))
-    monkeypatch.setattr(setup, 'ROOT', Path('/tmp/checkout with spaces'))
+    monkeypatch.setattr(setup, 'ROOT', Path('/untrusted/checkout with spaces'))
     turns = []
     def answer(prompt):
         turns.append(prompt)
@@ -1810,10 +1820,12 @@ def test_backup_enter_does_not_confirm_and_commands_pin_target(wizard, monkeypat
     assert setup.wait_for_backup(cfg, ADDR)
     assert len(turns) == 2
     output = capsys.readouterr().out
-    assert "cd '/tmp/checkout with spaces'" in output
-    assert './scripts/reveal-secret.sh --setup' in output
-    assert './scripts/confirm-backup.sh --setup' in output
-    assert output.count('./scripts/reveal-secret.sh') == 1
+    assert 'custody-service.py admin --config POLICY backup ' + ADDR in output
+    assert 'custody-service.py admin --config POLICY confirm-backup ' + ADDR in output
+    assert output.count(' admin --config POLICY backup ') == 1
+    assert '/untrusted/checkout' not in output
+    assert './scripts/reveal-secret.sh' not in output
+    assert './scripts/confirm-backup.sh' not in output
     assert 'Backup not confirmed yet' in output
     assert 'SETUP_PYTHON=' not in output
     assert 'WALLET_ADDRESS' not in output
@@ -1939,7 +1951,7 @@ def test_existing_network_switch_is_explicit(config, monkeypatch, selection, exp
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX interactive terminal')
-@pytest.mark.parametrize('action,foreground', [('create', False), ('import', False), ('create', True)])
+@pytest.mark.parametrize('action,foreground', [('create', False), ('create', True)])
 @pytest.mark.parametrize('terminal_type', ['dumb', 'xterm-256color'])
 def test_guided_shell_one_session_applies_wallet_and_restarts(checkout, action, foreground, terminal_type):
     """Actual shell + PTY + synthetic HTTP wallet service. No real keys or payments."""
@@ -2130,53 +2142,38 @@ def onboard(cfg, *, yes=False):
 
 
 @pytest.mark.parametrize('action', ['reveal', 'confirm'])
-def test_setup_backup_ignores_other_agent_environment(backup, tmp_path, monkeypatch, capsys, action):
-    root = tmp_path / 'checkout'
-    (root / 'server/src/config').mkdir(parents=True)
-    (root / 'agent-data').mkdir()
-    cfg = dict(wallet_config(), X402_NETWORK='eip155:8453')
-    (root / 'server/src/config/local-config.json').write_text(json.dumps(cfg))
-    (root / 'agent-data/wallet-setup.json').write_text(json.dumps({
-        'stage': 'wallet', 'network': 'eip155:8453', 'address': ADDR}))
-    monkeypatch.setattr(backup, 'ROOT', root)
+def test_retired_setup_backup_ignores_other_agent_environment(backup, monkeypatch, capsys, action):
     monkeypatch.setenv('CONFIG_FILE', '/other-agent/config.json')
     monkeypatch.setenv('LOCAL_AGENT_URL', 'https://untrusted.invalid')
-    monkeypatch.setattr(sys.stdout, 'isatty', lambda: True)
-    monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
-    monkeypatch.setattr('builtins.input', lambda _: 'BACKED UP')
-    wire = Mock(return_value={'address': ADDR, 'secret': 'synthetic private backup',
-                              'backup_confirmed_at': 'confirmed'})
-    monkeypatch.setattr(backup, 'request', wire)
-    backup.run(action, None, setup=True)
-    assert wire.call_args.args[0]['LOCAL_AGENT_URL'] == cfg['LOCAL_AGENT_URL']
-    assert ADDR in wire.call_args.args[1]
-    assert ('synthetic private backup' in capsys.readouterr().out) == (action == 'reveal')
+    wire = Mock(side_effect=AssertionError('No HTTP allowed'))
+    prompt = Mock(side_effect=AssertionError('No confirmation allowed'))
+    monkeypatch.setattr(setup, 'request', wire)
+    monkeypatch.setattr('builtins.input', prompt)
+    with pytest.raises(setup.SetupError, match='isolated custody administrator'):
+        backup.run(action, None, setup=True)
+    wire.assert_not_called()
+    prompt.assert_not_called()
+    assert capsys.readouterr().out == ''
 
 
 @pytest.mark.parametrize('stage,network', [('pending', 'eip155:8453'), ('wallet', 'eip155:84532')])
-def test_setup_backup_rejects_incomplete_or_changed_network(backup, tmp_path, monkeypatch, stage, network):
-    monkeypatch.setattr(backup, 'ROOT', tmp_path)
-    cfg = dict(wallet_config(), X402_NETWORK='eip155:8453')
-    monkeypatch.setattr(backup, 'read_config', Mock(side_effect=[cfg,
-        {'stage': stage, 'network': network, 'address': ADDR}]))
-    wire = Mock()
-    monkeypatch.setattr(backup, 'request', wire)
-    with pytest.raises(setup.SetupError, match='No matching wallet setup'):
+def test_retired_setup_backup_does_not_read_old_checkpoint(backup, monkeypatch, stage, network):
+    reader = Mock(return_value={'stage': stage, 'network': network, 'address': ADDR})
+    monkeypatch.setattr(setup, 'read_config', reader)
+    with pytest.raises(setup.SetupError, match='isolated custody administrator'):
         backup.run('confirm', None, setup=True)
-    wire.assert_not_called()
+    reader.assert_not_called()
 
 
-def test_setup_backup_does_not_confirm_without_acknowledgment(backup, monkeypatch):
-    cfg = dict(wallet_config(), X402_NETWORK='eip155:8453')
-    monkeypatch.setattr(backup, 'read_config', Mock(side_effect=[cfg,
-        {'stage': 'wallet', 'network': 'eip155:8453', 'address': ADDR}]))
-    monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
-    monkeypatch.setattr('builtins.input', lambda _: '')
+def test_retired_setup_backup_cannot_be_reenabled_by_acknowledgment(backup, monkeypatch):
+    prompt = Mock(return_value='BACKED UP')
     wire = Mock()
-    monkeypatch.setattr(backup, 'request', wire)
-    with pytest.raises(setup.SetupError, match='not confirmed'):
+    monkeypatch.setattr('builtins.input', prompt)
+    monkeypatch.setattr(setup, 'request', wire)
+    with pytest.raises(setup.SetupError, match='isolated custody administrator'):
         backup.run('confirm', None, setup=True)
     wire.assert_not_called()
+    prompt.assert_not_called()
 
 
 def test_wizard_step_plain_text_wraps_without_escape_codes(monkeypatch, capsys):

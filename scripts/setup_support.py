@@ -739,16 +739,16 @@ def guide(cfg, *, yes=False, docker=False):
                           f'{cmd} --wallet create'))
         elif selected == '2':
             steps.append(('Import your wallet - securely saves your existing wallet in this agent.',
-                          f'{cmd} --wallet import'))
+                          'Human administrator: custody-service.py admin --config POLICY import'))
         else:
             steps.append(('List saved wallets - shows addresses on this network and their backup status.',
                           f'{cmd} --wallet list'))
         if selected != '2':
             steps.extend([
                 ('Save a backup - reveals the secret in your terminal so you can save it securely; skip if already backed up.',
-                 './scripts/reveal-secret.sh --address WALLET_ADDRESS'),
+                 'Human administrator: custody-service.py admin --config POLICY backup WALLET_ADDRESS'),
                 ('Confirm your backup - records that you have saved the secret outside this agent; skip if already confirmed.',
-                 './scripts/confirm-backup.sh WALLET_ADDRESS'),
+                 'Human administrator: custody-service.py admin --config POLICY confirm-backup WALLET_ADDRESS'),
             ])
         steps.extend([
             ('Select the payer - choose the saved wallet and review its spending limit.', f'{cmd} --wallet select'),
@@ -756,14 +756,14 @@ def guide(cfg, *, yes=False, docker=False):
             (f'Fund the selected address - send USDC on {label} only after checking the service accepts this network.', None),
             ('Open restricted chat; start with your wallet list and spending status.', './scripts/chat.sh'),
         ])
-        print('\nRun each command yourself in this checkout, in order:')
+        print('\nComplete these steps in order; custody steps require the independent administrator terminal:')
         for number, (description, command) in enumerate(steps, 1):
             print(f'\nStep {number}. {description}')
             if command:
                 print(f'  {command}')
             if selected == '2' and number == 1:
-                print('  Type IMPORT, then BACKED UP if you have saved the secret safely.')
-                print('  Enter your private key or recovery phrase only at the hidden terminal prompt.')
+                print('  In the independent custody terminal, type BACKED UP only if the secret is saved safely.')
+                print('  Enter the secret only at the custody administrator hidden prompt, outside this agent.')
                 print('  No address entry is needed: the agent derives and displays it. Check it matches your wallet.')
         if selected != '2':
             print('\nReplace WALLET_ADDRESS with the public address from the wallet command.')
@@ -888,15 +888,15 @@ def wait_for_backup(cfg, addr):
             flow_success('Backup confirmed')
             return True
         if not shown:
-            flow_step(2, 'Save your backup', 'Keep this window open. In a second private terminal:')
-            flow_text('1. Open this checkout', tone='2')
-            print('     cd ' + shlex.quote(str(ROOT)))
+            flow_step(2, 'Save your backup', 'The human administrator must use a separate private custody terminal:')
+            flow_text('1. Open the protected custody installation, outside this agent', tone='2')
+            flow_text('Use the installed Python -I launcher and root-owned policy described in docs/custody.md.', tone='2')
             print()
-            flow_text('2. Reveal your secret and save it somewhere safe', tone='2')
-            print('     ./scripts/reveal-secret.sh --setup')
+            flow_text('2. Back up this exact wallet and save its secret securely', tone='2')
+            print('     custody-service.py admin --config POLICY backup ' + addr)
             print()
-            flow_text('3. Confirm only after you have saved it', tone='2')
-            print('     ./scripts/confirm-backup.sh --setup')
+            flow_text('3. Confirm only after saving it outside the agent', tone='2')
+            print('     custody-service.py admin --config POLICY confirm-backup ' + addr)
             print()
             shown = True
         else:
@@ -1111,7 +1111,7 @@ def wallet_action(action, cfg, *, guided=False, selected_address=None, before_mu
             item = eligible[int(choice) - 1]
         addr = address(item['address'])
         if not item.get('backup_confirmed_at'):
-            raise SetupError('Back up this wallet and run confirm-backup.sh with its address before selecting it.')
+            raise SetupError('The human custody administrator must back up this wallet and confirm its backup before selecting it.')
         budget = request(cfg, '/api/v1/agent/x402/spend')
         try:
             active_cap = Decimal(str(budget['cap_usd']))
@@ -1169,33 +1169,9 @@ def wallet_action(action, cfg, *, guided=False, selected_address=None, before_mu
         raise SetupError('Cancelled; no wallet request was sent.')
     payload = {'chain': 'evm', 'network': net, 'chain_id': chain, 'label': 'x402 payments'}
     if action == 'import':
-        if guided:
-            print()
-            flow_text('You need a backup saved outside this agent.')
-        else:
-            print('Step 2. Confirm your backup - continue only if the secret is safely saved outside this agent.')
-        if input('Type BACKED UP to confirm you have saved its secret outside the agent: ').strip() != 'BACKED UP':
-            raise SetupError('Import cancelled; backup was not confirmed.')
-        if guided:
-            print()
-            flow_text('Paste your secret below. Input is hidden; never paste it into chat.')
-            print()
-        else:
-            print('Step 3. Enter the wallet secret - paste it at the hidden prompt below, in this terminal only.')
-            print('You do not enter an address; the agent derives it from the secret and displays it after import.')
-        secret = hidden('Private key or recovery phrase (hidden; never paste into chat): ')
-        if not secret:
-            raise SetupError('Empty secret; nothing was sent.')
-        try:
-            result = request(cfg, '/api/v1/agent/wallet/stash-secret', {'secret': secret})
-        finally:
-            del secret
-        if not isinstance(result, dict):
-            raise SetupError('Invalid vault response; no wallet import was sent.')
-        token = result.get('vault_token')
-        if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9_-]{20,128}', token):
-            raise SetupError('Invalid vault handoff; nothing was imported.')
-        payload['vault_token'] = token
+        raise SetupError('Wallet import runs only in the isolated custody administrator terminal. '
+                         'Ask the human administrator to run custody-service.py admin --config '
+                         'POLICY import, then select the public address here.')
     # Persist only public recovery metadata before sending a mutation. An uncertain
     # response must never result in an automatic second create/import request.
     if before_mutation is not None:
@@ -1218,18 +1194,22 @@ def wallet_action(action, cfg, *, guided=False, selected_address=None, before_mu
         print('Step 4. Check the address above - it should match the wallet you intended to import.')
         if result.get('backup_required'):
             print('This saved wallet still needs backup confirmation. After saving its secret securely:')
-            print(f'  ./scripts/confirm-backup.sh {addr}')
+            print(f'  Human administrator: custody-service.py admin --config POLICY confirm-backup {addr}')
     if action == 'create':
         print('Save your backup yourself in a private terminal:')
-        print(f'  ./scripts/reveal-secret.sh --address {addr}')
+        print(f'  Human administrator: custody-service.py admin --config POLICY backup {addr}')
         print('Only after saving it:')
-        print(f'  ./scripts/confirm-backup.sh {addr}')
+        print(f'  Human administrator: custody-service.py admin --config POLICY confirm-backup {addr}')
     print('Next: select this wallet as payer and review its spending limit:')
     print('  ./scripts/setup.sh --wallet select')
     print('No payment was made.')
 
 
 def chat_settings() -> dict:
+    for asset in ('scripts/wallet_secret_guard.py', 'server/src/shared/secret_guard.py',
+                  '.claude/hooks/bip39-english.txt'):
+        if not (ROOT / asset).is_file():
+            raise SetupError('Required secret detector assets are missing; repair the installation.')
     def hook(name: str, *args: str) -> dict:
         path = ROOT / '.claude/hooks' / name
         if not path.is_file():
@@ -1247,7 +1227,8 @@ def chat_settings() -> dict:
         'hooks': {
             'UserPromptSubmit': [{'hooks': [hook('block-wallet-secrets.sh', '--mode', 'user')]}],
             'PostToolUse': [{'hooks': [hook('block-wallet-secrets.sh', '--mode', 'tool')]}],
-            'PreToolUse': [{
+            'PostToolUseFailure': [{'hooks': [hook('block-wallet-secrets.sh', '--mode', 'failure')]}],
+            'PreToolUse': [{'hooks': [hook('block-wallet-secrets.sh', '--mode', 'pre')]}, {
                 'matcher': 'mcp__mangrove-agent__execute_swap',
                 'hooks': [hook('preflight-swap.sh')],
             }],

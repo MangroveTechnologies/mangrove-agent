@@ -1,0 +1,18 @@
+# Native invocation hook profile read by scripts/client_session.py.
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = 'python3 "$(git rev-parse --show-toplevel)/scripts/wallet_secret_guard.py" --client codex'
+timeout = 5
+
+[[hooks.PreToolUse]]
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$(git rev-parse --show-toplevel)/scripts/wallet_secret_guard.py" --client codex'
+timeout = 5
+
+[[hooks.PostToolUse]]
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = 'python3 "$(git rev-parse --show-toplevel)/scripts/wallet_secret_guard.py" --client codex'
+timeout = 5

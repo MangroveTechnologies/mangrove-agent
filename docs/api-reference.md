@@ -106,38 +106,30 @@ remain available.
 
 ## Wallets
 
-Wallet secrets never appear in a response. Creating or stashing a secret returns a
-`vault_token` that refers to an in-process vault entry. The entry is single-read and expires
-after `SECRET_VAULT_TTL_SECONDS` (300 by default). The reveal routes are called by the local
-scripts in `scripts/`; no MCP tool calls them.
+Wallet creation and signing use [isolated custody](custody.md). The ordinary
+local credential cannot export, import or confirm backups. Human administration
+runs directly under the separate custody UID, outside HTTP/MCP and agent RPC.
 
 | Method | Path | Tier | Purpose |
 |--------|------|------|---------|
-| POST | `/wallet/create` | Auth | Create and encrypt a wallet (201) |
-| POST | `/wallet/import` | Auth | Import a wallet from a stashed secret (201) |
-| POST | `/wallet/stash-secret` | Auth | Stash a plaintext secret; used by `scripts/stash-secret.sh` |
-| GET | `/wallet/reveal-secret/{vault_token}` | Auth | Reveal and consume a stashed secret; used by `scripts/reveal-secret.sh` |
-| GET | `/wallet/{address}/reveal` | Auth | Decrypt a stored wallet's secret; used by `scripts/reveal-secret.sh --address` |
-| POST | `/wallet/{address}/confirm-backup` | Auth | Record that the user backed up the secret; used by `scripts/confirm-backup.sh` |
-| GET | `/wallet/list` | Auth | Stored wallets (addresses and metadata only) |
-| GET | `/wallet/{address}/balances?chain_id=<int>` | Auth | Token balances (`chain_id` required) |
-| GET | `/wallet/{address}/portfolio?chain_id=<int>` | Auth | Combined `value`, `pnl`, `tokens` and `defi` (`chain_id` optional) |
-| GET | `/wallet/{address}/history?limit=<int>` | Auth | Transaction history (`limit` defaults to 50) |
+| POST | `/wallet/create` | Auth | Create in isolated custody; public metadata (201) |
+| POST | `/wallet/import` | Auth | Retired; human custody administration (410) |
+| POST | `/wallet/stash-secret` | Auth | Retired; no secret input authority (410) |
+| GET | `/wallet/reveal-secret/{vault_token}` | Auth | Retired; no capability export (410) |
+| GET | `/wallet/{address}/reveal` | Auth | Retired; no address export (410) |
+| POST | `/wallet/{address}/confirm-backup` | Auth | Retired; human custody confirmation (410) |
+| GET | `/wallet/list` | Auth | Public addresses and metadata only |
+| GET | `/wallet/{address}/balances?chain_id=<int>` | Auth | Public token balances |
+| GET | `/wallet/{address}/portfolio?chain_id=<int>` | Auth | Public portfolio reads |
+| GET | `/wallet/{address}/history?limit=<int>` | Auth | Public transaction history |
 
-`POST /wallet/create` body: `chain` (`evm` default, or `xrpl`), `network` (default `mainnet`;
-XRPL also accepts `testnet` and `devnet`), `chain_id` (default 8453, ignored for XRPL), `label`. The response carries
-`address`, `chain`, `network`, `chain_id`, `label`, `created_at`, `vault_token`, `secret_type`,
-`master_key_source`, `reveal_cmd`, `secret_ttl_seconds`, `backup_required`,
-`deposit_instructions` and `safety_note`. Any other chain returns 501
-`CHAIN_NOT_SUPPORTED_IN_V1`.
-
-`POST /wallet/import` body: `vault_token` plus the same `chain`, `network`, `chain_id` and
-`label` fields. `POST /wallet/stash-secret` body: `secret` and optional `address_hint`; it
-returns `{vault_token, secret_ttl_seconds}`.
-
-`POST /wallet/{address}/confirm-backup` sets `backup_confirmed_at`. Until it is set for a
-wallet, live swaps and live strategy activation from that wallet are refused, and so are x402
-payments signed by it.
+Creation accepts `chain`, `network`, `chain_id` and optional `label`. Specify the
+intended network explicitly. Responses contain public metadata, secret type,
+backup requirements and human-admin instructions; deprecated `vault_token` is
+empty and `secret_ttl_seconds` is zero. Neither field authorizes export.
+`list_wallets` exposes `custody_status`; legacy ciphertext requires verified
+migration and retirement. Backup and independent policy remain mandatory for
+live signing. Disabling local authentication fails closed.
 
 ## DEX
 

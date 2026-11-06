@@ -29,10 +29,9 @@ comes from configuration, never from a tool argument or challenge.
 
 ## One-time setup
 
-Use the existing wallet creation/import and backup workflow. Import existing
-keys using `scripts/stash-secret.sh`, never through chat. Select a backed-up EVM
+Use [isolated custody](custody.md) and its direct human-admin import/backup workflow; no secret or import handoff passes through chat or the ordinary API. Select a backed-up EVM
 wallet on Base Sepolia (84532) or Base (8453). XRPL wallets can also be created locally or imported using an XRPL family seed
-through the same terminal-only workflow. Ed25519 and secp256k1 master seeds are
+through the same independent custody-administrator workflow. Ed25519 and secp256k1 master seeds are
 supported; regular-key and multisignature wallets are not.
 
 Run the normal `scripts/setup.sh` workflow and select API-key or x402 access.

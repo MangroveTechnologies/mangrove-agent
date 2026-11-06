@@ -33,12 +33,11 @@ at a time.
 
 1. **You asked.** The client does not trade on its own initiative.
 2. **The wallet's backup is confirmed.** `backup_confirmed_at` is set (Chapter
-   06). Otherwise the call is refused with the two commands to run.
+   06). Otherwise the call is refused; the independent human custody administrator must complete backup and confirmation.
 3. **`slippage_pct` is given and in range.** There is no default. It is a
    decimal greater than 0 and at most `0.0025` (0.25%).
 4. **`confirm=true` is set on the call.** Without it the call is refused.
-5. **The signing guard accepts the transaction.** Only 1inch router calls and
-   approvals to a 1inch router are signed.
+5. **Independent custody policy accepts the exact transaction.** The protected broker checks decoded chain, assets, router/executor, recipient, input, output floor, native value, fees, lifetime budgets and replay state. Unknown selectors and unreviewed chains fail closed; a router address alone does not authorize signing.
 
 In Claude Code, the `preflight-swap.sh` hook also blocks the call when the
 wallet holds none of the input token on that chain.
@@ -251,8 +250,7 @@ before relying on it.
 
 ## What to take away
 
-- A live DEX swap needs your request, a backup-confirmed wallet, an explicit
-  `slippage_pct` of at most 0.0025, and `confirm=true`.
+- A live DEX swap needs your request, a human-backup-confirmed wallet, independent protected custody policy, explicit `slippage_pct` of at most 0.0025, and `confirm=true`.
 - `execute_swap` reads `amount` as the asset quantity when buying. Check the
   USDC it will spend before you approve, or use the REST route for an exact
   input.

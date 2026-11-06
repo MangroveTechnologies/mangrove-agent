@@ -33,7 +33,7 @@ $MANGROVE_AGENT_HOME/agent-data/agent.db         # a relative DB_PATH resolves h
 $MANGROVE_AGENT_HOME/agent-data/master.key       # a relative MASTER_KEY_PATH resolves here
 ```
 
-With `MANGROVE_AGENT_HOME` set, the loader reads `<environment>-config.json` from `$MANGROVE_AGENT_HOME/config/` and resolves relative `DB_PATH` and `MASTER_KEY_PATH` against it instead of the process working directory. `configuration-keys.json` and `mangrove-endpoints.json` always come from the package. With it unset (a git clone), nothing changes. The plugin seeds its config with your MangroveAI API key as both the upstream key and the local `API_KEYS` credential. The helper scripts (`reveal-secret.sh`, `stash-secret.sh`, `confirm-backup.sh`, `stash-kraken-secret.sh`) find the right config through `scripts/_agent_home.sh`.
+With `MANGROVE_AGENT_HOME` set, the loader reads `<environment>-config.json` from `$MANGROVE_AGENT_HOME/config/` and resolves relative `DB_PATH` and `MASTER_KEY_PATH` against it instead of the process working directory. `configuration-keys.json` and `mangrove-endpoints.json` always come from the package. With it unset (a git clone), nothing changes. Setup generates a separate unique inbound `API_KEYS` credential; `MANGROVE_API_KEY` is outbound managed-service authority. Wallet backup/import/confirmation now run in the independent custody administrator terminal, not through agent HTTP helpers. `stash-kraken-secret.sh` remains a separate venue-credential workflow.
 
 ## Value resolution and secret references
 
@@ -78,7 +78,9 @@ These must be present in the config file, or the agent fails at startup.
 | `API_KEYS` | Comma-separated local credentials for the AI client's `X-API-Key` header. Setup generates a unique value; the published defaults `dev-key-1` and `GENERATED_BY_SETUP` are rejected. |
 | `MANGROVEMARKETS_BASE_URL` | The MangroveMarkets server used for DEX routing and read tools. The example ships `http://localhost:9081`; setup replaces that with the hosted default `https://mangrovemarkets-pcqgpciucq-uc.a.run.app`, or with the value of `--markets-url`. |
 | `DB_PATH` | The SQLite database file (`./agent-data/agent.db`). |
-| `MASTER_KEY_PATH` | The Fernet master keyfile that encrypts wallet secrets (`./agent-data/master.key`). |
+| `MASTER_KEY_PATH` | The agent Fernet keyfile for its other encrypted credentials/payment records. Wallet keys live under isolated custody. Preserve this key during migration. |
+| `CUSTODY_SOCKET` | Absolute protected Unix socket path for the dedicated custody service. No local signing fallback. |
+| `CUSTODY_UID` | Numeric dedicated non-root custody UID, different from the agent UID. |
 | `KEYRING_SERVICE_NAME` | The OS keychain service name, used only when no keyfile exists. |
 | `MANGROVE_SDK_TIMEOUT_SECONDS` | Request timeout for the MangroveAI client, in seconds (`180`). Long backtests need a generous value. |
 | `LOG_RETENTION_DAYS` | Log retention in days. The loader requires it; the agent does not currently act on the value. |
@@ -217,3 +219,5 @@ The agent reads only a few environment variables. Everything else comes from the
 | `BARE_PORT` | Read by `setup.sh` to choose the bare-metal port (default `9080`). |
 
 `docker-compose.yml` sets `ENVIRONMENT=local` and mounts `server/src/config/local-config.json` read-only into the container.
+
+Wallet operations require the separately installed [isolated custody service](custody.md). The ordinary agent config contains only its public socket path and expected UID. Root-owned custody policy sets independent wallet, destination and spending limits. Disabled `AUTH_ENABLED` refuses privileged local access; it does not disable custody authorization.

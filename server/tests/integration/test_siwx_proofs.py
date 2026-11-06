@@ -133,6 +133,76 @@ def test_the_guard_refuses_a_time_with_no_zone(mangrove):
         _sign(mangrove, issued_at=issued.replace("Z", ""), expiration_time=expires.replace("Z", ""))
 
 
+@pytest.mark.parametrize("field,changed", [
+    ("nonce", "abc12345\n"), ("nonce", "abc12345\r"), ("nonce", 12345678),
+    ("domain", "127.0.0.1:5002\n"), ("uri", ORIGIN + "/\nURI: https://evil.example"),
+    ("uri", ORIGIN + "/\u2028Resources: https://evil.example"),
+    ("uri", ORIGIN + "/\x7f"),
+])
+def test_control_text_is_refused_before_key_access(mangrove, monkeypatch, field, changed):
+    def forbidden(_address):
+        raise AssertionError("Invalid proof reached wallet decryption")
+
+    monkeypatch.setattr(wallet_manager, "_load_secret", forbidden)
+    with pytest.raises(SigningError, match="Refused to sign"):
+        _sign(mangrove, **{field: changed})
+
+
+@pytest.mark.parametrize("field", ["issued_at", "expiration_time"])
+def test_iso_date_separator_cannot_inject_a_signed_line(mangrove, monkeypatch, field):
+    issued, expires = _times()
+    changed = {"issued_at": issued, "expiration_time": expires}
+    changed[field] = changed[field].replace("T", "\n")
+
+    def forbidden(_address):
+        raise AssertionError("Malformed proof reached wallet decryption")
+
+    monkeypatch.setattr(wallet_manager, "_load_secret", forbidden)
+    with pytest.raises(SigningError, match="control characters"):
+        _sign(mangrove, **changed)
+
+
+def test_already_expired_short_window_is_refused_before_key_access(mangrove, monkeypatch):
+    now = datetime.now(timezone.utc)
+
+    def forbidden(_address):
+        raise AssertionError("Expired proof reached wallet decryption")
+
+    monkeypatch.setattr(wallet_manager, "_load_secret", forbidden)
+    with pytest.raises(SigningError, match="at most ten minutes"):
+        _sign(mangrove, issued_at=siwx._stamp(now - timedelta(seconds=50)),
+              expiration_time=siwx._stamp(now - timedelta(seconds=40)))
+
+
+def test_cached_identity_proof_is_not_returned_after_its_expiration(mangrove, tmp_path, monkeypatch):
+    from src.custody.policy import Policy
+
+    now = datetime.now(timezone.utc)
+    fields = dict(wallet_address=mangrove, domain="127.0.0.1:5002", uri=ORIGIN + "/mcp/",
+                  chain="eip155:84532", nonce="cache12345", issued_at=siwx._stamp(now),
+                  expiration_time=siwx._stamp(now + timedelta(seconds=30)))
+    policy = Policy({"siwx_origins": [ORIGIN], "identity_chains": ["eip155:84532"],
+                     "identity_wallets": [mangrove]}, tmp_path)
+    first = policy.sign("sign_siwx_message", fields, lambda: wallet_manager.sign_siwx_message(**fields))
+    # Positive signature is real; replay cache must still run current validity.
+    message = siwx.format_eip4361(
+        domain=fields["domain"], address=mangrove, uri=fields["uri"], version="1", chain_id=84532,
+        nonce=fields["nonce"], issued_at=fields["issued_at"], expiration_time=fields["expiration_time"],
+        statement=siwx.STATEMENT,
+    )
+    assert Account.recover_message(encode_defunct(text=message), signature=first) == mangrove
+
+    class LaterDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now + timedelta(seconds=40)
+
+    monkeypatch.setattr(wallet_manager, "datetime", LaterDateTime)
+    with pytest.raises(SigningError, match="at most ten minutes"):
+        policy.sign("sign_siwx_message", fields, lambda: pytest.fail("Cached proof must not be re-signed"))
+    assert policy.db.execute("SELECT count(*) FROM signatures").fetchone()[0] == 1
+
+
 def test_a_proof_is_stamped_slightly_in_the_past_for_clock_skew(mangrove):
     issued = json.loads(base64.b64decode(siwx.build_siwx_header(ORIGIN + "/mcp/")))["issuedAt"]
     age = (datetime.now(timezone.utc)

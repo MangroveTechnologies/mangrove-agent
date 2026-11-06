@@ -140,14 +140,10 @@ records the result. Each filled engine order becomes a simulated trade in the lo
 Live DEX execution needs a funded wallet whose secret you have backed up outside
 the agent. The agent never shows the secret in chat:
 
-1. `create_wallet` returns a `vault_token`, not the secret. To import an existing
-   wallet, run `./scripts/stash-secret.sh` in a terminal and pass the resulting
-   token to `import_wallet`.
-2. Run `./scripts/reveal-secret.sh --address <address>` in a private terminal to
-   print the secret once, and save it somewhere safe.
-3. Run `./scripts/confirm-backup.sh <address>`. This sets
-   `wallets.backup_confirmed_at`, which opens the live-trading gate for that wallet.
-4. Fund the wallet. This happens outside the agent.
+1. Install [isolated custody](custody.md). `create_wallet` returns public metadata and human-admin backup instructions, with no usable export token. Human import runs directly under the separate custody UID.
+2. The human administrator uses the protected Python `-I` launcher in an independent terminal to back up this exact wallet and confirm it. Ordinary local API credentials cannot export or confirm a backup.
+3. The human reviews custody-owned wallet/network/token/destination and lifetime input/fee limits. Backup confirmation alone does not authorize spending outside that policy.
+4. Any funding is a separate explicit action outside the agent. Preserve legacy recovery material through verified migration and guarded retirement.
 
 ### Promoting to live
 
@@ -269,7 +265,7 @@ the handful of strategies one person runs locally.
 | --- | --- | --- |
 | No evaluations appear after a promotion | The agent process is not running | Check `GET /health`, then restart the agent with `./scripts/setup.sh` |
 | An evaluation has `status="error"` | The MangroveAI call failed (service down, bad key) | Read `error_msg` on the evaluation and `agent-data/bare.log` |
-| A promotion to live fails with "not backed up" | The wallet's `backup_confirmed_at` is null | Run `./scripts/reveal-secret.sh --address <address>`, then `./scripts/confirm-backup.sh <address>` |
+| A promotion to live fails with "not backed up" | The wallet's `backup_confirmed_at` is null | Have the independent human custody administrator back up and confirm the exact wallet; see [custody](custody.md) |
 | A request is rejected for slippage | `slippage_pct` is above 0.0025 or missing | Resend with a value above 0 and up to 0.0025 |
 | Live ticks stop placing orders | The portfolio kill switch tripped | Check `GET /api/v1/agent/portfolio/risk`, then reset it deliberately |
 | `active_cron_jobs` is 0 after a restart | The job store was not persisted, for example `DB_PATH` changed or is `:memory:` | Check `DB_PATH` and promote the strategies again |

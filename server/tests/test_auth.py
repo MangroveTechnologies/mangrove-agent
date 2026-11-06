@@ -39,12 +39,12 @@ def test_missing_api_key_rejected():
             validate_api_key(None)
 
 
-def test_auth_disabled_allows_all():
+def test_auth_disabled_refuses_privileged_access():
     mock_config = _make_mock_config(auth_enabled=False)
     with patch("src.shared.auth.middleware._get_config", return_value=mock_config):
         from src.shared.auth.middleware import validate_api_key
-        result = validate_api_key(None)
-        assert result is None
+        with pytest.raises(ValueError, match="disabled"):
+            validate_api_key(None)
 
 
 def test_has_valid_api_key_true():
@@ -65,7 +65,7 @@ def test_has_valid_api_key_disabled():
     mock_config = _make_mock_config(auth_enabled=False)
     with patch("src.shared.auth.middleware._get_config", return_value=mock_config):
         from src.shared.auth.middleware import has_valid_api_key
-        assert has_valid_api_key(None) is True
+        assert has_valid_api_key(None) is False
 
 
 @pytest.mark.parametrize("published", ["dev-key-1", "GENERATED_BY_SETUP"])
