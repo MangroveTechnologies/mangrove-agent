@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import socket
+import tempfile
 import time
 from pathlib import Path
 
@@ -20,14 +21,38 @@ from src.custody.transport import MAX_FRAME, peer_uid, receive
 
 
 @pytest.fixture
-def custody(tmp_path, monkeypatch):
+def protected_directory(tmp_path):
+    """Use a real protected ancestor; Linux pytest's /tmp (1777) is unsafe.
+
+    macOS home directories may themselves carry ACLs, so accept a candidate
+    only after the unchanged production ancestor check succeeds.
+    """
+    from src.custody.transport import check_ancestors, check_owned_path
+
+    for candidate in (tmp_path, Path.home()):
+        base = candidate.resolve()
+        try:
+            check_ancestors(base, allowed_owners={0, os.getuid()})
+        except ValueError:
+            continue
+        with tempfile.TemporaryDirectory(prefix="mangrove-custody-test-", dir=base) as directory:
+            protected = Path(directory)
+            check_owned_path(protected, owner=os.getuid(), private=True)
+            check_ancestors(protected, allowed_owners={0, os.getuid()})
+            yield protected
+        return
+    pytest.fail("Custody tests require a protected user-owned ancestor without extended ACLs")
+
+
+@pytest.fixture
+def custody(protected_directory, monkeypatch):
     from src.config import app_config
     from src.services import wallet_manager as wm
     from src.shared.crypto import fernet
     from src.shared.db import sqlite
 
-    monkeypatch.setattr(app_config, "DB_PATH", str(tmp_path / "wallets.db"))
-    monkeypatch.setattr(app_config, "MASTER_KEY_PATH", str(tmp_path / "master.key"))
+    monkeypatch.setattr(app_config, "DB_PATH", str(protected_directory / "wallets.db"))
+    monkeypatch.setattr(app_config, "MASTER_KEY_PATH", str(protected_directory / "master.key"))
     monkeypatch.setattr("keyring.get_password", lambda *_: None)
     monkeypatch.setattr(runtime, "_active", True)
     sqlite.reset_connection()
@@ -35,7 +60,7 @@ def custody(tmp_path, monkeypatch):
     sqlite.init_db()
     wallet = wm.create_wallet(chain="evm", network="testnet", chain_id=84532)
     settings = {
-        "state_dir": str(tmp_path),
+        "state_dir": str(protected_directory),
         "policy": {
             "x402": {
                 "wallet_address": wallet.address,
@@ -404,17 +429,17 @@ def test_bootstrap_refuses_nonisolated_interpreter_before_loading_configuration(
         initialize("/no/configuration/should/be/read.json")
 
 
-def test_protected_paths_reject_writable_ancestors_and_symlinks(tmp_path):
+def test_protected_paths_reject_writable_ancestors_and_symlinks(protected_directory):
     from src.custody.transport import check_ancestors, check_owned_path
 
-    nested = tmp_path / "private"
+    nested = protected_directory / "private"
     nested.mkdir(mode=0o700)
     check_ancestors(nested, allowed_owners={0, os.getuid()})
     nested.chmod(0o777)
     with pytest.raises(ValueError, match="writable"):
         check_ancestors(nested, allowed_owners={0, os.getuid()})
     nested.chmod(0o700)
-    link = tmp_path / "link"
+    link = protected_directory / "link"
     link.symlink_to(nested)
     with pytest.raises(ValueError, match="unsafe ownership"):
         check_owned_path(link, owner=os.getuid())
@@ -461,7 +486,7 @@ def test_generated_service_definitions_preserve_platform_boundary():
     assert defaults.socket_dir == "/Library/MangroveCustody/run"
 
 
-def test_migration_reencrypts_preserves_recovery_and_resumes(custody, tmp_path):
+def test_migration_reencrypts_preserves_recovery_and_resumes(custody, protected_directory):
     import shutil
 
     from src.custody.admin import migrate
@@ -470,13 +495,13 @@ def test_migration_reencrypts_preserves_recovery_and_resumes(custody, tmp_path):
     wm, wallet, _, settings = custody
     wm.confirm_backup(wallet.address)
     original = wm._load_secret(wallet.address)
-    old_db, old_key = tmp_path / "legacy.db", tmp_path / "legacy.key"
+    old_db, old_key = protected_directory / "legacy.db", protected_directory / "legacy.key"
     import sqlite3
 
     snapshot = sqlite3.connect(old_db)
     sqlite.get_connection().backup(snapshot)
     snapshot.close()
-    shutil.copyfile(tmp_path / "master.key", old_key)
+    shutil.copyfile(protected_directory / "master.key", old_key)
     old_db.chmod(0o600)
     old_key.chmod(0o600)
     # Existing same-key wallets make migration resumable rather than overwriting.
@@ -484,7 +509,7 @@ def test_migration_reencrypts_preserves_recovery_and_resumes(custody, tmp_path):
     assert migrate(old_db, old_key, settings) == first
     assert wm._load_secret(wallet.address) == original
     assert wm._get_wallet_row(wallet.address)["backup_confirmed_at"]
-    assert original not in (tmp_path / "migration-receipt.json").read_text()
+    assert original not in (protected_directory / "migration-receipt.json").read_text()
     # Finalization requires verified receipt and checks every original ciphertext.
     script = Path(__file__).resolve().parents[3] / "scripts/custody-retire-legacy.py"
     spec = importlib.util.spec_from_file_location("retire_custody", script)
@@ -494,7 +519,7 @@ def test_migration_reencrypts_preserves_recovery_and_resumes(custody, tmp_path):
     from unittest.mock import patch
 
     with patch.object(module.os, "geteuid", return_value=0):
-        module.retire(old_db, tmp_path / "migration-receipt.json", os.getuid())
+        module.retire(old_db, protected_directory / "migration-receipt.json", os.getuid())
     check = sqlite3.connect(old_db)
     record = check.execute("SELECT encrypted_secret,encryption_method FROM wallets").fetchone()
     assert record == (b"", "external-custody")
