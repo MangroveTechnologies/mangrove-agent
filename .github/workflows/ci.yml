@@ -38,11 +38,14 @@ jobs:
       - name: Lint with ruff
         run: ruff check --config server/pyproject.toml server/src/
 
+      - name: Verify the custody hashed lock matches requirements.lock
+        run: python scripts/hash_custody_lock.py --check
+
       - name: Lint custody administration and acceptance tests
         run: >-
           ruff check --config server/pyproject.toml
           scripts/custody-service.py scripts/custody-retire-legacy.py
-          scripts/install-custody.py scripts/custody_security_e2e.py
+          scripts/install-custody.py scripts/custody_security_e2e.py scripts/hash_custody_lock.py
           server/tests/unit/test_custody.py server/tests/unit/test_transaction_intent.py
 
       - name: Verify shared agent instructions and client launchers

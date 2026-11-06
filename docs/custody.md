@@ -60,7 +60,11 @@ This installs into `/opt/mangrove-custody`, creates private state at
 `/var/lib/mangrove-custody`, a read-only-to-agent socket directory at
 `/run/mangrove-custody`, and root-owned configuration at `/etc/mangrove-custody`.
 Existing paths are rejected rather than overwritten. It installs the locked
-dependencies and generates service definitions, but starts no service and grants
+dependencies from `server/requirements-custody.lock` with `pip --require-hashes`,
+so a distribution whose SHA-256 differs from the reviewed lock is refused.
+`scripts/hash_custody_lock.py` regenerates that file from
+`server/requirements.lock` and PyPI's published hashes; CI checks that both files
+pin the same versions. It also generates service definitions, but starts no service and grants
 no spending authority. Choose protected platform-specific paths with
 `--destination`, `--state-dir`, `--socket-dir` and `--config-home` when needed.
 Do not put writable agent state inside the immutable installation.
@@ -101,9 +105,23 @@ and numeric custody UID:
 
 Use the actual generated UID. Restart the ordinary agent and list wallets. Its
 SQLite journal receives metadata-only `external-custody` rows to retain allocation
-foreign keys. It stores no wallet ciphertext. Public metadata reads can show
-legacy wallets with `custody_status="migration_required"`; signing those wallets
-requires migration and retirement below.
+foreign keys. It stores no wallet ciphertext. Wallet listings report
+`custody_status`: `isolated` when custody can sign, `migration_required` for a
+legacy wallet whose key is still agent ciphertext (not yet migrated, or migrated
+but not yet retired), and `custody_unconfigured` when the agent has no custody
+socket. The free `status` tool and `GET /api/v1/agent/status` carry a `custody`
+block with `configured`, `migration_required_wallets`,
+`unsignable_live_allocations` and `action_required`.
+
+### Upgrading an existing installation
+
+Legacy agent-held wallets cannot sign after this upgrade, including protective
+exits on open live positions. Until custody is installed and each wallet is
+migrated, retired and its backup confirmed again, the agent refuses live
+promotion, live entries and exits, and x402 payments from those wallets with a
+`migration_required` or "custody is not configured" error that names this
+guide. Before upgrading, flatten live DEX positions or plan to complete the
+migration below promptly, and check the `custody` block of `status` afterwards.
 
 ## Human backup and import
 
@@ -215,10 +233,13 @@ sudo -u mangrove-custody /opt/mangrove-custody/.venv/bin/python -I /opt/mangrove
 ```
 
 Migration validates every decrypted wallet identity, reencrypts with the custody
-master key, preserves metadata and backup state, commits atomically, and writes
+master key, preserves metadata, commits atomically, and writes
 a private receipt containing addresses and hashes of original ciphertext. A
 same-snapshot retry verifies already migrated identities and resumes receipt
-creation without overwriting them. Verify address listing and human backup from
+creation without overwriting them. Backup confirmations are not carried over,
+because ordinary agent authority could set the legacy flag: verify each wallet's
+backup with `admin ... backup ADDRESS`, then run `admin ... confirm-backup ADDRESS`.
+Until then the wallet cannot sign. Verify address listing and human backup from
 custody before retiring the original active database. Funds and approved network
 limits are never inferred or automatically authorized from legacy balances.
 

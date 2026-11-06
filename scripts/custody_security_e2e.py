@@ -470,6 +470,9 @@ def exercise_migration():
     check('human migration preserves a real synthetic legacy wallet', code == 0)
     code, _ = admin(action, 'MIGRATE STOPPED SNAPSHOT')
     check('migration safely resumes an already copied wallet', code == 0)
+    listed = {item['address']: item for item in rpc('list_wallets', {}).get('result') or []}
+    check('migration does not carry the agent-settable backup confirmation',
+          address in listed and listed[address]['backup_confirmed_at'] is None)
     code, output = admin(['backup', address], 'DISPLAY SECRET')
     values = re.findall(rb'(?m)^0x[0-9a-fA-F]{64}\r?$', output)
     check('migrated secret recovers original public identity', code == 0 and len(values) == 1

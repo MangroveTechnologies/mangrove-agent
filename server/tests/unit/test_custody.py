@@ -642,3 +642,39 @@ def test_migration_reencrypts_preserves_recovery_and_resumes(custody, protected_
     record = check.execute("SELECT encrypted_secret,encryption_method FROM wallets").fetchone()
     assert record == (b"", "external-custody")
     check.close()
+
+
+def test_migration_requires_new_backup_confirmation(custody, protected_directory):
+    """Review probe MEDIUM-3: a legacy backup flag, settable by the agent, is not migrated."""
+    import sqlite3
+
+    from cryptography.fernet import Fernet
+    from src.custody.admin import migrate
+    from src.shared.errors import SigningError
+
+    wm, _, _, settings = custody
+    legacy_key = Fernet.generate_key()
+    account = Account.create()
+    legacy_dir = protected_directory / "legacy"
+    legacy_dir.mkdir(mode=0o700)
+    database = legacy_dir / "agent.db"
+    conn = sqlite3.connect(database)
+    conn.execute("CREATE TABLE wallets (id TEXT, address TEXT, chain TEXT, network TEXT, chain_id INTEGER, "
+                 "encrypted_secret BLOB, encryption_method TEXT, label TEXT, created_at TEXT, "
+                 "metadata_json TEXT, backup_confirmed_at TEXT)")
+    conn.execute("INSERT INTO wallets VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                 ("id1", account.address, "evm", "mainnet", 8453,
+                  Fernet(legacy_key).encrypt(("0x" + account.key.hex().removeprefix("0x")).encode()),
+                  "fernet-v1", None, "2026-01-01T00:00:00+00:00", None, "2026-01-02T00:00:00+00:00"))
+    conn.commit()
+    conn.close()
+    os.chmod(database, 0o600)
+    keyfile = legacy_dir / "master.key"
+    keyfile.write_bytes(legacy_key)
+    os.chmod(keyfile, 0o600)
+    migrate(database, keyfile, settings)
+    assert wm._get_wallet_row(account.address)["backup_confirmed_at"] is None
+    with pytest.raises(SigningError, match="not backed up"):
+        wm.require_backup_confirmed(account.address)
+    wm.confirm_backup(account.address)
+    wm.require_backup_confirmed(account.address)

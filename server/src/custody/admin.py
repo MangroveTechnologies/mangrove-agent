@@ -23,7 +23,12 @@ def require_terminal():
 
 
 def migrate(legacy_db: Path, legacy_key: Path, settings: dict) -> dict:
-    """Reencrypt a protected stopped-installation snapshot; never return plaintext."""
+    """Reencrypt a protected stopped-installation snapshot; never return plaintext.
+
+    Backup confirmations are not copied: the legacy flag was settable with
+    ordinary agent authority, so each migrated wallet needs a new
+    confirm-backup by the custody administrator.
+    """
     import os
 
     from cryptography.fernet import Fernet
@@ -77,6 +82,9 @@ def migrate(legacy_db: Path, legacy_key: Path, settings: dict) -> dict:
                     del current
                 continue
             row["encrypted_secret"] = ciphertext
+            # Ordinary agent authority could set the legacy flag, so the custody
+            # administrator confirms each migrated backup again.
+            row["backup_confirmed_at"] = None
             columns = [name for name in ("id", "address", "chain", "network", "chain_id", "encrypted_secret",
                                          "encryption_method", "label", "created_at", "metadata_json", "backup_confirmed_at") if name in row]
             conn.execute("INSERT INTO wallets(" + ",".join(columns) + ") VALUES(" + ",".join("?" for _ in columns) + ")", tuple(row[name] for name in columns))
@@ -146,6 +154,7 @@ def main():
             raise ValueError("Migration cancelled")
         result = migrate(args.legacy_db, args.legacy_master_key, settings)
         print("Migrated " + str(len(result["wallets"])) + " wallets. Original snapshots and any other backups still contain recoverable secrets.")
+        print("Backup confirmations were not carried over. Verify each wallet's backup, then run confirm-backup ADDRESS for it.")
     elif args.action == "approve-marketplace":
         request = json.loads(args.request_file.read_text())
         if request.get("operation") != "sign_marketplace_proof" or set(request) != {"operation", "arguments"}:

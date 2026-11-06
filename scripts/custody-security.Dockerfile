@@ -7,7 +7,7 @@ COPY server/requirements.lock /opt/requirements.lock
 RUN pip install --no-cache-dir -r /opt/requirements.lock && chmod -R go-w /usr/local
 WORKDIR /opt/mangrove
 COPY server/src /opt/mangrove/server/src
-COPY server/requirements.lock /opt/mangrove/server/requirements.lock
+COPY server/requirements.lock server/requirements-custody.lock /opt/mangrove/server/
 COPY scripts /opt/mangrove/scripts
 RUN chmod -R go-w /opt/mangrove
 RUN python -I scripts/install-custody.py --custody-user custody --agent-user agent \

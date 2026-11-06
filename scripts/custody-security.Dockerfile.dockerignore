@@ -1,6 +1,7 @@
 **
 !server/
 !server/requirements.lock
+!server/requirements-custody.lock
 !server/src/
 !server/src/**
 !scripts/
