@@ -122,20 +122,13 @@ The REST equivalents are `POST /api/v1/agent/strategies/deployments`,
 
 ### Access and rollout
 
-The normal installation uses published `mangroveai==2.2.0`, which does not contain
-`strategies.local_deployment`. An unversioned SDK upgrade does not enable these
-tools while that is the latest published release. The existing adapter refuses
-the missing capability before making a request.
-
-Local deployment needs the helper in prepared **SDK 2.3.0** and the validated
-contract from **API 7.11 or later** actually serving. The coordinated API packaging
-candidate is now **7.12.0**; it does not change that minimum capability.
-Prepared SDK source does not establish registry publication or production
-serving. Follow the
-[release compatibility gates](release-compatibility.md) before enabling the
-workflow. After the compatible SDK is published and the API is qualified as
-serving, update the SDK minimum and regenerate the lock. Verify the installed
-package rather than a source checkout:
+SDK 2.3.0 and later contain `strategies.local_deployment`, and the endpoint it reads
+is served by MangroveAI API 7.11.0 or later. `server/requirements.lock` decides which
+SDK version an installation gets, and every install path uses it. If the installed
+SDK lacks the helper, the adapter refuses the request with a capability error before
+making it. See [SDK and local-deployment release compatibility](release-compatibility.md)
+for the requirements and the upgrade procedure. Verify the installed package rather
+than a source checkout:
 
 ```sh
 .venv/bin/python -c 'from mangrove_ai._services.strategies import StrategiesService; assert callable(getattr(StrategiesService, "local_deployment", None)), "Installed SDK lacks local_deployment support"'

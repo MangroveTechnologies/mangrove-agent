@@ -89,7 +89,7 @@ def test_installed_package_capability_matches_ci_selection(installed_api):
         assert requests == []
 
 
-@pytest.mark.skipif(not HAS_HELPER, reason="Published default SDK has no local-deployment helper")
+@pytest.mark.skipif(not HAS_HELPER, reason="Installed SDK has no local-deployment helper")
 def test_installed_helper_preserves_server_snapshot_and_readiness(installed_api):
     payload, requests = installed_api
     original = copy.deepcopy(payload)
@@ -106,7 +106,7 @@ def test_installed_helper_preserves_server_snapshot_and_readiness(installed_api)
     )]
 
 
-@pytest.mark.skipif(not HAS_HELPER, reason="Published default SDK has no local-deployment helper")
+@pytest.mark.skipif(not HAS_HELPER, reason="Installed SDK has no local-deployment helper")
 @pytest.mark.parametrize("field,value", [("contract_version", 2), ("strategy_id", "wrong-id"), ("asset_class", "equity")])
 def test_installed_helper_mismatched_contract_is_rejected(installed_api, field, value):
     payload, requests = installed_api
