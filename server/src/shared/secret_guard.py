@@ -358,8 +358,9 @@ def find_in_result(result: Any) -> str | None:
     """Return the secret kind found in a tool result, or None.
 
     Only key-named fields count, because results routinely carry transaction
-    hashes. JSON carried as text content is parsed and walked; other text
-    falls back to ``_contextual_text_hit``.
+    hashes. JSON carried as text content is parsed and walked, and the raw
+    text is then scanned with ``_contextual_text_hit`` as well, so a parser
+    that drops duplicate keys cannot hide a key-named value.
     """
 
     def walk(value: Any, field: str | None) -> str | None:
@@ -382,7 +383,9 @@ def find_in_result(result: Any) -> str | None:
         if isinstance(value, str):
             nested = _parse_json_text(value)
             if nested is not None:
-                return walk(nested, None)
+                hit = walk(nested, None)
+                if hit:
+                    return hit
             return _contextual_text_hit(value, arguments=False)
         return None
 
