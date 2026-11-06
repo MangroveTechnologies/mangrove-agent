@@ -119,11 +119,9 @@ def main():
     from src.services import wallet_manager
 
     if args.action == "backup":
-        print("Wallet: " + args.address)
-        if input("Type DISPLAY SECRET to show this wallet's backup in this private terminal: ") != "DISPLAY SECRET":
-            raise ValueError("Backup cancelled")
-        print(wallet_manager.reveal_wallet_secret(args.address).secret)
-        print("Save it outside the agent, then use confirm-backup. Clear terminal scrollback.")
+        from src.custody.terminal import display_wallet_backup
+
+        display_wallet_backup(args.address)
     elif args.action == "confirm-backup":
         print("Wallet: " + args.address)
         if input("Type BACKED UP only after securely saving the secret: ") != "BACKED UP":
