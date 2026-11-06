@@ -82,11 +82,24 @@ jobs:
         env:
           ENVIRONMENT: test
         run: |
-          # Ubuntu runner home and /tmp can have writable ancestors. Allocate
-          # only a disposable leaf under /opt; production permission checks
-          # remain unchanged and validate the real fixture hierarchy.
-          custody_test_root="$(sudo mktemp -d /opt/mangrove-custody-unit.XXXXXX)"
+          # Runner home, /tmp and /opt can have writable ancestors. Create
+          # only a disposable leaf directly under /, then verify the exact
+          # hierarchy with unchanged production checks before the full suite.
+          custody_test_root="$(sudo mktemp -d /mangrove-custody-unit.XXXXXX)"
           sudo chown "$(id -u):$(id -g)" "$custody_test_root"
           trap 'sudo rmdir -- "$custody_test_root"' EXIT
+          stat --format='%A %a %U:%G %n' / "$custody_test_root"
+          if command -v getfacl >/dev/null; then
+            getfacl -p / "$custody_test_root"
+          fi
+          MANGROVE_CUSTODY_TEST_ROOT="$custody_test_root" PYTHONPATH=server python - <<'PY'
+          import os
+          from pathlib import Path
+          from src.custody.transport import check_ancestors, check_owned_path
+          root = Path(os.environ["MANGROVE_CUSTODY_TEST_ROOT"])
+          check_owned_path(root, owner=os.getuid(), private=True)
+          check_ancestors(root, allowed_owners={0, os.getuid()})
+          print("Protected custody fixture hierarchy verified:", root)
+          PY
           cd server
           MANGROVE_CUSTODY_TEST_ROOT="$custody_test_root" pytest tests/ -v
