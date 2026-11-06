@@ -48,6 +48,14 @@ def test_wordlist_matches_the_claude_hook_list():
     assert secret_guard.bip39_words() == hook_words
 
 
+def test_wordlist_falls_back_to_the_repository_copy_without_eth_account(monkeypatch):
+    def missing(_package):
+        raise ModuleNotFoundError("eth_account")
+
+    monkeypatch.setattr(secret_guard.resources, "files", missing)
+    assert secret_guard._wordlist_text().split() == list(secret_guard._bip39_list())
+
+
 @pytest.mark.parametrize("arguments,kind", [
     ({"vault_token": FAKE_KEY}, secret_guard.EVM_KEY),
     ({"config": {"private_key": FAKE_KEY}}, secret_guard.EVM_KEY),
@@ -118,7 +126,8 @@ _HOOK_CASES = [
 def test_strict_text_scan_agrees_with_the_hook_user_mode(text, blocked):
     hook = subprocess.run(
         ["bash", str(HOOKS / "block-wallet-secrets.sh"), "--mode", "user"],
-        input=text, capture_output=True, text=True, timeout=20,
+        input=json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": text}),
+        capture_output=True, text=True, timeout=20,
     )
     assert hook.returncode == (2 if blocked else 0)
     assert (secret_guard.find_in_text(text) is not None) is blocked

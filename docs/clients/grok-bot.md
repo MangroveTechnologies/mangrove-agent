@@ -146,8 +146,9 @@ These guards are not enforced on this host and remain Grok Bot's duty:
 
 - A key or recovery phrase the owner types into the Grok Bot chat reaches the
   host transcript before any tool runs. If one arrives, do not pass it to any
-  tool or file; tell the owner to run `./scripts/stash-secret.sh` in their own
-  terminal. A tool call that carries one is refused with `SECRET_IN_ARGUMENTS`.
+  tool or file; tell the owner that wallet import runs only in the independent
+  custody administrator terminal ([isolated custody](../custody.md)). A tool
+  call that carries one is refused with `SECRET_IN_ARGUMENTS`.
 - Shell output on the box is not checked for secrets. Do not run commands that
   print keys, phrases, vault tokens or config contents.
 - For repository maintenance, work on a feature branch and open a pull request;

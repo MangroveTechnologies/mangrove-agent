@@ -3,7 +3,6 @@ import importlib.util
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -47,7 +46,7 @@ def test_bundle_check_detects_policy_drift(tmp_path):
 @pytest.fixture
 def installation(tmp_path):
     root = tmp_path / "Sage user's install"
-    for relative in ('scripts', '.codex', '.grok', '.claude/hooks'):
+    for relative in ('scripts', '.codex', '.grok'):
         shutil.copytree(ROOT / relative, root / relative,
                         ignore=shutil.ignore_patterns('config.toml', '__pycache__'))
     for relative in context.SOURCES:
@@ -83,16 +82,7 @@ pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps({
                                      CAPTURE=str(capture)))
     assert result.returncode == 0, result.stderr
     data = json.loads(capture.read_text())
-    if client == 'codex':
-        assert data['args'][::2] == ['-c', '-c', '-c']
-        invocation = tomllib.loads('\n'.join(data['args'][1::2]))['hooks']
-        assert set(invocation) == {'UserPromptSubmit', 'PreToolUse', 'PostToolUse'}
-        assert all('--client codex' in invocation[event][0]['hooks'][0]['command'] for event in invocation)
-        assert all(shlex.split(invocation[event][0]['hooks'][0]['command'])[1] ==
-                   str((installation / 'scripts/wallet_secret_guard.py').resolve()) for event in invocation)
-        assert 'bypass-hook-trust' not in ' '.join(data['args'])
-    else:
-        assert data['args'] == []
+    assert data['args'] == []
     assert data['cwd'] == str(installation)
     assert data['correct_key']
     assert data['url'] == 'http://127.0.0.1:9087/mcp/'
@@ -102,7 +92,6 @@ pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps({
     if client == 'codex':
         assert settings['url'] == data['url']
         assert settings['env_http_headers']['X-API-Key'] == 'MANGROVE_LOCAL_API_KEY'
-        assert 'hooks' not in tomllib.loads(settings_text)
     else:
         assert settings['headers']['X-API-Key'] == '${MANGROVE_LOCAL_API_KEY}'
 
@@ -156,74 +145,6 @@ def test_plugin_injects_shared_policy_before_unconfigured_status(tmp_path):
     assert '**Name:** Unset' in result.stdout
     assert 'Client-only skills:' in result.stdout
     assert 'NOT CONFIGURED:' in result.stdout
-
-
-@pytest.mark.parametrize('relative', ['scripts/wallet_secret_guard.py',
-                                    '.claude/hooks/bip39-english.txt', '.codex/session-hooks.toml'])
-def test_missing_codex_hook_asset_prevents_launch(installation, tmp_path, relative):
-    (installation / relative).unlink()
-    binary = tmp_path / 'bin'
-    binary.mkdir()
-    capture = tmp_path / 'started'
-    cli = binary / 'codex'
-    cli.write_text('#!' + sys.executable + '\nfrom pathlib import Path\n'
-                   f'Path({str(capture)!r}).touch()\n')
-    cli.chmod(0o700)
-    result = subprocess.run([sys.executable, str(installation / 'scripts/client_session.py'), 'codex'],
-                            capture_output=True, text=True,
-                            env=dict(os.environ, PATH=f'{binary}{os.pathsep}{os.environ["PATH"]}'))
-    assert result.returncode != 0
-    assert 'Required Codex wallet-secret hook is missing' in result.stderr
-    assert not capture.exists()
-
-
-@pytest.mark.parametrize('duplicate', [False, True, 'matched'])
-def test_existing_codex_config_is_preserved_and_duplicate_hooks_are_refused(installation, duplicate):
-    sys.path.insert(0, str(ROOT / 'scripts'))
-    try:
-        spec = importlib.util.spec_from_file_location('client_session_hook_check', ROOT / 'scripts/client_session.py')
-        launcher = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(launcher)
-    finally:
-        sys.path.pop(0)
-    path = installation / '.codex/config.toml'
-    original = ('[mcp_servers.mangrove-agent]\nurl = "http://127.0.0.1:9087/mcp/"\n'
-                'env_http_headers = { "X-API-Key" = "MANGROVE_LOCAL_API_KEY" }\n')
-    if duplicate == 'matched':
-        handler = tomllib.loads((installation / '.codex/session-hooks.toml').read_text())['hooks']['PreToolUse'][0]['hooks'][0]
-        original += ('[[hooks.PreToolUse]]\nmatcher = "Bash"\n[[hooks.PreToolUse.hooks]]\n' +
-                     '\n'.join(key + '=' + launcher.toml_literal(value) for key, value in handler.items()) + '\n')
-    elif duplicate:
-        original += (installation / '.codex/session-hooks.toml').read_text()
-    path.write_text(original)
-    if duplicate:
-        with pytest.raises(launcher.SetupError, match='Remove duplicate wallet-secret hook tables'):
-            launcher.prepare_config('codex', installation, 'http://127.0.0.1:9087/mcp/')
-    else:
-        assert launcher.prepare_config('codex', installation, 'http://127.0.0.1:9087/mcp/') == path
-    assert path.read_text() == original
-
-
-def test_native_codex_bound_guard_runs_from_another_cwd_with_spaces_and_quotes(installation, tmp_path):
-    # The fixture installation contains both spaces and an apostrophe. A second
-    # cwd must neither reselect the script nor break the shell's path quoting.
-    code = ('import json,sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); '
-            'from client_session import codex_hook_arguments; '
-            'print(json.dumps(codex_hook_arguments(Path(sys.argv[2]))))')
-    result = subprocess.run([sys.executable, '-c', code, str(ROOT / 'scripts'), str(installation)],
-                            cwd=tmp_path, capture_output=True, text=True, check=True)
-    arguments = json.loads(result.stdout)
-    hooks = tomllib.loads('\n'.join(arguments[1::2]))['hooks']
-    for event, groups in hooks.items():
-        command = groups[0]['hooks'][0]['command']
-        assert 'git rev-parse' not in command and '$(' not in command
-        assert shlex.split(command) == ['python3', str((installation / 'scripts/wallet_secret_guard.py').resolve()),
-                                        '--client', 'codex']
-        checked = subprocess.run(['/bin/sh', '-c', command], cwd=tmp_path,
-                                 input=json.dumps({'hook_event_name': event, 'prompt': 'Show status',
-                                                   'tool_input': {}, 'tool_response': {'ok': True}}),
-                                 capture_output=True, text=True)
-        assert checked.returncode == 0, checked.stderr
 
 
 GROK_BOT_DOC = ROOT / 'docs/clients/grok-bot.md'

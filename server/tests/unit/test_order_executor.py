@@ -276,11 +276,11 @@ def test_live_refuses_empty_input_balance_before_quote_or_approval(
     from src.services.wallet_manager import canonical_usdc_addresses
     from src.shared.errors import WalletInputBalanceEmpty
 
-    usdc = canonical_usdc_addresses()[84532]
+    usdc = canonical_usdc_addresses()[8453]
     mock_markets.dex.balances.return_value = MagicMock(balances={usdc: "0"})
     with pytest.raises(WalletInputBalanceEmpty):
         execute_one(_intent("buy"), mode="live", strategy_id="s1",
-                    wallet_address="0xabc", chain_id=84532, slippage_pct=0.002)
+                    wallet_address="0xabc", chain_id=8453, slippage_pct=0.002)
     assert mock_markets.dex.get_quote.call_count == 0
     assert mock_markets.dex.approve_token.call_count == 0
     assert mock_markets.dex.broadcast.call_count == 0

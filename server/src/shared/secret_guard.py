@@ -13,6 +13,9 @@ Secret shapes:
   form is what MetaMask's "Show private key" displays.
 - BIP-39 recovery phrase: consecutive words from the English BIP-39 list,
   read from ``eth_account`` (a runtime dependency, present in the Docker image).
+  When ``eth_account`` is not importable, as under the system ``python3`` that
+  runs the Claude hook, the identical repository copy
+  ``.claude/hooks/bip39-english.txt`` is read instead.
 - XRPL family seed: ``s`` followed by 28 base58 characters (``sEd`` for Ed25519).
 
 Field names are normalized before matching: lowercased, with every character
@@ -52,10 +55,10 @@ withheld when the field's value is key-shaped, when a ``0x`` key appears
 anywhere in it without a hash label, or when it also holds a 12-word run or
 an XRPL seed.
 
-Differences from the Claude hook: the hook matches only ``0x`` keys and exact
-field names, and treats any 12-word run as a phrase. ``find_in_text`` is the
-strict scan used for key-named values; it agrees with the hook's user mode on
-``0x`` keys, phrases and seeds, and also matches bare hex keys.
+Client hooks: ``scripts/wallet_secret_guard.py`` adapts this module to the
+Claude Code hook events, so the hook and the MCP boundary share one detector.
+The hook applies ``find_in_text`` to a typed prompt, ``find_in_arguments`` to
+tool inputs and ``find_in_result`` to tool output and errors.
 """
 from __future__ import annotations
 
@@ -64,6 +67,7 @@ import json
 import re
 from functools import lru_cache
 from importlib import resources
+from pathlib import Path
 from typing import Any
 
 EVM_KEY = "evm_private_key"
@@ -135,10 +139,22 @@ def _is_identifier_field(norm: str) -> bool:
     return "hash" in norm or "digest" in norm or "txid" in norm or norm.endswith("id")
 
 
+_REPOSITORY_WORDLIST = Path(__file__).resolve().parents[3] / ".claude" / "hooks" / "bip39-english.txt"
+
+
+def _wordlist_text() -> str:
+    try:
+        return (resources.files("eth_account.hdaccount") / "wordlist" / "english.txt").read_text("utf-8")
+    except ModuleNotFoundError:
+        return _REPOSITORY_WORDLIST.read_text("utf-8")
+
+
 @lru_cache(maxsize=1)
 def _bip39_list() -> tuple[str, ...]:
-    text = (resources.files("eth_account.hdaccount") / "wordlist" / "english.txt").read_text("utf-8")
-    return tuple(word.strip() for word in text.splitlines() if word.strip())
+    words = tuple(word.strip() for word in _wordlist_text().splitlines() if word.strip())
+    if len(words) != 2048:
+        raise ValueError("BIP-39 wordlist must hold 2048 words")
+    return words
 
 
 @lru_cache(maxsize=1)
