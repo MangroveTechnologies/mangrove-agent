@@ -294,16 +294,16 @@ def test_finalized_receipt_adapter_clean_and_known_bad(ledger, monkeypatch, muta
 def test_execute_preflight_and_locally_hashed_broadcast_controls(ledger, monkeypatch, outcome):
     from eth_utils import keccak
 
-    from src.services import order_executor, wallet_manager
+    from src.services import order_executor
     from src.shared.clients import mangrove
+    from tests.dex_fixtures import generic_swap_payload
 
     localhash = "0x" + keccak(hexstr="0x0102").hex()
-    router = next(iter(wallet_manager._ONEINCH_ROUTERS))
 
     class RPC:
         def __call__(self, method, args):
             if method == "eth_chainId":
-                return "0x1" if outcome == "wrong_chain" else hex(84532)
+                return "0x1" if outcome == "wrong_chain" else hex(8453)
             if method == "eth_getBlockByNumber":
                 return dict(number="0x123", hash="0x" + "bb" * 32)
             if method == "eth_getTransactionReceipt":
@@ -322,15 +322,8 @@ def test_execute_preflight_and_locally_hashed_broadcast_controls(ledger, monkeyp
     sdk = MagicMock()
     sdk.dex.token_search.return_value = [SimpleNamespace(symbol="BTC", address=ASSET, decimals=18)]
     sdk.dex.token_info.return_value = SimpleNamespace(decimals=6)
-    payload = dict(
-        to=router,
-        value=1 if outcome == "native_value" else 0,
-        data="0x1234",
-        gas=100000,
-        gasPrice=1,
-        nonce=0,
-        chainId=84532,
-    )
+    payload = generic_swap_payload(QUOTE, ASSET, 200_000_000, 99_999, WALLET)
+    payload["value"] = 1 if outcome == "native_value" else 0
     sdk.dex.prepare_swap.return_value = SimpleNamespace(payload=payload)
     sdk.dex.approve_token.return_value = None
     monkeypatch.setattr(mangrove, "mangrove_markets_client", lambda: sdk)
@@ -341,7 +334,7 @@ def test_execute_preflight_and_locally_hashed_broadcast_controls(ledger, monkeyp
                 conn.execute("UPDATE strategies SET status='inactive' WHERE id='s'")
             if outcome == "stale_during_quote":
                 conn.execute("UPDATE strategies SET book_revision=book_revision+1 WHERE id='s'")
-        return dict(quote_id="quote", output_amount=99999)
+        return dict(quote_id="quote", output_amount=99999, output_amount_base_units=99999)
 
     monkeypatch.setattr(dex.dex_service, "get_quote", quote)
 
@@ -363,10 +356,10 @@ def test_execute_preflight_and_locally_hashed_broadcast_controls(ledger, monkeyp
     sdk.dex.broadcast.side_effect = broadcast
     oid = dex.reserve("s", "eval", intent(), dict(id="p"), confirmed.snapshot_revision("s"))
     if outcome == "clean":
-        dex.execute(oid, intent(), WALLET, 84532, 0.002, 1000)
+        dex.execute(oid, intent(), WALLET, 8453, 0.002, 1000)
     else:
         with pytest.raises(Exception):
-            dex.execute(oid, intent(), WALLET, 84532, 0.002, 1000)
+            dex.execute(oid, intent(), WALLET, 8453, 0.002, 1000)
     row = dex.orders("s")[0]
     state, positions, _, complete = confirmed.dex_inputs("s", 100)
     assert positions == [] and state["cash_balance"] == 1000

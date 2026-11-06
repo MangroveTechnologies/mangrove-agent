@@ -7,6 +7,15 @@ on:
     branches: [main]
 
 jobs:
+  custody-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build isolated custody acceptance image
+        run: docker build -f scripts/custody-security.Dockerfile -t mangrove-custody-security .
+      - name: Verify real processes, OS users, signatures and adversarial requests
+        run: docker run --rm --network none mangrove-custody-security
+
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
@@ -26,10 +35,17 @@ jobs:
       - name: Lint with ruff
         run: ruff check --config server/pyproject.toml server/src/
 
+      - name: Lint custody administration and acceptance tests
+        run: >-
+          ruff check --config server/pyproject.toml
+          scripts/custody-service.py scripts/custody-retire-legacy.py
+          scripts/install-custody.py scripts/custody_security_e2e.py
+          server/tests/unit/test_custody.py server/tests/unit/test_transaction_intent.py
+
       - name: Verify shared agent instructions and client launchers
         run: |
           python scripts/agent_context.py --check
-          ruff check --config server/pyproject.toml scripts/agent_context.py scripts/client_session.py scripts/local_mcp_bridge.py server/tests/unit/test_agent_clients.py server/tests/unit/test_chat_launcher.py server/tests/unit/test_local_mcp_bridge.py
+          ruff check --config server/pyproject.toml scripts/agent_context.py scripts/client_session.py scripts/local_mcp_bridge.py scripts/wallet_secret_guard.py server/tests/unit/test_wallet_secret_guard.py server/tests/unit/test_agent_clients.py server/tests/unit/test_chat_launcher.py server/tests/unit/test_local_mcp_bridge.py
 
       - name: Lint payment demos and their tests
         run: >-

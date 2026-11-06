@@ -217,8 +217,25 @@ running the helper cannot change another process's environment.
 
 These are normal developer sessions with the client's own tools and policies.
 They do not inherit the restricted Claude launcher's shell/file restrictions or
-Claude hooks. The shared instructions and server authorization checks still
-apply, but they are not a claim of equivalent client-side enforcement.
+Claude hooks. The Codex helper reads `.codex/session-hooks.toml` and supplies
+its three native hook tables through supported `-c` invocation settings. Review
+and trust them in `/hooks` (CLI) or Settings > Hooks (desktop). No trust bypass
+is enabled. Starting `codex` directly does not load this helper's guard profile.
+The profile contains public commands only; credentials remain in the child
+environment. Keep these wallet-secret hooks out of project `config.toml` to avoid
+duplicate execution; the helper refuses matching duplicates and preserves the
+existing file. The helper cannot establish that the running client trusted them.
+Grok Build is a separate product and has no verified adapter here. Follow the
+[wallet boundary and hook support](#wallet-boundary-and-hook-support) below.
+
+Manually installed Codex desktop plugins use `.codex-plugin/plugin.json` and
+`.codex/plugin-hooks.json`, with the Codex adapter rather than Claude's output
+replacement contract. Review and trust those hooks in the installed copy too.
+The native package supplies workflows and hooks only; it does not prompt for a
+credential or register MCP. Connect the local MCP service using the supported
+project configuration and `client_session.py` above. Its `MANGROVE_LOCAL_API_KEY`
+is the local `API_KEYS` credential, never the upstream MangroveAI key. Installing
+the plugin does not connect MCP or enable or trust hooks automatically. See [official plugin packaging](https://developers.openai.com/plugins/build/plugins).
 
 ## Claude Code
 
@@ -242,10 +259,72 @@ immediate tool access without a custom cloud connector, a new Project/Space,
 or a separate Mac app. Load the shared policy with `agent_context.py --stdout`
 and keep using the command client for discovered Mangrove tools.
 
+Keep custody keys, database, master key, privileged configuration and custody
+administration off Computer's general execution environment. Connect it only to
+the restricted service backed by an independently protected signing runtime.
+The command client is a transport, so access to that wrapper does not prevent
+other shell/file commands. If the host cannot provide this separation, use
+non-wallet workflows and stop wallet setup rather than copy custody material
+onto the host. No Perplexity hook is installed or assumed.
+
 Perplexity Search and other web modes that cannot execute installation commands
 need an existing agent exposed through a supported MCP connection. Merely
 uploading the instruction bundle does not install the server or connect tools.
 The same limitation applies to Grok web modes without an execution environment.
+
+## Wallet boundary and hook support
+
+Keep plaintext wallet keys, the custody database, decryption material and custody
+administration outside the AI client's execution identity. Ordinary local agent
+authentication does not authorize export, import or backup confirmation. A
+separate bearer credential in an agent-readable file is insufficient. Clients
+receive a narrow custody signing interface; the human runs administration from
+an independently controlled terminal under the protected custody identity.
+The AI identity must not have sudo, Docker control, debugger access or permission
+to replace custody code or policy. A general client with host administration
+authority cannot claim this isolation.
+
+| Client | Repository protection | Limit |
+| --- | --- | --- |
+| Claude Code | Shared detector through `.claude/settings.json`, the plugin hooks, or restricted `chat.sh` settings; prompt checks, pre-tool denial, post-tool replacement and failure detection | A failure hook stops continuation but has no documented error replacement. Original output can enter telemetry before a post-tool hook. |
+| Codex helper session | Native invocation tables from `.codex/session-hooks.toml`, reviewed and trusted in the client; prompt checks, pre-tool denial and post-tool block | A direct `codex` launch does not install this profile. Version and enabled hooks must be checked in that session. Specialized/hosted tools can bypass the local function-tool hook path. |
+| Perplexity Computer | Restricted service access and external custody | No compatible custom pre/post-tool contract has been verified. A policy file or command wrapper is not an enforced hook. |
+| Grok Bot | Restricted service access and external custody; see [Grok Bot](clients/grok-bot.md) | Enterprise inference hooks are separate, optional model-input checks. They do not prevent a tool action that has already run. |
+| Grok Build and other hosts | Restricted service access and external custody | Do not infer Claude/Codex hook support from instruction-file compatibility. |
+
+The detector covers nested JSON, serialized MCP text, structured results,
+stdout, stderr and errors; it recognizes prefixed/unprefixed EVM key shapes,
+BIP39 word sequences and XRPL seed shapes. Recognized public transaction/block
+hash fields, labeled hash lines and public addresses pass. Exact HTTPS `/tx/`
+links in URL fields on the configured explorer hosts also pass, as do the single
+hash arguments in strict JSON-RPC 2.0 `eth_getTransactionByHash` and
+`eth_getTransactionReceipt` requests. Other method labels, argument positions,
+unrecognized hosts or URL query/fragment payloads do not gain that exemption.
+A secret-named ancestor overrides public context. An unlabeled 32-byte
+hex value is ambiguous and is withheld. Content mislabeled as public data,
+images, arbitrary encodings and specialized tool paths are outside this heuristic.
+
+Pre-tool checks deny known export commands, reveal URLs and custody file access.
+They are not a shell sandbox: renamed scripts, aliases or arbitrary code can
+evade text checks. Hooks supplement the service and OS boundary. They cannot
+erase transcripts or telemetry already written, and repository files remain
+editable by a client that owns the checkout. Administrators can install protected
+managed hooks outside that authority where the host supports them.
+
+The adapters use each vendor's current contract:
+[Claude `updatedToolOutput`](https://code.claude.com/docs/en/hooks#posttooluse)
+preserves the result shape; a Claude `decision: "block"` alone retains the result.
+[Codex post-tool blocking](https://learn.chatgpt.com/docs/hooks#posttooluse)
+replaces model-facing feedback and rejects a blocked nested code-mode call;
+`updatedMCPToolOutput` and `suppressOutput` are unsupported. This is the documented
+contract, not proof of installed-host enforcement.
+
+Verify each actual installation using synthetic, non-secret sentinels: prompt,
+direct/nested MCP, successful and failed shell stdout/stderr, native file/HTTP
+prechecks and a captured PTY. Inspect model-facing results and any available
+transcript/telemetry separately. Repeat with absent/disabled/malformed hooks;
+the custody boundary must still deny plaintext operations. Do not use a real
+wallet or a paid tool for this check.
 
 ## Grok Bot
 
@@ -279,8 +358,9 @@ Verify each client separately; passing in one does not prove another is ready.
    evaluate a strategy, create/import a wallet, place an order, or reset a budget.
 3. Ask where strategy/backtest instructions come from. The answer is the live
    server's `load_skill`, not a local copy or remembered strategy template.
-4. Ask how to import a private key. The answer must direct the user to their
-   private terminal's stash flow, never invite them to paste the key into chat.
+4. Ask how to import a private key. The answer must direct the user to the
+   independently controlled custody administrator, never invite them to paste
+   the key into chat or give the model an export-capable token.
 
 ### Naming and status behavior to expect
 

@@ -395,3 +395,7 @@ Setup serializes runs with the `agent-data/.setup.lock` directory. After a hard 
 ### Keep your state while troubleshooting
 
 Do not delete `agent-data/` to fix setup or a chat connection. It holds the saved agent name, trading history and wallet material, including the master key. Use the server log and the exact failing check to diagnose the problem, and preserve the config, database and key before any recovery you requested explicitly. A missing upstream tool is different from a stopped local server.
+
+## Wallet custody requires a separate identity
+
+Ordinary setup configures the agent, paper workflows and managed-service access. Wallet signing uses the [isolated custody deployment](docs/custody.md) under a dedicated OS UID with root-owned code/policy and private custody state. Human backup, secret import and backup confirmation run directly in the independent administrator terminal. The former stash/reveal/confirm agent helpers and HTTP routes are retired. Do not erase an existing `agent-data` directory; preserve it for the documented verified migration and guarded retirement procedure. Clients with root/sudo/Docker control over custody cannot claim this isolation.

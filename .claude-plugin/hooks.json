@@ -35,11 +35,31 @@
     ],
     "PreToolUse": [
       {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/.claude/hooks/block-wallet-secrets.sh --mode pre",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "mcp__plugin_mangrove-agent_mangrove-agent__execute_swap",
         "hooks": [
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/.claude/hooks/preflight-swap.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/.claude/hooks/block-wallet-secrets.sh --mode failure",
             "timeout": 5
           }
         ]

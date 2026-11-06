@@ -1,0 +1,11 @@
+**
+!server/
+!server/requirements.lock
+!server/src/
+!server/src/**
+!scripts/
+!scripts/**
+**/__pycache__/
+**/*.pyc
+server/src/config/*-config.json
+!server/src/config/local-example-config.json

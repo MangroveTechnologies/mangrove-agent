@@ -1,7 +1,7 @@
 """API key authentication middleware.
 
 Validates X-API-Key header against configured API_KEYS (comma-separated).
-When AUTH_ENABLED is false, all requests pass without validation.
+When AUTH_ENABLED is false, privileged requests fail closed.
 API key holders bypass x402 payment requirements.
 """
 import secrets
@@ -82,7 +82,7 @@ def validate_api_key(api_key: Optional[str]) -> Optional[str]:
     config = _get_config()
 
     if not config.AUTH_ENABLED:
-        return None
+        raise ValueError("Local authentication is disabled; privileged access is refused")
 
     if not api_key:
         raise ValueError("Missing API key")
@@ -101,7 +101,7 @@ def has_valid_api_key(api_key: Optional[str]) -> bool:
     try:
         config = _get_config()
         if not config.AUTH_ENABLED:
-            return True
+            return False
         if not api_key:
             return False
         return _matches_any(api_key, _configured_keys(config))

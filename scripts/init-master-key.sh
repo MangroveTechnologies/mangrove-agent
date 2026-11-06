@@ -69,7 +69,6 @@ ok "written with chmod 600"
 
 echo
 printf "${GREEN}Done.${CLR} Master key at $KEY_PATH\n\n"
-echo "Wallets created from here on are encrypted with this key. If the"
-echo "file is ever lost, wallets become unrecoverable agent-side — but"
-echo "each wallet's secret can still be recovered off-agent if you"
-echo "backed it up (via ./scripts/reveal-secret.sh after creation)."
+echo "This key protects agent credential/payment state; wallet custody uses"
+echo "its separate protected identity and master key. Preserve existing keys"
+echo "and recovery data. Human wallet backup/import is documented in docs/custody.md."

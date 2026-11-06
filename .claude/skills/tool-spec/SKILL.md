@@ -36,7 +36,7 @@ For each parameter give: `name`, `type`, `required`, `description`. Standard pat
 Every MCP tool calls into a function in `server/src/services/<resource>.py`. Give the function signature the tool will call - the service layer owns the business logic, the tool layer only authenticates + marshals.
 
 ### 6. Response shape
-JSON dict with explicit keys. Never return raw model objects without `.model_dump(mode="json")`. Never return encrypted secrets, Fernet ciphertext, or plaintext key material (the signing guard blocks that at the wallet layer, but your tool should not be a bypass).
+JSON dict with explicit keys. Never return raw model objects without `.model_dump(mode="json")`. Never return encrypted secrets, Fernet ciphertext, or plaintext key material (custody owns wallet secrets outside ordinary agent authority; no tool may add an export capability).
 
 ### 7. Error shape
 Match the existing error envelope:
@@ -52,7 +52,7 @@ One positive example with realistic values (e.g. a real Base contract address, a
 
 When drafting tools that touch signing, wallets, or execution, state explicitly in the spec's description / preconditions:
 
-- Signing flows MUST route through `wallet_manager.sign()` - the hard guard there refuses non-1inch payloads (see `.claude/rules/wallet-presentation.md`).
+- Transaction signing MUST carry immutable decoded intent through `wallet_manager.sign()` into the separate-UID custody broker. Independent human policy bounds wallet, chain, assets, recipients, amounts and fees. Narrow x402/SIWX/marketplace proofs retain their own guarded interfaces; never add generic signing or agent backup/import/export authority (see `.claude/rules/wallet-presentation.md`).
 - New tools that take a wallet address MUST check `backup_confirmed_at` before executing anything that moves real funds.
 - New tools that take a chain_id MUST default to Base Sepolia (84532); mainnet (8453) requires an explicit user signal.
 

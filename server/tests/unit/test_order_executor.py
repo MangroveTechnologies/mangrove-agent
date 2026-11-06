@@ -14,6 +14,7 @@ os.environ.setdefault("ENVIRONMENT", "test")
 import pytest  # noqa: E402
 
 from src.models.domain import OrderIntent  # noqa: E402
+from tests.dex_fixtures import USDC, WALLET, WETH, approval_payload, generic_swap_payload  # noqa: E402
 
 
 def _intent(side: str = "buy", symbol: str = "ETH", amount: float = 0.1) -> OrderIntent:
@@ -76,6 +77,7 @@ def mock_markets(monkeypatch):
         t = MagicMock()
         t.symbol = symbol
         t.decimals = decimals
+        t.address = USDC if symbol == "USDC" else WETH
         return t
 
     _TOKENS = {"USDC": _token("USDC", 6), "ETH": _token("ETH", 18)}
@@ -95,14 +97,29 @@ def mock_markets(monkeypatch):
         "mangrove_fee": 0.5,
         "price_impact_percent": 0.05,
     }
-    client.dex.get_quote.return_value = quote
+    def get_quote(**kwargs):
+        amount = kwargs["amount"]
+        output = int(amount * 10**12 / 2500) if kwargs["input_token"].lower() == USDC else int(amount * 2500 / 10**12)
+        quote.model_dump.return_value.update(input_amount=amount, output_amount=output)
+        quote.raw_output = output
+        return quote
+
+    client.dex.get_quote.side_effect = get_quote
+    client.dex.token_info.side_effect = lambda chain_id, address: _TOKENS["USDC" if address.lower() == USDC else "ETH"]
 
     # Default: approval already in place (None returned).
     client.dex.approve_token.return_value = None
 
     swap_tx = MagicMock()
-    swap_tx.payload = {"chainId": 84532, "to": "0x" + "a" * 40, "nonce": 0, "data": "0x"}
-    client.dex.prepare_swap.return_value = swap_tx
+    def prepare_swap(**kwargs):
+        requested = client.dex.get_quote.call_args.kwargs
+        swap_tx.payload = generic_swap_payload(
+            requested["input_token"], requested["output_token"], requested["amount"],
+            quote.raw_output, kwargs["wallet_address"],
+        )
+        return swap_tx
+
+    client.dex.prepare_swap.side_effect = prepare_swap
 
     broadcast = MagicMock()
     broadcast.tx_hash = "0xdeadbeef"
@@ -130,7 +147,7 @@ def stub_sign(monkeypatch):
     )
     monkeypatch.setattr(
         "src.services.order_executor.wallet_sign",
-        lambda payload, wallet_address, chain_id=None: "0xSIGNED",
+        lambda payload, wallet_address, chain_id=None, *, intent=None: "0xSIGNED",
     )
 
 
@@ -236,8 +253,8 @@ def test_live_skips_approval_when_none(temp_db, mock_mangroveai, mock_markets, s
         _intent("buy"),
         mode="live",
         strategy_id="s1",
-        wallet_address="0xabc",
-        chain_id=84532,
+        wallet_address=WALLET,
+        chain_id=8453,
         slippage_pct=0.002,
     )
     assert trade.mode == "live"
@@ -257,21 +274,124 @@ def test_live_full_flow_with_approval(temp_db, mock_mangroveai, mock_markets, st
 
     # First call: returns an approval; both broadcasts confirm.
     approval_tx = MagicMock()
-    approval_tx.payload = {"chainId": 84532, "to": "0x" + "b" * 40, "data": "0x"}
+    approval_tx.payload = approval_payload()
     mock_markets.dex.approve_token.return_value = approval_tx
 
     trade = execute_one(
         _intent("buy"),
         mode="live",
         strategy_id="s1",
-        wallet_address="0xabc",
-        chain_id=84532,
+        wallet_address=WALLET,
+        chain_id=8453,
         slippage_pct=0.002,
     )
     assert trade.status == "confirmed"
     # broadcast called twice (approval + swap)
     assert mock_markets.dex.broadcast.call_count == 2
     assert trade.fees["approval_tx_hash"] == "0xdeadbeef"
+    assert mock_markets.dex.approve_token.call_args.kwargs["amount"] == 250_000_000
+    assert mock_markets.dex.prepare_swap.call_count == 1  # nonce fetched after approval
+    assert trade.fees["routing_fee_cap_bps"] == 25
+    assert trade.fees["gross_quote_output_base_units"] == "100000000000000000"
+    assert trade.fees["minimum_return_base_units"] == "99550500000000000"
+
+
+@pytest.mark.parametrize("mutation", ["chain", "selector", "amount", "recipient", "slippage", "value"])
+def test_prepared_swap_cannot_redefine_original_order(
+    temp_db, mock_mangroveai, mock_markets, stub_sign, monkeypatch, mutation,
+):
+    from types import SimpleNamespace
+
+    from eth_abi import encode
+
+    from src.services import order_executor
+    from src.services.transaction_intent import _SWAP_SELECTORS, _SWAP_TYPES
+    from src.shared.errors import SigningError
+    from tests.dex_fixtures import EXECUTOR, ROUTER
+
+    original = mock_markets.dex.prepare_swap.side_effect
+
+    def malicious(**kwargs):
+        tx = dict(original(**kwargs).payload)
+        if mutation == "chain":
+            tx["chainId"] = 1
+        elif mutation == "selector":
+            tx["data"] = "0xdeadbeef"
+        elif mutation == "value":
+            tx["value"] = 1000
+        else:
+            recipient = "0x" + "99" * 20 if mutation == "recipient" else WALLET
+            amount = 250_000_001 if mutation == "amount" else 250_000_000
+            minimum = 1 if mutation == "slippage" else 10**17
+            args = (EXECUTOR, (USDC, WETH, EXECUTOR, recipient, amount, minimum, 0), b"route")
+            tx["data"] = "0x" + (_SWAP_SELECTORS[ROUTER] + encode(_SWAP_TYPES[ROUTER], args)).hex()
+        return SimpleNamespace(payload=tx)
+
+    mock_markets.dex.prepare_swap.side_effect = malicious
+    sign = MagicMock()
+    monkeypatch.setattr(order_executor, "wallet_sign", sign)
+    with pytest.raises(SigningError):
+        order_executor.execute_one(_intent(), mode="live", strategy_id="s1", wallet_address=WALLET,
+                                   chain_id=8453, slippage_pct=.002)
+    sign.assert_not_called()
+    mock_markets.dex.approve_token.assert_called_once()
+    mock_markets.dex.broadcast.assert_not_called()
+
+
+def test_unsupported_swap_after_finite_approval_reports_and_journals_partial_outcome(
+    temp_db, mock_mangroveai, mock_markets, stub_sign, monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from src.services import order_executor
+    from src.services.trade_log import list_trades
+    from src.shared.errors import SigningError
+
+    original = mock_markets.dex.prepare_swap.side_effect
+
+    def refresh(**kwargs):
+        tx = dict(original(**kwargs).payload)
+        # Match the real provider: preparation is reached only after the
+        # approval is confirmed and its nonce is consumed on chain.
+        assert mock_markets.dex.broadcast.call_count == 1
+        assert mock_markets.dex.tx_status.call_count == 1
+        tx["data"] = "0xdeadbeef"
+        return SimpleNamespace(payload=tx)
+
+    mock_markets.dex.prepare_swap.side_effect = refresh
+    mock_markets.dex.approve_token.return_value = SimpleNamespace(payload=approval_payload())
+    sign = MagicMock(return_value="0xSIGNED")
+    monkeypatch.setattr(order_executor, "wallet_sign", sign)
+    with pytest.raises(SigningError, match="Approval 0xdeadbeef was confirmed.*UNSUPPORTED_SWAP_SELECTOR"):
+        order_executor.execute_one(_intent(), mode="live", strategy_id="s1", wallet_address=WALLET,
+                                   chain_id=8453, slippage_pct=.002)
+    assert sign.call_count == 1
+    assert sign.call_args.kwargs["intent"].kind == "approval"
+    assert mock_markets.dex.broadcast.call_count == 1
+    recorded = list_trades("s1")
+    assert len(recorded) == 1
+    assert recorded[0].status == "failed"
+    assert recorded[0].tx_hash is None and recorded[0].output_amount == 0
+    assert recorded[0].fees["approval_tx_hash"] == "0xdeadbeef"
+    assert recorded[0].fees["swap_broadcast"] is False
+
+
+def test_approval_cannot_escalate_allowance_to_unlimited(
+    temp_db, mock_mangroveai, mock_markets, stub_sign, monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from src.services import order_executor
+    from src.shared.errors import SigningError
+
+    mock_markets.dex.approve_token.return_value = SimpleNamespace(payload=approval_payload(amount=2**256 - 1))
+    sign = MagicMock()
+    monkeypatch.setattr(order_executor, "wallet_sign", sign)
+    with pytest.raises(SigningError, match="Approval spender or amount"):
+        order_executor.execute_one(_intent(), mode="live", strategy_id="s1", wallet_address=WALLET,
+                                   chain_id=8453, slippage_pct=.002)
+    sign.assert_not_called()
+    mock_markets.dex.broadcast.assert_not_called()
 
 
 def test_live_quotes_in_base_units(temp_db, mock_mangroveai, mock_markets, stub_sign):
@@ -286,7 +406,7 @@ def test_live_quotes_in_base_units(temp_db, mock_mangroveai, mock_markets, stub_
         _intent("buy", "ETH", 0.04),
         mode="live",
         strategy_id="s1",
-        wallet_address="0xabc",
+        wallet_address=WALLET,
         chain_id=8453,
         slippage_pct=0.002,
     )
@@ -313,7 +433,7 @@ def test_live_buy_uses_ref_price_and_allocation_cap(temp_db, mock_mangroveai, mo
     intent = OrderIntent(action="enter", side="buy", symbol="ETH",
                          amount=0.1, ref_price=2000.0, reason="engine order")
     execute_one(
-        intent, mode="live", strategy_id="s1", wallet_address="0xabc",
+        intent, mode="live", strategy_id="s1", wallet_address=WALLET,
         chain_id=8453, slippage_pct=0.002,
         max_input_amount=50.0,  # 0.1 ETH * 2000 = 200 USDC, capped to 50
     )
@@ -331,7 +451,7 @@ def test_live_sell_quotes_asset_side_in_base_units(temp_db, mock_mangroveai, moc
         _intent("sell", "ETH", 0.1),
         mode="live",
         strategy_id="s1",
-        wallet_address="0xabc",
+        wallet_address=WALLET,
         chain_id=8453,
         slippage_pct=0.002,
     )
@@ -352,7 +472,7 @@ def test_live_rejects_dust_amount(temp_db, mock_mangroveai, mock_markets, stub_s
             _intent("sell", "ETH", 1e-19),
             mode="live",
             strategy_id="s1",
-            wallet_address="0xabc",
+            wallet_address=WALLET,
             chain_id=8453,
             slippage_pct=0.002,
         )
@@ -370,7 +490,7 @@ def test_live_requires_slippage_pct(temp_db, mock_mangroveai, mock_markets, stub
 
     with pytest.raises(SigningError, match="slippage_pct is required"):
         execute_one(_intent("buy"), mode="live", strategy_id="s1",
-                    wallet_address="0xabc", chain_id=84532)
+                    wallet_address=WALLET, chain_id=8453)
 
 
 def test_live_rejects_slippage_above_cap(temp_db, mock_mangroveai, mock_markets, stub_sign):
@@ -381,7 +501,7 @@ def test_live_rejects_slippage_above_cap(temp_db, mock_mangroveai, mock_markets,
 
     with pytest.raises(SigningError, match="outside allowed range"):
         execute_one(_intent("buy"), mode="live", strategy_id="s1",
-                    wallet_address="0xabc", chain_id=84532,
+                    wallet_address=WALLET, chain_id=8453,
                     slippage_pct=0.01)  # 1%, over the 0.25% cap
 
 
@@ -391,7 +511,7 @@ def test_live_requires_wallet_address(temp_db, mock_mangroveai, mock_markets, st
 
     with pytest.raises(SigningError):
         execute_one(_intent("buy"), mode="live", strategy_id="s1",
-                    chain_id=84532, slippage_pct=0.002)
+                    chain_id=8453, slippage_pct=0.002)
 
 
 def test_live_requires_chain_id(temp_db, mock_mangroveai, mock_markets, stub_sign):
@@ -400,7 +520,7 @@ def test_live_requires_chain_id(temp_db, mock_mangroveai, mock_markets, stub_sig
 
     with pytest.raises(SigningError):
         execute_one(_intent("buy"), mode="live", strategy_id="s1",
-                    wallet_address="0xabc", slippage_pct=0.002)
+                    wallet_address=WALLET, slippage_pct=0.002)
 
 
 def test_live_wraps_sdk_failures(temp_db, mock_mangroveai, mock_markets, stub_sign):
@@ -410,7 +530,7 @@ def test_live_wraps_sdk_failures(temp_db, mock_mangroveai, mock_markets, stub_si
     mock_markets.dex.get_quote.side_effect = RuntimeError("upstream 503")
     with pytest.raises(SdkError):
         execute_one(_intent("buy"), mode="live", strategy_id="s1",
-                    wallet_address="0xabc", chain_id=84532,
+                    wallet_address=WALLET, chain_id=8453,
                     slippage_pct=0.002)
 
 

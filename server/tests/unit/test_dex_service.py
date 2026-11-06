@@ -128,6 +128,9 @@ def test_get_quote_sends_base_units_and_returns_human(monkeypatch):
     assert out["input_amount"] == 0.001
     assert out["output_amount"] == 2.5
     assert out["output_amount_base_units"] == 2_500_000
+    assert out["routing_fee_cap_bps"] == 25
+    assert out["output_amount_after_max_routing_fee_base_units"] == 2_493_750
+    assert out["output_amount_after_max_routing_fee"] == 2.49375
 
 
 def test_get_quote_rejects_dust(monkeypatch):
@@ -139,3 +142,34 @@ def test_get_quote_rejects_dust(monkeypatch):
             input_token=_USDC, output_token=_WETH, amount=0.0000001, chain_id=8453,
         )
     client.dex.get_quote.assert_not_called()
+
+
+@pytest.mark.parametrize("matches", [[], [("USDC", _USDC), ("USDC", _WETH)], [("USD", _USDC)]])
+def test_signing_token_resolution_refuses_missing_or_ambiguous_symbol(matches):
+    from types import SimpleNamespace
+
+    client = MagicMock()
+    client.dex.token_search.return_value = [SimpleNamespace(symbol=symbol, address=addr) for symbol, addr in matches]
+    with pytest.raises(SdkError, match="exact token-symbol"):
+        dex_service.resolve_token_address(client, 8453, "USDC")
+
+
+def test_signing_token_resolution_preserves_explicit_address_without_lookup():
+    client = MagicMock()
+    assert dex_service.resolve_token_address(client, 8453, _USDC) == _USDC.lower()
+    client.dex.token_search.assert_not_called()
+
+
+@pytest.mark.parametrize("changes", [
+    {"input_amount": 1_000_001}, {"chain_id": 1}, {"src_token_address": _WETH},
+    {"dst_token_address": _USDC},
+])
+def test_quote_response_cannot_change_requested_operation(monkeypatch, changes):
+    client = _client_with_decimals({_WETH.lower(): 18, _USDC.lower(): 6})
+    client.dex.get_quote.return_value.model_dump.return_value = {
+        "quote_id": "q1", "input_amount": 1_000_000, "output_amount": 400_000_000_000_000,
+        **changes,
+    }
+    monkeypatch.setattr(dex_service, "mangrove_markets_client", lambda: client)
+    with pytest.raises(SdkError, match="differs"):
+        dex_service.get_quote(_USDC, _WETH, 1, 8453)

@@ -3,10 +3,9 @@ import os
 from contextlib import nullcontext
 from unittest.mock import patch
 
-# Default to the 'test' env for unit/integration runs; live E2E tests
-# (tests/e2e/test_live_swap.py) override by setting ENVIRONMENT=local
-# before pytest starts so they pick up the real MANGROVE_API_KEY +
-# hosted MangroveMarkets URL from local-config.json.
+# Unit/integration tests use offline test configuration. The opt-in funded
+# HTTP harness targets an already running, independently provisioned agent;
+# it never loads local-config.json or imports wallet secrets into this process.
 os.environ.setdefault("ENVIRONMENT", "test")
 
 import pytest
@@ -19,10 +18,22 @@ def _unavailable_facilitator_metadata(*_args, **_kwargs):
 
 
 # src.app constructs its module-level app during import, before fixtures run.
-# Keep ordinary test collection offline; live runs opt into ENVIRONMENT=local.
+# Keep test app startup offline; funded HTTP acceptance uses the external agent.
 with (patch.object(HTTPFacilitatorClient, "get_supported", _unavailable_facilitator_metadata)
       if os.environ.get("ENVIRONMENT") == "test" else nullcontext()):
     import src.app as app_module
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_custody_runtime(monkeypatch):
+    """Existing service unit tests run only synthetic custody in the test process.
+
+    Production has no config-selectable in-process backend. OS-isolation E2E runs
+    the real daemon separately and does not use this fixture.
+    """
+    if os.environ.get("ENVIRONMENT") == "test":
+        from src.custody import runtime
+        monkeypatch.setattr(runtime, "_active", True)
 
 
 @pytest.fixture(autouse=True)

@@ -64,6 +64,18 @@ def mock_sdk_create(monkeypatch):
     return fixed
 
 
+
+
+def _valid_approval(wallet=_TEST_ADDRESS, chain=8453, amount=100):
+    from src.services.transaction_intent import ApprovalIntent
+    token = "0x" + "22" * 20
+    router = "0x111111125421cA6dc452d289314280a0f8842A65"
+    payload = {"nonce": 0, "gas": 100000, "maxFeePerGas": 2000000000,
+               "maxPriorityFeePerGas": 1000000000, "to": token, "value": 0,
+               "data": "0x095ea7b3" + router[2:].lower().zfill(64) + hex(amount)[2:].zfill(64), "chainId": chain}
+    return payload, ApprovalIntent(chain_id=chain, wallet_address=wallet,
+                                   token_address=token, spender=router, amount=amount)
+
 # -- crypto/fernet -----------------------------------------------------------
 
 
@@ -115,10 +127,10 @@ def test_create_wallet_evm_persists_encrypted(temp_db, stub_keyring, mock_sdk_cr
     response = create_wallet(chain="evm", network="testnet", chain_id=84532, label="test")
     assert response.address == _TEST_ADDRESS
     # The plaintext is NOT in the response — only a vault_token pointing at the vault.
-    assert response.vault_token and len(response.vault_token) >= 16
+    assert response.vault_token == ""
     assert response.secret_type == "private_key"
     assert response.master_key_source in {"keyfile", "keychain", "generated_keyfile"}
-    assert response.reveal_cmd.startswith("./scripts/reveal-secret.sh ")
+    assert "custody-service.py admin" in response.reveal_cmd
     assert response.backup_required is True
     # No seed_phrase/private_key field on the response model.
     resp_dump = response.model_dump()
@@ -129,8 +141,8 @@ def test_create_wallet_evm_persists_encrypted(temp_db, stub_keyring, mock_sdk_cr
     assert "small test amount" in response.deposit_instructions.lower()
 
     # The vault must have the plaintext (so reveal-secret.sh can retrieve it).
-    plaintext = vault.reveal(response.vault_token)
-    assert plaintext == _TEST_PRIVKEY
+    with pytest.raises(KeyError):
+        vault.reveal(response.vault_token)
 
     row = get_connection().execute(
         "SELECT address, chain, chain_id, label, encrypted_secret, encryption_method, backup_confirmed_at FROM wallets WHERE address=?",
@@ -159,7 +171,7 @@ def test_create_wallet_generates_locally_no_markets_client(temp_db, stub_keyring
     assert r1.address != r2.address  # real randomness, not a fixture
     for r in (r1, r2):
         assert r.address.startswith("0x") and len(r.address) == 42
-        assert r.vault_token
+        assert r.vault_token == ""
     # No remote key-gen path exists in the wallet service at all.
     assert not hasattr(wm, "mangrove_markets_client")
 
@@ -220,46 +232,23 @@ def test_list_wallets_empty(temp_db, stub_keyring):
 
 def test_sign_round_trip(temp_db, stub_keyring, mock_sdk_create):
     from src.services.wallet_manager import create_wallet, sign
-
-    create_wallet(chain="evm", network="testnet", chain_id=84532)
-
-    unsigned = {
-        "nonce": 0,
-        "gas": 21000,
-        "maxFeePerGas": 2_000_000_000,
-        "maxPriorityFeePerGas": 1_000_000_000,
-        # 1inch V6 AggregationRouter — sign guard requires a known 1inch target
-        "to": "0x111111125421cA6dc452d289314280a0f8842A65",
-        "value": 0,
-        "data": b"",
-        "chainId": 84532,
-    }
-    raw_hex = sign(unsigned, _TEST_ADDRESS)
-    assert raw_hex.startswith("0x")
-    # Decode to bytes and compare with a direct sign via eth_account — should match.
+    create_wallet(chain="evm", network="mainnet", chain_id=8453)
+    unsigned, intent = _valid_approval()
+    raw_hex = sign(unsigned, _TEST_ADDRESS, intent=intent)
     direct = Account.from_key(_TEST_PRIVKEY).sign_transaction(unsigned)
-    direct_raw = direct.rawTransaction if hasattr(direct, "rawTransaction") else direct.raw_transaction
-    direct_hex = direct_raw.hex()
-    if not direct_hex.startswith("0x"):
-        direct_hex = "0x" + direct_hex
-    assert raw_hex == direct_hex
+    assert bytes.fromhex(raw_hex.removeprefix("0x")) == direct.raw_transaction
+    assert Account.recover_transaction(raw_hex) == _TEST_ADDRESS
+
 
 
 def test_sign_unknown_wallet_raises(temp_db, stub_keyring):
     from src.services.wallet_manager import sign
     from src.shared.errors import WalletNotFound
-
-    # Use a guard-compliant payload so the WalletNotFound path is what's being
-    # exercised (not the signing guard).
-    payload = {
-        "nonce": 0,
-        "gas": 21000,
-        "to": "0x111111125421cA6dc452d289314280a0f8842A65",
-        "value": 0,
-        "chainId": 84532,
-    }
+    address = Account.create().address
+    payload, intent = _valid_approval(wallet=address)
     with pytest.raises(WalletNotFound):
-        sign(payload, "0x" + "33" * 20)
+        sign(payload, address, intent=intent)
+
 
 
 def test_sign_message_blocked_by_guard(temp_db, stub_keyring, mock_sdk_create):
@@ -289,89 +278,21 @@ def test_wallet_exists(temp_db, stub_keyring, mock_sdk_create):
 # -- payload normalization (regression — caught by the real Base mainnet swap)
 
 
-def test_normalize_coerces_stringified_numerics():
-    from src.services.wallet_manager import _normalize_payload
-
-    sdk_payload = {
-        "to": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-        "data": "0x095ea7b3",
-        "value": "0",
-        "gas": 60000,
-        "nonce": 26,
-        "maxPriorityFeePerGas": "1000000",
-        "maxFeePerGas": "11000000",
-    }
-    out = _normalize_payload(sdk_payload, chain_id=8453)
-    assert out["value"] == 0
-    assert out["maxFeePerGas"] == 11_000_000
-    assert out["maxPriorityFeePerGas"] == 1_000_000
-    assert out["chainId"] == 8453  # injected
-    assert out["type"] == 2         # eip-1559
-    assert out["to"] == "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"  # checksum
 
 
-def test_normalize_drops_null_fields_for_legacy_tx():
-    """prepare_swap returns legacy (gasPrice populated, EIP-1559 nulls).
-    eth_account validator rejects `maxFeePerGas=None`, so we drop them."""
-    from src.services.wallet_manager import _normalize_payload
-
-    sdk_payload = {
-        "to": "0x111111125421ca6dc452d289314280a0f8842a65",
-        "data": "0xabcdef",
-        "value": "0",
-        "gas": 207909,
-        "nonce": 28,
-        "gasPrice": "7800000",
-        "maxFeePerGas": None,
-        "maxPriorityFeePerGas": None,
-    }
-    out = _normalize_payload(sdk_payload, chain_id=8453)
-    assert out["gasPrice"] == 7_800_000
-    assert "maxFeePerGas" not in out
-    assert "maxPriorityFeePerGas" not in out
-    assert "type" not in out  # legacy tx, no type marker
 
 
-def test_normalize_no_chain_id_injection_if_already_present():
-    from src.services.wallet_manager import _normalize_payload
-
-    out = _normalize_payload({"chainId": 1, "value": 0}, chain_id=8453)
-    assert out["chainId"] == 1  # caller's value wins
 
 
-def test_normalize_raises_nothing_when_chain_id_omitted():
-    """Caller may sign without chainId — eth_account handles that."""
-    from src.services.wallet_manager import _normalize_payload
-
-    out = _normalize_payload({"value": "0"})
-    assert out["value"] == 0
-    assert "chainId" not in out
 
 
 def test_sign_accepts_sdk_style_payload_with_chain_id(temp_db, stub_keyring, mock_sdk_create):
-    """End-to-end: wallet_manager.sign accepts a payload shaped exactly like
-    what mangrovemarkets SDK returns (stringified numerics, no chainId)."""
     from src.services.wallet_manager import create_wallet, sign
+    create_wallet(chain="evm", network="mainnet", chain_id=8453)
+    payload, intent = _valid_approval()
+    payload = {key: str(value) if type(value) is int else value for key, value in payload.items()}
+    assert Account.recover_transaction(sign(payload, _TEST_ADDRESS, chain_id=8453, intent=intent)) == _TEST_ADDRESS
 
-    create_wallet(chain="evm", network="testnet", chain_id=84532)
-
-    sdk_style_payload = {
-        # 1inch V6 AggregationRouter (same address mainnet + testnet — canonical deploy)
-        "to": "0x111111125421cA6dc452d289314280a0f8842A65",
-        "data": "0x",
-        "value": "0",
-        "gas": 21000,
-        "nonce": 0,
-        "maxPriorityFeePerGas": "1000000",
-        "maxFeePerGas": "11000000",
-        # Note: NO chainId. Agent must inject it.
-    }
-    raw = sign(sdk_style_payload, _TEST_ADDRESS, chain_id=84532)
-    assert raw.startswith("0x")
-    # Signed tx must encode chainId=84532 (0x14a34). After tx type byte (02)
-    # and RLP list prefix, the first list element is chainId. Quick sanity:
-    # not the chainId=0 signature bug we hit on the real swap.
-    assert "021482" not in raw[:20]  # would be chainId=0 (01 48 = type+empty)
 
 
 # -- SecretVault flow (phase-2 contract: plaintext never in MCP responses) ----
@@ -506,144 +427,23 @@ def _approve_calldata(spender: str, amount: int = 100) -> str:
 
 
 class TestSignGuard:
-    """Sign-layer hard constraint: the agent refuses to sign anything that
-    isn't a direct 1inch swap or a 1inch-bound ERC-20 approve.
-
-    Context: on 2026-04-24 the workshop test wallet was drained $10 via an
-    EIP-7702 authorization that delegated code execution to an attacker-
-    deployed contract. The mangrove-agent agent must not be signable for
-    ANY flow other than 1inch swaps, end of story. This is defense in
-    depth against SDK compromise, supply-chain attacks, and rogue code
-    paths that could otherwise call sign() with a phishing payload.
-    """
-
-    def _make_wallet(self):
-        from src.services.wallet_manager import create_wallet
-        create_wallet(chain="evm", network="testnet", chain_id=84532)
-
-    def _swap_payload(self, to: str, chain_id: int = 84532) -> dict:
-        return {
-            "nonce": 0,
-            "gas": 21000,
-            "maxFeePerGas": 2_000_000_000,
-            "maxPriorityFeePerGas": 1_000_000_000,
-            "to": to,
-            "value": 0,
-            "data": "0x",
-            "chainId": chain_id,
-        }
-
-    def test_accepts_1inch_v6_router(self, temp_db, stub_keyring, mock_sdk_create):
-        from src.services.wallet_manager import sign
-        self._make_wallet()
-        raw = sign(self._swap_payload(_ONEINCH_V6), _TEST_ADDRESS)
-        assert raw.startswith("0x")
-
-    def test_accepts_1inch_v5_router(self, temp_db, stub_keyring, mock_sdk_create):
-        from src.services.wallet_manager import sign
-        self._make_wallet()
-        raw = sign(self._swap_payload(_ONEINCH_V5), _TEST_ADDRESS)
-        assert raw.startswith("0x")
-
-    def test_accepts_testnet_swap_on_base_sepolia(self, temp_db, stub_keyring, mock_sdk_create):
-        """Workshop starts on testnet — guard MUST not discriminate by chain."""
-        from src.services.wallet_manager import sign
-        self._make_wallet()
-        raw = sign(self._swap_payload(_ONEINCH_V6, chain_id=84532), _TEST_ADDRESS)
-        assert raw.startswith("0x")
-
-    def test_accepts_mainnet_swap_on_base(self, temp_db, stub_keyring, mock_sdk_create):
-        """Mainnet must also work once user graduates off testnet."""
-        from src.services.wallet_manager import sign
-        self._make_wallet()
-        raw = sign(self._swap_payload(_ONEINCH_V6, chain_id=8453), _TEST_ADDRESS)
-        assert raw.startswith("0x")
-
-    def test_rejects_non_1inch_to_address(self, temp_db, stub_keyring, mock_sdk_create):
-        from src.services.wallet_manager import sign
+    @pytest.mark.parametrize("mutation", ["missing_intent", "arbitrary_router_call", "eoa_approval",
+        "truncated_approval", "native_value", "chain_mismatch", "type4_legacy", "authorization_list"])
+    def test_refuses_before_plaintext(self, monkeypatch, mutation):
+        from src.services import wallet_manager as wm
         from src.shared.errors import SigningError
-        self._make_wallet()
-        # A random destination — the shape of the 2026-04-24 drain.
-        bad = self._swap_payload("0x14F9f76863b57e89f2D482557828337234DCacaD")
-        with pytest.raises(SigningError, match="1inch|guard|refuse"):
-            sign(bad, _TEST_ADDRESS)
+        payload, intent = _valid_approval()
+        if mutation == "missing_intent": intent = None
+        if mutation == "arbitrary_router_call": payload.update(to=intent.spender, data="0xdeadbeef")
+        if mutation == "eoa_approval": payload["to"] = "0x" + "33" * 20
+        if mutation == "truncated_approval": payload["data"] = payload["data"][:-64]
+        if mutation == "native_value": payload["value"] = 1
+        if mutation == "chain_mismatch": payload["chainId"] = 1
+        if mutation == "type4_legacy": payload.update(type=4, gasPrice=1)
+        if mutation == "authorization_list": payload["authorizationList"] = []
+        monkeypatch.setattr(wm, "_load_secret", lambda *args: pytest.fail("Refused payload loaded plaintext"))
+        with pytest.raises(SigningError): wm.sign(payload, _TEST_ADDRESS, chain_id=8453, intent=intent)
 
-    def test_rejects_plain_eoa_transfer(self, temp_db, stub_keyring, mock_sdk_create):
-        """Bare ETH/token transfer to an EOA — refused even if it looks innocuous."""
-        from src.services.wallet_manager import sign
-        from src.shared.errors import SigningError
-        self._make_wallet()
-        with pytest.raises(SigningError, match="1inch|guard|refuse"):
-            sign(self._swap_payload("0x" + "22" * 20), _TEST_ADDRESS)
-
-    def test_rejects_tx_with_no_to_field(self, temp_db, stub_keyring, mock_sdk_create):
-        """Contract deployment / bare call — refused."""
-        from src.services.wallet_manager import sign
-        from src.shared.errors import SigningError
-        self._make_wallet()
-        payload = self._swap_payload(_ONEINCH_V6)
-        payload.pop("to")
-        with pytest.raises(SigningError, match="to|guard|refuse"):
-            sign(payload, _TEST_ADDRESS)
-
-    def test_rejects_eip7702_tx_type(self, temp_db, stub_keyring, mock_sdk_create):
-        """EIP-7702 set-code txs (type 4) are the 2026-04-24 attack shape. Refused categorically."""
-        from src.services.wallet_manager import sign
-        from src.shared.errors import SigningError
-        self._make_wallet()
-        payload = self._swap_payload(_ONEINCH_V6)
-        payload["type"] = 4
-        with pytest.raises(SigningError, match="7702|type|guard|refuse"):
-            sign(payload, _TEST_ADDRESS)
-
-    def test_rejects_tx_with_authorization_list_field(self, temp_db, stub_keyring, mock_sdk_create):
-        """Even if the type field is absent, presence of an EIP-7702 authorization list refuses."""
-        from src.services.wallet_manager import sign
-        from src.shared.errors import SigningError
-        self._make_wallet()
-        payload = self._swap_payload(_ONEINCH_V6)
-        payload["authorizationList"] = [
-            {"chainId": 8453, "address": "0xd7d20E03C9793bd1b63291eeA0021c8cC096a915", "nonce": 0}
-        ]
-        with pytest.raises(SigningError, match="7702|authorization|guard|refuse"):
-            sign(payload, _TEST_ADDRESS)
-
-    def test_accepts_approve_when_spender_is_1inch_v6(self, temp_db, stub_keyring, mock_sdk_create):
-        """ERC-20 approve() for a 1inch router is the required step before a 1inch swap."""
-        from src.services.wallet_manager import sign
-        self._make_wallet()
-        payload = self._swap_payload(_USDC_BASE)
-        payload["data"] = _approve_calldata(_ONEINCH_V6, amount=10_000_000)  # 10 USDC
-        raw = sign(payload, _TEST_ADDRESS)
-        assert raw.startswith("0x")
-
-    def test_accepts_approve_when_spender_is_1inch_v5(self, temp_db, stub_keyring, mock_sdk_create):
-        from src.services.wallet_manager import sign
-        self._make_wallet()
-        payload = self._swap_payload(_USDC_BASE)
-        payload["data"] = _approve_calldata(_ONEINCH_V5)
-        raw = sign(payload, _TEST_ADDRESS)
-        assert raw.startswith("0x")
-
-    def test_rejects_approve_when_spender_is_not_1inch(self, temp_db, stub_keyring, mock_sdk_create):
-        """Approve for a non-1inch spender = attacker draining via approve-then-transferFrom."""
-        from src.services.wallet_manager import sign
-        from src.shared.errors import SigningError
-        self._make_wallet()
-        payload = self._swap_payload(_USDC_BASE)
-        payload["data"] = _approve_calldata("0x14F9f76863b57e89f2D482557828337234DCacaD")
-        with pytest.raises(SigningError, match="1inch|approve|guard|refuse"):
-            sign(payload, _TEST_ADDRESS)
-
-    def test_rejects_approve_with_malformed_data(self, temp_db, stub_keyring, mock_sdk_create):
-        """An approve selector without enough bytes for the spender = refuse."""
-        from src.services.wallet_manager import sign
-        from src.shared.errors import SigningError
-        self._make_wallet()
-        payload = self._swap_payload(_USDC_BASE)
-        payload["data"] = "0x095ea7b3"  # selector only, no args
-        with pytest.raises(SigningError, match="1inch|approve|guard|refuse"):
-            sign(payload, _TEST_ADDRESS)
 
 
 # -- x402 payment signing guard ----------------------------------------------
@@ -1042,7 +842,7 @@ class TestX402SignGuard:
             "maxFeePerGas": 2_000_000_000, "maxPriorityFeePerGas": 1_000_000_000,
             "to": _USDC_BASE, "value": 0, "data": "0x", "chainId": 8453,
         }
-        with pytest.raises(SigningError, match="1inch|guard|refuse"):
+        with pytest.raises(SigningError, match="intent"):
             sign(tx, _TEST_ADDRESS)
 
     def test_sign_message_remains_disabled(self, temp_db, stub_keyring, mock_sdk_create):

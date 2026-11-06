@@ -27,16 +27,16 @@ Check each principle if relevant:
 5. Explicit confirmation at status transitions
 6. Small first allocation
 7. Wallet secrets NEVER in chat
-8. **Signing is 1inch-only** (hard guard at `wallet_manager._validate_sign_target`)
+8. **Signing validates intent inside isolated custody** (`transaction_intent` plus independent protected policy)
 9. **Testnet-first for learning** (Base Sepolia 84532 by default)
 
 Plus the stage machine (Stage 0 tour -> 1 Orient -> 2 Author -> 3 Review -> 4 Paper -> 4.5 Wallet -> 5 Live -> 6 Monitor). Does the change preserve the stage boundaries?
 
 ### 3. `.claude/rules/wallet-presentation.md` - wallet handling
-- Never echo plaintext keys / vault_tokens in chat prose.
+- Never expose plaintext keys or export capabilities to the agent.
 - Default to testnet for new wallets.
-- All signing routes through `wallet_manager.sign()` which is hard-guarded to 1inch-only payloads.
-- The signing guard allowlist (`_ONEINCH_ROUTERS`) must only be expanded with explicit review.
+- Transaction signing routes through strict decoded intent validation and the separate-UID custody broker; x402, SIWX and marketplace proofs have their own narrow guards.
+- Chain/router/function support and independently authorized wallet/spending policy may only expand through explicit review. Human import, backup and confirmation have no agent authority.
 
 ### 4. `CONTRIBUTING.md` - branching + PR flow
 - Feature branch + PR for every change (no direct commits to main).
