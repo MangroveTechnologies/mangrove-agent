@@ -60,11 +60,12 @@ This installs into `/opt/mangrove-custody`, creates private state at
 `/var/lib/mangrove-custody`, a read-only-to-agent socket directory at
 `/run/mangrove-custody`, and root-owned configuration at `/etc/mangrove-custody`.
 Existing paths are rejected rather than overwritten. It installs the locked
-dependencies from `server/requirements-custody.lock` with `pip --require-hashes`,
-so a distribution whose SHA-256 differs from the reviewed lock is refused.
-`scripts/hash_custody_lock.py` regenerates that file from
-`server/requirements.lock` and PyPI's published hashes; CI checks that both files
-pin the same versions. It also generates service definitions, but starts no service and grants
+dependencies from `server/requirements-custody.lock` with
+`pip --require-hashes --only-binary :all:`: only wheels whose SHA-256 is listed
+in the reviewed lock install, and no source distribution is built, so no build
+dependency is fetched without a hash. `scripts/hash_custody_lock.py` regenerates
+that file from `server/requirements.lock` and the wheel hashes PyPI publishes;
+CI regenerates it with `--verify` and fails on any difference. It also generates service definitions, but starts no service and grants
 no spending authority. Choose protected platform-specific paths with
 `--destination`, `--state-dir`, `--socket-dir` and `--config-home` when needed.
 Do not put writable agent state inside the immutable installation.

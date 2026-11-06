@@ -92,9 +92,10 @@ def install(args):
     catalog = json.loads((source / "server/src/config/mangrove-endpoints.json").read_text())
     subprocess.run([args.python, "-m", "venv", str(destination / ".venv")], check=True)
     python = destination / ".venv/bin/python"
-    # Every distribution is checked against the hashes pinned in the reviewed lock.
-    subprocess.run([str(python), "-m", "pip", "install", "--require-hashes", "-r",
-                    str(destination / "server/requirements-custody.lock")], check=True)
+    # Wheels only, each checked against the hashes pinned in the reviewed lock;
+    # no source build can fetch unhashed build dependencies.
+    subprocess.run([str(python), "-m", "pip", "install", "--require-hashes", "--only-binary", ":all:",
+                    "-r", str(destination / "server/requirements-custody.lock")], check=True)
     for path in destination.rglob("*"):
         if not path.is_symlink():
             path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)

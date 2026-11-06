@@ -38,8 +38,8 @@ jobs:
       - name: Lint with ruff
         run: ruff check --config server/pyproject.toml server/src/
 
-      - name: Verify the custody hashed lock matches requirements.lock
-        run: python scripts/hash_custody_lock.py --check
+      - name: Verify the custody hashed lock against requirements.lock and PyPI wheel hashes
+        run: python scripts/hash_custody_lock.py --verify
 
       - name: Lint custody administration and acceptance tests
         run: >-
