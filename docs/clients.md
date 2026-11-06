@@ -223,7 +223,9 @@ and trust them in `/hooks` (CLI) or Settings > Hooks (desktop). No trust bypass
 is enabled. Starting `codex` directly does not load this helper's guard profile.
 The profile contains public commands only; credentials remain in the child
 environment. Keep these wallet-secret hooks out of project `config.toml` to avoid
-duplicate execution; the helper refuses matching duplicates and preserves the
+duplicate execution. Generated commands bind the absolute guard path to this
+installation, so changing directories cannot select another checkout's script.
+The helper refuses matching duplicates and preserves the
 existing file. The helper cannot establish that the running client trusted them.
 Grok Build is a separate product and has no verified adapter here. Follow the
 [wallet boundary and hook support](#wallet-boundary-and-hook-support) below.

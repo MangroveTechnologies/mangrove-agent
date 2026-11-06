@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -87,6 +88,8 @@ pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps({
         invocation = tomllib.loads('\n'.join(data['args'][1::2]))['hooks']
         assert set(invocation) == {'UserPromptSubmit', 'PreToolUse', 'PostToolUse'}
         assert all('--client codex' in invocation[event][0]['hooks'][0]['command'] for event in invocation)
+        assert all(shlex.split(invocation[event][0]['hooks'][0]['command'])[1] ==
+                   str((installation / 'scripts/wallet_secret_guard.py').resolve()) for event in invocation)
         assert 'bypass-hook-trust' not in ' '.join(data['args'])
     else:
         assert data['args'] == []
@@ -199,6 +202,28 @@ def test_existing_codex_config_is_preserved_and_duplicate_hooks_are_refused(inst
     else:
         assert launcher.prepare_config('codex', installation, 'http://127.0.0.1:9087/mcp/') == path
     assert path.read_text() == original
+
+
+def test_native_codex_bound_guard_runs_from_another_cwd_with_spaces_and_quotes(installation, tmp_path):
+    # The fixture installation contains both spaces and an apostrophe. A second
+    # cwd must neither reselect the script nor break the shell's path quoting.
+    code = ('import json,sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); '
+            'from client_session import codex_hook_arguments; '
+            'print(json.dumps(codex_hook_arguments(Path(sys.argv[2]))))')
+    result = subprocess.run([sys.executable, '-c', code, str(ROOT / 'scripts'), str(installation)],
+                            cwd=tmp_path, capture_output=True, text=True, check=True)
+    arguments = json.loads(result.stdout)
+    hooks = tomllib.loads('\n'.join(arguments[1::2]))['hooks']
+    for event, groups in hooks.items():
+        command = groups[0]['hooks'][0]['command']
+        assert 'git rev-parse' not in command and '$(' not in command
+        assert shlex.split(command) == ['python3', str((installation / 'scripts/wallet_secret_guard.py').resolve()),
+                                        '--client', 'codex']
+        checked = subprocess.run(['/bin/sh', '-c', command], cwd=tmp_path,
+                                 input=json.dumps({'hook_event_name': event, 'prompt': 'Show status',
+                                                   'tool_input': {}, 'tool_response': {'ok': True}}),
+                                 capture_output=True, text=True)
+        assert checked.returncode == 0, checked.stderr
 
 
 GROK_BOT_DOC = ROOT / 'docs/clients/grok-bot.md'

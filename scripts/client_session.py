@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -47,6 +48,13 @@ def toml_literal(value) -> str:
 
 def codex_hook_arguments(root: Path) -> list[str]:
     hooks = tomllib.loads((root / '.codex/session-hooks.toml').read_text())['hooks']
+    # Trust belongs to the reviewed installation, even if a later tool changes cwd.
+    command = shlex.join(['python3', str((root / 'scripts/wallet_secret_guard.py').resolve()),
+                          '--client', 'codex'])
+    for groups in hooks.values():
+        for group in groups:
+            for handler in group['hooks']:
+                handler['command'] = command
     return [argument for event, groups in hooks.items()
             for argument in ('-c', f'hooks.{event}={toml_literal(groups)}')]
 
