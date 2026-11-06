@@ -1,17 +1,19 @@
-"""Claude Code hook adapter over the agent's wallet-secret detector.
+"""Claude Code and Codex hook adapters over the agent's wallet-secret detector.
 
 Detection is ``server/src/shared/secret_guard.py``, the detector the MCP
-boundary uses, loaded from this installation by file path:
+boundary uses, loaded from this installation by file path. Hook content gets
+its strict ``scan_hook_content`` rules:
 
-- ``UserPromptSubmit``: ``find_in_text`` on the typed prompt (strict).
-- ``PreToolUse``: ``find_in_arguments`` on the tool input, plus a deny list of
-  known export commands, reveal routes and legacy secret files.
-- ``PostToolUse`` and ``PostToolUseFailure``: ``find_in_result`` on the tool
-  output or error.
+- ``UserPromptSubmit`` and ``PreToolUse``: any secret shape is refused; a 64-hex
+  value passes only as an exact explorer transaction link or the hash of an
+  exact JSON-RPC transaction read. ``PreToolUse`` also denies known export
+  commands, reveal routes and legacy secret files.
+- ``PostToolUse`` and ``PostToolUseFailure``: the same, plus whole-value
+  public-hash fields and labelled hash lines.
 
-The hook supplements the custody boundary: a host can record tool output before
-a hook runs. Feedback never includes the inspected payload, a matched value, a
-path or exception text.
+The hooks supplement the custody boundary: a host can record tool output
+before a hook runs. Feedback never includes the inspected payload, a matched
+value, a path or exception text.
 """
 from __future__ import annotations
 
@@ -25,7 +27,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DETECTOR = ROOT / 'server/src/shared/secret_guard.py'
 MAX_BYTES = 4 * 1024 * 1024
-REDACTED = '[wallet-secret content withheld]'
 REASON = ('Wallet-secret protection blocked this content or operation. '
           'Use the independently controlled custody administrator; never paste secrets into chat.')
 KNOWN_ACCESS = re.compile(
@@ -57,48 +58,40 @@ def known_secret_access(value) -> bool:
     return isinstance(value, str) and bool(KNOWN_ACCESS.search(value.replace('\\/', '/')))
 
 
-def redact(value):
-    """Same container shape with every string withheld."""
-    if isinstance(value, dict):
-        return {key: redact(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [redact(item) for item in value]
-    if isinstance(value, str):
-        return REDACTED
-    return value
-
-
-def response(event: str, payload: dict) -> tuple[dict | None, int]:
+def response(client: str, event: str, payload: dict) -> tuple[dict | None, int]:
     guard = load_detector()
     if event == 'UserPromptSubmit':
-        prompt = payload.get('prompt', payload)
-        text = prompt if isinstance(prompt, str) else json.dumps(prompt)
-        return ({'decision': 'block', 'reason': REASON}, 2) if guard.find_in_text(text) else (None, 0)
+        _, hit = guard.scan_hook_content(payload.get('prompt', payload), output=False)
+        return ({'decision': 'block', 'reason': REASON}, 2) if hit else (None, 0)
     if event == 'PreToolUse':
         arguments = payload.get('tool_input', {})
-        if (guard.find_in_arguments(arguments) or known_secret_access(arguments)
-                or known_secret_access(payload.get('tool_name', ''))):
+        _, hit = guard.scan_hook_content(arguments, output=False)
+        if hit or known_secret_access(arguments) or known_secret_access(payload.get('tool_name', '')):
             return {'hookSpecificOutput': {'hookEventName': event, 'permissionDecision': 'deny',
                                            'permissionDecisionReason': REASON}}, 0
         return None, 0
     if event == 'PostToolUseFailure':
-        if not guard.find_in_result(payload.get('error', '')):
-            return None, 0
+        _, hit = guard.scan_hook_content(payload.get('error', ''), output=True)
         # Claude documents no error replacement field for this event. Stop the
         # continuation without claiming the original error was removed.
-        return {'continue': False, 'stopReason': REASON,
-                'hookSpecificOutput': {'hookEventName': event, 'additionalContext': REASON}}, 0
+        return ({'continue': False, 'stopReason': REASON,
+                 'hookSpecificOutput': {'hookEventName': event, 'additionalContext': REASON}}, 0) if hit else (None, 0)
     if event != 'PostToolUse':
         raise ValueError('Unsupported hook event')
-    output = payload.get('tool_response', payload)
-    if not guard.find_in_result(output):
+    clean, hit = guard.scan_hook_content(payload.get('tool_response', payload), output=True)
+    if not hit:
         return None, 0
+    if client == 'codex':
+        # Codex does not support updatedMCPToolOutput or suppressOutput. A native
+        # block replaces model feedback and rejects nested code-mode promises.
+        return {'decision': 'block', 'reason': REASON}, 0
     return {'decision': 'block', 'reason': REASON, 'hookSpecificOutput': {
-        'hookEventName': event, 'updatedToolOutput': redact(output), 'additionalContext': REASON}}, 0
+        'hookEventName': event, 'updatedToolOutput': clean, 'additionalContext': REASON}}, 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--client', choices=['claude', 'codex'], default='claude')
     parser.add_argument('--mode', choices=sorted(MODES))
     args = parser.parse_args()
     try:
@@ -108,12 +101,16 @@ def main() -> int:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise ValueError('Invalid hook payload')
-        output, status = response(MODES.get(args.mode) or payload.get('hook_event_name'), payload)
+        output, status = response(args.client, MODES.get(args.mode) or payload.get('hook_event_name'), payload)
     except (ValueError, TypeError, OSError, UnicodeError, RecursionError, ImportError):
-        # Parser exceptions can contain payload text, so none is printed. A
-        # global stop halts continuation when the content cannot be inspected.
-        print(json.dumps({'continue': False, 'stopReason': REASON + ' The protection check could not complete.'}))
-        return 0
+        # Parser exceptions can contain payload text, so none is printed.
+        if args.client == 'claude':
+            # Exit 2 alone only adds Claude post-tool feedback; a global stop
+            # halts continuation when the content cannot be inspected.
+            print(json.dumps({'continue': False, 'stopReason': REASON + ' The protection check could not complete.'}))
+            return 0
+        print(REASON + ' The protection check could not complete.', file=sys.stderr)
+        return 2
     if output is not None:
         print(json.dumps(output, ensure_ascii=True))
     if status == 2:

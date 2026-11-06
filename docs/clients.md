@@ -186,8 +186,9 @@ host.
 
 ## Guardrails across clients
 
-Claude Code hooks in `.claude/hooks/` run only in Claude Code. The controls
-below run inside the agent, so they apply to every client that reaches it:
+Client hooks run only in Claude Code and in Codex sessions started by
+`client_session.py` (see [wallet boundary and hook support](#wallet-boundary-and-hook-support)).
+The controls below run inside the agent, so they apply to every client that reaches it:
 Claude Code, the command client (`scripts/local_mcp_bridge.py`) used by Codex,
 Grok, Grok Bot and Perplexity, the restricted launcher and remote MCP clients.
 
@@ -223,14 +224,16 @@ only tool calls:
 - **A secret typed into the host chat.** The host sends the message to its own
   model and transcript before any Mangrove tool runs. The agent refuses the
   secret if it reaches a tool, but cannot remove it from the host's history.
-  Claude Code blocks the prompt with a `UserPromptSubmit` hook; other hosts
-  rely on the shared instructions and the user. Never paste a key or phrase
+  Claude Code and Codex helper sessions block the prompt with a
+  `UserPromptSubmit` hook; other hosts rely on the shared instructions and the
+  user. Never paste a key or phrase
   into any AI chat. Wallet import runs only in the independent custody
   administrator terminal; see [isolated custody](custody.md).
 - **Secrets in other tools' output**, such as a shell command or file read.
   These never pass through the agent. Claude Code checks them with a
-  `PostToolUse` hook; other hosts do not. The hook and the MCP boundary use the
-  same detector, `secret_guard.py`.
+  `PostToolUse` hook and Codex helper sessions with a native hook; other hosts
+  do not. The hooks use the detector module the MCP boundary uses,
+  `secret_guard.py`, with stricter rules for hook content.
 - **Commits and pushes to `main`.** Git runs in the host's shell, not through
   the agent. Claude Code blocks them with `block-main-commits.sh`. For every
   client, the enforceable control is branch protection on the GitHub
@@ -269,9 +272,27 @@ running the helper cannot change another process's environment.
 
 These are normal developer sessions with the client's own tools and policies.
 They do not inherit the restricted Claude launcher's shell/file restrictions or
-Claude hooks. The shared instructions, server authorization checks and the
-agent-side [guardrails](#guardrails-across-clients) still apply; the host-only
-guards listed there do not.
+Claude hooks. The Codex helper reads `.codex/session-hooks.toml` and supplies
+its three native hook tables through supported `-c` invocation settings. Review
+and trust them in `/hooks` (CLI) or Settings > Hooks (desktop). No trust bypass
+is enabled. Starting `codex` directly does not load this helper's guard profile.
+The profile contains public commands only; credentials remain in the child
+environment. Keep these wallet-secret hooks out of project `config.toml` to avoid
+duplicate execution. Generated commands bind the absolute guard path to this
+installation, so changing directories cannot select another checkout's script.
+The helper refuses matching duplicates and preserves the
+existing file. The helper cannot establish that the running client trusted them.
+Grok Build is a separate product and has no verified adapter here. Follow the
+[wallet boundary and hook support](#wallet-boundary-and-hook-support) below.
+
+Manually installed Codex desktop plugins use `.codex-plugin/plugin.json` and
+`.codex/plugin-hooks.json`, with the Codex adapter rather than Claude's output
+replacement contract. Review and trust those hooks in the installed copy too.
+The native package supplies workflows and hooks only; it does not prompt for a
+credential or register MCP. Connect the local MCP service using the supported
+project configuration and `client_session.py` above. Its `MANGROVE_LOCAL_API_KEY`
+is the local `API_KEYS` credential, never the upstream MangroveAI key. Installing
+the plugin does not connect MCP or enable or trust hooks automatically. See [official plugin packaging](https://developers.openai.com/plugins/build/plugins).
 
 ## Claude Code
 
@@ -322,32 +343,43 @@ authority cannot claim this isolation.
 
 | Client | Repository protection | Limit |
 | --- | --- | --- |
-| Claude Code | `.claude/hooks/block-wallet-secrets.sh` through `.claude/settings.json`, the plugin hooks, or restricted `chat.sh` settings: prompt check, pre-tool denial, post-tool replacement and failure detection | A failure hook stops continuation but has no documented error replacement. Original output can enter telemetry before a post-tool hook. |
-| Codex | Restricted service access, external custody and the agent-side guardrails above | No Codex hook is installed by this repository. |
+| Claude Code | Shared detector through `.claude/settings.json`, the plugin hooks, or restricted `chat.sh` settings; prompt checks, pre-tool denial, post-tool replacement and failure detection | A failure hook stops continuation but has no documented error replacement. Original output can enter telemetry before a post-tool hook. |
+| Codex helper session | Native invocation tables from `.codex/session-hooks.toml`, reviewed and trusted in the client; prompt checks, pre-tool denial and post-tool block | A direct `codex` launch does not install this profile. Version and enabled hooks must be checked in that session. Specialized/hosted tools can bypass the local function-tool hook path. |
 | Perplexity Computer | Restricted service access and external custody | No compatible custom pre/post-tool contract has been verified. A policy file or command wrapper is not an enforced hook. |
 | Grok Bot | Restricted service access and external custody; see [Grok Bot](clients/grok-bot.md) | Enterprise inference hooks are separate, optional model-input checks. They do not prevent a tool action that has already run. |
-| Grok Build and other hosts | Restricted service access and external custody | Do not infer Claude hook support from instruction-file compatibility. |
+| Grok Build and other hosts | Restricted service access and external custody | Do not infer Claude/Codex hook support from instruction-file compatibility. |
 
-The Claude hook is an adapter (`scripts/wallet_secret_guard.py`) over
-`server/src/shared/secret_guard.py`, the detector the MCP boundary uses, so the
-hook and the agent apply the same rules. A typed prompt gets the strict scan:
-any 64-hex value, any run of 12 BIP-39 words or an XRPL seed is blocked. Tool
-inputs get the argument rules described above, so a hash-labelled value such as
-`cast receipt 0x...` passes. Tool output and errors get the result rules, so a
-secret is withheld only from a key-named field; a document or log that quotes
-transaction hashes passes.
+Both adapters call `scan_hook_content` in `server/src/shared/secret_guard.py`,
+the module that holds the MCP boundary's detector, so the shapes and wordlist
+are shared. Hook content is shell, file and prompt text rather than a
+structured MCP payload, so its rules are stricter than the MCP argument rules:
+every string is checked for any 64-hex value (with or without `0x`), any run of
+12 BIP-39 words and any XRPL seed shape, including nested JSON, serialized MCP
+text, structured results, stdout, stderr and errors. Label words in free text,
+such as `tx` or `receipt` before a value, never exempt it. In tool input, a
+64-hex value passes only as an exact HTTPS `/tx/` link in a URL field on a
+configured explorer host, or as the single hash argument of a strict JSON-RPC
+2.0 `eth_getTransactionByHash` or `eth_getTransactionReceipt` request. Tool
+output and errors also allow the whole value of a public transaction, block or
+digest hash field, and a line holding only a hash label and one hash
+(`Transaction hash: 0x...`). A secret-named ancestor removes every exemption.
+Content mislabeled as public data, images, arbitrary encodings and specialized
+tool paths are outside this heuristic.
 
-Pre-tool checks also deny known export commands, reveal URLs and legacy secret
-files. They are not a shell sandbox: renamed scripts, aliases or arbitrary code
-can evade text checks. Hooks supplement the service and OS boundary. They cannot
+Pre-tool checks deny known export commands, reveal URLs and custody file access.
+They are not a shell sandbox: renamed scripts, aliases or arbitrary code can
+evade text checks. Hooks supplement the service and OS boundary. They cannot
 erase transcripts or telemetry already written, and repository files remain
 editable by a client that owns the checkout. Administrators can install protected
 managed hooks outside that authority where the host supports them.
 
-The post-tool adapter uses [Claude `updatedToolOutput`](https://code.claude.com/docs/en/hooks#posttooluse),
-which keeps the result's shape with every string withheld; a Claude
-`decision: "block"` alone retains the result. This is the documented contract,
-not proof of installed-host enforcement.
+The adapters use each vendor's current contract:
+[Claude `updatedToolOutput`](https://code.claude.com/docs/en/hooks#posttooluse)
+preserves the result shape; a Claude `decision: "block"` alone retains the result.
+[Codex post-tool blocking](https://learn.chatgpt.com/docs/hooks#posttooluse)
+replaces model-facing feedback and rejects a blocked nested code-mode call;
+`updatedMCPToolOutput` and `suppressOutput` are unsupported. This is the documented
+contract, not proof of installed-host enforcement.
 
 Verify each actual installation using synthetic, non-secret sentinels: prompt,
 direct/nested MCP, successful and failed shell stdout/stderr, native file/HTTP

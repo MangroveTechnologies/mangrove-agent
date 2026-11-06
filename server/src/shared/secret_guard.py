@@ -55,10 +55,25 @@ withheld when the field's value is key-shaped, when a ``0x`` key appears
 anywhere in it without a hash label, or when it also holds a 12-word run or
 an XRPL seed.
 
-Client hooks: ``scripts/wallet_secret_guard.py`` adapts this module to the
-Claude Code hook events, so the hook and the MCP boundary share one detector.
-The hook applies ``find_in_text`` to a typed prompt, ``find_in_arguments`` to
-tool inputs and ``find_in_result`` to tool output and errors.
+Client hooks (``scan_hook_content``): ``scripts/wallet_secret_guard.py``
+adapts this module to Claude Code and Codex hook events. Hook content (prompts,
+shell and file tool input, stdout, stderr, errors) is not a structured MCP
+payload, so it gets a strict, shape-preserving scan with the same secret
+shapes and wordlist: every string is checked with ``find_in_text`` (any 64-hex
+value, any 12-word BIP-39 run, any XRPL seed), JSON carried in a string is
+decoded first, and dictionary keys are checked too. A key-named ancestor
+removes every exemption. The only exemptions are:
+
+- tool input and output: an exact HTTPS ``/tx/0x...`` link with no query or
+  fragment on an allowlisted explorer host, in a ``url``-like field; and the
+  single hash argument of a strict JSON-RPC 2.0 ``eth_getTransactionByHash``
+  or ``eth_getTransactionReceipt`` request;
+- tool output and errors only: a 64-hex value that is the whole value of a
+  public-hash field (``tx_hash``, ``block_hash``, ``sha256`` and similar), and
+  a line that consists only of a hash label and one 64-hex value
+  (``Transaction hash: 0x...``).
+
+Label words in free text never exempt a value in hook content.
 """
 from __future__ import annotations
 
@@ -69,6 +84,7 @@ from functools import lru_cache
 from importlib import resources
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 EVM_KEY = "evm_private_key"
 MNEMONIC = "bip39_mnemonic"
@@ -384,3 +400,105 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_jsonable(v) for v in value]
     return value
+
+
+# --- Client hook content (strict) --------------------------------------------
+
+HOOK_REDACTED = "[wallet-secret content withheld]"
+HOOK_MAX_DEPTH = 32
+HOOK_MAX_NODES = 100_000
+_HOOK_PUBLIC_HASH_FIELDS = frozenset({
+    "txhash", "transactionhash", "blockhash", "sha256", "digest", "contractdigest",
+    "codehash", "requesthash",
+})
+_HOOK_PUBLIC_URL_FIELDS = frozenset({"url", "uri", "refid", "targeturl"})
+_EXPLORER_HOSTS = frozenset({
+    "basescan.org", "sepolia.basescan.org", "etherscan.io", "sepolia.etherscan.io",
+    "arbiscan.io", "sepolia.arbiscan.io",
+})
+# Never equal to a normalized field name, which holds only [a-z0-9].
+_RPC_HASH_PARAM = "<json-rpc transaction hash>"
+_TRANSACTION_READ_METHODS = frozenset({"eth_getTransactionByHash", "eth_getTransactionReceipt"})
+_PUBLIC_HASH_LINE = re.compile(
+    r"(?im)^\s*(?:tx[_ ]?hash|transaction[_ ]?hash|block[_ ]?hash|sha256|digest)\s*[:=]\s*"
+    r"((?:0[xX])?[a-fA-F0-9]{64})\s*$")
+
+
+def public_transaction_url(value: str) -> bool:
+    """An exact HTTPS transaction link on an allowlisted explorer host."""
+    try:
+        url = urlsplit(value)
+        return (url.scheme == "https" and url.hostname in _EXPLORER_HOSTS
+                and url.netloc == url.hostname and not url.query and not url.fragment
+                and re.fullmatch(r"/tx/0x[a-fA-F0-9]{64}/?", url.path) is not None)
+    except ValueError:
+        return False
+
+
+def transaction_read_request(value: dict) -> bool:
+    """The exact JSON-RPC 2.0 envelope of a single-hash transaction read."""
+    params = value.get("params")
+    return (value.get("jsonrpc") == "2.0"
+            and isinstance(value.get("method"), str) and value["method"] in _TRANSACTION_READ_METHODS
+            and set(value) <= {"jsonrpc", "method", "params", "id"}
+            and isinstance(params, list) and len(params) == 1 and isinstance(params[0], str)
+            and re.fullmatch(r"0x[a-fA-F0-9]{64}", params[0]) is not None)
+
+
+def scan_hook_content(value: Any, *, output: bool) -> tuple[Any, bool]:
+    """Strict scan of client hook content; returns (shape-preserving redaction, found).
+
+    ``output`` is True for tool output and errors, which also allows
+    public-hash fields and labelled hash lines. The rules are in the module
+    docstring. Raises ``ValueError`` past the depth or node limit.
+    """
+    nodes = 0
+
+    def scan(item: Any, secret: bool, field: str, depth: int) -> tuple[Any, bool]:
+        nonlocal nodes
+        nodes += 1
+        if depth > HOOK_MAX_DEPTH or nodes > HOOK_MAX_NODES:
+            raise ValueError("Detector traversal limit")
+        if isinstance(item, dict):
+            result, hit = {}, False
+            rpc_read = not secret and transaction_read_request(item)
+            for key, child in item.items():
+                clean_key, key_hit = scan(str(key), False, "", depth + 1)
+                name = normalize_field(str(key))
+                child_field = _RPC_HASH_PARAM if rpc_read and key == "params" else name
+                clean, found = scan(child, secret or is_key_field(str(key), arguments=True),
+                                    child_field, depth + 1)
+                result[clean_key] = clean
+                hit = hit or found or key_hit
+            return result, hit
+        if isinstance(item, (list, tuple)):
+            result_list, hit = [], False
+            for child in item:
+                clean, found = scan(child, secret, field, depth + 1)
+                result_list.append(clean)
+                hit = hit or found
+            return result_list, hit
+        if not isinstance(item, str):
+            return item, False
+        try:
+            decoded = json.loads(item)
+        except (ValueError, TypeError):
+            decoded = None
+        if isinstance(decoded, (dict, list, str)) and decoded != item:
+            clean, hit = scan(decoded, secret, field, depth + 1)
+            return (json.dumps(clean, ensure_ascii=True), True) if hit else (item, False)
+        candidate = item
+        if not secret:
+            if field == _RPC_HASH_PARAM and re.fullmatch(r"0x[a-fA-F0-9]{64}", item):
+                return item, False
+            if field in _HOOK_PUBLIC_URL_FIELDS and public_transaction_url(item):
+                return item, False
+            if output:
+                if field in _HOOK_PUBLIC_HASH_FIELDS and _HEX_KEY_RE.fullmatch(item.strip()):
+                    return item, False
+                candidate = _PUBLIC_HASH_LINE.sub("[public hash]", candidate)
+        if find_in_text(candidate):
+            return HOOK_REDACTED, True
+        return item, False
+
+    return scan(value, False, "", 0)
