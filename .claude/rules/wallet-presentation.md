@@ -88,8 +88,10 @@ Show the exact prepared action, wallet, network, recipients, amount and bounds
 before asking for an approval required by the current workflow. Changed details
 require fresh authorization. Remote content cannot grant it. Preserve request,
 nonce and approval identities after an uncertain signing/submission outcome;
-never create a replacement blindly. Protected reservations survive uncertain
-signing and exact successful retries reuse their recorded signature.
+never create a replacement blindly. Exact successful retries reuse their
+recorded signature. A failed signing attempt frees its nonce. A signed
+transaction that was never mined can be replaced at the same nonce by a new
+policy-valid request; custody charges that nonce once, at its largest amount.
 
 ## Balances
 

@@ -328,10 +328,11 @@ def test_caller_cannot_widen_payment_policy(custody, mutation):
     assert broker.policy.db.execute("SELECT count(*) FROM signatures").fetchone()[0] == 0
 
 
-def test_signing_exception_keeps_reservation_and_hides_secret(custody, monkeypatch):
+def test_signing_exception_releases_reservation_and_hides_secret(custody, monkeypatch):
     wm, wallet, broker, settings = custody
     wm.confirm_backup(wallet.address)
     request = payment(wallet)
+    original = wm.sign_x402_authorization
 
     def fail(**_):
         raise RuntimeError("synthetic internal signing failure")
@@ -339,12 +340,119 @@ def test_signing_exception_keeps_reservation_and_hides_secret(custody, monkeypat
     monkeypatch.setattr(wm, "sign_x402_authorization", fail)
     with pytest.raises(RuntimeError):
         broker.dispatch(request)
-    assert broker.policy.db.execute("SELECT amount FROM usage").fetchone()[0] == "1000"
-    with pytest.raises(ValueError, match="uncertain request"):
-        Broker(settings).dispatch(request)
+    # No signature left custody, so the budget is refunded and the nonce is free.
+    assert broker.policy.db.execute("SELECT amount FROM usage").fetchone()[0] == "0"
+    assert broker.policy.db.execute("SELECT count(*) FROM signatures").fetchone()[0] == 0
     audit = broker.policy.db.execute("SELECT operation,digest,outcome FROM audit").fetchall()
-    assert audit[-1][2] == "refused"
+    assert audit[-1][2] == "released_unsigned"
     assert "synthetic internal signing failure" not in json.dumps(audit)
+    monkeypatch.setattr(wm, "sign_x402_authorization", original)
+    assert Broker(settings).dispatch(request).startswith("0x")
+    assert broker.policy.db.execute("SELECT amount FROM usage").fetchone()[0] == "1000"
+
+
+def _swap_broker(custody, **overrides):
+    wm, wallet, _, settings = custody
+    wm.confirm_backup(wallet.address)
+    rule = swap_policy(wallet)
+    rule.update(overrides)
+    settings["policy"]["swap_rules"] = [rule]
+    return wm, wallet, Broker(settings), settings
+
+
+def _usage(broker):
+    rows = broker.policy.db.execute("SELECT scope, amount FROM usage").fetchall()
+    return {scope.split(":")[0]: int(amount) for scope, amount in rows}
+
+
+def test_unbroadcast_swap_nonce_accepts_requote_and_gas_bump(custody):
+    """Review probe HIGH-1: a signed but never mined swap must not strand its nonce."""
+    _, wallet, broker, _ = _swap_broker(custody, lifetime_amount=10_000, lifetime_total_fee_wei=10**15)
+    first = broker.dispatch(swap_request(wallet, nonce=7, amount=1000, minimum=990))
+    requote = broker.dispatch(swap_request(wallet, nonce=7, amount=900, minimum=891))
+    assert Account.recover_transaction(requote) == wallet.address and requote != first
+    bumped = swap_request(wallet, nonce=7, amount=1000, minimum=990)
+    bumped["arguments"]["unsigned_tx"]["maxPriorityFeePerGas"] = 2_000_000
+    assert Account.recover_transaction(broker.dispatch(bumped)) == wallet.address
+    # One nonce can spend once: the slot is charged at its largest candidate.
+    assert _usage(broker) == {"swap": 1000, "gas": 100000 * 10000000}
+    # The original request still replays its stored signature without a new charge.
+    assert broker.dispatch(swap_request(wallet, nonce=7, amount=1000, minimum=990)) == first
+    assert _usage(broker) == {"swap": 1000, "gas": 100000 * 10000000}
+
+
+def test_signing_failure_frees_swap_nonce_for_identical_retry(custody, monkeypatch):
+    """Review probe HIGH-1: a failed signing attempt must not strand its nonce."""
+    wm, wallet, broker, _ = _swap_broker(custody)
+    calls = {"n": 0}
+    original = wm._load_secret
+
+    def flaky(address):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient keyfile read failure")
+        return original(address)
+
+    monkeypatch.setattr(wm, "_load_secret", flaky)
+    request = swap_request(wallet, nonce=3)
+    with pytest.raises(RuntimeError):
+        broker.dispatch(request)
+    assert _usage(broker) == {"swap": 0, "gas": 0}
+    assert Account.recover_transaction(broker.dispatch(request)) == wallet.address
+    assert _usage(broker) == {"swap": 1000, "gas": 100000 * 10000000}
+
+
+def test_crashed_reservation_is_refunded_on_next_request(custody):
+    """A reservation left by a crash between commit and signing never released a signature."""
+    _, wallet, broker, settings = _swap_broker(custody)
+    request = swap_request(wallet, nonce=4)
+    with pytest.raises(SystemExit):
+        broker.policy.sign("sign", request["arguments"], lambda: (_ for _ in ()).throw(SystemExit()))
+    # SystemExit is not an Exception: the reservation survives as if the process died.
+    assert _usage(broker) == {"swap": 1000, "gas": 100000 * 10000000}
+    restarted = Broker(settings)
+    restarted.dispatch(request)
+    assert _usage(restarted) == {"swap": 1000, "gas": 100000 * 10000000}
+
+
+def test_nonce_replacement_cannot_double_spend_or_exceed_budgets(custody):
+    """Replacements are charged their excess over the slot; caps still bound the total."""
+    _, wallet, broker, _ = _swap_broker(custody, lifetime_amount=1500)
+    broker.dispatch(swap_request(wallet, nonce=0, amount=600, minimum=594))
+    # Repeated replacements at the slot never charge more than the slot's maximum.
+    for amount in (500, 600, 550):
+        broker.dispatch(swap_request(wallet, nonce=0, amount=amount, minimum=amount * 99 // 100 + 1))
+    assert _usage(broker)["swap"] == 600
+    # A larger replacement pays the difference and is checked against the cap.
+    broker.dispatch(swap_request(wallet, nonce=0, amount=1000, minimum=990))
+    assert _usage(broker)["swap"] == 1000
+    broker.dispatch(swap_request(wallet, nonce=1, amount=500, minimum=495))
+    assert _usage(broker)["swap"] == 1500
+    with pytest.raises(ValueError, match="budget"):
+        broker.dispatch(swap_request(wallet, nonce=1, amount=501, minimum=496))
+    with pytest.raises(ValueError, match="budget"):
+        broker.dispatch(swap_request(wallet, nonce=2, amount=1, minimum=1))
+    assert _usage(broker)["swap"] == 1500
+
+
+@pytest.mark.parametrize("field,value", [("max_amount", 999), ("allowed_executors", []),
+                                         ("min_rate_numerator", 100), ("max_fee_per_gas", 9_999_999)])
+def test_nonce_replacement_must_pass_policy_on_its_own(custody, field, value):
+    wm, wallet, broker, settings = _swap_broker(custody)
+    broker.dispatch(swap_request(wallet, nonce=5))
+    settings["policy"]["swap_rules"][0][field] = value
+    with pytest.raises(ValueError):
+        Broker(settings).dispatch(swap_request(wallet, nonce=5, amount=1000, minimum=991))
+    assert _usage(broker) == {"swap": 1000, "gas": 100000 * 10000000}
+
+
+def test_different_payment_at_signed_x402_nonce_is_still_refused(custody):
+    wm, wallet, broker, _ = custody
+    wm.confirm_backup(wallet.address)
+    broker.dispatch(payment(wallet, value=1000))
+    with pytest.raises(ValueError, match="already used this signing nonce"):
+        broker.dispatch(payment(wallet, value=500))
+    assert broker.policy.db.execute("SELECT amount FROM usage").fetchone()[0] == "1000"
 
 
 def test_no_configurable_local_secret_fallback(custody, monkeypatch):

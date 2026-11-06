@@ -311,7 +311,9 @@ def exercise(settings):
     check('exact signing retry returns same signature', rpc('sign', arguments).get('result') == result['result'])
     changed = copy.deepcopy(arguments)
     changed['unsigned_tx']['maxPriorityFeePerGas'] = 2
-    check('changed transaction cannot reuse reserved nonce', rpc('sign', changed).get('ok') is False)
+    replacement = rpc('sign', changed)
+    check('policy-valid replacement at a signed nonce is signed',
+          replacement.get('ok') is True and Account.recover_transaction(replacement['result']).lower() == WALLET.lower())
     for label, updates in (
         ('7702 type', {'type': 4}), ('authorization list', {'authorizationList': []}),
         ('wrong chain', {'chainId': 1}), ('native value on approval', {'value': 1}),
@@ -338,12 +340,16 @@ def exercise(settings):
     request = {'unsigned_tx': swap, 'intent': swap_intent, 'wallet_address': WALLET, 'chain_id': 8453}
     result = rpc('sign', request)
     check('real generic swap signature recovers custody wallet', result.get('ok') is True and Account.recover_transaction(result['result']).lower() == WALLET.lower())
+    bumped = copy.deepcopy(request)
+    bumped['unsigned_tx']['maxPriorityFeePerGas'] = 2
+    check('gas-bumped swap replacement at the same nonce is signed', rpc('sign', bumped).get('ok') is True)
     bad = copy.deepcopy(request)
     bad['unsigned_tx'].update(nonce=2, data='0xdeadbeef')
     check('allowlisted router cannot sign arbitrary calldata', rpc('sign', bad).get('ok') is False)
     second = copy.deepcopy(request)
     second['unsigned_tx']['nonce'] = 2
-    check('second swap fits independent lifetime cap', rpc('sign', second).get('ok') is True)
+    check('second swap fits independent lifetime cap after a same-nonce replacement',
+          rpc('sign', second).get('ok') is True)
     third = copy.deepcopy(request)
     third['unsigned_tx']['nonce'] = 3
     check('third swap exceeds independent lifetime cap', rpc('sign', third).get('ok') is False)

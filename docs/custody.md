@@ -177,9 +177,22 @@ terminal. Approval lasts ten minutes and authorizes that exact proof only.
 
 Every signing request claims protected usage/nonce state before cryptographic
 signing and delivery. Deterministic missing-wallet, backup and argument failures
-occur before reservation. A crash or uncertain signing exception retains its
-reservation. Exact successful retries return the stored signature without
-spending twice; a different request at that nonce is refused. The protected
+occur before reservation. A signing exception, or a crash between reservation
+and storing the signature, means no signature left custody: the reservation is
+refunded and its nonce is free for the next request. Exact successful retries
+return the stored signature without spending twice.
+
+A transaction that was signed but never mined (a broadcast failure, an RPC
+rejection or a mempool drop) does not strand its nonce. A different transaction
+for the same wallet, chain and nonce, such as a re-quoted swap, a gas-bumped
+replacement or a protective exit, is signed when it passes the swap policy on
+its own. Only one transaction per sender nonce can be included on chain, so the
+nonce is charged per budget scope at the largest amount signed there: a
+replacement pays only its excess over that amount, and every charge is checked
+against the lifetime caps. The custody service does not query the chain; a
+replacement for an already mined nonce cannot be included and costs nothing
+beyond its charge. For x402, SIWX and marketplace proofs, a different request at
+a nonce that already released a signature is refused. The protected
 SQLite journal records operation, request digest, policy digest and outcome,
 without plaintext secrets or export tokens. Cached signatures are spendable
 material and remain inside private custody state. This journal is protected

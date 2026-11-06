@@ -32,8 +32,13 @@ class Policy:
             PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS usage (scope TEXT PRIMARY KEY, amount TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS signatures (
-                replay_key TEXT PRIMARY KEY, digest TEXT NOT NULL,
-                policy_digest TEXT NOT NULL, result TEXT);
+                replay_key TEXT NOT NULL, digest TEXT NOT NULL,
+                policy_digest TEXT NOT NULL, result TEXT,
+                PRIMARY KEY (replay_key, digest));
+            CREATE TABLE IF NOT EXISTS slot_claims (
+                replay_key TEXT NOT NULL, scope TEXT NOT NULL,
+                released TEXT NOT NULL, reserved TEXT NOT NULL,
+                PRIMARY KEY (replay_key, scope));
             CREATE TABLE IF NOT EXISTS approvals (digest TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS audit (
                 id INTEGER PRIMARY KEY, at INTEGER NOT NULL, operation TEXT NOT NULL,
@@ -45,13 +50,65 @@ class Policy:
         self.db.execute("INSERT INTO audit(at,operation,digest,outcome,policy_digest) VALUES(?,?,?,?,?)",
                         (int(time.time()), operation, request_digest, outcome, digest(self.settings)))
 
-    def _claim(self, scope: str, amount: int, cap: int):
+    def _add_usage(self, scope: str, delta: int):
         row = self.db.execute("SELECT amount FROM usage WHERE scope=?", (scope,)).fetchone()
-        total = int(row[0]) if row else 0
-        if total + amount > cap:
-            raise ValueError("Custody policy budget exhausted")
+        total = (int(row[0]) if row else 0) + delta
         self.db.execute("INSERT INTO usage VALUES(?,?) ON CONFLICT(scope) DO UPDATE SET amount=excluded.amount",
-                        (scope, str(total + amount)))
+                        (scope, str(total)))
+        return total
+
+    def _slot(self, replay_key: str) -> dict[str, tuple[int, int]]:
+        rows = self.db.execute("SELECT scope, released, reserved FROM slot_claims WHERE replay_key=?", (replay_key,))
+        return {scope: (int(released), int(reserved)) for scope, released, reserved in rows}
+
+    def _set_slot(self, replay_key: str, scope: str, released: int, reserved: int):
+        self.db.execute("INSERT INTO slot_claims VALUES(?,?,?,?) ON CONFLICT(replay_key, scope) DO UPDATE "
+                        "SET released=excluded.released, reserved=excluded.reserved",
+                        (replay_key, scope, str(released), str(reserved)))
+
+    def _release_unsigned(self, replay_key: str):
+        """Refund reservations whose signature never left custody.
+
+        A reservation above ``released`` belongs to an attempt that raised or
+        crashed before its signature was stored and returned, so no signature
+        for it exists outside this process.
+        """
+        for scope, (released, reserved) in self._slot(replay_key).items():
+            if reserved != released:
+                self._add_usage(scope, released - reserved)
+                self._set_slot(replay_key, scope, released, released)
+        self.db.execute("DELETE FROM slot_claims WHERE replay_key=? AND reserved='0'", (replay_key,))
+        self.db.execute("DELETE FROM signatures WHERE replay_key=? AND result IS NULL", (replay_key,))
+
+    def _reserve(self, replay_key: str, claims):
+        """Charge each scope up to the largest amount ever signed or reserved at this slot.
+
+        Only one transaction per sender nonce can be included on chain, so the
+        per-scope maximum over every signature issued at a nonce bounds what
+        that nonce can spend. A replacement charges only its excess over that
+        maximum, and every charge is checked against the lifetime cap.
+        """
+        slot = self._slot(replay_key)
+        for scope, amount, cap in claims:
+            released, reserved = slot.get(scope, (0, 0))
+            target = max(reserved, amount)
+            row = self.db.execute("SELECT amount FROM usage WHERE scope=?", (scope,)).fetchone()
+            if (int(row[0]) if row else 0) + target - reserved > cap:
+                raise ValueError("Custody policy budget exhausted")
+            self._add_usage(scope, target - reserved)
+            self._set_slot(replay_key, scope, released, target)
+            slot[scope] = (released, target)
+
+    def _confirm_released(self, replay_key: str, claims):
+        """Record that a signature covering ``claims`` has left custody."""
+        slot = self._slot(replay_key)
+        for scope, amount, _cap in claims:
+            released, reserved = slot.get(scope, (0, 0))
+            target = max(released, amount)
+            if reserved < target:
+                self._add_usage(scope, target - reserved)
+                reserved = target
+            self._set_slot(replay_key, scope, target, reserved)
 
     def _swap(self, args):
         from src.services.transaction_intent import intent_from_dict, validate_transaction
@@ -91,12 +148,12 @@ class Policy:
                 or integer(tx.get("value", 0)) > integer(rule.get("max_native_value", 0))):
             raise ValueError("Swap violates custody gas or native-value policy")
         scope = f"{kind}:{args['wallet_address'].lower()}:{requested['chain_id']}:{token.lower()}:{router.lower()}"
-        self._claim(scope, amount, integer(rule["lifetime_amount"], minimum=1))
-        self._claim(f"gas:{args['wallet_address'].lower()}:{requested['chain_id']}",
-                    gas * fee, integer(rule["lifetime_total_fee_wei"], minimum=1))
-        return f"tx:{args['wallet_address'].lower()}:{tx['chainId']}:{tx['nonce']}"
+        claims = [(scope, amount, integer(rule["lifetime_amount"], minimum=1)),
+                  (f"gas:{args['wallet_address'].lower()}:{requested['chain_id']}",
+                   gas * fee, integer(rule["lifetime_total_fee_wei"], minimum=1))]
+        return f"tx:{args['wallet_address'].lower()}:{tx['chainId']}:{tx['nonce']}", claims
 
-    def _x402(self, args, *, claim=True):
+    def _x402(self, args):
         from src.services.wallet_manager import _validate_x402_authorization
 
         payee, value, chain_id = _validate_x402_authorization(
@@ -111,16 +168,16 @@ class Policy:
                 or message["validAfter"] > now or message["validBefore"] <= now
                 or message["validBefore"] - now > integer(rule.get("max_validity_seconds", 0))):
             raise ValueError("Payment violates independent custody policy")
-        if claim:
-            self._claim("x402", value, integer(rule.get("lifetime_micro_usd", 0)))
+        claims = [("x402", value, integer(rule.get("lifetime_micro_usd", 0)))]
         nonce = message["nonce"]
         if isinstance(nonce, str):
             nonce = nonce.removeprefix("0x").lower()
         else:
             nonce = bytes(nonce).hex()
-        return f"x402:{args['wallet_address'].lower()}:{chain_id}:{nonce}"
+        return f"x402:{args['wallet_address'].lower()}:{chain_id}:{nonce}", claims
 
     def authorize(self, operation, args):
+        """Validate against policy; return the replay key and its budget claims."""
         if operation == "sign":
             return self._swap(args)
         if operation == "sign_x402_authorization":
@@ -137,7 +194,7 @@ class Policy:
                     or args["chain"] not in self.settings.get("identity_chains", [])
                     or args["wallet_address"].lower() not in {wallet.lower() for wallet in self.settings.get("identity_wallets", [])}):
                 raise ValueError("Identity destination is not authorized by custody policy")
-            return "siwx:" + digest(args)
+            return "siwx:" + digest(args), []
         if operation == "sign_marketplace_proof":
             from src.services.wallet_manager import _validate_marketplace_proof
 
@@ -147,22 +204,34 @@ class Policy:
             if not approved or approved[0] < int(time.time()) - 600:
                 raise ValueError("Marketplace proof requires an exact, recent human approval")
             self.db.execute("DELETE FROM approvals WHERE digest=?", (request_digest,))
-            return "marketplace:" + request_digest
+            return "marketplace:" + request_digest, []
         raise ValueError("Unknown signing operation")
 
     def sign(self, operation: str, args: dict, sign_function):
+        """Reserve, sign and journal one request.
+
+        - An exact retry under unchanged policy returns the stored signature.
+        - A reservation whose signing raised or never completed is refunded and
+          its slot freed, because its signature never left custody.
+        - A different transaction at a ``tx:`` nonce slot is allowed when it
+          passes policy on its own; the slot is charged per scope at the
+          maximum of everything signed there (see ``_reserve``).
+        - A different x402, SIWX or marketplace request at a slot that already
+          released a signature is refused.
+        """
         request_digest = digest({"operation": operation, "arguments": args})
+        policy_digest = digest(self.settings)
         self.db.execute("BEGIN IMMEDIATE")
         try:
             # Exact retries return the protected stored signature and never reserve twice.
             previous = self.db.execute("SELECT result FROM signatures WHERE digest=? AND policy_digest=? AND result IS NOT NULL",
-                                       (request_digest, digest(self.settings))).fetchone()
+                                       (request_digest, policy_digest)).fetchone()
             if previous:
                 # A cached signature can still be spendable. Recheck time-bound
                 # proof/payment validity without claiming another budget unit or
                 # consuming the already used human marketplace approval.
                 if operation == "sign_x402_authorization":
-                    self._x402(args, claim=False)
+                    self._x402(args)
                 elif operation == "sign_siwx_message":
                     self.authorize(operation, args)
                 elif operation == "sign_marketplace_proof":
@@ -171,14 +240,17 @@ class Policy:
                 self._record(operation, request_digest, "replayed")
                 self.db.commit()
                 return json.loads(previous[0])
-            replay_key = self.authorize(operation, args)
-            previous = self.db.execute("SELECT digest FROM signatures WHERE replay_key=?", (replay_key,)).fetchone()
-            if previous:
-                raise ValueError("A different or uncertain request already used this signing nonce")
-            self.db.execute("INSERT INTO signatures(replay_key,digest,policy_digest) VALUES(?,?,?)",
-                            (replay_key, request_digest, digest(self.settings)))
-            self._record(operation, request_digest, "reserved")
-            # Commit BEFORE signing: a crash/exception after signing must not release budget.
+            replay_key, claims = self.authorize(operation, args)
+            self._release_unsigned(replay_key)
+            other = self.db.execute("SELECT 1 FROM signatures WHERE replay_key=? AND digest<>? AND result IS NOT NULL",
+                                    (replay_key, request_digest)).fetchone()
+            if other and not replay_key.startswith("tx:"):
+                raise ValueError("A different request already used this signing nonce")
+            self._reserve(replay_key, claims)
+            self.db.execute("INSERT OR REPLACE INTO signatures(replay_key,digest,policy_digest,result) VALUES(?,?,?,NULL)",
+                            (replay_key, request_digest, policy_digest))
+            self._record(operation, request_digest, "replacement_reserved" if other else "reserved")
+            # Commit BEFORE signing: a crash after signing must not release budget.
             self.db.commit()
         except Exception:
             self.db.rollback()
@@ -187,11 +259,16 @@ class Policy:
             raise
         try:
             result = sign_function()
-            self.db.execute("UPDATE signatures SET result=? WHERE replay_key=?", (canonical(result), replay_key))
-            self._record(operation, request_digest, "signed")
-            self.db.commit()
-            return result
         except Exception:
-            self._record(operation, request_digest, "failed_reserved")
+            self.db.execute("BEGIN IMMEDIATE")
+            self._release_unsigned(replay_key)
+            self._record(operation, request_digest, "released_unsigned")
             self.db.commit()
             raise
+        self.db.execute("BEGIN IMMEDIATE")
+        self.db.execute("UPDATE signatures SET result=? WHERE replay_key=? AND digest=?",
+                        (canonical(result), replay_key, request_digest))
+        self._confirm_released(replay_key, claims)
+        self._record(operation, request_digest, "signed")
+        self.db.commit()
+        return result
