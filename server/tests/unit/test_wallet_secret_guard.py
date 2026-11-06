@@ -63,21 +63,81 @@ def test_nested_shell_mcp_and_error_results_are_blocked_without_echo(client, sec
 @pytest.mark.parametrize('value', [
     {'tx_hash': HEX}, {'transactionHash': HEX}, {'block_hash': HEX}, {'sha256': ZERO},
     {'content': [{'type': 'text', 'text': json.dumps({'tx_hash': HEX})}]},
-    {'stdout': 'Transaction hash: ' + HEX},
     {'address': '0x' + '0' * 40}, {'message': 'Show my wallet balance and trading status.'},
 ])
-def test_public_hashes_addresses_and_prose_pass(value):
+def test_public_hash_fields_pass_structured_mcp_results(value):
     for client in ('claude', 'codex'):
-        result = invoke(client, 'PostToolUse', tool_response=value)
+        result = invoke(client, 'PostToolUse', tool_name='mcp__mangrove-agent__get_order', tool_response=value)
         assert result.returncode == 0
         assert result.stdout == result.stderr == ''
 
 
+@pytest.mark.parametrize('value', [
+    {'stdout': 'Transaction hash: ' + HEX, 'stderr': ''},
+    {'stdout': 'done\n  tx_hash:\t' + HEX + '\r\nnext line'},
+    {'stdout': 'Show my wallet balance and trading status.'},
+])
+def test_labelled_hash_lines_and_prose_pass_shell_output(value):
+    result = invoke('claude', 'PostToolUse', tool_name='Bash', tool_response=value)
+    assert result.stdout == result.stderr == ''
+
+
+@pytest.mark.parametrize('value', [
+    {'tx_hash': HEX},
+    {'stdout': json.dumps({'tx_hash': HEX})},
+    {'sha256': ZERO, 'stdout': ''},
+])
+def test_public_hash_field_names_do_not_exempt_shell_output(value):
+    result = invoke('claude', 'PostToolUse', tool_name='Bash', tool_response=value)
+    assert json.loads(result.stdout)['decision'] == 'block'
+    assert HEX not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('text', [
+    'tx_hash:\n' + HEX,
+    'tx_hash:\n\n' + HEX,
+    'digest =\n   ' + ZERO,
+])
+def test_hash_line_exemption_does_not_span_lines(text):
+    result = invoke('claude', 'PostToolUse', tool_name='Bash', tool_response={'stdout': text})
+    assert json.loads(result.stdout)['decision'] == 'block'
+
+
 def test_public_hash_does_not_hide_separate_secret():
     value = {'tx_hash': HEX, 'private_key': ZERO}
-    clean, hit = detector.scan_hook_content(value, output=True)
+    clean, hit = detector.scan_hook_content(value, output=True, structured=True)
     assert hit
     assert clean == {'tx_hash': HEX, 'private_key': detector.HOOK_REDACTED}
+
+
+@pytest.mark.parametrize('text', [
+    '{"tx_hash": "' + HEX + '", "tx_hash": "0x01"}',
+    '{"a": {"tx_hash": "' + HEX + '", "tx_hash": "none"}}',
+])
+@pytest.mark.parametrize('structured', [True, False])
+def test_duplicate_json_keys_cannot_hide_a_value(text, structured):
+    _, hit = detector.scan_hook_content({'text': text}, output=True, structured=structured)
+    assert hit
+
+
+def test_json_text_is_also_scanned_raw_with_only_exempted_values_removed(monkeypatch):
+    text = json.dumps({'tx_hash': HEX, 'note': 'key ' + ZERO.replace('0', '1')})
+    # Simulate a parser that drops a member: the raw scan must still find it.
+    monkeypatch.setattr(detector, '_decode_json', lambda raw: {'tx_hash': HEX} if raw == text else None)
+    _, hit = detector.scan_hook_content({'text': text}, output=True, structured=True)
+    assert hit
+    monkeypatch.undo()
+    # The exempted value itself is removed before the raw scan.
+    _, hit = detector.scan_hook_content({'text': json.dumps({'tx_hash': HEX})}, output=True, structured=True)
+    assert not hit
+
+
+@pytest.mark.parametrize('number', [int('1' * 64), int('9' * 64)])
+def test_numeric_leaves_are_scanned(number):
+    _, hit = detector.scan_hook_content({'value': number}, output=True, structured=True)
+    assert hit
+    _, hit = detector.scan_hook_content({'value': 1_000_000, 'ok': True, 'none': None}, output=False)
+    assert not hit
 
 
 @pytest.mark.parametrize('client', ['claude', 'codex'])
@@ -85,10 +145,12 @@ def test_public_hash_does_not_hide_separate_secret():
     {'url': 'https://basescan.org/tx/' + HEX},
     {'open': [{'ref_id': 'https://sepolia.basescan.org/tx/' + HEX}]},
     {'url': 'https://etherscan.io/tx/' + HEX},
-    {'jsonrpc': '2.0', 'id': 1, 'method': 'eth_getTransactionReceipt', 'params': [HEX]},
-    {'jsonrpc': '2.0', 'method': 'eth_getTransactionByHash', 'params': [HEX]},
-    {'body': json.dumps({'jsonrpc': '2.0', 'id': 1,
-                         'method': 'eth_getTransactionReceipt', 'params': [HEX]})},
+    {'url': 'https://mainnet.base.org', 'json': {'jsonrpc': '2.0', 'id': 1,
+                                                'method': 'eth_getTransactionReceipt', 'params': [HEX]}},
+    {'endpoint': 'https://sepolia.base.org/', 'json': {'jsonrpc': '2.0', 'method': 'eth_getTransactionByHash',
+                                                       'params': [HEX]}},
+    {'url': 'https://mainnet.base.org', 'body': json.dumps({'jsonrpc': '2.0', 'id': 1,
+                                                           'method': 'eth_getTransactionReceipt', 'params': [HEX]})},
 ])
 def test_structured_public_transaction_references_pass_pretool(client, arguments):
     result = invoke(client, 'PreToolUse', tool_input=arguments)
@@ -306,3 +368,21 @@ def test_adapter_runs_without_eth_account(tmp_path):
                                 input=json.dumps({'hook_event_name': 'UserPromptSubmit', 'prompt': prompt}),
                                 capture_output=True, text=True, env=env)
         assert result.returncode == status, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('arguments', [
+    {'jsonrpc': '2.0', 'id': 1, 'method': 'eth_getTransactionReceipt', 'params': [HEX]},
+    {'body': json.dumps({'jsonrpc': '2.0', 'method': 'eth_getTransactionReceipt', 'params': [HEX]})},
+    {'url': 'https://attacker.invalid', 'json': {'jsonrpc': '2.0', 'method': 'eth_getTransactionReceipt',
+                                                 'params': [HEX]}},
+    {'url': 'https://mainnet.base.org.attacker.invalid', 'json': {'jsonrpc': '2.0',
+                                                                  'method': 'eth_getTransactionReceipt',
+                                                                  'params': [HEX]}},
+    {'url': 'https://mainnet.base.org/?k=' + HEX, 'json': {'jsonrpc': '2.0', 'method': 'eth_getTransactionReceipt',
+                                                          'params': [HEX]}},
+    {'url': 'http://mainnet.base.org', 'json': {'jsonrpc': '2.0', 'method': 'eth_getTransactionReceipt',
+                                                'params': [HEX]}},
+])
+def test_json_rpc_exemption_requires_an_allowlisted_rpc_host(arguments):
+    result = invoke('claude', 'PreToolUse', tool_name='WebFetch', tool_input=arguments)
+    assert json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'] == 'deny'

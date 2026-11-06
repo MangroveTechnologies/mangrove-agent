@@ -6,10 +6,11 @@ its strict ``scan_hook_content`` rules:
 
 - ``UserPromptSubmit`` and ``PreToolUse``: any secret shape is refused; a 64-hex
   value passes only as an exact explorer transaction link or the hash of an
-  exact JSON-RPC transaction read. ``PreToolUse`` also denies known export
+  exact JSON-RPC transaction read sent to an allowlisted RPC host. ``PreToolUse`` also denies known export
   commands, reveal routes and legacy secret files.
-- ``PostToolUse`` and ``PostToolUseFailure``: the same, plus whole-value
-  public-hash fields and labelled hash lines.
+- ``PostToolUse`` and ``PostToolUseFailure``: the same, plus lines holding
+  only a hash label and one hash; MCP tool results (``mcp__`` tools) also
+  allow whole-value public-hash fields.
 
 The hooks supplement the custody boundary: a host can record tool output
 before a hook runs. Feedback never includes the inspected payload, a matched
@@ -78,7 +79,9 @@ def response(client: str, event: str, payload: dict) -> tuple[dict | None, int]:
                  'hookSpecificOutput': {'hookEventName': event, 'additionalContext': REASON}}, 0) if hit else (None, 0)
     if event != 'PostToolUse':
         raise ValueError('Unsupported hook event')
-    clean, hit = guard.scan_hook_content(payload.get('tool_response', payload), output=True)
+    structured = str(payload.get('tool_name', '')).startswith('mcp__')
+    clean, hit = guard.scan_hook_content(payload.get('tool_response', payload), output=True,
+                                         structured=structured)
     if not hit:
         return None, 0
     if client == 'codex':

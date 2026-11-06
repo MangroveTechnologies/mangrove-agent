@@ -353,18 +353,21 @@ Both adapters call `scan_hook_content` in `server/src/shared/secret_guard.py`,
 the module that holds the MCP boundary's detector, so the shapes and wordlist
 are shared. Hook content is shell, file and prompt text rather than a
 structured MCP payload, so its rules are stricter than the MCP argument rules:
-every string is checked for any 64-hex value (with or without `0x`), any run of
-12 BIP-39 words and any XRPL seed shape, including nested JSON, serialized MCP
-text, structured results, stdout, stderr and errors. Label words in free text,
-such as `tx` or `receipt` before a value, never exempt it. In tool input, a
-64-hex value passes only as an exact HTTPS `/tx/` link in a URL field on a
-configured explorer host, or as the single hash argument of a strict JSON-RPC
-2.0 `eth_getTransactionByHash` or `eth_getTransactionReceipt` request. Tool
-output and errors also allow the whole value of a public transaction, block or
-digest hash field, and a line holding only a hash label and one hash
-(`Transaction hash: 0x...`). A secret-named ancestor removes every exemption.
-Content mislabeled as public data, images, arbitrary encodings and specialized
-tool paths are outside this heuristic.
+every string and number is checked for any 64-hex value (with or without
+`0x`), any run of 12 BIP-39 words and any XRPL seed shape, including nested
+JSON, serialized MCP text, structured results, stdout, stderr and errors. JSON
+text with duplicate keys is scanned as plain text, and other JSON text is also
+scanned raw with exempted values removed. Label words in free text, such as
+`tx` or `receipt` before a value, never exempt it. A 64-hex value passes only
+as an exact HTTPS `/tx/` link in a URL field on a configured explorer host, or
+as the single hash argument of a strict JSON-RPC 2.0 `eth_getTransactionByHash`
+or `eth_getTransactionReceipt` request whose call names `https://mainnet.base.org`
+or `https://sepolia.base.org` in a URL or endpoint field. Tool output and errors
+also allow a line holding only a hash label and one hash
+(`Transaction hash: 0x...`), and MCP tool results also allow the whole value of
+a public transaction, block or digest hash field. A secret-named ancestor
+removes every exemption. Content mislabeled as public data, images, arbitrary
+encodings and specialized tool paths are outside this heuristic.
 
 Pre-tool checks deny known export commands, reveal URLs and custody file access.
 They are not a shell sandbox: renamed scripts, aliases or arbitrary code can
