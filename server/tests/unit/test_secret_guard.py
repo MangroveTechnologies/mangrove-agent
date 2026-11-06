@@ -288,3 +288,12 @@ def test_checksummed_phrase_with_any_separator_is_refused(layout):
 ])
 def test_result_text_with_key_field_and_nearby_key_is_withheld(text):
     assert secret_guard.find_in_result([TextContent(type="text", text=text)]) == secret_guard.EVM_KEY
+
+
+@pytest.mark.parametrize("text", [
+    # The JSON parser keeps the last duplicate key, so the parsed object hides the first value.
+    '{"private_key": "' + FAKE_KEY + '", "private_key": "redacted"}',
+    '{"wallet": {"secret": "' + BARE_KEY + '", "secret": null}}',
+])
+def test_json_text_results_are_also_scanned_as_raw_text(text):
+    assert secret_guard.find_in_result(text) == secret_guard.EVM_KEY
