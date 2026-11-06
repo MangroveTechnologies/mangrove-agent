@@ -81,4 +81,12 @@ jobs:
       - name: Run tests
         env:
           ENVIRONMENT: test
-        run: cd server && pytest tests/ -v
+        run: |
+          # Ubuntu runner home and /tmp can have writable ancestors. Allocate
+          # only a disposable leaf under /opt; production permission checks
+          # remain unchanged and validate the real fixture hierarchy.
+          custody_test_root="$(sudo mktemp -d /opt/mangrove-custody-unit.XXXXXX)"
+          sudo chown "$(id -u):$(id -g)" "$custody_test_root"
+          trap 'sudo rmdir -- "$custody_test_root"' EXIT
+          cd server
+          MANGROVE_CUSTODY_TEST_ROOT="$custody_test_root" pytest tests/ -v

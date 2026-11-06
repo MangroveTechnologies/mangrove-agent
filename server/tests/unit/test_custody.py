@@ -29,10 +29,16 @@ def protected_directory(tmp_path):
     """
     from src.custody.transport import check_ancestors, check_owned_path
 
-    for candidate in (tmp_path, Path.home()):
+    configured = os.environ.get("MANGROVE_CUSTODY_TEST_ROOT")
+    candidates = (Path(configured),) if configured else (tmp_path, Path.home())
+    for candidate in candidates:
+        if not candidate.is_absolute():
+            pytest.fail("MANGROVE_CUSTODY_TEST_ROOT must be an absolute protected directory")
         base = candidate.resolve()
         try:
             check_ancestors(base, allowed_owners={0, os.getuid()})
+            if configured:
+                check_owned_path(base, owner=os.getuid(), private=True)
         except ValueError:
             continue
         with tempfile.TemporaryDirectory(prefix="mangrove-custody-test-", dir=base) as directory:
@@ -41,7 +47,7 @@ def protected_directory(tmp_path):
             check_ancestors(protected, allowed_owners={0, os.getuid()})
             yield protected
         return
-    pytest.fail("Custody tests require a protected user-owned ancestor without extended ACLs")
+    pytest.fail("Custody tests require a protected user-owned ancestor without extended ACLs; CI must provide MANGROVE_CUSTODY_TEST_ROOT under a protected root-owned parent")
 
 
 @pytest.fixture
