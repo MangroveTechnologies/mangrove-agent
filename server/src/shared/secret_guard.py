@@ -28,15 +28,12 @@ Arguments (``find_in_arguments``):
    BIP-39 words (no checksum needed), or an XRPL seed. A vault token is a
    22-character URL-safe handle, so a key-shaped one is a pasted secret.
 2. Any string is refused when it holds an XRPL seed, or a 12, 15, 18, 21 or
-   24-word window of BIP-39 words with a valid BIP-39 checksum. Words count
-   as consecutive when only whitespace or list numbers (``1.``, ``2)``)
-   separate them; other punctuation ends a run. The checksum and the
-   punctuation rule keep strategy prose made of wordlist words
-   (``price above average, volume above average``) from being refused. An
-   unpunctuated run of wordlist words still has about a 1 in 16 chance per
-   12-word window of passing the checksum. A phrase written with commas
-   between its words is not detected here; it is detected in a key-named
-   field (rule 1).
+   24-word window of BIP-39 words with a valid BIP-39 checksum. Words are the
+   letter runs of the text, so a phrase separated by spaces, commas, hyphens,
+   newlines or list numbers (``1. word 2. word``) is found. The checksum
+   keeps strategy prose made of wordlist words (``price above average``) from
+   being refused; such a run still has about a 1 in 16 chance per 12-word
+   window of passing it.
 3. Any other string is refused when it holds 64 hex characters, with or
    without ``0x``, embedded in text (``"import my wallet 0x..."``) or anywhere
    in a free-text field (``PROSE_FIELD_NAMES``, such as ``query`` or
@@ -50,9 +47,10 @@ Arguments (``find_in_arguments``):
 
 Results (``find_in_result``): only key-named fields count, because results
 routinely carry transaction hashes. JSON carried as text content is parsed
-and walked. Other text is withheld when a quoted key-named field name is
-followed directly by a key-shaped value, or when it appears in the same text
-as a 12-word run or an XRPL seed.
+and walked. Other text that names a key field (quoted with ``"`` or ``'``) is
+withheld when the field's value is key-shaped, when a ``0x`` key appears
+anywhere in it without a hash label, or when it also holds a 12-word run or
+an XRPL seed.
 
 Differences from the Claude hook: the hook matches only ``0x`` keys and exact
 field names, and treats any 12-word run as a phrase. ``find_in_text`` is the
@@ -85,9 +83,9 @@ _XRPL_SEED_RE = re.compile(
 _WORD_RE = re.compile(r"[a-z]+")
 _NAME_RE = re.compile(r"[A-Za-z0-9_]+")
 _NORMALIZE_RE = re.compile(r"[^a-z0-9]")
-_QUOTED_FIELD_RE = re.compile(r'"([A-Za-z0-9_\-]{1,64})"\s*:\s*')
-_LIST_NUMBER_RE = re.compile(r"\d{1,2}[.):]?")
-_PHRASE_CHUNK_RE = re.compile(r"([\"'(\[]*)([a-z]+)([.,;:!?\"')\]]*)")
+_QUOTED_FIELD_RE = re.compile(r"""["']([A-Za-z0-9_\-]{1,64})["']\s*[:=]""")
+_VALUE_PREFIX_RE = re.compile(r"""[\s"'{\[]*""")
+_PREFIXED_KEY_RE = re.compile(r"(?<![0-9A-Za-z])0[xX][0-9a-fA-F]{64}(?![0-9A-Za-z])")
 _MNEMONIC_RUN = 12
 _MNEMONIC_LENGTHS = (12, 15, 18, 21, 24)
 
@@ -193,42 +191,13 @@ def has_mnemonic(text: str) -> bool:
     return any(len(run) >= _MNEMONIC_RUN for run in _word_runs(text))
 
 
-def _phrase_runs(text: str) -> list[list[str]]:
-    """Runs of whitespace-separated BIP-39 words, broken by punctuation.
-
-    A list number such as ``1.`` or ``12)`` neither joins nor breaks a run. A
-    word with leading punctuation starts a new run, and a word with trailing
-    punctuation ends one, so ``"... above average, volume ..."`` is two runs.
-    """
-    words = bip39_words()
-    runs: list[list[str]] = []
-    run: list[str] = []
-
-    def close() -> None:
-        nonlocal run
-        if run:
-            runs.append(run)
-        run = []
-
-    for chunk in text.lower().split():
-        if _LIST_NUMBER_RE.fullmatch(chunk):
-            continue
-        match = _PHRASE_CHUNK_RE.fullmatch(chunk)
-        if not match or match.group(2) not in words:
-            close()
-            continue
-        if match.group(1):
-            close()
-        run.append(match.group(2))
-        if match.group(3):
-            close()
-    close()
-    return runs
-
-
 def has_valid_mnemonic(text: str) -> bool:
-    """A 12, 15, 18, 21 or 24-word window of BIP-39 words with a valid checksum."""
-    for run in _phrase_runs(text):
+    """A 12, 15, 18, 21 or 24-word window of BIP-39 words with a valid checksum.
+
+    Words are the letter runs of the lowercased text, so spaces, commas,
+    hyphens, newlines and list numbers all separate words without ending a run.
+    """
+    for run in _word_runs(text):
         for length in _MNEMONIC_LENGTHS:
             for start in range(len(run) - length + 1):
                 if bip39_checksum_valid(run[start:start + length]):
@@ -287,17 +256,27 @@ def _free_text_hex_hit(text: str, field: str | None) -> str | None:
 
 
 def _contextual_text_hit(text: str, *, arguments: bool) -> str | None:
-    """Non-JSON text with a quoted key-named field: a key directly after the
-    field name, or a 12-word run or XRPL seed anywhere in the same text."""
+    """Non-JSON text that names a key field (quoted with ``"`` or ``'``).
+
+    Refused when the value after the field name, past whitespace, quotes and
+    opening ``{`` or ``[``, is key-shaped (with or without ``0x``); when a
+    ``0x`` key appears anywhere in the text and is not labelled as a hash; or
+    when the text also holds a 12-word run or an XRPL seed.
+    """
     named = False
     for match in _QUOTED_FIELD_RE.finditer(text):
         if not is_key_field(match.group(1), arguments=arguments):
             continue
         named = True
-        if _HEX_KEY_RE.match(text[match.end():].lstrip('"')):
+        rest = text[match.end():]
+        prefix = _VALUE_PREFIX_RE.match(rest)
+        if _HEX_KEY_RE.match(rest, prefix.end() if prefix else 0):
             return EVM_KEY
     if not named:
         return None
+    for match in _PREFIXED_KEY_RE.finditer(text):
+        if not _hash_labelled(text, match.start()):
+            return EVM_KEY
     if _XRPL_SEED_RE.search(text):
         return XRPL_SEED
     if has_mnemonic(text):

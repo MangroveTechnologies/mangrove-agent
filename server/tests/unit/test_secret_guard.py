@@ -258,9 +258,33 @@ def test_checksummed_phrase_layouts_are_refused(layout):
     assert secret_guard.find_in_arguments({"query": layout(words)}) == secret_guard.MNEMONIC
 
 
-def test_punctuation_ends_a_word_run():
-    words = REAL_PHRASE.split()
-    split = " ".join(words[:6]) + ". " + " ".join(words[6:])
-    assert secret_guard.find_in_arguments({"query": split}) is None
-    # In a key-named field any 12-word run counts, punctuation or not.
-    assert secret_guard.find_in_arguments({"mnemonic": ", ".join(words)}) == secret_guard.MNEMONIC
+def test_key_named_field_counts_any_word_run_without_checksum():
+    assert secret_guard.find_in_arguments({"mnemonic": ", ".join(FAKE_PHRASE.split())}) == secret_guard.MNEMONIC
+
+
+# --- Separators and result-text fallback ------------------------------------
+
+@pytest.mark.parametrize("layout", [
+    lambda words: ",".join(words),
+    lambda words: ", ".join(words),
+    lambda words: "-".join(words),
+    lambda words: " ".join(f"{i}. {w}" for i, w in enumerate(words, 1)),
+    lambda words: "\n".join(f"{i}) {w}," for i, w in enumerate(words, 1)),
+    lambda words: " ".join(words[:6]) + ". " + " ".join(words[6:]),
+    lambda words: "; ".join(w.upper() for w in words),
+])
+def test_checksummed_phrase_with_any_separator_is_refused(layout):
+    words = _real_phrase(12).split()
+    assert secret_guard.find_in_arguments({"query": layout(words)}) == secret_guard.MNEMONIC
+
+
+@pytest.mark.parametrize("text", [
+    '{"private_key": {"value": "' + FAKE_KEY + '"}',            # truncated JSON, nested object
+    '"private_key": [ "' + FAKE_KEY + '" ]',
+    "\"secret\": '" + FAKE_KEY + "'",
+    "'private_key': '" + FAKE_KEY + "'",
+    '"privateKey":\n    "' + BARE_KEY + '"',
+    '"private_key": "redacted"; later the value ' + FAKE_KEY + ' was logged',
+])
+def test_result_text_with_key_field_and_nearby_key_is_withheld(text):
+    assert secret_guard.find_in_result([TextContent(type="text", text=text)]) == secret_guard.EVM_KEY
