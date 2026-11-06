@@ -193,16 +193,29 @@ Grok, Grok Bot and Perplexity, the restricted launcher and remote MCP clients.
 
 | Control | Where it is enforced | Applies to |
 |---|---|---|
-| Refuse a wallet secret in tool arguments: an EVM private key in a key-named field or in `vault_token`, or a BIP-39 recovery phrase or XRPL family seed anywhere. Nothing is sent to the tool or upstream. Error code `SECRET_IN_ARGUMENTS`. | MCP call boundary, `PricedFastMCP.call_tool` in `server/src/mcp/server.py`, using `server/src/shared/secret_guard.py` | Every MCP tool call, local or forwarded to MangroveAI or Markets |
+| Refuse a wallet secret in tool arguments: an EVM private key (64 hex characters, with or without `0x`) in a key-named field, in `vault_token` or inside free text; a BIP-39 recovery phrase with a valid checksum anywhere; or an XRPL family seed anywhere. Nothing is sent to the tool or upstream. Error code `SECRET_IN_ARGUMENTS`. | MCP call boundary, `PricedFastMCP.call_tool` in `server/src/mcp/server.py`, using `server/src/shared/secret_guard.py` | Every MCP tool call, local or forwarded to MangroveAI or Markets |
 | Withhold a tool result that carries a key, recovery phrase or seed in a key-named field. Error code `SECRET_IN_RESULT`; the operation may already have run. | Same boundary | Every MCP tool result |
-| Refuse a live swap when the wallet holds 0 of the input token on that chain, before any quote or approval is signed. Error code `WALLET_INPUT_BALANCE_EMPTY`. | `dex_service.require_input_balance`, called from the shared live swap path in `order_executor` | MCP `execute_swap`, REST `/dex/swap` and live strategy ticks |
+| Refuse a live swap when the wallet holds 0 of the input token on that chain, before any quote or approval is signed. Error code `WALLET_INPUT_BALANCE_EMPTY`. | `dex_service.require_input_balance`, called from the live swap path in `order_executor` and from `dex_confirmed.execute` for live strategy entries | MCP `execute_swap`, REST `/dex/swap` and live strategy entries. Live strategy exits are not checked, so a stale zero reading cannot hold back a protective exit. |
 
-The detection rules match `block-wallet-secrets.sh`, and a test keeps the BIP-39
-wordlist identical to the hook's. Transaction hashes have the same shape as a
-private key, so a bare `0x` plus 64 hex value counts as a secret only in a
-key-named field. The balance check fails open, like the hook it replaces: if the
-balance cannot be read, or the token is a symbol other than USDC, the swap
-continues to its own errors.
+Field names are compared after lowercasing and removing `_` and `-`, so
+`privateKey`, `PRIVATE_KEY` and `private_key` are the same key-named field.
+Transaction hashes, definition and config hashes, order ids and sha256 digests
+have the same shape as a private key. A 64-hex value outside a key-named field
+therefore passes when its field is named for a hash or id (`tx_hash`,
+`definition_hash`, `order_id`), when it is the whole value of a field that is not
+free text, or when a word such as `tx`, `transaction` or `hash` comes just before
+it. In free-text fields such as `query` and `description`, any other 64-hex
+value is refused. A run of wordlist words counts as a recovery phrase outside a
+key-named field only when it has a valid BIP-39 checksum, so strategy prose made
+of wordlist words passes. The full rules are in the `secret_guard.py` module
+docstring. A test keeps the BIP-39 wordlist identical to the hook's.
+
+The balance check fails open, like the hook it replaces: if the balance cannot
+be read, or the token is a symbol other than USDC, the swap continues to its own
+errors. Markets answers the balance read with `402 Payment Required` when no
+Mangrove API key is configured, so without a key the check never blocks. It does
+not check native gas: a wallet holding USDC and no ETH passes, and the approval
+or swap then fails at broadcast.
 
 Some guards cannot be enforced from this repository, because the agent sees
 only tool calls:

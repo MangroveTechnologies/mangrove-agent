@@ -15,8 +15,8 @@ the agent's MCP server as native tools. It uses the command client instead, as
 described in [Mangrove agent across AI clients](../clients.md). Claude hooks and
 the restricted launcher's permissions do not run on this host. The agent itself
 still refuses wallet secrets in tool arguments, withholds them from tool results
-and refuses a live swap from a wallet with no input-token balance, because those
-checks run in the agent for every client. See
+and refuses a live swap or strategy entry from a wallet with no input-token
+balance, because those checks run in the agent for every client. See
 [guardrails across clients](../clients.md#guardrails-across-clients).
 
 ## First run
