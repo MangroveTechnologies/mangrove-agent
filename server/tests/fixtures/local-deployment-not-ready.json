@@ -1,0 +1,125 @@
+{
+  "activation_blocker": "A passing backtest and inactive server strategy are required",
+  "activation_ready": false,
+  "asset_class": "crypto",
+  "contract_version": 1,
+  "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "name": "Synthetic local fixture",
+  "owner": {
+    "org_id": "33333333-4444-5555-6666-777777777777",
+    "user_id": "22222222-3333-4444-5555-666666666666"
+  },
+  "snapshot": {
+    "asset": "BTC",
+    "base_token": "BTC",
+    "entry": [
+      {
+        "name": "rsi_oversold",
+        "params": {
+          "threshold": 30,
+          "window": 14
+        },
+        "signal_type": "TRIGGER",
+        "timeframe": "1h"
+      }
+    ],
+    "execution_config": {
+      "atr_period": 14,
+      "circuit_breaker": {
+        "consecutive_loss_limit": 4,
+        "drawdown_pause_bars": 72,
+        "loss_amount_pct": 0.06,
+        "max_consecutive_pauses": 3,
+        "pause_bars": 36,
+        "pause_max_days": 14,
+        "pause_min_hours": 24,
+        "resume_size_fraction": 0.5,
+        "resume_trades": 3
+      },
+      "cooldown_bars": 24,
+      "cooldown_config": {
+        "15m": {
+          "long_cooldown_bars": 320,
+          "long_loss_limit": 6,
+          "long_window_bars": 320,
+          "short_cooldown_bars": 120,
+          "short_loss_limit": 4,
+          "short_window_bars": 120
+        },
+        "1d": {
+          "long_cooldown_bars": 60,
+          "long_loss_limit": 6,
+          "long_window_bars": 60,
+          "short_cooldown_bars": 20,
+          "short_loss_limit": 4,
+          "short_window_bars": 20
+        },
+        "1h": {
+          "long_cooldown_bars": 144,
+          "long_loss_limit": 6,
+          "long_window_bars": 144,
+          "short_cooldown_bars": 48,
+          "short_loss_limit": 4,
+          "short_window_bars": 48
+        },
+        "30m": {
+          "long_cooldown_bars": 220,
+          "long_loss_limit": 6,
+          "long_window_bars": 220,
+          "short_cooldown_bars": 80,
+          "short_loss_limit": 4,
+          "short_window_bars": 80
+        },
+        "4h": {
+          "long_cooldown_bars": 96,
+          "long_loss_limit": 6,
+          "long_window_bars": 96,
+          "short_cooldown_bars": 32,
+          "short_loss_limit": 4,
+          "short_window_bars": 32
+        },
+        "5m": {
+          "long_cooldown_bars": 480,
+          "long_loss_limit": 6,
+          "long_window_bars": 480,
+          "short_cooldown_bars": 180,
+          "short_loss_limit": 4,
+          "short_window_bars": 180
+        }
+      },
+      "cooldown_model": "trades",
+      "daily_momentum_limit": 3,
+      "enable_volatility_adjustment": false,
+      "exit_on_loss_after_bars": 1000,
+      "exit_on_profit_after_bars": 1000,
+      "initial_balance": 10000,
+      "max_drawdown_halt_limit": 0.2,
+      "max_drawdown_limit": 0.2,
+      "max_hold_bars": 1000,
+      "max_hold_time_hours": null,
+      "max_open_positions": 10,
+      "max_risk_per_trade": 0.01,
+      "max_trade_amount": 10000000,
+      "max_trades_per_day": 50,
+      "max_units_per_trade": 1000000,
+      "min_balance_threshold": 0.1,
+      "min_stop_distance_pct": 0.005,
+      "min_trade_amount": 25,
+      "position_size_calc": "v2",
+      "profit_threshold_pct": 0.05,
+      "reward_factor": 2,
+      "stop_model": "atr_width_dial",
+      "target_volatility": 0.1,
+      "volatility_mode": "stddev",
+      "volatility_tolerance": 0.5,
+      "volatility_window": 24,
+      "weekly_momentum_limit": 3
+    },
+    "exit": [],
+    "market_data_venue": "KRAKEN",
+    "position_size_calc": "v2",
+    "quote_token": "USD"
+  },
+  "strategy_id": "11111111-2222-3333-4444-555555555555",
+  "timeframe": "1h"
+}
