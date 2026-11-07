@@ -624,7 +624,9 @@ def test_hook_blocks_xrpl_seeds(mode, algorithm):
     seed = Wallet.create(algorithm=CryptoAlgorithm(algorithm)).seed
     hook = Path(__file__).resolve().parents[3] / '.claude/hooks/block-wallet-secrets.sh'
     result = subprocess.run(['bash', str(hook), '--mode', mode], input=json.dumps({'seed': seed}), text=True, capture_output=True)
-    assert result.returncode == 2
+    assert result.returncode == (2 if mode == 'user' else 0)
+    if mode == 'tool':
+        assert json.loads(result.stdout)['decision'] == 'block'
     assert seed not in result.stdout + result.stderr
 
 

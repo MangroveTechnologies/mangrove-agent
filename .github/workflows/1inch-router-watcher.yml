@@ -51,7 +51,7 @@ jobs:
             const { data: issue } = await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: 'New 1inch router version detected — update _ONEINCH_ROUTERS',
+              title: 'New 1inch router version detected: review transaction_intent.py routers',
               body,
               labels: ['audit-finding'],
             });
