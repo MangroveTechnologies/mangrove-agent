@@ -500,6 +500,7 @@ an MCP tool:
 | `STRATEGY_NOT_FOUND` | 404 | No local record with that ID |
 | `STRATEGY_INVALID_STATUS_TRANSITION` | 400 | Illegal lifecycle move, or an unsupported combination such as a Robinhood-bound strategy going to `paper` |
 | `ALLOCATION_INSUFFICIENT` | 400 | Allocation amount is not greater than 0 |
+| `WALLET_INPUT_BALANCE_EMPTY` | 400 | A live swap or live strategy entry was refused before quoting or approval because the wallet holds 0 of the input token on that chain |
 | `CEX_CREDENTIALS_MISSING` | 409 | A Kraken tool was used before Kraken was connected |
 | `SDK_ERROR` | 502 | An upstream call failed |
 | `UPSTREAM_AUTHENTICATION_FAILED` | 401 | An upstream service rejected the configured credential |

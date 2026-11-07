@@ -15,6 +15,19 @@ These hooks are **harness-enforced guardrails**: Claude Code runs them automatic
 
 All three live hooks are **blockers** (they `exit 2` to stop the action). There are no reminder-only hooks registered in this repo's `settings.json`; if one is ever added (a hook that only prints to stdout and `exit 0`s), document it here as a **reminder** and do **not** give it a `block_footer`.
 
+## Server-side equivalents (every client)
+
+These hooks run only in Claude Code. Hosts that use the command client (`scripts/local_mcp_bridge.py`: Codex, Grok, Grok Bot, Perplexity) or another MCP client get none of them, so the enforceable parts also run inside the agent. See [guardrails across clients](../../docs/clients.md#guardrails-across-clients).
+
+| Hook | Agent-side equivalent | Still host-only |
+|---|---|---|
+| `block-wallet-secrets.sh --mode user` | `PricedFastMCP.call_tool` ([`server/src/mcp/server.py`](../../server/src/mcp/server.py)) refuses a secret in any tool's **arguments** (`SECRET_IN_ARGUMENTS`) before the tool or upstream runs, using [`server/src/shared/secret_guard.py`](../../server/src/shared/secret_guard.py). | Blocking the **prompt itself**: text typed into a host chat reaches the host's model and transcript before any tool runs. |
+| `block-wallet-secrets.sh --mode tool` | The same boundary withholds a Mangrove tool **result** that has a secret in a key-named field (`SECRET_IN_RESULT`). | Output of non-Mangrove tools (shell, file reads), which never passes through the agent. |
+| `preflight-swap.sh` | `dex_service.require_input_balance`, called from the live swap path and from live strategy entries (`dex_confirmed.execute`), refuses a zero input-token balance (`WALLET_INPUT_BALANCE_EMPTY`) before quoting or approval. It also covers the `USDC` symbol, which the hook skips, and REST swaps. Live strategy exits are not checked. | Nothing. The hook is now redundant defense in depth; removing it is a maintainer decision. |
+| `block-main-commits.sh` | None. Git runs in the host shell, not through the agent. | All of it. Use GitHub branch protection for an every-client guarantee. |
+
+`secret_guard.py` starts from the hook's shapes and key-named fields and is stricter in two ways: it matches a 64-hex key with or without `0x`, and it compares field names after lowercasing and removing `_` and `-` (so `privateKey` is key-named). Outside key-named fields it refuses a 64-hex value inside free text unless the field or a preceding word marks it as a hash, and it counts a word run as a recovery phrase only when the BIP-39 checksum is valid. Its module docstring states the full rules. It reads the BIP-39 list from `eth_account` so it works in the Docker image, which excludes `.claude/`. [`server/tests/unit/test_secret_guard.py`](../../server/tests/unit/test_secret_guard.py) checks that the list matches `bip39-english.txt` and that the strict scan agrees with the hook's user mode on `0x` keys, phrases and seeds. If you change the hook's patterns, review `secret_guard.py` in the same pull request.
+
 ## Related: the code-level signing guard (not a hook)
 
 Beyond these Claude-side hooks, there is a **hard signing guard in the agent itself**: [`server/src/services/wallet_manager.py`](../../server/src/services/wallet_manager.py) (`_validate_sign_target`). Invariant: the agent signs **only** a 1inch `AggregationRouter` call or the ERC-20 `approve()` whose spender is a 1inch router — any other transaction shape (arbitrary EOA transfers, non-1inch contracts) is **refused at sign time**, on every chain. `preflight-swap.sh` is the Claude-side companion: it gates *when* a swap is attempted (balance present); the signing guard restricts *what* may ever be signed.

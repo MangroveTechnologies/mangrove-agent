@@ -184,6 +184,56 @@ cleanup of the installing command. A hosted execution environment still controls
 the lifetime of its processes and files; unattended trading needs a persistent
 host.
 
+## Guardrails across clients
+
+Claude Code hooks in `.claude/hooks/` run only in Claude Code. The controls
+below run inside the agent, so they apply to every client that reaches it:
+Claude Code, the command client (`scripts/local_mcp_bridge.py`) used by Codex,
+Grok, Grok Bot and Perplexity, the restricted launcher and remote MCP clients.
+
+| Control | Where it is enforced | Applies to |
+|---|---|---|
+| Refuse a wallet secret in tool arguments: an EVM private key (64 hex characters, with or without `0x`) in a key-named field, in `vault_token` or inside free text; a BIP-39 recovery phrase with a valid checksum anywhere; or an XRPL family seed anywhere. Nothing is sent to the tool or upstream. Error code `SECRET_IN_ARGUMENTS`. | MCP call boundary, `PricedFastMCP.call_tool` in `server/src/mcp/server.py`, using `server/src/shared/secret_guard.py` | Every MCP tool call, local or forwarded to MangroveAI or Markets |
+| Withhold a tool result that carries a key, recovery phrase or seed in a key-named field. Error code `SECRET_IN_RESULT`; the operation may already have run. | Same boundary | Every MCP tool result |
+| Refuse a live swap when the wallet holds 0 of the input token on that chain, before any quote or approval is signed. Error code `WALLET_INPUT_BALANCE_EMPTY`. | `dex_service.require_input_balance`, called from the live swap path in `order_executor` and from `dex_confirmed.execute` for live strategy entries | MCP `execute_swap`, REST `/dex/swap` and live strategy entries. Live strategy exits are not checked, so a stale zero reading cannot hold back a protective exit. |
+
+Field names are compared after lowercasing and removing `_` and `-`, so
+`privateKey`, `PRIVATE_KEY` and `private_key` are the same key-named field.
+Transaction hashes, definition and config hashes, order ids and sha256 digests
+have the same shape as a private key. A 64-hex value outside a key-named field
+therefore passes when its field is named for a hash or id (`tx_hash`,
+`definition_hash`, `order_id`), when it is the whole value of a field that is not
+free text, or when a word such as `tx`, `transaction` or `hash` comes just before
+it. In free-text fields such as `query` and `description`, any other 64-hex
+value is refused. A run of wordlist words counts as a recovery phrase outside a
+key-named field only when it has a valid BIP-39 checksum, so strategy prose made
+of wordlist words passes. The full rules are in the `secret_guard.py` module
+docstring. A test keeps the BIP-39 wordlist identical to the hook's.
+
+The balance check fails open, like the hook it replaces: if the balance cannot
+be read, or the token is a symbol other than USDC, the swap continues to its own
+errors. Markets answers the balance read with `402 Payment Required` when no
+Mangrove API key is configured, so without a key the check never blocks. It does
+not check native gas: a wallet holding USDC and no ETH passes, and the approval
+or swap then fails at broadcast.
+
+Some guards cannot be enforced from this repository, because the agent sees
+only tool calls:
+
+- **A secret typed into the host chat.** The host sends the message to its own
+  model and transcript before any Mangrove tool runs. The agent refuses the
+  secret if it reaches a tool, but cannot remove it from the host's history.
+  Claude Code blocks the prompt with a `UserPromptSubmit` hook; other hosts
+  rely on the shared instructions and the user. Never paste a key or phrase
+  into any AI chat; use `./scripts/stash-secret.sh` in a private terminal.
+- **Secrets in other tools' output**, such as a shell command or file read.
+  These never pass through the agent. Claude Code checks them with a
+  `PostToolUse` hook; other hosts do not.
+- **Commits and pushes to `main`.** Git runs in the host's shell, not through
+  the agent. Claude Code blocks them with `block-main-commits.sh`. For every
+  client, the enforceable control is branch protection on the GitHub
+  repository.
+
 ## Codex and Grok Build
 
 Run `./scripts/setup.sh` first using the existing setup flow. It starts the
@@ -217,8 +267,9 @@ running the helper cannot change another process's environment.
 
 These are normal developer sessions with the client's own tools and policies.
 They do not inherit the restricted Claude launcher's shell/file restrictions or
-Claude hooks. The shared instructions and server authorization checks still
-apply, but they are not a claim of equivalent client-side enforcement.
+Claude hooks. The shared instructions, server authorization checks and the
+agent-side [guardrails](#guardrails-across-clients) still apply; the host-only
+guards listed there do not.
 
 ## Claude Code
 

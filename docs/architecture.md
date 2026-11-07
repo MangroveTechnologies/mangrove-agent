@@ -300,6 +300,14 @@ These controls are enforced in the agent, independent of the AI client.
   (a keyfile with owner-only permissions), then the OS keychain; a missing key is generated
   into the keyfile only when none exists anywhere. The agent never invents a replacement for a
   key it cannot find.
+- **Secret guard at the MCP boundary.** Every tool call is checked before it runs: a private
+  key (64 hex characters, with or without `0x`) in a key-named field, in `vault_token` or
+  inside free text, a recovery phrase with a valid BIP-39 checksum, or an XRPL seed is refused
+  without calling the tool or upstream. A result with a secret in a key-named field is
+  withheld. See [guardrails across clients](clients.md#guardrails-across-clients).
+- **Empty-wallet swap refusal.** A live swap, or a live strategy entry, is refused before
+  quoting or approval when the wallet holds 0 of the input token on that chain. Exits are
+  never checked.
 - **Backup gate.** Live swaps, live strategy activation and x402 payments refuse a wallet
   until `confirm-backup` has recorded that the user saved its secret off the machine.
 - **Signing guard.** The wallet manager signs only a call to a 1inch aggregation router, an
