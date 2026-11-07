@@ -56,7 +56,7 @@ mangroveai>=2.4.0,<3.0.0
 # 1.1.1 publishes the reviewed quantity, error and transport contract repairs.
 mangrovemarkets>=1.1.1,<2.0.0
 apscheduler[sqlalchemy]>=3.10
-cryptography>=42
+cryptography>=50.0.1
 keyring>=24
 structlog>=24
 
