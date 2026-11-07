@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Scan the @1inch/fusion-sdk npm package for AggregationRouter addresses
-not present in _ONEINCH_ROUTERS.
+not reviewed in server/src/services/transaction_intent.py (ROUTER_V* constants).
 
 1inch uses deterministic CREATE2 deploys with a vanity prefix (0x111111...)
 on every supported chain, so scanning the published JS/TS package is a
@@ -25,7 +25,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-WALLET_MANAGER = Path("server/src/services/wallet_manager.py")
+TRANSACTION_INTENT = Path("server/src/services/transaction_intent.py")
 ALERT_FILE = Path("/tmp/1inch-router-alert.md")
 GITHUB_OUTPUT = Path(os.environ.get("GITHUB_OUTPUT", "/dev/null"))
 
@@ -54,15 +54,11 @@ def set_output(key: str, value: str) -> None:
 
 
 def get_current_allowlist() -> set[str]:
-    content = WALLET_MANAGER.read_text()
-    m = re.search(
-        r"_ONEINCH_ROUTERS\s*:\s*set\[str\]\s*=\s*\{([^}]+)\}",
-        content,
-        re.DOTALL,
-    )
-    if not m:
-        raise ValueError("_ONEINCH_ROUTERS block not found in wallet_manager.py")
-    return {a.lower() for a in re.findall(r'"(0x[0-9a-fA-F]+)"', m.group(1))}
+    content = TRANSACTION_INTENT.read_text()
+    routers = re.findall(r'^ROUTER_V\d+\s*=\s*"(0x[0-9a-fA-F]{40})"', content, re.MULTILINE)
+    if not routers:
+        raise ValueError("No ROUTER_V* constants found in transaction_intent.py")
+    return {a.lower() for a in routers}
 
 
 def scan_npm_package(package: str) -> set[str] | None:
@@ -112,7 +108,7 @@ def build_alert(new_routers: set[str], known: set[str], package: str) -> str:
     return f"""\
 ## New 1inch AggregationRouter detected
 
-The automated watcher found 1inch router address(es) **not** in `_ONEINCH_ROUTERS`.
+The automated watcher found 1inch router address(es) that `transaction_intent.py` does not review.
 Review and add them before the next swap attempt routes through the new contract.
 
 | Address | Status |
@@ -123,21 +119,20 @@ Detected by scanning the `{package}` npm package.
 
 ---
 
-### Current allowlist (`server/src/services/wallet_manager.py:70-73`)
+### Currently reviewed routers (`server/src/services/transaction_intent.py`)
 
-```python
-_ONEINCH_ROUTERS: set[str] = {{
+```
 {known_block}
-}}
 ```
 
 ### Required action
 
 1. **Verify** the new address is a legitimate 1inch AggregationRouter — check
    [1inch docs](https://docs.1inch.io) and the Base block explorer.
-2. **Add** the confirmed address to `_ONEINCH_ROUTERS` with a version comment.
-3. **Confirm** `_validate_sign_target()` still runs **before** `_load_secret()`
-   in `wallet_manager.sign()` after the change.
+2. **Add** a `ROUTER_V*` constant and its swap ABI to `transaction_intent.py`; a
+   new router also needs its calldata decoding reviewed, not only its address.
+3. **Confirm** `transaction_intent.validate_transaction()` still runs **before**
+   the key is loaded in `wallet_manager.sign()` after the change.
 4. **Add a test** covering a tx sent to the new router address.
 
 > Do not expand the allowlist without human review.
