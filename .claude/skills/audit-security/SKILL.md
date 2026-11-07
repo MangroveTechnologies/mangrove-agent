@@ -20,13 +20,13 @@ Read-only audit against the mangrove-agent repo. Covers:
 
 1. **Check for prior audits** at `agent-data/audits/*-security-audit.md` (local and gitignored; audit reports are not published). If a recent one exists, read it to avoid re-flagging fixed issues and to track remediation.
 
-2. **Wallet + signing invariants** (CRITICAL - given 2026-04-24). Verify:
+2. **Wallet + signing invariants.** Verify:
    - `transaction_intent.validate_transaction` rejects unsupported types/chains/selectors, authorization lists, malformed ABI, mismatched chain/assets/recipient/amounts, native value and excessive fees before key access.
-   - `ROUTER_V5` and `ROUTER_V6` in `transaction_intent.py` match the known 1inch V5 + V6 addresses.
-   - `sign_message()` still raises unconditionally - no EIP-191 personal_sign path.
-   - No other code path in `server/src/` calls `Account.from_key`, `Account.from_mnemonic`, `sign_transaction`, `sign_message`, `sign_typed_data`, `sign_authorization`, or `setCode` outside of `wallet_manager.py`.
-   - Fernet `decrypt()` is only called from `wallet_manager._load_secret` and `reveal_wallet_secret`.
-   - `reveal_wallet_secret` response stays on the localhost REST endpoint, never exposed via MCP.
+   - The isolated custody broker independently pins wallet, router, executor, input/output floor, payees, validity, lifetime spending/fee budgets and replay state; request arguments cannot authorize wider limits.
+   - Custody runs as a distinct non-root UID with private state and root-owned immutable code/runtime/policy. Check ACLs and peer credentials; same-user processes and agent-controlled containers are insufficient.
+   - `sign_message()` still refuses general signing. Dedicated x402/SIWX/marketplace proofs retain their own structure, identity, expiry and approval checks.
+   - Plaintext loading is custody-internal; ordinary API/MCP/RPC has no export, stash, import, backup-confirmation or budget-reset authority.
+   - Human backup/import use direct independent custody administration. Verify recovery and guarded legacy retirement before calling an old installation migrated.
 
 3. **Hook-enforcement gaps.** For each hook in `.claude/hooks/*.sh`:
    - Confirm it's registered in `.claude/settings.json` under the right matcher.
@@ -40,7 +40,7 @@ Read-only audit against the mangrove-agent repo. Covers:
 
 5. **REST routes.** For each route in `server/src/api/routes/*.py`:
    - Auth dependency is wired correctly.
-   - No endpoint returns plaintext key material over HTTP except the two intentional localhost-only reveal routes (`/wallet/reveal-secret/{vault_token}` and `/wallet/{addr}/reveal`), which MUST NOT be called by MCP tools.
+   - No endpoint returns wallet plaintext. Both former reveal routes, stash/import and backup confirmation return 410; disabled local authentication refuses privileged access.
    - Pydantic validators enforce slippage caps, chain allowlists, and amount bounds.
 
 6. **Dependency CVEs.**
@@ -80,7 +80,7 @@ Overall severity + high-level findings count by CRITICAL / HIGH / MEDIUM / LOW.
 (repeat per finding)
 
 ## Done Well
-- Strict transaction-intent validation correctly refuses EIP-7702
+- Strict transaction-intent validation and isolated custody refuse new EIP-7702 authorization signing
 - (etc.)
 
 ## Dependencies
@@ -93,4 +93,4 @@ List of CVEs from pip-audit with fix recommendations.
 - **Redact secrets.** If you encounter a plaintext key or API token in any file, replace with `***` in the report.
 - **No exploits.** Never run network-level attack tests or modify running services.
 - **Cite every finding.** File path + line number + CWE ID. No generic "this could be exploited" language without a specific pointer.
-- **Acknowledge good practices.** The "Done Well" section matters - the Fernet + SecretVault + signing-guard layers exist precisely because of past incidents, and the audit should record what's working.
+- **Acknowledge good practices.** The "Done Well" section matters - the encrypted custody state, OS boundary and narrow signing policies need evidence for their actual deployment, and the audit should record what's working.

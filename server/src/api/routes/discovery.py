@@ -112,7 +112,7 @@ def reset_catalog_cache() -> None:
     description=(
         "Server + SDK versions, signal/KB catalog counts, wallet count, "
         "local execution records by status (not server-saved strategy inventory), "
-        "active authentication mode, cron jobs, db path, uptime. "
+        "active authentication mode, cron jobs, custody readiness, db path, uptime. "
         "x402_spend applies only to x402 mode; it is not account quota. Free, no auth."
     ),
     tags=["discovery"],
@@ -152,6 +152,7 @@ async def status() -> dict:
             "archived": counts.get("archived", 0),
         },
         "active_cron_jobs": active_job_count(),
+        "custody": _custody_status(),
         "portfolio_risk": _portfolio_risk_status(),
         "x402_spend": _x402_spend_status() if access_mode == "x402" else None,
         "db_path": str(app_config.DB_PATH),
@@ -164,6 +165,15 @@ async def status() -> dict:
 async def set_agent_name(body: agent_identity.AgentNameRequest) -> dict:
     """Name or rename this installation. Local only; no payment or trading."""
     return agent_identity.set_name(body.name)
+
+
+def _custody_status() -> dict:
+    """Whether custody can sign for local wallets and live allocations. Never fail /status over it."""
+    try:
+        from src.services import wallet_manager
+        return wallet_manager.custody_readiness()
+    except Exception:  # noqa: BLE001
+        return {"configured": None, "error": "unavailable"}
 
 
 def _portfolio_risk_status() -> dict:

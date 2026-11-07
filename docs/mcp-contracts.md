@@ -22,8 +22,7 @@ Local tools exist because they need things only the user's machine has: keys, wa
 local database, the scheduler and venue connections.
 
 - Discovery and identity: `status`, `list_tools`, `set_agent_name`.
-- Wallets: `create_wallet`, `import_wallet`, `list_wallets`. A secret is never an argument
-  or a result; tools exchange a `vault_token`.
+- Wallets: `create_wallet` and `list_wallets` return public metadata only, with no export capability. `import_wallet` is a retired compatibility tool that refuses agent authority; human import runs directly in isolated custody.
 - DEX execution: `execute_swap` (needs `confirm=true` and an explicit `slippage_pct` of at
   most 0.0025).
 - Kraken: `cex_status`, `cex_connect_kraken`, `cex_balances`, `cex_validate_order`,

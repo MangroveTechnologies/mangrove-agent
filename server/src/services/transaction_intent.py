@@ -1,7 +1,6 @@
 """Bind unsigned DEX transactions to locally constructed economic intent.
 
-This validator has no wallet/database/key access. wallet_manager.sign runs it
-before the wallet key is loaded.
+This validator has no wallet/database/key access and runs again in custody.
 Router addresses alone do not authorize a call. Only canonical approve and
 generic swap ABI encodings whose effects match the operation are supported.
 Optimized pool routes need a separate, independently verified pool adapter.
@@ -9,7 +8,7 @@ Optimized pool routes need a separate, independently verified pool adapter.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from decimal import ROUND_CEILING, Decimal, InvalidOperation, localcontext
 from typing import Literal
 
@@ -74,6 +73,26 @@ class SwapIntent:
 
 
 TransactionIntent = ApprovalIntent | SwapIntent
+
+
+def intent_to_dict(intent: TransactionIntent) -> dict:
+    """Serialize the operation, independently of the prepared transaction."""
+    if type(intent) not in (ApprovalIntent, SwapIntent):
+        raise SigningError("A recognized transaction intent is required.")
+    return asdict(intent)
+
+
+def intent_from_dict(value: dict) -> TransactionIntent:
+    """Parse a strict custody wire intent; extra or missing fields fail closed."""
+    try:
+        if type(value) is not dict:
+            raise ValueError
+        cls = {"approval": ApprovalIntent, "swap": SwapIntent}[value["kind"]]
+        result = cls(**value)
+        _validate_intent(result)
+        return result
+    except (KeyError, TypeError, ValueError):
+        raise SigningError("Invalid transaction intent.") from None
 
 
 def _uint(value: object, name: str, *, positive: bool = False) -> int:
@@ -203,6 +222,15 @@ def _decode(types: tuple[str, ...], raw: bytes) -> tuple:
         raise SigningError("Malformed or noncanonical transaction ABI encoding.") from None
 
 
+def swap_executor(normalized_tx: dict) -> str:
+    """Read the executor for protected policy after full intent validation."""
+    router = address(normalized_tx.get("to"))
+    raw = _calldata(normalized_tx.get("data"))
+    if router not in _SWAP_TYPES or raw[:4] != _SWAP_SELECTORS[router]:
+        raise SigningError("Unsupported swap ABI for executor policy.")
+    return address(_decode(_SWAP_TYPES[router], raw[4:])[0])
+
+
 def validate_transaction(
     unsigned_tx: dict,
     intent: TransactionIntent,
@@ -213,6 +241,7 @@ def validate_transaction(
 
     Type and field checks precede normalization, so a legacy gasPrice cannot
     erase type 4 or an authorization list. No unknown transaction fields pass.
+    Protected custody policy must additionally authorize the intent itself.
     """
     _validate_intent(intent)
     if address(wallet_address) != address(intent.wallet_address):

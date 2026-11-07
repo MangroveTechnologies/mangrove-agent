@@ -127,10 +127,10 @@ def test_create_wallet_evm_persists_encrypted(temp_db, stub_keyring, mock_sdk_cr
     response = create_wallet(chain="evm", network="testnet", chain_id=84532, label="test")
     assert response.address == _TEST_ADDRESS
     # The plaintext is NOT in the response — only a vault_token pointing at the vault.
-    assert response.vault_token and len(response.vault_token) >= 16
+    assert response.vault_token == ""
     assert response.secret_type == "private_key"
     assert response.master_key_source in {"keyfile", "keychain", "generated_keyfile"}
-    assert response.reveal_cmd.startswith("./scripts/reveal-secret.sh ")
+    assert "custody-service.py admin" in response.reveal_cmd
     assert response.backup_required is True
     # No seed_phrase/private_key field on the response model.
     resp_dump = response.model_dump()
@@ -141,8 +141,8 @@ def test_create_wallet_evm_persists_encrypted(temp_db, stub_keyring, mock_sdk_cr
     assert "small test amount" in response.deposit_instructions.lower()
 
     # The vault must have the plaintext (so reveal-secret.sh can retrieve it).
-    plaintext = vault.reveal(response.vault_token)
-    assert plaintext == _TEST_PRIVKEY
+    with pytest.raises(KeyError):
+        vault.reveal(response.vault_token)
 
     row = get_connection().execute(
         "SELECT address, chain, chain_id, label, encrypted_secret, encryption_method, backup_confirmed_at FROM wallets WHERE address=?",
@@ -171,7 +171,7 @@ def test_create_wallet_generates_locally_no_markets_client(temp_db, stub_keyring
     assert r1.address != r2.address  # real randomness, not a fixture
     for r in (r1, r2):
         assert r.address.startswith("0x") and len(r.address) == 42
-        assert r.vault_token
+        assert r.vault_token == ""
     # No remote key-gen path exists in the wallet service at all.
     assert not hasattr(wm, "mangrove_markets_client")
 
@@ -886,3 +886,104 @@ def test_reimport_evm_preserves_existing_wallet(temp_db, stub_keyring, target_ch
     assert result.address == _TEST_ADDRESS
     assert result.backup_required is True
     assert conn.execute('SELECT count(*) FROM wallets').fetchone()[0] == 1
+
+
+# --- Upgrade: wallets custody cannot sign for -------------------------------
+
+def _seed_wallet(address, method, backup="2026-04-20T00:00:00+00:00"):
+    from src.shared.db.sqlite import get_connection
+
+    get_connection().execute(
+        """INSERT INTO wallets (id, address, chain, network, chain_id, encrypted_secret,
+           encryption_method, label, created_at, metadata_json, backup_confirmed_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (address, address, "evm", "mainnet", 8453, b"x", method, None,
+         "2026-04-20T00:00:00+00:00", None, backup))
+    get_connection().commit()
+
+
+@pytest.fixture
+def agent_process(temp_db, monkeypatch):
+    """The agent side of custody: not the custody runtime, socket unset by default."""
+    from src.config import app_config
+    from src.custody import runtime
+
+    monkeypatch.setattr(runtime, "_active", False)
+    monkeypatch.setattr(app_config, "CUSTODY_SOCKET", None, raising=False)
+    return monkeypatch
+
+
+def test_legacy_wallet_is_refused_for_live_use_and_listed_as_migration_required(agent_process):
+    from src.services import wallet_manager as wm
+    from src.shared.errors import SigningError
+
+    _seed_wallet("0xlegacy", "fernet-v1")
+    with pytest.raises(SigningError, match="migration_required") as refused:
+        wm.require_backup_confirmed("0xlegacy")
+    assert "docs/custody.md" in refused.value.suggestion
+    [item] = wm.list_wallets()
+    assert item.custody_status == "migration_required"
+    assert item.backup_confirmed_at is not None
+
+
+def test_unconfigured_custody_refuses_every_wallet(agent_process):
+    from src.services import wallet_manager as wm
+    from src.shared.errors import SigningError
+
+    _seed_wallet("0xisolated", "external-custody")
+    with pytest.raises(SigningError, match="not configured") as refused:
+        wm.require_backup_confirmed("0xisolated")
+    assert "docs/custody.md" in refused.value.suggestion
+    assert wm.list_wallets()[0].custody_status == "custody_unconfigured"
+
+
+def test_status_reports_wallets_and_live_allocations_custody_cannot_sign(agent_process):
+    from src.services import wallet_manager as wm
+    from src.shared.db.sqlite import get_connection
+
+    _seed_wallet("0xlegacy", "fernet-v1")
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO strategies (id, mangrove_id, name, asset, timeframe, status, entry_json, exit_json,
+           execution_config_json, generation_report_json, created_at, updated_at)
+           VALUES ('s1','mg','t','ETH','1h','live','[]','[]','{}',NULL,'2026-04-20','2026-04-20')""")
+    conn.execute(
+        """INSERT INTO allocations (id, strategy_id, wallet_address, token_address, token_symbol, amount,
+           active, created_at) VALUES ('a1','s1','0xlegacy','0xusdc','USDC',100,1,'2026-04-20')""")
+    conn.commit()
+    readiness = wm.custody_readiness()
+    assert readiness == {"configured": False, "migration_required_wallets": 1,
+                         "unsignable_live_allocations": 1, "action_required": True,
+                         "guide": "docs/custody.md"}
+
+
+def test_status_route_carries_custody_block(agent_process):
+    import asyncio
+
+    from src.api.routes.discovery import status
+
+    _seed_wallet("0xlegacy", "fernet-v1")
+    body = asyncio.run(status())
+    assert body["custody"]["migration_required_wallets"] == 1
+    assert body["custody"]["action_required"] is True
+    assert "0xlegacy" not in str(body["custody"])
+
+
+def test_configured_listing_surfaces_unmigrated_and_unretired_legacy_wallets(agent_process):
+    """Listing through custody must not fail while legacy rows remain (migrate before retire)."""
+    from src.config import app_config
+    from src.services import wallet_manager as wm
+    from src.shared.errors import SigningError
+
+    agent_process.setattr(app_config, "CUSTODY_SOCKET", "/run/mangrove-custody/custody.sock", raising=False)
+    _seed_wallet("0xmigrated", "fernet-v1")
+    _seed_wallet("0xnotmigrated", "fernet-v1")
+    custody_items = [{"address": "0xmigrated", "chain": "evm", "network": "mainnet", "chain_id": 8453,
+                      "created_at": "2026-04-20T00:00:00+00:00",
+                      "backup_confirmed_at": "2026-04-21T00:00:00+00:00"}]
+    agent_process.setattr(wm.custody_client, "call", lambda operation, arguments: custody_items)
+    statuses = {item.address: item.custody_status for item in wm.list_wallets()}
+    assert statuses == {"0xmigrated": "migration_required", "0xnotmigrated": "migration_required"}
+    for address in statuses:
+        with pytest.raises(SigningError, match="migration_required"):
+            wm.require_backup_confirmed(address)

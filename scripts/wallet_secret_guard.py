@@ -12,8 +12,8 @@ its strict ``scan_hook_content`` rules:
   only a hash label and one hash; MCP tool results (``mcp__`` tools) also
   allow whole-value public-hash fields.
 
-The hooks supplement the agent's server-side secret guard: a host can record
-tool output before a hook runs. Feedback never includes the inspected payload, a matched
+The hooks supplement the custody boundary: a host can record tool output
+before a hook runs. Feedback never includes the inspected payload, a matched
 value, a path or exception text.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DETECTOR = ROOT / 'server/src/shared/secret_guard.py'
 MAX_BYTES = 4 * 1024 * 1024
 REASON = ('Wallet-secret protection blocked this content or operation. '
-          'To import a wallet, run ./scripts/stash-secret.sh in your own terminal; never paste secrets into chat.')
+          'Use the independently controlled custody administrator; never paste secrets into chat.')
 KNOWN_ACCESS = re.compile(
     r'reveal-secret\.(?:sh|py)|custody[-_]admin(?:\.py)?|'
     r'/wallet/(?:reveal-secret|[^\s/"\']+/reveal)(?:[/\s?"\']|$)|'

@@ -138,13 +138,11 @@ causes:
 3. **Another setup is running.** Setup uses a lock directory at
    `agent-data/.setup.lock`. Remove it only after confirming no setup is
    running.
-4. **Master key problems.** The agent refuses to use a `master.key` that is
-   group- or world-readable (fix with `chmod 600`) or has the wrong length. See
-   Chapter 06.
+4. **Key or custody problems.** Preserve the original state and inspect the protected custody policy/audit from the independent administrator terminal. Do not regenerate missing encryption keys to hide a read failure; see Chapter 06 and the migration guide.
 
 ### A swap is refused or fails
 
-- **Backup gate:** run `reveal-secret.sh --address` and `confirm-backup.sh`.
+- **Backup gate:** the independent human custody administrator must back up and confirm the exact wallet; see [Chapter 06](06-wallet-setup.md).
 - **Confirmation required:** the call lacked `confirm=true`.
 - **Slippage out of range:** use a value in (0, 0.0025].
 - **`status: failed`:** the price moved beyond your tolerance between quote and

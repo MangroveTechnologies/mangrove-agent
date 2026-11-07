@@ -587,3 +587,25 @@ def test_unknown_mode_raises(temp_db, mock_mangroveai, mock_markets):
 
     with pytest.raises(SigningError):
         execute_one(_intent(), mode="backtest", strategy_id="s1")  # type: ignore[arg-type]
+
+
+def test_live_entry_refuses_legacy_wallet_custody_cannot_sign(temp_db, mock_mangroveai, mock_markets, monkeypatch):
+    """After upgrade a legacy wallet row keeps its backup flag but cannot sign."""
+    from src.config import app_config
+    from src.custody import runtime
+    from src.services.order_executor import execute_one
+    from src.shared.db.sqlite import get_connection
+    from src.shared.errors import SigningError
+
+    get_connection().execute(
+        """INSERT INTO wallets (id, address, chain, network, chain_id, encrypted_secret, encryption_method,
+           label, created_at, metadata_json, backup_confirmed_at)
+           VALUES ('w','0xabc','evm','mainnet',8453,X'00','fernet-v1',NULL,'2026-04-20',NULL,'2026-04-20')""")
+    get_connection().commit()
+    monkeypatch.setattr(runtime, "_active", False)
+    monkeypatch.setattr(app_config, "CUSTODY_SOCKET", None, raising=False)
+    with pytest.raises(SigningError, match="migration_required"):
+        execute_one(_intent("buy"), mode="live", strategy_id="s1",
+                    wallet_address="0xabc", chain_id=8453, slippage_pct=0.002)
+    assert mock_markets.dex.get_quote.call_count == 0
+    assert mock_markets.dex.broadcast.call_count == 0

@@ -82,9 +82,10 @@ class PricedFastMCP(FastMCP):
             return mangrove_proxy.failure(
                 'SECRET_IN_ARGUMENTS',
                 f'The tool arguments contain {secret_guard.LABELS[found]}. The call was refused '
-                'and nothing was sent to any tool or upstream service. To import a wallet, run '
-                './scripts/stash-secret.sh in your own terminal and pass only the vault token '
-                'from its handoff file. Remove the secret from the chat.',
+                'and nothing was sent to any tool or upstream service. Wallet import runs only '
+                'in the independent custody administrator terminal (custody-service.py admin '
+                'import; see docs/custody.md), never through an agent. Remove the secret from '
+                'the chat.',
             )
         result = await self._dispatch(name, arguments)
         found = secret_guard.find_in_result(result)
@@ -94,8 +95,8 @@ class PricedFastMCP(FastMCP):
                 'SECRET_IN_RESULT',
                 f'The tool response contained {secret_guard.LABELS[found]} in a secret field and '
                 'was withheld. The operation may have completed; inspect its state before '
-                'retrying. Report this to the maintainers: tool responses must carry only a '
-                'vault token.',
+                'retrying. Report this to the maintainers: wallet secrets stay in isolated '
+                'custody and tool responses must never carry one.',
             )
         return result
 

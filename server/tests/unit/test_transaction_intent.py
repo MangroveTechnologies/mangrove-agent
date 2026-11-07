@@ -50,13 +50,14 @@ def approval_data(spender=ti.ROUTER_V6, amount=1_000_000):
 
 @pytest.mark.parametrize("router", [ti.ROUTER_V5, ti.ROUTER_V6])
 def test_valid_generic_swaps_produce_real_recoverable_transactions(router):
-    # Generated locally, unfunded, discarded; no network/database access.
+    # Generated locally, unfunded, discarded; no network/custody/database access.
     account = Account.create()
     intent = swap_intent(router_address=router, wallet_address=account.address)
     data = swap_data(intent, desc_overrides={"dst_receiver": account.address})
     normalized = ti.validate_transaction(payload(data, to=router), intent, account.address, 8453)
     signed = account.sign_transaction(normalized)
     assert Account.recover_transaction(signed.raw_transaction) == account.address
+    assert ti.swap_executor(normalized) == EXECUTOR
     assert normalized["chainId"] == 8453
 
 
@@ -160,10 +161,14 @@ def test_unreviewed_chain_policy_refuses_testnet_and_different_deployments(chain
         ti.validate_transaction(payload(chainId=chain), swap_intent(chain_id=chain), WALLET)
 
 
-def test_intent_is_frozen_and_required():
+def test_wire_intent_is_strict_and_frozen():
     original = swap_intent()
+    assert ti.intent_from_dict(ti.intent_to_dict(original)) == original
     with pytest.raises(AttributeError):
         original.amount = 2
+    for extra in ({"unexpected": True}, {"kind": "personal_sign"}, {"amount": "1000000"}, {"routing_fee_bps": 26}):
+        with pytest.raises(SigningError):
+            ti.intent_from_dict({**ti.intent_to_dict(original), **extra})
     with pytest.raises(SigningError):
         ti.validate_transaction(payload(), None, WALLET)
 

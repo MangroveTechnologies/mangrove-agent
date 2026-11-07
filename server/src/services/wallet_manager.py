@@ -1,30 +1,9 @@
-"""wallet_manager — local encrypted key storage + signing.
+"""Wallet metadata and narrow signing adapters for isolated OS custody.
 
-Responsibilities:
-- Create wallets via mangrovemarkets.wallet.create(). Encrypt the returned
-  seed/private_key with Fernet, persist the ciphertext in SQLite. Stash
-  the plaintext in the in-process SecretVault and return only a vault_token
-  in the MCP response — the plaintext never enters the Claude Code
-  conversation context.
-- Import externally-generated private keys via the stash-and-consume
-  pattern: user's bash CLI posts the raw key to /internal/stash-secret
-  and gets back a vault_token, then calls import_wallet with that id.
-- List stored wallets (addresses + metadata only; never returns secrets).
-- Sign EVM transactions locally, only when their decoded effects match a
-  locally built transaction intent. The SDK never sees the key.
-- Sign x402 payment authorizations (EIP-3009 TransferWithAuthorization) locally,
-  behind their own narrow guard. Separate door from sign(); see below.
-- Gate live trading on explicit user backup confirmation (backup_confirmed_at).
-  Paper mode is unaffected.
-
-Security:
-- The plaintext key NEVER appears in an MCP tool response. Responses carry
-  only the opaque vault_token, which is useful only via the localhost reveal
-  CLI (out-of-band, never through Claude Code).
-- sign() decrypts into a local bytes variable, derives the signing account,
-  signs, discards the variable. Plaintext lifetime is <10ms per op.
-
-Chain support (v1): EVM only. XRPL returns ChainNotSupportedInV1.
+The ordinary agent never loads wallet plaintext. A dedicated custody identity
+owns its key, database, policy and immutable installation. Local role checks here
+route service-internal calls; operating-system access control is the boundary.
+Human import, backup and backup confirmation have no REST/MCP/RPC authority.
 """
 from __future__ import annotations
 
@@ -37,6 +16,8 @@ from eth_account import Account
 from eth_account.datastructures import SignedTransaction
 from pydantic import BaseModel
 
+from src.custody import client as custody_client
+from src.custody import runtime as custody_runtime
 from src.services.secret_vault import vault
 from src.shared.crypto.fernet import decrypt, encrypt, get_master_key_source
 from src.shared.db.sqlite import get_connection
@@ -67,12 +48,9 @@ _ENCRYPTION_METHOD = "fernet-v1"
 # spending, so every check below runs BEFORE the key is decrypted, exactly as
 # in sign().
 #
-# What this guard deliberately does NOT constrain: the payee. Paying an
-# arbitrary counterparty is inherent to x402 — the receiving address is chosen
-# by the server in its 402 envelope and may rotate — so there is no allowlist
-# to check it against. It is made auditable instead: payee and value are
-# logged before the key is touched. Aggregate spend limits are a separate
-# concern and do not belong in a signing guard.
+# This helper validates the cryptographic structure. The isolated broker also
+# enforces its protected wallet/payee allowlists, chain, per-payment amount,
+# lifetime budget, freshness, backup and replay policy before invoking it.
 # ---------------------------------------------------------------------------
 
 _X402_PRIMARY_TYPE = "TransferWithAuthorization"
@@ -361,9 +339,9 @@ SecretType = Literal["private_key", "mnemonic", "seed"]
 class WalletCreateResponse(BaseModel):
     """Response for POST /wallet/create.
 
-    The plaintext secret is NEVER included. The caller receives a vault_token
-    pointing at an in-process vault entry (TTL-bound, single-read) and a
-    reveal_cmd describing how to retrieve the plaintext out-of-band.
+    The plaintext secret is NEVER included. The deprecated vault_token is empty,
+    with no usable vault token. The reveal_cmd names the human custody
+    administrator workflow; ordinary agent authority cannot invoke it.
     """
 
     address: str
@@ -406,8 +384,8 @@ class StashSecretResponse(BaseModel):
 class RevealSecretResponse(BaseModel):
     """Response for GET /internal/reveal-secret/{id} or /wallet/{addr}/reveal.
 
-    Contains plaintext — only exposed over localhost to a CLI subprocess
-    that is not Claude Code. NEVER return this from an MCP tool.
+    Contains plaintext only inside the direct human-admin process. Never
+    serialize this through REST, MCP or agent custody RPC.
     """
 
     secret: str
@@ -425,6 +403,7 @@ class WalletListItem(BaseModel):
     created_at: datetime
     backup_confirmed_at: datetime | None = None
     is_configured_x402_payer: bool = False
+    custody_status: str = "isolated"
 
 
 # ---------------------------------------------------------------------------
@@ -478,25 +457,11 @@ def _derive_address(secret: str) -> str:
 
 
 def _safety_note(secret_type: SecretType, master_key_source: str) -> str:
-    src_blurb = {
-        "keyfile": "your local keyfile (./agent-data/master.key, chmod 600)",
-        "generated_keyfile": "your local keyfile (./agent-data/master.key, chmod 600)",
-        "keychain": "your OS keychain (macOS Keychain / Linux Secret Service / Windows Credential Manager)",
-    }.get(master_key_source, master_key_source)
-
-    import_ui = (
-        "MetaMask → Import Account → Private Key"
-        if secret_type == "private_key"
-        else "MetaMask → Import Account → Secret Recovery Phrase"
-    )
-    if secret_type == "seed":
-        import_ui = "an XRPL wallet supporting family-seed import"
-    return (
-        f"Your secret (type: {secret_type}) is encrypted at rest with a Fernet "
-        f"master key stored in {src_blurb}. Run the reveal_cmd ONCE to back it "
-        f"up outside the agent (off-agent backup needed for disaster recovery "
-        f"if the master key is ever lost). Import with: {import_ui}."
-    )
+    return (f"Your {secret_type} is encrypted inside the dedicated custody service "
+            f"(master-key source: {master_key_source}), outside the restricted agent UID. "
+            "A human administrator must save an independent backup in the protected "
+            "custody terminal and confirm it before live spending. Ordinary agent "
+            "credentials cannot export this secret.")
 
 
 def _secret_vault_ttl() -> int:
@@ -512,11 +477,15 @@ def _reveal_cmd_for(vault_token: str) -> str:
 
 
 def _reveal_cmd_for_address(address: str) -> str:
-    return f"./scripts/reveal-secret.sh --address {address}"
+    import shlex
+
+    if custody_runtime._admin_command_prefix:
+        return shlex.join([*custody_runtime._admin_command_prefix, "backup", address])
+    return f"Human administrator: use the protected custody-service.py admin backup for {address}; follow docs/custody.md for installation paths."
 
 
 # ---------------------------------------------------------------------------
-# Create wallet (secret stays in-process, MCP response has vault_token only)
+# Create wallet inside custody (public metadata and human backup instructions)
 # ---------------------------------------------------------------------------
 
 
@@ -526,9 +495,13 @@ def create_wallet(
     chain_id: int | None = None,
     label: str | None = None,
 ) -> WalletCreateResponse:
-    """Create a new wallet. Encrypts the secret, persists to SQLite, stashes
-    plaintext in the in-process vault, returns a vault_token.
-    """
+    """Create and encrypt a wallet inside the dedicated custody service. Returns public metadata and human backup instructions, with an empty deprecated vault_token field."""
+    if not custody_runtime.active():
+        response = WalletCreateResponse.model_validate(custody_client.call("create_wallet", {
+            "chain": chain, "network": network, "chain_id": chain_id, "label": label,
+        }))
+        _cache_wallet_metadata(response.model_dump(mode="json"))
+        return response
     chain_normalized = chain.lower()
     if chain_normalized == "xrpl":
         from xrpl.wallet import Wallet
@@ -569,8 +542,9 @@ def create_wallet(
     )
     conn.commit()
 
-    # Stash plaintext in vault. `secret` is not returned to the caller.
-    vault_token = vault.stash_for_address(secret, address=address)
+    # Backup is a direct human-admin operation, never a redeemable bearer token.
+    del secret
+    vault_token = ""
 
     _log.info(
         "wallet.created",
@@ -592,8 +566,8 @@ def create_wallet(
         vault_token=vault_token,
         secret_type=secret_type,
         master_key_source=get_master_key_source(),
-        reveal_cmd=_reveal_cmd_for(vault_token),
-        secret_ttl_seconds=_secret_vault_ttl(),
+        reveal_cmd=_reveal_cmd_for_address(address),
+        secret_ttl_seconds=0,
         backup_required=True,
         deposit_instructions=_deposit_instructions(address, chain_normalized, network),
         safety_note=_safety_note(secret_type, get_master_key_source()),
@@ -612,16 +586,8 @@ def import_wallet(
     chain_id: int | None = 8453,
     label: str | None = None,
 ) -> WalletImportResponse:
-    """Import an existing wallet whose secret has been stashed in the vault.
-
-    The user's CLI flow:
-      1. Run `./scripts/stash-secret.sh` — it prompts for the private key via
-         `read -s`, POSTs to /internal/stash-secret, prints the returned id.
-      2. Ask the agent to import that id.
-      3. Agent calls import_wallet(vault_token=<id>).
-
-    The private key never enters Claude Code's conversation context.
-    """
+    """Human custody administrator imports a secret from its internal one-use vault. Ordinary agent processes cannot invoke this function; no import RPC exists."""
+    custody_runtime.require()
     chain_normalized = chain.lower()
     if chain_normalized not in {"evm", "xrpl"}:
         raise ChainNotSupportedInV1("Supported wallet chains are evm and xrpl.")
@@ -635,9 +601,8 @@ def import_wallet(
         raise SigningError(
             "vault_token is unknown or has expired.",
             suggestion=(
-                "Re-run `./scripts/stash-secret.sh` to stash your key and get a "
-                "fresh vault_token, then retry the import. Each vault_token is "
-                "single-read and TTL-bound."
+                "Restart the direct human custody administrator import command. "
+                "No agent-side token or HTTP import is supported."
             ),
         ) from e
 
@@ -726,25 +691,16 @@ def import_wallet(
 
 
 def reveal_wallet_secret(address: str) -> RevealSecretResponse:
-    """Decrypt and return the plaintext secret for a stored wallet.
-
-    INTENDED FOR CALL BY THE LOCALHOST CLI ONLY. The server exposes this
-    via a private REST endpoint; the bash script in scripts/reveal-secret.sh
-    invokes it and prints to the user's terminal. MCP tools MUST NOT call
-    this — doing so would leak the plaintext back through Claude Code.
-    """
+    """Human custody administrator reads a stored secret directly in its private terminal. No REST, MCP, or agent RPC route can invoke this operation."""
+    custody_runtime.require()
     secret = _load_secret(address)
     _log.info("wallet.secret_revealed", address=address)
     return RevealSecretResponse(secret=secret, address=address)
 
 
 def stash_external_secret(secret: str, address_hint: str | None = None) -> str:
-    """Accept a plaintext secret from the CLI, stash in the vault, return id.
-
-    Called by /internal/stash-secret. The caller is expected to be the
-    localhost bash CLI, which reads the secret via `read -s` and POSTs it
-    here. The secret never enters Claude Code's context.
-    """
+    """Stage hidden terminal input inside the human custody administrator process. The token is process-internal and is never returned to an agent client."""
+    custody_runtime.require()
     if not secret or not secret.strip():
         raise ValueError("secret must be non-empty")
     # If we can derive an address, tag the vault entry for later reveal-by-address.
@@ -763,13 +719,8 @@ def stash_external_secret(secret: str, address_hint: str | None = None) -> str:
 
 
 def confirm_backup(address: str) -> WalletListItem:
-    """Mark a wallet as backed-up by the user.
-
-    The user invokes `./scripts/confirm-backup.sh <address>` AFTER they've
-    saved the plaintext secret outside the agent. This flips the flag;
-    downstream, execute_swap and the live strategy transition through PATCH
-    `/api/v1/agent/strategies/{strategy_id}/status` unlock.
-    """
+    """Human custody administrator confirms an off-agent backup. The agent cannot set this state through its credential or RPC."""
+    custody_runtime.require()
     conn = get_connection()
     row = conn.execute(
         "SELECT 1 FROM wallets WHERE address = ?", (address,),
@@ -810,6 +761,13 @@ def require_backup_confirmed(address: str) -> None:
     Called by execute_swap / live-promotion paths. Paper mode does not
     call this — no real funds at risk.
     """
+    if not custody_runtime.active():
+        require_custody_signable(address)
+    if not custody_runtime.active() and custody_client.configured():
+        row = _get_wallet_row(address)
+        if not row or not row.get("backup_confirmed_at"):
+            raise SigningError("Wallet requires human backup confirmation in the isolated custody administrator terminal.")
+        return
     row = get_connection().execute(
         "SELECT backup_confirmed_at FROM wallets WHERE address = ?",
         (address,),
@@ -823,14 +781,77 @@ def require_backup_confirmed(address: str) -> None:
         raise SigningError(
             f"Wallet {address} is not backed up. Live trading refused.",
             suggestion=(
-                "Back up the wallet's secret OUTSIDE the agent first:\n"
-                f"  ./scripts/reveal-secret.sh --address {address}\n"
-                "Save the printed secret in a password manager / hardware "
-                "wallet / paper. THEN confirm the backup with:\n"
-                f"  ./scripts/confirm-backup.sh {address}\n"
-                "After that the agent will unlock live trading for this wallet."
+                "The human custody administrator must back up this exact wallet "
+                "outside the agent and run its direct confirm-backup command: "
+                f"{address}. Follow docs/custody.md; ordinary API authority cannot confirm it."
             ),
         )
+
+
+CUSTODY_MIGRATION_SUGGESTION = (
+    "A human administrator must install isolated custody and complete the migration in "
+    "docs/custody.md (migrate, retire the legacy ciphertext, then confirm the backup in the "
+    "custody administrator terminal). Paper trading is unaffected."
+)
+
+
+def _custody_status(encryption_method: str | None) -> str:
+    """Agent-side custody state of a local wallet row.
+
+    ``migration_required``: the key is still legacy agent ciphertext, which no
+    longer signs. ``custody_unconfigured``: the wallet lives in custody but this
+    agent has no custody socket. ``isolated``: custody can sign for it.
+    """
+    if encryption_method != "external-custody":
+        return "migration_required"
+    return "isolated" if custody_client.configured() else "custody_unconfigured"
+
+
+def require_custody_signable(address: str) -> None:
+    """Refuse, in the agent process, a wallet that isolated custody cannot sign for."""
+    row = get_connection().execute(
+        "SELECT encryption_method FROM wallets WHERE address = ?", (address,),
+    ).fetchone()
+    status = _custody_status(row["encryption_method"]) if row else (
+        "isolated" if custody_client.configured() else "custody_unconfigured")
+    if status == "migration_required":
+        raise SigningError(
+            f"Wallet {address} has custody_status migration_required: its key is still held by "
+            "the legacy agent database, which can no longer sign. Live promotion, live entries, "
+            "exits and payments from it are refused.",
+            suggestion=CUSTODY_MIGRATION_SUGGESTION,
+        )
+    if status == "custody_unconfigured":
+        raise SigningError(
+            "Isolated wallet custody is not configured, so no wallet can sign. Live promotion, "
+            "live entries, exits and payments are refused.",
+            suggestion=CUSTODY_MIGRATION_SUGGESTION,
+        )
+
+
+def custody_readiness() -> dict:
+    """Public custody summary for /status: counts only, no addresses.
+
+    ``unsignable_live_allocations`` counts active allocations of live or
+    exit-only strategies whose wallet custody cannot sign for, so their
+    entries, exits and protective exits would fail.
+    """
+    conn = get_connection()
+    rows = conn.execute("SELECT address, encryption_method FROM wallets").fetchall()
+    statuses = {r["address"]: _custody_status(r["encryption_method"]) for r in rows}
+    live = conn.execute(
+        """SELECT a.wallet_address FROM allocations a JOIN strategies s ON s.id = a.strategy_id
+           WHERE a.active = 1 AND (s.status = 'live' OR s.exit_only_mode = 'live')""",
+    ).fetchall()
+    unsignable = sum(1 for r in live if statuses.get(r["wallet_address"], "migration_required") != "isolated")
+    migration = sum(1 for status in statuses.values() if status == "migration_required")
+    return {
+        "configured": custody_client.configured(),
+        "migration_required_wallets": migration,
+        "unsignable_live_allocations": unsignable,
+        "action_required": bool(migration or unsignable),
+        "guide": "docs/custody.md",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -840,17 +861,33 @@ def require_backup_confirmed(address: str) -> None:
 
 def list_wallets() -> list[WalletListItem]:
     """Return all stored wallets. Secrets are NEVER returned."""
+    if not custody_runtime.active() and custody_client.configured():
+        result = [WalletListItem.model_validate(item) for item in custody_client.call("list_wallets", {})]
+        for item in result:
+            try:
+                _cache_wallet_metadata(item.model_dump(mode="json"))
+            except SigningError:
+                # Migrated into custody, but the legacy ciphertext is not retired yet.
+                item.custody_status = "migration_required"
+        listed = {item.address.lower() for item in result}
+        return result + [item for item in _local_wallets()
+                         if item.custody_status == "migration_required" and item.address.lower() not in listed]
+    return _local_wallets()
+
+
+def _local_wallets() -> list[WalletListItem]:
     from src.services.payment_identity import configured_payer_address
 
     payer = configured_payer_address()
     rows = get_connection().execute(
         """SELECT address, chain, network, chain_id, label, created_at,
-                  backup_confirmed_at
+                  backup_confirmed_at, encryption_method
            FROM wallets ORDER BY created_at DESC""",
     ).fetchall()
     return [
         WalletListItem(
             address=r["address"],
+            custody_status="isolated" if custody_runtime.active() else _custody_status(r["encryption_method"]),
             is_configured_x402_payer=bool(payer and r["chain"] == "evm" and r["address"].lower() == payer.lower()),
             chain=r["chain"],
             network=r["network"],
@@ -864,7 +901,24 @@ def list_wallets() -> list[WalletListItem]:
     ]
 
 
+def _cache_wallet_metadata(item: dict) -> None:
+    """Keep foreign-key-compatible public wallet records in the agent journal."""
+    conn = get_connection()
+    previous = conn.execute("SELECT encryption_method FROM wallets WHERE address=?", (item["address"],)).fetchone()
+    if previous and previous["encryption_method"] != "external-custody":
+        raise SigningError("Legacy wallet ciphertext remains in the agent database. Complete human custody migration and retirement before using this identity.")
+    conn.execute("""INSERT INTO wallets(id,address,chain,network,chain_id,encrypted_secret,
+        encryption_method,label,created_at,metadata_json,backup_confirmed_at)
+        VALUES(?,?,?,?,?,X'','external-custody',?,?,NULL,?)
+        ON CONFLICT(address) DO UPDATE SET label=excluded.label,
+        backup_confirmed_at=excluded.backup_confirmed_at""",
+        (str(uuid.uuid4()), item["address"], item["chain"], item["network"], item.get("chain_id"),
+         item.get("label"), item["created_at"], item.get("backup_confirmed_at")))
+    conn.commit()
+
+
 def _load_secret(address: str) -> str:
+    custody_runtime.require()
     row = get_connection().execute(
         "SELECT encrypted_secret, encryption_method FROM wallets WHERE address = ?",
         (address,),
@@ -883,17 +937,12 @@ def _load_secret(address: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Signing (unchanged from previous impl except for backup-gated callers)
+# Isolated signing adapters and custody-internal cryptography
 # ---------------------------------------------------------------------------
 
 
 def _account_from_secret(secret: str):
-    """Derive the signing account from a decrypted secret (key or mnemonic).
-
-    Callers own the plaintext's lifetime: decrypt into a local, call this,
-    discard. Shared by sign() and sign_x402_authorization() so the
-    key-vs-mnemonic branch exists once.
-    """
+    """Derive an account only inside the immutable custody process. Python immutable strings cannot be reliably erased; custody isolation limits who can read that process."""
     if secret.startswith("0x") or len(secret) == 64:
         return Account.from_key(secret)
     Account.enable_unaudited_hdwallet_features()
@@ -901,17 +950,14 @@ def _account_from_secret(secret: str):
 
 
 def sign(unsigned_tx: dict, wallet_address: str, chain_id: int | None = None, *, intent=None) -> str:
-    """Sign a transaction whose decoded effects match its immutable intent.
-
-    transaction_intent.validate_transaction refuses every other payload,
-    including EIP-7702 type 4 transactions and authorization lists, before
-    the key is decrypted. Callers that move live funds (execute_swap, live
-    strategy evaluation) MUST call require_backup_confirmed(wallet_address)
-    first; sign() itself does not gate on backup confirmation.
-    """
-    from src.services.transaction_intent import validate_transaction
+    """Sign a transaction whose decoded effects match its immutable intent. Ordinary processes route to isolated custody, which enforces independent human policy, backup, spending and replay limits before releasing a signature."""
+    from src.services.transaction_intent import intent_to_dict, validate_transaction
 
     normalized = validate_transaction(unsigned_tx, intent, wallet_address, chain_id)
+    if not custody_runtime.active():
+        return custody_client.call("sign", {"unsigned_tx": unsigned_tx,
+            "wallet_address": wallet_address, "chain_id": chain_id,
+            "intent": intent_to_dict(intent)})
     secret = _load_secret(wallet_address)
     try:
         account = _account_from_secret(secret)
@@ -944,27 +990,13 @@ def sign_x402_authorization(
     message: dict,
     wallet_address: str,
 ) -> bytes:
-    """Sign an EIP-3009 TransferWithAuthorization for an x402 payment.
-
-    This is the narrow typed helper that sign_message's docstring calls for:
-    a specific payload shape with its own guard, NOT a reopening of general
-    message signing. Anything that is not a USDC TransferWithAuthorization on
-    a known chain is refused by _validate_x402_authorization before the key is
-    decrypted.
-
-    Arguments mirror the x402 ClientEvmSigner.sign_typed_data protocol
-    (domain / types / primary_type / message) so the payer service can adapt
-    this to the SDK without repacking, and returns the 65-byte ECDSA
-    signature that protocol expects.
-
-    NOTE: like sign(), this does NOT gate on backup confirmation — the gate
-    lives one layer up. An x402 payment moves real funds, so the caller MUST
-    call require_backup_confirmed(wallet_address) first, on the same rule as
-    execute_swap and live strategy evaluation. Nor does it enforce any spend
-    limit: a signing guard validates one payload's shape and cannot see an
-    aggregate. Per-payment authorization and portfolio-wide spend control are
-    separate concerns, deliberately kept in separate layers.
-    """
+    """Sign exactly the guarded EIP-3009 USDC structure. The isolated broker additionally enforces its independently configured payee, lifetime budget, per-payment limit, freshness, backup and replay controls."""
+    if not custody_runtime.active():
+        message = {key: ("0x" + bytes(value).hex() if isinstance(value, (bytes, bytearray)) else value)
+                   for key, value in message.items()}
+        result = custody_client.call("sign_x402_authorization", {"domain": domain, "types": types,
+            "primary_type": primary_type, "message": message, "wallet_address": wallet_address})
+        return bytes.fromhex(result.removeprefix("0x"))
     payee, value, chain_id = _validate_x402_authorization(
         domain, types, primary_type, message, wallet_address
     )
@@ -1016,12 +1048,10 @@ def sign_x402_authorization(
     return bytes(signed.signature)
 
 
-def sign_marketplace_proof(challenge: dict, *, operation: str, arguments: dict,
-                           wallet_address: str, audience: str, identity: dict,
-                           chain_id: int | None, xrpl_network: str | None = None) -> dict:
-    """Sign a validated ownership action using the selected wallet's chain adapter."""
-    from eth_account.messages import encode_defunct
-
+def _validate_marketplace_proof(challenge: dict, *, operation: str, arguments: dict,
+                                wallet_address: str, audience: str, identity: dict,
+                                chain_id: int | None, xrpl_network: str | None = None) -> tuple[str, str]:
+    """Validate public proof metadata/current validity without loading any key."""
     from src.services.marketplace_authorization import validate_challenge
 
     row = _get_wallet_row(wallet_address)
@@ -1039,6 +1069,23 @@ def sign_marketplace_proof(challenge: dict, *, operation: str, arguments: dict,
     message = validate_challenge(challenge, operation=operation, arguments=arguments,
                                  wallet=wallet_address, audience=audience, identity=identity, chain=chain,
                                  network=f"xrpl:{xrpl_network}" if chain == "xrpl" else f"eip155:{chain_id}")
+    return chain, message
+
+
+def sign_marketplace_proof(challenge: dict, *, operation: str, arguments: dict,
+                           wallet_address: str, audience: str, identity: dict,
+                           chain_id: int | None, xrpl_network: str | None = None) -> dict:
+    """Sign a validated ownership action using the selected wallet's chain adapter."""
+    if not custody_runtime.active():
+        return custody_client.call("sign_marketplace_proof", {"challenge": challenge,
+            "operation": operation, "arguments": arguments, "wallet_address": wallet_address,
+            "audience": audience, "identity": identity, "chain_id": chain_id,
+            "xrpl_network": xrpl_network})
+    from eth_account.messages import encode_defunct
+
+    chain, message = _validate_marketplace_proof(challenge, operation=operation, arguments=arguments,
+        wallet_address=wallet_address, audience=audience, identity=identity,
+        chain_id=chain_id, xrpl_network=xrpl_network)
     secret = _load_secret(wallet_address)
     try:
         if chain == "xrpl":
@@ -1068,6 +1115,10 @@ def sign_marketplace_authorization(challenge: dict, **kwargs) -> str:
 
 _SIWX_CHAINS = {"eip155:8453": 8453, "eip155:84532": 84532}
 _SIWX_NONCE = re.compile(r"^[A-Za-z0-9]{8,64}$")
+_SIWX_TIMESTAMP = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})"
+)
 _SIWX_MAX_WINDOW_SECONDS = 600
 _SIWX_CLOCK_SKEW_SECONDS = 60
 
@@ -1083,9 +1134,21 @@ def _validate_siwx(*, wallet_address: str, domain: str, uri: str, chain: str, no
     from src.config import app_config
     from src.shared.clients.mangrove import _payment_destination
 
+    # Validate the exact text that will be signed, before URL/date parsers can
+    # normalize it. Otherwise ISO parsers accept a newline as a date/time
+    # separator, and regex '$' accepts a nonce ending with a newline.
+    for value in (wallet_address, domain, uri, chain, nonce, issued_at, expiration_time):
+        if (type(value) is not str
+                or any(ord(char) < 32 or 127 <= ord(char) <= 159 or char in "\u2028\u2029" for char in value)):
+            raise SigningError("Refused to sign: Sign-In-With-X fields must be text without control characters.")
+    if not _is_hex_address(wallet_address):
+        raise SigningError("Refused to sign: malformed Sign-In-With-X wallet address.")
     expected = httpx.URL(_payment_destination(app_config)["base_url"])
     expected_origin = f"{expected.scheme}://{expected.netloc.decode('ascii')}"
-    target = httpx.URL(uri)
+    try:
+        target = httpx.URL(uri)
+    except httpx.InvalidURL:
+        raise SigningError("Refused to sign: malformed Sign-In-With-X URI.") from None
     if (domain != expected.netloc.decode("ascii")
             or f"{target.scheme}://{target.netloc.decode('ascii')}" != expected_origin):
         raise SigningError("Refused to sign: a Sign-In-With-X proof is only signed for the "
@@ -1096,8 +1159,10 @@ def _validate_siwx(*, wallet_address: str, domain: str, uri: str, chain: str, no
             or chain != str(app_config.X402_NETWORK)):
         raise SigningError("Refused to sign: Sign-In-With-X needs the selected Base wallet on "
                            "the configured network.")
-    if not _SIWX_NONCE.match(nonce or ""):
+    if not _SIWX_NONCE.fullmatch(nonce):
         raise SigningError("Refused to sign: malformed Sign-In-With-X nonce.")
+    if not all(_SIWX_TIMESTAMP.fullmatch(value) for value in (issued_at, expiration_time)):
+        raise SigningError("Refused to sign: Sign-In-With-X times must use RFC3339 text with a time zone.")
     try:
         issued = datetime.fromisoformat(issued_at.replace("Z", "+00:00"))
         expires = datetime.fromisoformat(expiration_time.replace("Z", "+00:00"))
@@ -1109,7 +1174,7 @@ def _validate_siwx(*, wallet_address: str, domain: str, uri: str, chain: str, no
     now = datetime.now(timezone.utc)
     window = (expires - issued).total_seconds()
     if (abs((now - issued).total_seconds()) > _SIWX_CLOCK_SKEW_SECONDS
-            or not 0 < window <= _SIWX_MAX_WINDOW_SECONDS):
+            or expires <= now or not 0 < window <= _SIWX_MAX_WINDOW_SECONDS):
         raise SigningError("Refused to sign: a Sign-In-With-X proof must start now and last "
                            "at most ten minutes.")
     return chain_id
@@ -1126,6 +1191,10 @@ def sign_siwx_message(*, wallet_address: str, domain: str, uri: str, chain: str,
     The signature proves identity only -- it authorizes no transfer and no transaction.
     Backup confirmation is not required, for the same reason.
     """
+    if not custody_runtime.active():
+        return custody_client.call("sign_siwx_message", {"wallet_address": wallet_address,
+            "domain": domain, "uri": uri, "chain": chain, "nonce": nonce,
+            "issued_at": issued_at, "expiration_time": expiration_time})
     from eth_account.messages import encode_defunct
 
     from src.shared.x402.siwx import STATEMENT, VERSION, format_eip4361
@@ -1152,18 +1221,11 @@ def sign_siwx_message(*, wallet_address: str, domain: str, uri: str, chain: str,
 
 
 def sign_message(message: str | bytes, wallet_address: str) -> str:
-    """Disabled by the signing guard.
+    """General-purpose personal message signing is disabled.
 
-    EIP-191 personal_sign is not required by any 1inch swap flow the agent
-    currently supports. Enabling arbitrary message signing is the attack
-    vector that produced the EIP-7702 drain on 2026-04-24 (the authorization
-    signed by the wallet's key is a message, not a tx). The guard refuses
-    all message-signing by default.
-
-    If a future flow (e.g. 1inch limit orders, Fusion intents, gasless
-    approves) legitimately needs to sign a structured message, add a narrow
-    typed helper with its own guard that validates the specific payload
-    shape — do NOT reopen this general-purpose personal_sign endpoint.
+    EIP-191 signatures and EIP-7702 authorization signatures have distinct
+    signing preimages. Historical source alone does not identify the incident's
+    signing route. Dedicated identity/payment proofs remain separately guarded.
     """
     # Arguments deliberately accepted for signature compatibility — they are
     # not used, since we refuse all calls. Referenced here to avoid lint warnings.
@@ -1171,13 +1233,15 @@ def sign_message(message: str | bytes, wallet_address: str) -> str:
     raise SigningError(
         "Refused to sign: sign_message is disabled by the wallet signing guard. "
         "The agent only signs 1inch swap txs and approve() calls for 1inch routers — "
-        "arbitrary message signing is a known phishing surface (EIP-7702 authorizations "
-        "were the shape that drained the workshop test wallet on 2026-04-24).",
+        "general-purpose message signing is not an authorized custody operation.",
         suggestion="If a specific 1inch flow needs message signing, add a narrow typed helper with its own guard — do not reopen the general personal_sign endpoint.",
     )
 
 
 def _get_wallet_row(address: str) -> dict | None:
+    if not custody_runtime.active() and custody_client.configured():
+        return next((item.model_dump(mode="json") for item in list_wallets()
+                     if item.address.lower() == address.lower()), None)
     row = get_connection().execute(
         """SELECT address, chain, network, chain_id, label, created_at,
                   backup_confirmed_at

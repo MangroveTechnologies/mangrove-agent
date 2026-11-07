@@ -25,7 +25,7 @@ blockchain.
 |  |   - local MCP tools + REST API                      |           |
 |  |   - forwards MangroveAI tools                       |           |
 |  |   - APScheduler (in-process timers)                 |           |
-|  |   - Fernet-encrypted wallet keys                    |           |
+|  |   - public wallet metadata + custody RPC                    |           |
 |  |   - SQLite DB: wallets, swaps, schedules, payments  |           |
 |  +--------------+----------------------+---------------+           |
 |                 |                      |                           |
@@ -71,12 +71,7 @@ things:
    for schedules whose next evaluation is due) and the reconciliation workers
    for broker orders and payments. There is no separate daemon and no system
    cron. If the process stops, nothing ticks.
-4. **Holds encrypted wallet keys.** When you create or import a wallet, the
-   private key is encrypted with a Fernet master key and stored in the SQLite
-   file. The master key lives in a file at `./agent-data/master.key` (mode 600)
-   or, if no such file exists, in your OS keychain (macOS Keychain, Linux
-   Secret Service or Windows Credential Manager). The agent decrypts a key
-   in-process only when it needs to sign.
+4. **Calls isolated custody.** A separate protected OS identity owns wallet keys, its master key, policy and signing journal. The agent holds public wallet metadata and calls a narrow authenticated Unix socket. Human backup/import/confirmation have no agent HTTP/MCP/RPC authority; see [custody](../../docs/custody.md).
 
 You can see it running with `ps aux | grep uvicorn`, which shows one Python
 process with the configured port.
@@ -89,7 +84,7 @@ Durable state lives in one directory:
 agent-data/
 |-- agent.db     SQLite: wallets, swaps, paper schedules, payment ledger,
 |                scheduler jobs, strategy execution records
-|-- master.key   Fernet master key (mode 600, gitignored)
+|-- master.key   Agent credential/payment key (wallet keys are separate)
 |                [only present when you are not using the OS keychain]
 |-- bare.pid     uvicorn process ID
 |-- bare.log     server log
@@ -129,17 +124,14 @@ scripts/
 |-- setup.sh                - initial setup; idempotent
 |-- setup-mcp.sh            - register the MCP server with Claude Code
 |-- chat.sh                 - restricted Claude session (Chapter 01)
-|-- stash-secret.sh         - import an existing wallet (hidden input)
-|-- reveal-secret.sh        - view a wallet's secret in your terminal
-|-- confirm-backup.sh       - unlock live swaps for a wallet
+|-- install-custody.py      - independent administrator deployment
+|-- custody-service.py      - protected daemon/human administration launcher
 |-- stash-kraken-secret.sh  - connect Kraken with your own API key
 |-- connect-robinhood.sh    - authorize Robinhood in a browser
 `-- verify_quickstart.sh    - sanity-check the whole setup
 ```
 
-`stash-secret.sh`, `reveal-secret.sh`, `confirm-backup.sh` and
-`stash-kraken-secret.sh` handle secrets. They run only in your terminal, and
-the AI client never sees what they print. Chapter 06 covers the wallet scripts.
+Wallet secret operations run only through the protected installed custody launcher in the independent human terminal. The old agent stash/reveal/confirm helpers are retired. `stash-kraken-secret.sh` remains a distinct venue-credential workflow. [Chapter 06](06-wallet-setup.md) explains wallet custody.
 
 ## What runs at Mangrove
 
