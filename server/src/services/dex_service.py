@@ -34,7 +34,7 @@ from decimal import Decimal
 from typing import Any
 
 from src.shared.clients.mangrove import mangrove_markets_client
-from src.shared.errors import SdkError, ValidationError
+from src.shared.errors import SdkError, ValidationError, WalletInputBalanceEmpty
 from src.shared.logging import get_logger
 
 _log = get_logger(__name__)
@@ -210,3 +210,47 @@ def get_quote(
         quote_id=data.get("quote_id"),
     )
     return data
+
+
+def require_input_balance(client: Any, input_token: str, chain_id: int, wallet_address: str) -> None:
+    """Refuse a live swap whose wallet holds zero of the token it would spend.
+
+    Server-side replacement for the zero-balance check that used to live only
+    in the Claude Code hook ``.claude/hooks/preflight-swap.sh``, so every MCP
+    and REST client gets it. Runs before the quote and before any approval is
+    signed, so an unfundable swap never spends gas on an approval.
+
+    Fails open, like the hook: an unreadable balance, a token missing from the
+    tracked set, or a symbol other than USDC that cannot be mapped to an
+    address offline lets the swap continue to its own SDK errors. Only an
+    explicit zero blocks.
+    """
+    from src.services.wallet_manager import canonical_usdc_addresses
+
+    token = input_token.strip()
+    if token.upper() == "USDC":
+        token = canonical_usdc_addresses().get(chain_id, "")
+    if not _is_address(token):
+        return
+    try:
+        balances = getattr(client.dex.balances(chain_id=chain_id, wallet=wallet_address), "balances", None)
+    except Exception as exc:  # noqa: BLE001 - fail open; the swap surfaces its own error
+        _log.warning("dex.preflight.balance_unavailable", chain_id=chain_id, error_type=type(exc).__name__)
+        return
+    if not isinstance(balances, dict):
+        return
+    target = token.lower()
+    raw = next((value for key, value in balances.items() if str(key).lower() == target), None)
+    try:
+        empty = raw is not None and Decimal(str(raw)) == 0
+    except ArithmeticError:
+        return
+    if empty:
+        raise WalletInputBalanceEmpty(
+            f"Wallet {wallet_address} holds 0 of input token {input_token} on chain_id {chain_id}. "
+            "No quote was requested and nothing was signed.",
+            suggestion=(
+                "Confirm the deposit landed on this chain (the same address exists on every EVM "
+                "chain), then retry. On Base Sepolia (84532), fund the wallet from a faucet first."
+            ),
+        )

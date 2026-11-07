@@ -24,6 +24,15 @@
     ],
     "PreToolUse": [
       {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/block-wallet-secrets.sh\" --mode pre",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -39,6 +48,17 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/preflight-swap.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/block-wallet-secrets.sh\" --mode failure",
             "timeout": 5
           }
         ]

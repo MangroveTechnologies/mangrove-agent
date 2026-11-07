@@ -28,6 +28,8 @@ def installation(tmp_path):
     (root / 'SAGE.md').write_text((ROOT / 'SAGE.md').read_text())
     shutil.copytree(ROOT / '.claude/rules', root / '.claude/rules')
     (root / 'server/src/config').mkdir(parents=True)
+    shutil.copytree(ROOT / 'server/src/shared', root / 'server/src/shared',
+                    ignore=shutil.ignore_patterns('__pycache__'))
     (root / 'server/src/config/local-config.json').write_text(json.dumps({
         'AUTH_ENABLED': True, 'API_KEYS': 'synthetic-local-key',
         'LOCAL_AGENT_URL': 'http://127.0.0.1:9083',

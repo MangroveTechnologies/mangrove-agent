@@ -1230,6 +1230,10 @@ def wallet_action(action, cfg, *, guided=False, selected_address=None, before_mu
 
 
 def chat_settings() -> dict:
+    for asset in ('scripts/wallet_secret_guard.py', 'server/src/shared/secret_guard.py',
+                  '.claude/hooks/bip39-english.txt'):
+        if not (ROOT / asset).is_file():
+            raise SetupError('Required secret detector assets are missing; repair the installation.')
     def hook(name: str, *args: str) -> dict:
         path = ROOT / '.claude/hooks' / name
         if not path.is_file():
@@ -1247,7 +1251,8 @@ def chat_settings() -> dict:
         'hooks': {
             'UserPromptSubmit': [{'hooks': [hook('block-wallet-secrets.sh', '--mode', 'user')]}],
             'PostToolUse': [{'hooks': [hook('block-wallet-secrets.sh', '--mode', 'tool')]}],
-            'PreToolUse': [{
+            'PostToolUseFailure': [{'hooks': [hook('block-wallet-secrets.sh', '--mode', 'failure')]}],
+            'PreToolUse': [{'hooks': [hook('block-wallet-secrets.sh', '--mode', 'pre')]}, {
                 'matcher': 'mcp__mangrove-agent__execute_swap',
                 'hooks': [hook('preflight-swap.sh')],
             }],
