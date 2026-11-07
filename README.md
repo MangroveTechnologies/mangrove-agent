@@ -215,7 +215,7 @@ The agent calls `agent_start_paper_schedule` with the server strategy ID, an int
 
 - **Robinhood:** use the bundled `setup-robinhood` skill and the [execution venue guide](docs/robinhood-execution.md). It uses broker OAuth and needs no local trading wallet.
 - **DEX:** wallet setup and live trading are covered in chapters 06 and 07 of the tutorial. In outline: create or import a wallet (`create_wallet`, or `./scripts/stash-secret.sh` and then `import_wallet`); save its secret in your own terminal with `./scripts/reveal-secret.sh --address WALLET_ADDRESS`; run `./scripts/confirm-backup.sh WALLET_ADDRESS`; fund the wallet with a small amount of USDC on Base; then trade. `execute_swap` needs `confirm=true`, an explicit `slippage_pct` of at most 0.0025 (0.25%) and a backup-confirmed wallet. A strategy moves to `live` through `PATCH /api/v1/agent/strategies/{strategy_id}/status` with `confirm=true` and an allocation (`wallet_address`, `token`, `token_address`, `amount`, `slippage_pct`).
-- At swap time the agent signs locally and sends only the signed transaction to MangroveMarkets to broadcast. Swap signing is restricted to calls to the 1inch routers and the ERC-20 approvals that precede them; any other transaction is refused before the key is decrypted.
+- At swap time the agent signs locally and sends only the signed transaction to MangroveMarkets to broadcast. The agent builds each swap's intent (chain, wallet, router, assets, amount and minimum output) from the original order and signs only a generic 1inch V5/V6 swap or the finite ERC-20 approval that matches it. EIP-7702 and blob transactions, authorization lists, unknown selectors and unreviewed chains, including Base Sepolia, are refused before the key is decrypted.
 
 ## Connect your Kraken account
 
@@ -349,12 +349,9 @@ cd server
 ENVIRONMENT=test ../.venv/bin/python3 -m pytest tests/ -v
 ```
 
-CI runs the same suite. The two live-swap tests in `tests/e2e/test_live_swap.py` are skipped unless you opt in:
+CI runs the same suite, including the offline rejection of unsupported Sepolia swap signing. The live mainnet swap test in `tests/e2e/test_live_swap.py` is skipped unless you opt in:
 
 ```bash
-# Base Sepolia testnet (run from server/)
-ENABLE_SEPOLIA_TEST=1 BASE_SEPOLIA_PRIVATE_KEY=0x... ENVIRONMENT=test ../.venv/bin/python3 -m pytest tests/e2e/test_live_swap.py::test_sepolia_live_swap
-
 # Base mainnet, real funds (budget cap 0.10 USDC per run)
 ENABLE_MAINNET_TEST=1 BASE_MAINNET_PRIVATE_KEY=0x... ENVIRONMENT=test ../.venv/bin/python3 -m pytest tests/e2e/test_live_swap.py::test_mainnet_live_swap
 ```

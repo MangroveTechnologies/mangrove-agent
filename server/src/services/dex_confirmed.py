@@ -15,6 +15,14 @@ from src.models.domain import OrderIntent
 from src.services import broker_store as store
 from src.services import confirmed_execution as confirmed
 from src.services import dex_service, receipt_settlement
+from src.services.transaction_intent import (
+    ONEINCH_ROUTING_FEE_BPS,
+    ApprovalIntent,
+    SwapIntent,
+    minimum_return,
+    router_for_chain,
+    validate_transaction,
+)
 from src.shared.errors import SdkError
 
 PENDING = ("submitting", "pending", "uncertain")
@@ -222,22 +230,45 @@ def execute(oid, intent, wallet_address, chain_id, slippage_pct, max_input_amoun
         quote = dex_service.get_quote(
             input_token=in_address, output_token=out_address, amount=amount, chain_id=chain_id
         )
+        router_address = router_for_chain(chain_id)
+        amount_base_units = dex_service.to_base_units(amount, in_decimals)
+        swap_intent = SwapIntent(
+            chain_id, wallet_address, router_address, in_address, out_address,
+            amount_base_units, minimum_return(
+                quote.get("output_amount_base_units"), slippage_pct,
+                routing_fee_bps=ONEINCH_ROUTING_FEE_BPS,
+            ),
+            routing_fee_bps=ONEINCH_ROUTING_FEE_BPS,
+        )
+        update(oid, context=dict(
+            routing_fee_cap_bps=ONEINCH_ROUTING_FEE_BPS,
+            minimum_return_base_units=str(swap_intent.min_return_amount),
+            gross_quote_output_base_units=str(quote.get("output_amount_base_units")),
+        ))
         swap = client.dex.prepare_swap(
             quote_id=quote["quote_id"], wallet_address=wallet_address, slippage=slippage_pct * 100
         )
         payload = getattr(swap, "payload", {})
         _zero_value(payload)
-        wallet_manager._validate_sign_target(wallet_manager._normalize_payload(payload, chain_id=chain_id))
-        approval = client.dex.approve_token(token_address=in_address, chain_id=chain_id, wallet_address=wallet_address)
+        validate_transaction(payload, swap_intent, wallet_address, chain_id)
+        approval = client.dex.approve_token(
+            token_address=in_address, chain_id=chain_id, wallet_address=wallet_address,
+            amount=amount_base_units,
+        )
         if approval is not None:
             approval_payload = getattr(approval, "payload", {})
             _zero_value(approval_payload)
-            wallet_manager._validate_sign_target(wallet_manager._normalize_payload(approval_payload, chain_id=chain_id))
+            approval_intent = ApprovalIntent(
+                chain_id, wallet_address, in_address, router_address, amount_base_units,
+            )
+            validate_transaction(approval_payload, approval_intent, wallet_address, chain_id)
             update(oid, context=dict(approval_required=True, approval_recipient=approval_payload.get("to")))
         update(oid, context=dict(router_address=payload.get("to"), signed_native_value="0"))
         if approval is not None:
             _authorize_entry(oid, intent)
-            signed = executor.wallet_sign(approval_payload, wallet_address, chain_id=chain_id)
+            signed = executor.wallet_sign(
+                approval_payload, wallet_address, chain_id=chain_id, intent=approval_intent,
+            )
             approval_hash = _signed_hash(signed)
             update(oid, context=dict(approval_tx_hash=approval_hash))
             broadcast_signed(client, signed, approval_hash)
@@ -250,10 +281,10 @@ def execute(oid, intent, wallet_address, chain_id, slippage_pct, max_input_amoun
             )
             payload = getattr(swap, "payload", {})
             _zero_value(payload)
-            wallet_manager._validate_sign_target(wallet_manager._normalize_payload(payload, chain_id=chain_id))
+            validate_transaction(payload, swap_intent, wallet_address, chain_id)
             update(oid, context=dict(router_address=payload.get("to"), signed_native_value="0"))
         _authorize_entry(oid, intent)
-        signed = executor.wallet_sign(payload, wallet_address, chain_id=chain_id)
+        signed = executor.wallet_sign(payload, wallet_address, chain_id=chain_id, intent=swap_intent)
         tx_hash = _signed_hash(signed)
         update(oid, status="pending", tx_hash=tx_hash)
         broadcast_signed(client, signed, tx_hash)

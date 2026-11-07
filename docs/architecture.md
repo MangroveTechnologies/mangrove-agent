@@ -311,11 +311,13 @@ These controls are enforced in the agent, independent of the AI client.
   never checked.
 - **Backup gate.** Live swaps, live strategy activation and x402 payments refuse a wallet
   until `confirm-backup` has recorded that the user saved its secret off the machine.
-- **Signing guard.** The wallet manager signs only a call to a 1inch aggregation router, an
-  ERC-20 `approve()` for a 1inch spender, and the narrow typed-data forms used for x402
-  payment authorizations, marketplace proofs and Sign-In-With-X. EIP-7702 and blob
-  transactions, authorization lists, and any other target are refused before the key is
-  decrypted.
+- **Signing guard.** The wallet manager signs a transaction only when its decoded effects
+  match an intent the agent built from the original order: a generic 1inch V5/V6 swap with the
+  requested chain, wallet, assets, amount, minimum output and recipient, or the finite ERC-20
+  approval for that amount. It also signs the narrow typed-data forms used for x402 payment
+  authorizations, marketplace proofs and Sign-In-With-X. EIP-7702 and blob transactions,
+  authorization lists, unknown selectors and unreviewed chains, including Base Sepolia, are
+  refused before the key is decrypted.
 - **Explicit confirmation.** Swaps, going live, leaving live, starting a paper schedule,
   marketplace submission and spend top-ups each need `confirm=true`.
 - **Slippage cap.** Swaps and allocations require an explicit tolerance of at most 0.25

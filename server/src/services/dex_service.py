@@ -52,6 +52,23 @@ def _is_address(token: str) -> bool:
     return isinstance(token, str) and token.startswith("0x") and len(token) == 42
 
 
+def resolve_token_address(client: Any, chain_id: int, token: str) -> str:
+    """Resolve the original requested asset, refusing ambiguous symbol matches."""
+    from src.services.transaction_intent import NATIVE_TOKEN, ZERO_ADDRESS, address
+
+    if _is_address(token):
+        result = address(token)
+        return NATIVE_TOKEN if result == ZERO_ADDRESS else result
+    try:
+        matches = client.dex.token_search(chain_id=chain_id, query=token)
+    except Exception:
+        raise SdkError("Could not resolve the requested token address.") from None
+    exact = [m for m in matches or [] if str(getattr(m, "symbol", "")).upper() == token.upper()]
+    if len(exact) != 1:
+        raise SdkError("Live signing requires one exact token-symbol match; use the contract address.")
+    return address(getattr(exact[0], "address", None))
+
+
 def resolve_decimals(client: Any, chain_id: int, token: str) -> int:
     """Return the ERC-20 decimals for ``token`` on ``chain_id``.
 
@@ -190,12 +207,31 @@ def get_quote(
     data = quote.model_dump() if hasattr(quote, "model_dump") else dict(quote)
     raw_in = data.get("input_amount")
     raw_out = data.get("output_amount")
+    # A quote may supply a price; it cannot replace the requested operation.
+    if raw_in is None or Decimal(str(raw_in)) != raw_amount:
+        raise SdkError("DEX quote input amount differs from the requested amount.")
+    if data.get("chain_id") is not None and data["chain_id"] != chain_id:
+        raise SdkError("DEX quote chain differs from the requested chain.")
+    for field, requested in (("src_token_address", input_token), ("dst_token_address", output_token)):
+        if data.get(field) and _is_address(requested) and str(data[field]).lower() != requested.lower():
+            raise SdkError("DEX quote asset differs from the requested token.")
     if raw_in is not None:
         data["input_amount_base_units"] = raw_in
         data["input_amount"] = from_base_units(raw_in, in_decimals)
     if raw_out is not None:
         data["output_amount_base_units"] = raw_out
         data["output_amount"] = from_base_units(raw_out, out_decimals)
+        from src.services.transaction_intent import ONEINCH_ROUTING_FEE_BPS, quote_after_max_routing_fee
+
+        # Current Markets quotes are gross of the fixed partner fee added by
+        # prepare_swap. Expose that separate allowance without relabeling it
+        # as price slippage or reporting it as a measured execution fee.
+        data["routing_fee_cap_bps"] = ONEINCH_ROUTING_FEE_BPS
+        net_floor = quote_after_max_routing_fee(
+            raw_out, ONEINCH_ROUTING_FEE_BPS,
+        )
+        data["output_amount_after_max_routing_fee_base_units"] = net_floor
+        data["output_amount_after_max_routing_fee"] = from_base_units(net_floor, out_decimals)
     data["input_token_decimals"] = in_decimals
     data["output_token_decimals"] = out_decimals
 

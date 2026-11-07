@@ -57,7 +57,9 @@ def client(tmp_path, monkeypatch):
     sdk.dex.approve_token.return_value = None  # already approved
 
     prepare = MagicMock()
-    prepare.payload = {"chainId": 84532, "to": "0x" + "a" * 40, "data": "0x"}
+    from tests.dex_fixtures import generic_swap_payload
+
+    prepare.payload = generic_swap_payload()
     sdk.dex.prepare_swap.return_value = prepare
 
     bcast = MagicMock()
@@ -105,6 +107,7 @@ def client(tmp_path, monkeypatch):
         m = MagicMock()
         m.symbol = query.upper()
         m.decimals = dec
+        m.address = _USDC_BASE if query.upper() == "USDC" else _WETH_BASE
         return [m]
 
     sdk.dex.token_search.side_effect = _token_search
@@ -127,7 +130,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr("src.services.order_executor.mangrove_markets_client", lambda: sdk)
     monkeypatch.setattr(
         "src.services.order_executor.wallet_sign",
-        lambda payload, wallet_address, chain_id=None: "0xSIGNED",
+        lambda payload, wallet_address, chain_id=None, *, intent=None: "0xSIGNED",
     )
     # Backup gate stub — this test doesn't seed a wallet row, and
     # execute_swap's gate calls require_backup_confirmed(address) which
@@ -232,7 +235,7 @@ def test_swap_requires_confirm(client):
         headers=_auth(),
         json={
             "input_token": "USDC", "output_token": "ETH", "amount": 100.0,
-            "chain_id": 84532, "wallet_address": "0xabc",
+            "chain_id": 8453, "wallet_address": "0x" + "11" * 20,
             "slippage_pct": 0.002, "confirm": False,
         },
     )
@@ -248,7 +251,7 @@ def test_swap_requires_explicit_slippage(client):
         headers=_auth(),
         json={
             "input_token": "USDC", "output_token": "ETH", "amount": 100.0,
-            "chain_id": 84532, "wallet_address": "0xabc", "confirm": True,
+            "chain_id": 8453, "wallet_address": "0x" + "11" * 20, "confirm": True,
         },
     )
     assert r.status_code == 422  # Pydantic rejects missing required field
@@ -266,7 +269,7 @@ def test_swap_rejects_slippage_above_cap(client):
         headers=_auth(),
         json={
             "input_token": "USDC", "output_token": "ETH", "amount": 100.0,
-            "chain_id": 84532, "wallet_address": "0xabc",
+            "chain_id": 8453, "wallet_address": "0x" + "11" * 20,
             "slippage_pct": 0.01, "confirm": True,  # 1%, over the 0.25% cap
         },
     )
@@ -287,7 +290,7 @@ def test_swap_accepts_slippage_at_cap(client):
         headers=_auth(),
         json={
             "input_token": "USDC", "output_token": "ETH", "amount": 100.0,
-            "chain_id": 84532, "wallet_address": "0xabc",
+            "chain_id": 8453, "wallet_address": "0x" + "11" * 20,
             "slippage_pct": 0.0025, "confirm": True,
         },
     )
@@ -300,7 +303,7 @@ def test_swap_happy_path(client):
         headers=_auth(),
         json={
             "input_token": "USDC", "output_token": "ETH", "amount": 100.0,
-            "chain_id": 84532, "wallet_address": "0xabc",
+            "chain_id": 8453, "wallet_address": "0x" + "11" * 20,
             "slippage_pct": 0.002, "confirm": True,
         },
     )
@@ -327,7 +330,7 @@ def test_swap_rejects_dust_amount(client):
         headers=_auth(),
         json={
             "input_token": "USDC", "output_token": "ETH", "amount": 0.0000001,
-            "chain_id": 84532, "wallet_address": "0xabc",
+            "chain_id": 8453, "wallet_address": "0x" + "11" * 20,
             "slippage_pct": 0.002, "confirm": True,
         },
     )
@@ -341,7 +344,7 @@ def test_auth_required_on_dex_endpoints(client):
     assert client.get("/api/v1/agent/dex/pairs?venue_id=x").status_code == 401
     assert client.post("/api/v1/agent/dex/quote",
                        json={"input_token": "USDC", "output_token": "ETH",
-                             "amount": 1, "chain_id": 84532}).status_code == 401
+                             "amount": 1, "chain_id": 8453}).status_code == 401
 
 
 def test_tx_status(client):

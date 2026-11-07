@@ -21,8 +21,8 @@ Read-only audit against the mangrove-agent repo. Covers:
 1. **Check for prior audits** at `agent-data/audits/*-security-audit.md` (local and gitignored; audit reports are not published). If a recent one exists, read it to avoid re-flagging fixed issues and to track remediation.
 
 2. **Wallet + signing invariants** (CRITICAL - given 2026-04-24). Verify:
-   - `server/src/services/wallet_manager.py::_validate_sign_target` still refuses: tx type 3, tx type 4, `authorizationList` field, non-1inch `to`, non-1inch-spender approves, bare tx (no `to`).
-   - `_ONEINCH_ROUTERS` set matches known 1inch V5 + V6 addresses.
+   - `transaction_intent.validate_transaction` rejects unsupported types/chains/selectors, authorization lists, malformed ABI, mismatched chain/assets/recipient/amounts, native value and excessive fees before key access.
+   - `ROUTER_V5` and `ROUTER_V6` in `transaction_intent.py` match the known 1inch V5 + V6 addresses.
    - `sign_message()` still raises unconditionally - no EIP-191 personal_sign path.
    - No other code path in `server/src/` calls `Account.from_key`, `Account.from_mnemonic`, `sign_transaction`, `sign_message`, `sign_typed_data`, `sign_authorization`, or `setCode` outside of `wallet_manager.py`.
    - Fernet `decrypt()` is only called from `wallet_manager._load_secret` and `reveal_wallet_secret`.
@@ -80,7 +80,7 @@ Overall severity + high-level findings count by CRITICAL / HIGH / MEDIUM / LOW.
 (repeat per finding)
 
 ## Done Well
-- Signing guard at `wallet_manager._validate_sign_target` correctly refuses EIP-7702
+- Strict transaction-intent validation correctly refuses EIP-7702
 - (etc.)
 
 ## Dependencies

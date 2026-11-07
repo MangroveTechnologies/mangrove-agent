@@ -27,7 +27,7 @@ Check each principle if relevant:
 5. Explicit confirmation at status transitions
 6. Small first allocation
 7. Wallet secrets NEVER in chat
-8. **Signing is 1inch-only** (hard guard at `wallet_manager._validate_sign_target`)
+8. **Signing validates decoded intent** (`transaction_intent.validate_transaction`, run by `wallet_manager.sign()`)
 9. **Testnet-first for learning** (Base Sepolia 84532 by default)
 
 Plus the stage machine (Stage 0 tour -> 1 Orient -> 2 Author -> 3 Review -> 4 Paper -> 4.5 Wallet -> 5 Live -> 6 Monitor). Does the change preserve the stage boundaries?
@@ -35,8 +35,8 @@ Plus the stage machine (Stage 0 tour -> 1 Orient -> 2 Author -> 3 Review -> 4 Pa
 ### 3. `.claude/rules/wallet-presentation.md` - wallet handling
 - Never echo plaintext keys / vault_tokens in chat prose.
 - Default to testnet for new wallets.
-- All signing routes through `wallet_manager.sign()` which is hard-guarded to 1inch-only payloads.
-- The signing guard allowlist (`_ONEINCH_ROUTERS`) must only be expanded with explicit review.
+- Transaction signing routes through `wallet_manager.sign()`, which signs only payloads whose decoded effects match the locally built intent; x402, SIWX and marketplace proofs have their own narrow guards.
+- Chain, router and function support in `transaction_intent.py` may only expand through explicit review.
 
 ### 4. `CONTRIBUTING.md` - branching + PR flow
 - Feature branch + PR for every change (no direct commits to main).
