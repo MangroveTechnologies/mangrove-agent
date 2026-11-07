@@ -38,8 +38,9 @@ status. That local read should work without shell commands or an explicit key
 argument. A connected status alone does not prove authenticated tool execution.
 See [Claude's dynamic-header documentation](https://code.claude.com/docs/en/mcp#use-dynamic-headers-for-custom-authentication).
 
-The explicit reveal command only writes secrets to a terminal; redirecting its
-output is refused. Use a private terminal and clear scrollback after backing up.
+Wallet backup, secret import and backup confirmation require the independent
+human custody administrator terminal. The former agent reveal/stash helpers are
+retired. See [isolated custody](custody.md) before enabling wallet payment.
 Verification checks local authentication, required tools and scheduler readiness.
 It can read upstream discovery and, in API-key mode, verify the configured key.
 It does not sign payments or establish wallet/payment readiness.
@@ -50,20 +51,8 @@ Interactive setup keeps one session open through wallet creation/import, backup,
 payer review, and applying settings. Fresh installations use **Base Mainnet**;
 x402 payments spend real USDC. Creating/importing a wallet makes no payment.
 
-- **Create:** select Create, review the network, and type `CREATE`. Setup creates
-  the wallet directly and displays its public address. Keep setup open while you
-  run the displayed reveal command in a separate private terminal, save the
-  secret, and run the displayed backup-confirmation command. The short `reveal-secret.sh --setup` and `confirm-backup.sh --setup` commands
-  read the wallet address and local URL from this checkout’s setup progress,
-  ignoring environment overrides from other agents. The confirmation command
-  shows the address and asks you to type `BACKED UP`. Return to the wizard and
-  choose **Check backup and continue** using the arrow keys and Enter. Setup
-  verifies the recorded confirmation; Enter alone never confirms backup.
-- **Import:** select Import, type `IMPORT`, acknowledge `BACKED UP` only if the
-  secret is saved outside the agent, and enter it at the hidden terminal prompt.
-  Confirm that the derived public address matches your intended wallet. An
-  already-confirmed backup skips the reveal step. Existing imports that still
-  need backup confirmation follow the same private-terminal backup flow.
+- **Create:** select Create, review the network and type `CREATE`. Custody creates the wallet and setup displays its public address. The human administrator saves and confirms its backup using the protected installed Python `-I` launcher in an independent terminal. Return to setup and choose **Check backup and continue**. The ordinary agent cannot confirm the backup itself.
+- **Import:** importing through ordinary setup is refused before secret input. Have the human administrator run direct custody import, verify its public address, then choose **Use saved**. Never give setup or the AI client a wallet secret or import handoff.
 - **Use saved:** choose from all saved EVM wallets. Each entry shows its address,
   backup status, and whether it is the current payer. The current payer is
   highlighted by default. Keeping it preserves spending settings without another
@@ -103,29 +92,13 @@ and confirmation commands can run while the wizard waits.
 ./scripts/setup.sh --wallet create
 ```
 
-Review the configured network and type `CREATE`. The agent creates an encrypted wallet and prints its public address. It does not select the wallet as payer or confirm a backup. Replace `WALLET_ADDRESS` below with that address:
+Review the configured network and type `CREATE`. Custody returns the public address and human backup instructions. A human then uses the independent administrator commands documented in [custody](custody.md), including the actual protected interpreter, launcher, policy and custody OS user. The old reveal/confirm scripts cannot perform these operations.
 
-```bash
-./scripts/reveal-secret.sh --address WALLET_ADDRESS
-```
-
-Run this only in your own terminal; it refuses to write to a file or pipe. Save the secret in secure storage outside the agent and clear your terminal scrollback. Only after saving it, confirm the backup:
-
-```bash
-./scripts/confirm-backup.sh WALLET_ADDRESS
-```
-
-If creation times out, list saved wallets before retrying, because the server may have completed the request. Reveal-by-address also works after a creation vault token has expired. Do not delete wallet state or regenerate an encryption key to recover.
+If creation times out, list wallets before retrying; do not create a replacement automatically or delete recovery state.
 
 ### Import an existing wallet
 
-```bash
-./scripts/setup.sh --wallet import
-```
-
-Review the network, type `IMPORT`, and type `BACKED UP` only if you have already saved the secret outside the agent. Enter the private key or mnemonic at the hidden prompt. The command passes it to the agent's local secret vault and imports the single-use vault token in memory; neither the secret nor the token is printed or placed in a command argument. You do not enter an address: the agent derives it and displays it, so check that it matches your wallet. Import marks the backup as confirmed, which is why the explicit acknowledgement comes first.
-
-If the address is already saved, import returns the existing wallet without replacing its key, original network metadata or backup status. Complete any outstanding backup confirmation before selecting it.
+Wallet import is direct human custody administration, not `setup.sh --wallet import` or an MCP handoff. In the independent terminal, use the installed protected launcher with `admin --config POLICY import`, acknowledge the independent backup, and enter hidden input there. Give the ordinary agent only the derived public address and select that saved wallet. The separate protected policy must authorize its wallet/network/payees and spending limits.
 
 ### Use a wallet already saved in this agent
 
@@ -133,7 +106,7 @@ If the address is already saved, import returns the existing wallet without repl
 ./scripts/setup.sh --wallet list
 ```
 
-This lists saved EVM public addresses and their backup status. A saved EVM wallet can be used on either Base network without importing its secret again; the configured payment network decides which one, and balances are separate on each network. If necessary, complete the reveal and backup commands above before selecting a payer. This is local custody, not a MetaMask or WalletConnect browser connection.
+This lists saved EVM public addresses and their backup status. A saved EVM wallet can be used on either Base network without importing its secret again; the configured payment network decides which one, and balances are separate on each network. If necessary, have the human administrator complete custody backup and confirmation before selecting a payer. Ordinary payer selection cannot raise custody limits.
 
 ### Select the payer and review spending
 

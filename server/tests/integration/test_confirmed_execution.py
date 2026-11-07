@@ -294,16 +294,16 @@ def test_finalized_receipt_adapter_clean_and_known_bad(ledger, monkeypatch, muta
 def test_execute_preflight_and_locally_hashed_broadcast_controls(ledger, monkeypatch, outcome):
     from eth_utils import keccak
 
-    from src.services import order_executor, wallet_manager
+    from src.services import order_executor
     from src.shared.clients import mangrove
+    from tests.dex_fixtures import generic_swap_payload
 
     localhash = "0x" + keccak(hexstr="0x0102").hex()
-    router = next(iter(wallet_manager._ONEINCH_ROUTERS))
 
     class RPC:
         def __call__(self, method, args):
             if method == "eth_chainId":
-                return "0x1" if outcome == "wrong_chain" else hex(84532)
+                return "0x1" if outcome == "wrong_chain" else hex(8453)
             if method == "eth_getBlockByNumber":
                 return dict(number="0x123", hash="0x" + "bb" * 32)
             if method == "eth_getTransactionReceipt":
@@ -322,15 +322,8 @@ def test_execute_preflight_and_locally_hashed_broadcast_controls(ledger, monkeyp
     sdk = MagicMock()
     sdk.dex.token_search.return_value = [SimpleNamespace(symbol="BTC", address=ASSET, decimals=18)]
     sdk.dex.token_info.return_value = SimpleNamespace(decimals=6)
-    payload = dict(
-        to=router,
-        value=1 if outcome == "native_value" else 0,
-        data="0x1234",
-        gas=100000,
-        gasPrice=1,
-        nonce=0,
-        chainId=84532,
-    )
+    payload = generic_swap_payload(QUOTE, ASSET, 200_000_000, 99_999, WALLET)
+    payload["value"] = 1 if outcome == "native_value" else 0
     sdk.dex.prepare_swap.return_value = SimpleNamespace(payload=payload)
     sdk.dex.approve_token.return_value = None
     monkeypatch.setattr(mangrove, "mangrove_markets_client", lambda: sdk)
@@ -341,7 +334,7 @@ def test_execute_preflight_and_locally_hashed_broadcast_controls(ledger, monkeyp
                 conn.execute("UPDATE strategies SET status='inactive' WHERE id='s'")
             if outcome == "stale_during_quote":
                 conn.execute("UPDATE strategies SET book_revision=book_revision+1 WHERE id='s'")
-        return dict(quote_id="quote", output_amount=99999)
+        return dict(quote_id="quote", output_amount=99999, output_amount_base_units=99999)
 
     monkeypatch.setattr(dex.dex_service, "get_quote", quote)
 
@@ -363,10 +356,10 @@ def test_execute_preflight_and_locally_hashed_broadcast_controls(ledger, monkeyp
     sdk.dex.broadcast.side_effect = broadcast
     oid = dex.reserve("s", "eval", intent(), dict(id="p"), confirmed.snapshot_revision("s"))
     if outcome == "clean":
-        dex.execute(oid, intent(), WALLET, 84532, 0.002, 1000)
+        dex.execute(oid, intent(), WALLET, 8453, 0.002, 1000)
     else:
         with pytest.raises(Exception):
-            dex.execute(oid, intent(), WALLET, 84532, 0.002, 1000)
+            dex.execute(oid, intent(), WALLET, 8453, 0.002, 1000)
     row = dex.orders("s")[0]
     state, positions, _, complete = confirmed.dex_inputs("s", 100)
     assert positions == [] and state["cash_balance"] == 1000
@@ -594,3 +587,69 @@ def test_exit_batch_defers_entry_and_continues_distinct_position_after_uncertain
     assert seen == ["p1", "p2"]
     assert len(dex.orders("s", pending=True)) == 2
     assert not any(json.loads(o["intent_json"])["engine_position_id"] == "new" for o in dex.orders("s"))
+
+
+def _live_tick_harness(monkeypatch, balances):
+    """A Markets client that reports ``balances`` and records quote and sign calls."""
+    from src.services import order_executor
+    from src.shared.clients import mangrove
+
+    class RPC:
+        def __call__(self, method, args):
+            if method == "eth_chainId":
+                return hex(84532)
+            if method == "eth_getBlockByNumber":
+                return dict(number="0x123", hash="0x" + "bb" * 32)
+            return None
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(dex, "receipt_rpc", lambda _: RPC())
+    sdk = MagicMock()
+    sdk.dex.token_search.return_value = [SimpleNamespace(symbol="BTC", address=ASSET, decimals=18)]
+    sdk.dex.token_info.return_value = SimpleNamespace(decimals=6)
+    sdk.dex.balances.return_value = SimpleNamespace(balances=balances)
+    monkeypatch.setattr(mangrove, "mangrove_markets_client", lambda: sdk)
+    quote = MagicMock(side_effect=SdkError("quote reached"))
+    monkeypatch.setattr(dex.dex_service, "get_quote", quote)
+    sign = MagicMock(return_value="0x0102")
+    monkeypatch.setattr(order_executor, "wallet_sign", sign)
+    return sdk, quote, sign
+
+
+def test_live_entry_refuses_empty_quote_balance_before_quote_or_signature(ledger, monkeypatch):
+    from src.shared.errors import WalletInputBalanceEmpty
+
+    sdk, quote, sign = _live_tick_harness(monkeypatch, {QUOTE: "0"})
+    oid = dex.reserve("s", "eval", intent(), dict(id="p"), confirmed.snapshot_revision("s"))
+    with pytest.raises(WalletInputBalanceEmpty):
+        dex.execute(oid, intent(), WALLET, 84532, 0.002, 1000)
+    sdk.dex.balances.assert_called_once_with(chain_id=84532, wallet=WALLET)
+    quote.assert_not_called()
+    sign.assert_not_called()
+    sdk.dex.broadcast.assert_not_called()
+    row = dex.orders("s")[0]
+    assert row["status"] == "failed" and "holds 0" in row["error"]
+    assert json.loads(row["context_json"])["no_broadcast_confirmed"] is True
+
+
+@pytest.mark.parametrize("balances", [{QUOTE: "5000000"}, {}, None])
+def test_live_entry_with_funds_or_unreadable_balance_continues_to_quote(ledger, monkeypatch, balances):
+    sdk, quote, _ = _live_tick_harness(monkeypatch, balances)
+    oid = dex.reserve("s", "eval", intent(), dict(id="p"), confirmed.snapshot_revision("s"))
+    with pytest.raises(SdkError, match="quote reached"):
+        dex.execute(oid, intent(), WALLET, 84532, 0.002, 1000)
+    quote.assert_called_once()
+
+
+def test_live_exit_is_never_blocked_by_a_zero_balance_reading(ledger, monkeypatch):
+    reserve_fill()
+    sdk, quote, _ = _live_tick_harness(monkeypatch, {ASSET: "0", QUOTE: "0"})
+    exit_intent = intent("exit", 2, key="exit")
+    oid = dex.reserve("s", "eval", exit_intent, {}, confirmed.snapshot_revision("s"))
+    assert oid
+    with pytest.raises(SdkError, match="quote reached"):
+        dex.execute(oid, exit_intent, WALLET, 84532, 0.002, None)
+    sdk.dex.balances.assert_not_called()
+    quote.assert_called_once()

@@ -4,6 +4,10 @@ Mounted at /mcp on the FastAPI app via Streamable HTTP transport.
 """
 from mcp.server.fastmcp import FastMCP
 
+from src.shared.logging import get_logger
+
+_log = get_logger(__name__)
+
 _mcp_server = None
 
 # These adapters still use API-key/payment SDKs, not the MangroveAI MCP
@@ -62,6 +66,41 @@ class PricedFastMCP(FastMCP):
         return result + upstream
 
     async def call_tool(self, name, arguments):
+        """Apply the client-independent secret guard around every tool call.
+
+        Every MCP client reaches tools through this method, so the guard
+        covers Claude Code, the command client used by other hosts, the
+        restricted launcher and remote clients alike. See
+        src/shared/secret_guard.py and .claude/hooks/README.md.
+        """
+        from src.mcp import mangrove_proxy
+        from src.shared import secret_guard
+
+        found = secret_guard.find_in_arguments(arguments or {})
+        if found:
+            _log.warning('mcp.secret_guard.arguments_refused', tool=name, kind=found)
+            return mangrove_proxy.failure(
+                'SECRET_IN_ARGUMENTS',
+                f'The tool arguments contain {secret_guard.LABELS[found]}. The call was refused '
+                'and nothing was sent to any tool or upstream service. Wallet import runs only '
+                'in the independent custody administrator terminal (custody-service.py admin '
+                'import; see docs/custody.md), never through an agent. Remove the secret from '
+                'the chat.',
+            )
+        result = await self._dispatch(name, arguments)
+        found = secret_guard.find_in_result(result)
+        if found:
+            _log.error('mcp.secret_guard.result_withheld', tool=name, kind=found)
+            return mangrove_proxy.failure(
+                'SECRET_IN_RESULT',
+                f'The tool response contained {secret_guard.LABELS[found]} in a secret field and '
+                'was withheld. The operation may have completed; inspect its state before '
+                'retrying. Report this to the maintainers: wallet secrets stay in isolated '
+                'custody and tool responses must never carry one.',
+            )
+        return result
+
+    async def _dispatch(self, name, arguments):
         from src.mcp import mangrove_proxy, marketplace_proxy
         from src.services import mangrove_oauth
         from src.services.marketplace_catalog import RETIRED_READ_TOOLS, is_markets_tool

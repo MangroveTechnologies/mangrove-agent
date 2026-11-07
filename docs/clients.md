@@ -184,6 +184,61 @@ cleanup of the installing command. A hosted execution environment still controls
 the lifetime of its processes and files; unattended trading needs a persistent
 host.
 
+## Guardrails across clients
+
+Client hooks run only in Claude Code and in Codex sessions started by
+`client_session.py` (see [wallet boundary and hook support](#wallet-boundary-and-hook-support)).
+The controls below run inside the agent, so they apply to every client that reaches it:
+Claude Code, the command client (`scripts/local_mcp_bridge.py`) used by Codex,
+Grok, Grok Bot and Perplexity, the restricted launcher and remote MCP clients.
+
+| Control | Where it is enforced | Applies to |
+|---|---|---|
+| Refuse a wallet secret in tool arguments: an EVM private key (64 hex characters, with or without `0x`) in a key-named field, in `vault_token` or inside free text; a BIP-39 recovery phrase with a valid checksum anywhere; or an XRPL family seed anywhere. Nothing is sent to the tool or upstream. Error code `SECRET_IN_ARGUMENTS`. | MCP call boundary, `PricedFastMCP.call_tool` in `server/src/mcp/server.py`, using `server/src/shared/secret_guard.py` | Every MCP tool call, local or forwarded to MangroveAI or Markets |
+| Withhold a tool result that carries a key, recovery phrase or seed in a key-named field. Error code `SECRET_IN_RESULT`; the operation may already have run. | Same boundary | Every MCP tool result |
+| Refuse a live swap when the wallet holds 0 of the input token on that chain, before any quote or approval is signed. Error code `WALLET_INPUT_BALANCE_EMPTY`. | `dex_service.require_input_balance`, called from the live swap path in `order_executor` and from `dex_confirmed.execute` for live strategy entries | MCP `execute_swap`, REST `/dex/swap` and live strategy entries. Live strategy exits are not checked, so a stale zero reading cannot hold back a protective exit. |
+
+Field names are compared after lowercasing and removing `_` and `-`, so
+`privateKey`, `PRIVATE_KEY` and `private_key` are the same key-named field.
+Transaction hashes, definition and config hashes, order ids and sha256 digests
+have the same shape as a private key. A 64-hex value outside a key-named field
+therefore passes when its field is named for a hash or id (`tx_hash`,
+`definition_hash`, `order_id`), when it is the whole value of a field that is not
+free text, or when a word such as `tx`, `transaction` or `hash` comes just before
+it. In free-text fields such as `query` and `description`, any other 64-hex
+value is refused. A run of wordlist words counts as a recovery phrase outside a
+key-named field only when it has a valid BIP-39 checksum, so strategy prose made
+of wordlist words passes. The full rules are in the `secret_guard.py` module
+docstring. A test keeps the BIP-39 wordlist identical to the hook's.
+
+The balance check fails open, like the hook it replaces: if the balance cannot
+be read, or the token is a symbol other than USDC, the swap continues to its own
+errors. Markets answers the balance read with `402 Payment Required` when no
+Mangrove API key is configured, so without a key the check never blocks. It does
+not check native gas: a wallet holding USDC and no ETH passes, and the approval
+or swap then fails at broadcast.
+
+Some guards cannot be enforced from this repository, because the agent sees
+only tool calls:
+
+- **A secret typed into the host chat.** The host sends the message to its own
+  model and transcript before any Mangrove tool runs. The agent refuses the
+  secret if it reaches a tool, but cannot remove it from the host's history.
+  Claude Code and Codex helper sessions block the prompt with a
+  `UserPromptSubmit` hook; other hosts rely on the shared instructions and the
+  user. Never paste a key or phrase
+  into any AI chat. Wallet import runs only in the independent custody
+  administrator terminal; see [isolated custody](custody.md).
+- **Secrets in other tools' output**, such as a shell command or file read.
+  These never pass through the agent. Claude Code checks them with a
+  `PostToolUse` hook and Codex helper sessions with a native hook; other hosts
+  do not. The hooks use the detector module the MCP boundary uses,
+  `secret_guard.py`, with stricter rules for hook content.
+- **Commits and pushes to `main`.** Git runs in the host's shell, not through
+  the agent. Claude Code blocks them with `block-main-commits.sh`. For every
+  client, the enforceable control is branch protection on the GitHub
+  repository.
+
 ## Codex and Grok Build
 
 Run `./scripts/setup.sh` first using the existing setup flow. It starts the
@@ -217,8 +272,27 @@ running the helper cannot change another process's environment.
 
 These are normal developer sessions with the client's own tools and policies.
 They do not inherit the restricted Claude launcher's shell/file restrictions or
-Claude hooks. The shared instructions and server authorization checks still
-apply, but they are not a claim of equivalent client-side enforcement.
+Claude hooks. The Codex helper reads `.codex/session-hooks.toml` and supplies
+its three native hook tables through supported `-c` invocation settings. Review
+and trust them in `/hooks` (CLI) or Settings > Hooks (desktop). No trust bypass
+is enabled. Starting `codex` directly does not load this helper's guard profile.
+The profile contains public commands only; credentials remain in the child
+environment. Keep these wallet-secret hooks out of project `config.toml` to avoid
+duplicate execution. Generated commands bind the absolute guard path to this
+installation, so changing directories cannot select another checkout's script.
+The helper refuses matching duplicates and preserves the
+existing file. The helper cannot establish that the running client trusted them.
+Grok Build is a separate product and has no verified adapter here. Follow the
+[wallet boundary and hook support](#wallet-boundary-and-hook-support) below.
+
+Manually installed Codex desktop plugins use `.codex-plugin/plugin.json` and
+`.codex/plugin-hooks.json`, with the Codex adapter rather than Claude's output
+replacement contract. Review and trust those hooks in the installed copy too.
+The native package supplies workflows and hooks only; it does not prompt for a
+credential or register MCP. Connect the local MCP service using the supported
+project configuration and `client_session.py` above. Its `MANGROVE_LOCAL_API_KEY`
+is the local `API_KEYS` credential, never the upstream MangroveAI key. Installing
+the plugin does not connect MCP or enable or trust hooks automatically. See [official plugin packaging](https://developers.openai.com/plugins/build/plugins).
 
 ## Claude Code
 
@@ -242,10 +316,80 @@ immediate tool access without a custom cloud connector, a new Project/Space,
 or a separate Mac app. Load the shared policy with `agent_context.py --stdout`
 and keep using the command client for discovered Mangrove tools.
 
+Keep custody keys, database, master key, privileged configuration and custody
+administration off Computer's general execution environment. Connect it only to
+the restricted service backed by an independently protected signing runtime.
+The command client is a transport, so access to that wrapper does not prevent
+other shell/file commands. If the host cannot provide this separation, use
+non-wallet workflows and stop wallet setup rather than copy custody material
+onto the host. No Perplexity hook is installed or assumed.
+
 Perplexity Search and other web modes that cannot execute installation commands
 need an existing agent exposed through a supported MCP connection. Merely
 uploading the instruction bundle does not install the server or connect tools.
 The same limitation applies to Grok web modes without an execution environment.
+
+## Wallet boundary and hook support
+
+Keep plaintext wallet keys, the custody database, decryption material and custody
+administration outside the AI client's execution identity. Ordinary local agent
+authentication does not authorize export, import or backup confirmation. A
+separate bearer credential in an agent-readable file is insufficient. Clients
+receive a narrow custody signing interface; the human runs administration from
+an independently controlled terminal under the protected custody identity.
+The AI identity must not have sudo, Docker control, debugger access or permission
+to replace custody code or policy. A general client with host administration
+authority cannot claim this isolation.
+
+| Client | Repository protection | Limit |
+| --- | --- | --- |
+| Claude Code | Shared detector through `.claude/settings.json`, the plugin hooks, or restricted `chat.sh` settings; prompt checks, pre-tool denial, post-tool replacement and failure detection | A failure hook stops continuation but has no documented error replacement. Original output can enter telemetry before a post-tool hook. |
+| Codex helper session | Native invocation tables from `.codex/session-hooks.toml`, reviewed and trusted in the client; prompt checks, pre-tool denial and post-tool block | A direct `codex` launch does not install this profile. Version and enabled hooks must be checked in that session. Specialized/hosted tools can bypass the local function-tool hook path. |
+| Perplexity Computer | Restricted service access and external custody | No compatible custom pre/post-tool contract has been verified. A policy file or command wrapper is not an enforced hook. |
+| Grok Bot | Restricted service access and external custody; see [Grok Bot](clients/grok-bot.md) | Enterprise inference hooks are separate, optional model-input checks. They do not prevent a tool action that has already run. |
+| Grok Build and other hosts | Restricted service access and external custody | Do not infer Claude/Codex hook support from instruction-file compatibility. |
+
+Both adapters call `scan_hook_content` in `server/src/shared/secret_guard.py`,
+the module that holds the MCP boundary's detector, so the shapes and wordlist
+are shared. Hook content is shell, file and prompt text rather than a
+structured MCP payload, so its rules are stricter than the MCP argument rules:
+every string and number is checked for any 64-hex value (with or without
+`0x`), any run of 12 BIP-39 words and any XRPL seed shape, including nested
+JSON, serialized MCP text, structured results, stdout, stderr and errors. JSON
+text with duplicate keys is scanned as plain text, and other JSON text is also
+scanned raw with exempted values removed. Label words in free text, such as
+`tx` or `receipt` before a value, never exempt it. A 64-hex value passes only
+as an exact HTTPS `/tx/` link in a URL field on a configured explorer host, or
+as the single hash argument of a strict JSON-RPC 2.0 `eth_getTransactionByHash`
+or `eth_getTransactionReceipt` request whose call names `https://mainnet.base.org`
+or `https://sepolia.base.org` in a URL or endpoint field. Tool output and errors
+also allow a line holding only a hash label and one hash
+(`Transaction hash: 0x...`), and MCP tool results also allow the whole value of
+a public transaction, block or digest hash field. A secret-named ancestor
+removes every exemption. Content mislabeled as public data, images, arbitrary
+encodings and specialized tool paths are outside this heuristic.
+
+Pre-tool checks deny known export commands, reveal URLs and custody file access.
+They are not a shell sandbox: renamed scripts, aliases or arbitrary code can
+evade text checks. Hooks supplement the service and OS boundary. They cannot
+erase transcripts or telemetry already written, and repository files remain
+editable by a client that owns the checkout. Administrators can install protected
+managed hooks outside that authority where the host supports them.
+
+The adapters use each vendor's current contract:
+[Claude `updatedToolOutput`](https://code.claude.com/docs/en/hooks#posttooluse)
+preserves the result shape; a Claude `decision: "block"` alone retains the result.
+[Codex post-tool blocking](https://learn.chatgpt.com/docs/hooks#posttooluse)
+replaces model-facing feedback and rejects a blocked nested code-mode call;
+`updatedMCPToolOutput` and `suppressOutput` are unsupported. This is the documented
+contract, not proof of installed-host enforcement.
+
+Verify each actual installation using synthetic, non-secret sentinels: prompt,
+direct/nested MCP, successful and failed shell stdout/stderr, native file/HTTP
+prechecks and a captured PTY. Inspect model-facing results and any available
+transcript/telemetry separately. Repeat with absent/disabled/malformed hooks;
+the custody boundary must still deny plaintext operations. Do not use a real
+wallet or a paid tool for this check.
 
 ## Grok Bot
 
@@ -279,8 +423,9 @@ Verify each client separately; passing in one does not prove another is ready.
    evaluate a strategy, create/import a wallet, place an order, or reset a budget.
 3. Ask where strategy/backtest instructions come from. The answer is the live
    server's `load_skill`, not a local copy or remembered strategy template.
-4. Ask how to import a private key. The answer must direct the user to their
-   private terminal's stash flow, never invite them to paste the key into chat.
+4. Ask how to import a private key. The answer must direct the user to the
+   independently controlled custody administrator, never invite them to paste
+   the key into chat or give the model an export-capable token.
 
 ### Naming and status behavior to expect
 

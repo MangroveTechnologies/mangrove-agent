@@ -128,6 +128,9 @@ def test_get_quote_sends_base_units_and_returns_human(monkeypatch):
     assert out["input_amount"] == 0.001
     assert out["output_amount"] == 2.5
     assert out["output_amount_base_units"] == 2_500_000
+    assert out["routing_fee_cap_bps"] == 25
+    assert out["output_amount_after_max_routing_fee_base_units"] == 2_493_750
+    assert out["output_amount_after_max_routing_fee"] == 2.49375
 
 
 def test_get_quote_rejects_dust(monkeypatch):
@@ -139,3 +142,79 @@ def test_get_quote_rejects_dust(monkeypatch):
             input_token=_USDC, output_token=_WETH, amount=0.0000001, chain_id=8453,
         )
     client.dex.get_quote.assert_not_called()
+
+
+@pytest.mark.parametrize("matches", [[], [("USDC", _USDC), ("USDC", _WETH)], [("USD", _USDC)]])
+def test_signing_token_resolution_refuses_missing_or_ambiguous_symbol(matches):
+    from types import SimpleNamespace
+
+    client = MagicMock()
+    client.dex.token_search.return_value = [SimpleNamespace(symbol=symbol, address=addr) for symbol, addr in matches]
+    with pytest.raises(SdkError, match="exact token-symbol"):
+        dex_service.resolve_token_address(client, 8453, "USDC")
+
+
+def test_signing_token_resolution_preserves_explicit_address_without_lookup():
+    client = MagicMock()
+    assert dex_service.resolve_token_address(client, 8453, _USDC) == _USDC.lower()
+    client.dex.token_search.assert_not_called()
+
+
+@pytest.mark.parametrize("changes", [
+    {"input_amount": 1_000_001}, {"chain_id": 1}, {"src_token_address": _WETH},
+    {"dst_token_address": _USDC},
+])
+def test_quote_response_cannot_change_requested_operation(monkeypatch, changes):
+    client = _client_with_decimals({_WETH.lower(): 18, _USDC.lower(): 6})
+    client.dex.get_quote.return_value.model_dump.return_value = {
+        "quote_id": "q1", "input_amount": 1_000_000, "output_amount": 400_000_000_000_000,
+        **changes,
+    }
+    monkeypatch.setattr(dex_service, "mangrove_markets_client", lambda: client)
+    with pytest.raises(SdkError, match="differs"):
+        dex_service.get_quote(_USDC, _WETH, 1, 8453)
+
+
+# -- live swap preflight (server-side replacement for preflight-swap.sh) ----
+
+def _balances(mapping):
+    client = MagicMock()
+    client.dex.balances.return_value = MagicMock(balances=mapping)
+    return client
+
+
+def test_preflight_refuses_zero_balance_for_an_address():
+    from src.shared.errors import WalletInputBalanceEmpty
+
+    client = _balances({_WETH.lower(): "0"})
+    with pytest.raises(WalletInputBalanceEmpty) as exc:
+        dex_service.require_input_balance(client, _WETH, 8453, "0x" + "a" * 40)
+    assert exc.value.code == "WALLET_INPUT_BALANCE_EMPTY"
+    client.dex.balances.assert_called_once_with(chain_id=8453, wallet="0x" + "a" * 40)
+
+
+def test_preflight_maps_the_usdc_symbol_to_its_canonical_address():
+    from src.services.wallet_manager import canonical_usdc_addresses
+    from src.shared.errors import WalletInputBalanceEmpty
+
+    usdc = canonical_usdc_addresses()[8453]
+    with pytest.raises(WalletInputBalanceEmpty):
+        dex_service.require_input_balance(_balances({usdc.upper().replace("0X", "0x"): "0"}),
+                                          "usdc", 8453, "0x" + "a" * 40)
+
+
+@pytest.mark.parametrize("client,token", [
+    (_balances({_WETH.lower(): "1500"}), _WETH),          # funded
+    (_balances({}), _WETH),                               # token not tracked
+    (_balances({_WETH.lower(): "n/a"}), _WETH),           # unreadable amount
+    (MagicMock(), _WETH),                                 # unexpected shape
+    (_balances({_WETH.lower(): "0"}), "ETH"),             # symbol not resolvable offline
+])
+def test_preflight_fails_open_unless_balance_is_explicitly_zero(client, token):
+    dex_service.require_input_balance(client, token, 8453, "0x" + "a" * 40)
+
+
+def test_preflight_fails_open_when_balances_call_errors():
+    client = MagicMock()
+    client.dex.balances.side_effect = RuntimeError("offline")
+    dex_service.require_input_balance(client, _WETH, 8453, "0x" + "a" * 40)

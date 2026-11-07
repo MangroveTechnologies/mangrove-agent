@@ -34,7 +34,7 @@ from decimal import Decimal
 from typing import Any
 
 from src.shared.clients.mangrove import mangrove_markets_client
-from src.shared.errors import SdkError, ValidationError
+from src.shared.errors import SdkError, ValidationError, WalletInputBalanceEmpty
 from src.shared.logging import get_logger
 
 _log = get_logger(__name__)
@@ -50,6 +50,23 @@ _NATIVE_DECIMALS = 18
 
 def _is_address(token: str) -> bool:
     return isinstance(token, str) and token.startswith("0x") and len(token) == 42
+
+
+def resolve_token_address(client: Any, chain_id: int, token: str) -> str:
+    """Resolve the original requested asset, refusing ambiguous symbol matches."""
+    from src.services.transaction_intent import NATIVE_TOKEN, ZERO_ADDRESS, address
+
+    if _is_address(token):
+        result = address(token)
+        return NATIVE_TOKEN if result == ZERO_ADDRESS else result
+    try:
+        matches = client.dex.token_search(chain_id=chain_id, query=token)
+    except Exception:
+        raise SdkError("Could not resolve the requested token address.") from None
+    exact = [m for m in matches or [] if str(getattr(m, "symbol", "")).upper() == token.upper()]
+    if len(exact) != 1:
+        raise SdkError("Live signing requires one exact token-symbol match; use the contract address.")
+    return address(getattr(exact[0], "address", None))
 
 
 def resolve_decimals(client: Any, chain_id: int, token: str) -> int:
@@ -190,12 +207,31 @@ def get_quote(
     data = quote.model_dump() if hasattr(quote, "model_dump") else dict(quote)
     raw_in = data.get("input_amount")
     raw_out = data.get("output_amount")
+    # A quote may supply a price; it cannot replace the requested operation.
+    if raw_in is None or Decimal(str(raw_in)) != raw_amount:
+        raise SdkError("DEX quote input amount differs from the requested amount.")
+    if data.get("chain_id") is not None and data["chain_id"] != chain_id:
+        raise SdkError("DEX quote chain differs from the requested chain.")
+    for field, requested in (("src_token_address", input_token), ("dst_token_address", output_token)):
+        if data.get(field) and _is_address(requested) and str(data[field]).lower() != requested.lower():
+            raise SdkError("DEX quote asset differs from the requested token.")
     if raw_in is not None:
         data["input_amount_base_units"] = raw_in
         data["input_amount"] = from_base_units(raw_in, in_decimals)
     if raw_out is not None:
         data["output_amount_base_units"] = raw_out
         data["output_amount"] = from_base_units(raw_out, out_decimals)
+        from src.services.transaction_intent import ONEINCH_ROUTING_FEE_BPS, quote_after_max_routing_fee
+
+        # Current Markets quotes are gross of the fixed partner fee added by
+        # prepare_swap. Expose that separate allowance without relabeling it
+        # as price slippage or reporting it as a measured execution fee.
+        data["routing_fee_cap_bps"] = ONEINCH_ROUTING_FEE_BPS
+        net_floor = quote_after_max_routing_fee(
+            raw_out, ONEINCH_ROUTING_FEE_BPS,
+        )
+        data["output_amount_after_max_routing_fee_base_units"] = net_floor
+        data["output_amount_after_max_routing_fee"] = from_base_units(net_floor, out_decimals)
     data["input_token_decimals"] = in_decimals
     data["output_token_decimals"] = out_decimals
 
@@ -210,3 +246,47 @@ def get_quote(
         quote_id=data.get("quote_id"),
     )
     return data
+
+
+def require_input_balance(client: Any, input_token: str, chain_id: int, wallet_address: str) -> None:
+    """Refuse a live swap whose wallet holds zero of the token it would spend.
+
+    Server-side replacement for the zero-balance check that used to live only
+    in the Claude Code hook ``.claude/hooks/preflight-swap.sh``, so every MCP
+    and REST client gets it. Runs before the quote and before any approval is
+    signed, so an unfundable swap never spends gas on an approval.
+
+    Fails open, like the hook: an unreadable balance, a token missing from the
+    tracked set, or a symbol other than USDC that cannot be mapped to an
+    address offline lets the swap continue to its own SDK errors. Only an
+    explicit zero blocks.
+    """
+    from src.services.wallet_manager import canonical_usdc_addresses
+
+    token = input_token.strip()
+    if token.upper() == "USDC":
+        token = canonical_usdc_addresses().get(chain_id, "")
+    if not _is_address(token):
+        return
+    try:
+        balances = getattr(client.dex.balances(chain_id=chain_id, wallet=wallet_address), "balances", None)
+    except Exception as exc:  # noqa: BLE001 - fail open; the swap surfaces its own error
+        _log.warning("dex.preflight.balance_unavailable", chain_id=chain_id, error_type=type(exc).__name__)
+        return
+    if not isinstance(balances, dict):
+        return
+    target = token.lower()
+    raw = next((value for key, value in balances.items() if str(key).lower() == target), None)
+    try:
+        empty = raw is not None and Decimal(str(raw)) == 0
+    except ArithmeticError:
+        return
+    if empty:
+        raise WalletInputBalanceEmpty(
+            f"Wallet {wallet_address} holds 0 of input token {input_token} on chain_id {chain_id}. "
+            "No quote was requested and nothing was signed.",
+            suggestion=(
+                "Confirm the deposit landed on this chain (the same address exists on every EVM "
+                "chain), then retry. On Base Sepolia (84532), fund the wallet from a faucet first."
+            ),
+        )

@@ -215,10 +215,9 @@ backtests and paper mode. Paper mode avoids real trade execution, but upstream
 data and evaluation calls can still cost money. Set up access and a budget
 before paid use; live trading is a separate explicit decision.
 
-Never paste a private key or recovery phrase into any AI chat. Run
-`./scripts/stash-secret.sh` in your own private terminal and enter the secret at
-its hidden prompt. It stores the secret in the agent's short-lived vault and
-writes a private, single-use handoff file; tell the agent only the path it prints,
-and it imports the wallet from the file's vault token. Claude's configured secret
-hook is an extra client-specific check, not a guarantee supplied by every
-provider.
+Never paste a private key or recovery phrase into any AI chat. Wallet import,
+backup and backup confirmation run directly in the independent custody
+administrator terminal, under a different protected OS identity. The old agent
+stash/reveal helpers and import tool are retired. Give the client only the public
+wallet address after human administration. See [isolated custody](custody.md);
+client hooks are supplementary and cannot establish transcript erasure.

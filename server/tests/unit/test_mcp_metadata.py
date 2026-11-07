@@ -118,16 +118,16 @@ async def test_enrichment_preserves_receiver_hints_and_interaction_metadata(meta
 
 
 @pytest.mark.asyncio
-async def test_import_wallet_describes_private_handoff_file(metadata_server):
+async def test_import_wallet_describes_retired_agent_authority(metadata_server):
     tools = {tool.name: tool for tool in await metadata_server.list_tools()}
     tool = tools["import_wallet"]
-    assert "prints the file path, not the token" in tool.description
-    assert "restricted `./scripts/chat.sh` client cannot read" in tool.description
+    assert "Retired compatibility tool" in tool.description
+    assert "human custody-admin operation" in tool.description
     from src.mcp.registry import list_tools
 
     registry_tool = next(entry for entry in list_tools() if entry["name"] == "import_wallet")
     vault_token = next(param for param in registry_tool["parameters"] if param["name"] == "vault_token")
-    assert "private handoff file printed by scripts/stash-secret.sh" in vault_token["description"]
+    assert "no token authorizes wallet import" in vault_token["description"]
 
 
 def test_tools_list_wire_exposes_quantity_units_and_hints(metadata_server):
@@ -300,11 +300,12 @@ def test_fastapi_description_points_to_live_tool_catalog():
     assert "/api/v1/docs/tools" not in app.description
 
 
-def test_wallet_backup_openapi_uses_current_strategy_route_name():
+def test_wallet_backup_openapi_describes_retired_http_authority():
     from src.app import app
 
     description = app.openapi()["paths"][
         "/api/v1/agent/wallet/{address}/confirm-backup"
     ]["post"]["description"]
-    assert "PATCH `/api/v1/agent/strategies/{strategy_id}/status`" in description
+    assert "Retired" in description
+    assert "direct human custody administration" in description
     assert "update_strategy_status" not in description
