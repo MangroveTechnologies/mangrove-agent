@@ -304,7 +304,8 @@ These controls are enforced in the agent, independent of the AI client.
   key (64 hex characters, with or without `0x`) in a key-named field, in `vault_token` or
   inside free text, a recovery phrase with a valid BIP-39 checksum, or an XRPL seed is refused
   without calling the tool or upstream. A result with a secret in a key-named field is
-  withheld. See [guardrails across clients](clients.md#guardrails-across-clients).
+  withheld. `server/src/shared/secret_guard.py` is the only detector; the Claude Code
+  and Codex hooks call its stricter hook-content scan. See [guardrails across clients](clients.md#guardrails-across-clients).
 - **Empty-wallet swap refusal.** A live swap, or a live strategy entry, is refused before
   quoting or approval when the wallet holds 0 of the input token on that chain. Exits are
   never checked.
