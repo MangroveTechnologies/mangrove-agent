@@ -236,6 +236,18 @@ remain in place. See [restricted chat](restricted-chat.md).
 
 ## Perplexity Computer
 
+To add the hosted MangroveAI connector, open **Plugins > Add custom >
+Import plugin from GitHub** in Perplexity and enter
+`https://github.com/MangroveTechnologies/mangrove-agent/tree/main/plugins/perplexity`.
+You can also upload a ZIP of the contents of [the plugin folder](../plugins/perplexity).
+On the imported plugin page, connect the MangroveAI connector and sign in to
+Mangrove. The hosted OAuth server must allow Perplexity's client metadata host.
+To check the connection, select the plugin in Computer and ask it to use
+MangroveAI's `query_knowledge` tool to explain what drawdown means in a backtest.
+
+The hosted connector provides research and backtesting tools. For the local
+agent and its execution tools, use the command client described below.
+
 Use the install-from-an-agent workflow above inside Computer's execution
 environment. The provided command client gives the installing Perplexity agent
 immediate tool access without a custom cloud connector, a new Project/Space,
