@@ -193,18 +193,21 @@ Grok, Grok Bot and Perplexity, the restricted launcher and remote MCP clients.
 
 | Control | Where it is enforced | Applies to |
 |---|---|---|
-| Refuse a wallet secret in tool arguments: an EVM private key (64 hex characters, with or without `0x`) in a key-named field, in `vault_token` or inside free text; a BIP-39 recovery phrase with a valid checksum anywhere; or an XRPL family seed anywhere. Nothing is sent to the tool or upstream. Error code `SECRET_IN_ARGUMENTS`. | MCP call boundary, `PricedFastMCP.call_tool` in `server/src/mcp/server.py`, using `server/src/shared/secret_guard.py` | Every MCP tool call, local or forwarded to MangroveAI or Markets |
+| Refuse a wallet secret in tool arguments: an EVM private key (64 hex characters, with or without `0x`, or the same key written as an integer) in a key-named field, in `vault_token` or inside free text; a BIP-39 recovery phrase with a valid checksum anywhere; or an XRPL family seed anywhere. Nothing is sent to the tool or upstream. Error code `SECRET_IN_ARGUMENTS`. | MCP call boundary, `PricedFastMCP.call_tool` in `server/src/mcp/server.py`, using `server/src/shared/secret_guard.py` | Every MCP tool call, local or forwarded to MangroveAI or Markets |
 | Withhold a tool result that carries a key, recovery phrase or seed in a key-named field. Error code `SECRET_IN_RESULT`; the operation may already have run. | Same boundary | Every MCP tool result |
+| Remove argument values and validation input values from a tool error message, and withhold an error message that still carries a secret. Error code `SECRET_IN_ERROR`; the operation may already have run. | Same boundary | Every MCP tool error |
 | Refuse a live swap when the wallet holds 0 of the input token on that chain, before any quote or approval is signed. Error code `WALLET_INPUT_BALANCE_EMPTY`. | `dex_service.require_input_balance`, called from the live swap path in `order_executor` and from `dex_confirmed.execute` for live strategy entries | MCP `execute_swap`, REST `/dex/swap` and live strategy entries. Live strategy exits are not checked, so a stale zero reading cannot hold back a protective exit. |
 
 Field names are compared after lowercasing and removing `_` and `-`, so
-`privateKey`, `PRIVATE_KEY` and `private_key` are the same key-named field.
+`privateKey`, `PRIVATE_KEY` and `private_key` are the same key-named field. A
+name with a `seed`, `secret` or `mnemonic` part (`order_seed`, `seedHex`) is
+also key-named and is never treated as a hash or id field.
 Transaction hashes, definition and config hashes, order ids and sha256 digests
 have the same shape as a private key. A 64-hex value outside a key-named field
 therefore passes when its field is named for a hash or id (`tx_hash`,
 `definition_hash`, `order_id`), when it is the whole value of a field that is not
 free text, or when a word such as `tx`, `transaction` or `hash` comes just before
-it. In free-text fields such as `query` and `description`, any other 64-hex
+it and no nearby word such as `private` or `seed` names a key. In free-text fields such as `query` and `description`, any other 64-hex
 value is refused. A run of wordlist words counts as a recovery phrase outside a
 key-named field only when it has a valid BIP-39 checksum, so strategy prose made
 of wordlist words passes. The full rules are in the `secret_guard.py` module
