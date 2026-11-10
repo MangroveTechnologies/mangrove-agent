@@ -565,3 +565,46 @@ def test_phrase_with_wordlist_words_around_it_is_caught(words, around):
         _assert_caught_everywhere(text)
         repeated = " ".join([variant[0], *variant, variant[-1]])  # a repeat on each side
         _assert_caught_everywhere(repeated)
+
+
+# --- Phrase encodings ------------------------------------------------------------
+
+def _fullwidth(text: str) -> str:
+    return "".join(chr(ord(c) + 0xFEE0) if c.isalpha() else c for c in text)
+
+
+ENCODINGS = {
+    "underscores": lambda p: {"query": "_".join(p)},
+    "mixed separators": lambda p: {"query": "".join(w + "_-.\n"[i % 4] for i, w in enumerate(p))},
+    "upper case": lambda p: {"query": " ".join(p).upper()},
+    "title case": lambda p: {"query": " ".join(p).title()},
+    "zero-width between words": lambda p: {"query": "​".join(p)},
+    "zero-width inside words": lambda p: {"query": " ".join(w[:2] + "​" + w[2:] for w in p)},
+    "unicode spaces": lambda p: {"query": "  　".join(p)},
+    "fullwidth letters": lambda p: {"query": _fullwidth(" ".join(p))},
+    "punctuation": lambda p: {"query": " / ".join(", ".join(p[i:i + 2]) for i in range(0, len(p), 2))},
+    "line wraps": lambda p: {"query": "\r\n".join(" ".join(p[i:i + 5]) for i in range(0, len(p), 5))},
+    "numbered list": lambda p: {"query": "\n".join(f"{i}) {w}" for i, w in enumerate(p, 1))},
+    "JSON array text": lambda p: {"query": json.dumps(p)},
+    "list argument": lambda p: {"words": list(p)},
+    "list of objects": lambda p: {"words": [{"n": i, "w": w} for i, w in enumerate(p)]},
+    "split across fields": lambda p: {"first": " ".join(p[:5]), "second": " ".join(p[5:])},
+    "camel case": lambda p: {"query": p[0] + "".join(w.title() for w in p[1:])},
+    "no separator": lambda p: {"query": "".join(p)},
+}
+
+
+@pytest.mark.parametrize("words", [12, 24])
+@pytest.mark.parametrize("encoding", sorted(ENCODINGS))
+def test_valid_phrase_encodings_are_caught(words, encoding):
+    assert secret_guard.find_in_arguments(ENCODINGS[encoding](PHRASES[words])) == secret_guard.MNEMONIC
+
+
+@pytest.mark.parametrize("arguments", [
+    {"fields": ["input_token", "input_amount", "output_token", "output_amount", "slippage_bps"] * 4},
+    {"query": "_".join(["input_token", "input_amount", "output_token", "output_amount"] * 4)},
+    {"query": "inputTokenInputAmountOutputTokenOutputAmountEntryPriceExitPrice"},
+    {"side": "buy", "order": "market", "time": "day", "symbol": "ETH", "venue": "base", "note": "open long"},
+])
+def test_identifiers_and_enum_values_pass(arguments):
+    assert secret_guard.find_in_arguments(arguments) is None

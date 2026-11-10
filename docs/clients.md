@@ -212,8 +212,9 @@ it and no nearby word such as `private` or `seed` names a key. In free-text fiel
 value is refused. Outside a key-named field, 12 to 24 consecutive wordlist words
 count as a recovery phrase when they have a valid BIP-39 checksum, or when they
 repeat no word (one from 18 words) and are not in alphabetical order, so a phrase
-with a mistyped word is still refused. An underscore ends a run, so `snake_case`
-field names never form one. Strategy prose made of wordlist words repeats them
+with a mistyped word is still refused. Words joined by underscores or case changes, or
+spread over a list or several fields, count when they have a valid checksum, so
+`snake_case` field names do not. Strategy prose made of wordlist words repeats them
 (`price above average, volume above average`) and passes unless one of its
 windows happens to pass the checksum. The full rules are in the `secret_guard.py` module
 docstring. A test keeps the BIP-39 wordlist identical to the hook's.
