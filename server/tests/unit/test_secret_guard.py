@@ -716,3 +716,14 @@ def test_secret_shaped_argument_echo_is_redacted_not_withheld():
     digest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     assert secret_guard.redact_error(f"unknown dataset {digest}", {"dataset": digest}) == (
         "unknown dataset [argument value]", None)
+
+
+def test_huge_error_message_with_many_argument_values_is_bounded():
+    import time
+
+    arguments = {"items": [f"value-{i:06d}" for i in range(20_000)]}
+    message = " ".join(arguments["items"]) * 20
+    started = time.perf_counter()
+    redacted, found = secret_guard.redact_error(message, arguments)
+    assert time.perf_counter() - started < 1.0
+    assert found is None and len(redacted) <= secret_guard._ERROR_CHARS + 3

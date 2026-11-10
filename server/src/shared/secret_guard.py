@@ -171,6 +171,8 @@ _ATTRIBUTION_CHARS = 80
 _WINDOW_BUDGET = 50_000
 # Longest error message scanned and returned by redact_error.
 _ERROR_CHARS = 4000
+_ERROR_SCAN_CHARS = _ERROR_CHARS + 1024  # longer than any secret shape (24 words, 64 hex, 78 digits)
+_ERROR_VALUES = 1000
 
 # Normalized field names that carry key material.
 KEY_FIELD_NAMES = frozenset({
@@ -856,20 +858,25 @@ def _bare_secret(text: str) -> bool:
 def redact_error(message: str, arguments: Any) -> tuple[str, str | None]:
     """Scan an error message, then remove the argument values it repeats.
 
-    The whole message is scanned before anything is cut or replaced (as free
-    text, then as result text), so a secret cannot be split into parts the
-    scan misses. An argument value that is secret-shaped on its own, such as a
-    64-hex digest the caller passed and the argument checks allowed, is an
+    Only the first ``_ERROR_SCAN_CHARS`` characters are used: the
+    ``_ERROR_CHARS`` that can be returned plus a margin longer than any secret
+    shape, so a secret that crosses the final cut is still scanned whole. That
+    part is scanned before anything is cut or replaced (as free text, then as
+    result text). An argument value that is secret-shaped on its own, such as
+    a 64-hex digest the caller passed and the argument checks allowed, is an
     echo of the caller's input, so those values are removed before this scan.
     Any other argument value, such as one word of a recovery phrase, stays in
-    place. When the message holds no secret, every argument string, key or
-    integer of 8 or more characters that appears in it is replaced with
-    ``[argument value]``, and a message longer than ``_ERROR_CHARS`` is cut to
-    that length. Returns the redacted message and the secret kind found
-    (with an empty message), or None when the message holds none.
+    place. When the part holds no secret, every argument string, key or
+    integer of 8 or more characters that appears in it (the
+    ``_ERROR_VALUES`` longest) is replaced with ``[argument value]``, and the
+    result is cut to ``_ERROR_CHARS``. Returns the redacted message and the
+    secret kind found (with an empty message), or None when there is none.
     """
-    values = sorted({text for text in _argument_texts(arguments) if len(text) >= 8}, key=len, reverse=True)
-    scanned = message
+    longer = len(message) > _ERROR_CHARS
+    head = message[:_ERROR_SCAN_CHARS]
+    values = sorted({text for text in _argument_texts(arguments) if len(text) >= 8},
+                    key=len, reverse=True)[:_ERROR_VALUES]
+    scanned = head
     for text in values:
         if text in scanned and _bare_secret(text):
             scanned = scanned.replace(text, " ")
@@ -877,11 +884,11 @@ def redact_error(message: str, arguments: Any) -> tuple[str, str | None]:
     if found:
         return "", found
     for text in values:
-        if text in message:
-            message = message.replace(text, "[argument value]")
-    if len(message) > _ERROR_CHARS:
-        message = message[:_ERROR_CHARS] + "..."
-    return message, None
+        if text in head:
+            head = head.replace(text, "[argument value]")
+    if longer or len(head) > _ERROR_CHARS:
+        head = head[:_ERROR_CHARS] + "..."
+    return head, None
 
 
 def _jsonable(value: Any) -> Any:
