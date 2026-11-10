@@ -14,6 +14,8 @@ from src.custody.bootstrap import initialize
 from src.custody.policy import Policy, digest
 from src.custody.transport import check_ancestors, check_owned_path
 
+EXTERNAL_CUSTODY = "external-custody"
+
 
 def require_terminal():
     if not sys.stdin.isatty() or not sys.stdout.isatty():
@@ -28,6 +30,11 @@ def migrate(legacy_db: Path, legacy_key: Path, settings: dict) -> dict:
     Backup confirmations are not copied: the legacy flag was settable with
     ordinary agent authority, so each migrated wallet needs a new
     confirm-backup by the custody administrator.
+
+    Rows whose ``encryption_method`` is ``external-custody`` hold no agent
+    ciphertext; their key is already held outside the agent database. They are
+    skipped and listed under ``skipped`` with reason ``already_external_custody``.
+    Any other unexpected encryption method aborts before a wallet is written.
     """
     import os
 
@@ -45,8 +52,11 @@ def migrate(legacy_db: Path, legacy_key: Path, settings: dict) -> dict:
     rows = original.execute("SELECT * FROM wallets").fetchall()
     original.close()
     source_key = Fernet(legacy_key.read_bytes().strip())
-    prepared, receipt = [], []
+    prepared, receipt, skipped = [], [], []
     for row in rows:
+        if row["encryption_method"] == EXTERNAL_CUSTODY:
+            skipped.append({"address": row["address"], "reason": "already_external_custody"})
+            continue
         if row["encryption_method"] != "fernet-v1":
             raise ValueError("Unexpected legacy wallet encryption; no migration was committed")
         plaintext = source_key.decrypt(bytes(row["encrypted_secret"])).decode()
@@ -58,7 +68,7 @@ def migrate(legacy_db: Path, legacy_key: Path, settings: dict) -> dict:
             receipt.append({"address": row["address"], "ciphertext_sha256": hashlib.sha256(bytes(row["encrypted_secret"])).hexdigest()})
         finally:
             del plaintext
-    result = {"version": 1, "wallets": receipt}
+    result = {"version": 1, "wallets": receipt, "skipped": skipped}
     receipt_path = Path(settings["state_dir"]) / "migration-receipt.json"
     if receipt_path.exists() and json.loads(receipt_path.read_text()) != result:
         raise ValueError("A different migration receipt exists; no wallet mutation was committed")
@@ -153,6 +163,8 @@ def main():
         if input("Type MIGRATE STOPPED SNAPSHOT after stopping the legacy agent and protecting its recovery copies: ") != "MIGRATE STOPPED SNAPSHOT":
             raise ValueError("Migration cancelled")
         result = migrate(args.legacy_db, args.legacy_master_key, settings)
+        for item in result["skipped"]:
+            print("Skipped " + item["address"] + ": " + item["reason"])
         print("Migrated " + str(len(result["wallets"])) + " wallets. Original snapshots and any other backups still contain recoverable secrets.")
         print("Backup confirmations were not carried over. Verify each wallet's backup, then run confirm-backup ADDRESS for it.")
     elif args.action == "approve-marketplace":

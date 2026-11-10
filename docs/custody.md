@@ -203,8 +203,19 @@ Every signing request claims protected usage/nonce state before cryptographic
 signing and delivery. Deterministic missing-wallet, backup and argument failures
 occur before reservation. A signing exception, or a crash between reservation
 and storing the signature, means no signature left custody: the reservation is
-refunded and its nonce is free for the next request. Exact successful retries
-return the stored signature without spending twice.
+refunded and its nonce is free for the next request. At startup the daemon takes
+an exclusive lock on its state directory, refuses to start if another daemon
+holds it, and then refunds every reservation that has no stored signature, so a
+crash cannot hold budget for a nonce that is never retried. A stored signature
+was returned only after it was journaled, so stored signatures stay counted.
+Exact successful retries return the stored signature without signing or
+spending twice; after a policy change, the cached request must pass the current
+policy before it is returned.
+
+The daemon reads each client's request in its own thread, with a ten-second read
+deadline and at most eight clients at once; a ninth client receives a busy
+refusal. Policy checks and signing run one request at a time, so a silent or
+slow client cannot block other clients.
 
 A transaction that was signed but never mined (a broadcast failure, an RPC
 rejection or a mempool drop) does not strand its nonce. A different transaction
@@ -240,7 +251,11 @@ sudo -u mangrove-custody /opt/mangrove-custody/.venv/bin/python -I /opt/mangrove
 
 Migration validates every decrypted wallet identity, reencrypts with the custody
 master key, preserves metadata, commits atomically, and writes
-a private receipt containing addresses and hashes of original ciphertext. A
+a private receipt containing addresses and hashes of original ciphertext. Rows
+already marked `external-custody` hold no agent ciphertext; migration skips
+them, prints `Skipped ADDRESS: already_external_custody` for each, and lists
+them in the receipt. Any other unexpected encryption method stops the migration
+before a wallet is written. A
 same-snapshot retry verifies already migrated identities and resumes receipt
 creation without overwriting them. Backup confirmations are not carried over,
 because ordinary agent authority could set the legacy flag: verify each wallet's

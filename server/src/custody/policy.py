@@ -27,7 +27,9 @@ class Policy:
 
     def __init__(self, settings: dict, state_dir: Path):
         self.settings = settings
-        self.db = sqlite3.connect(state_dir / "policy.db")
+        # The daemon reads requests in worker threads and serializes every
+        # ledger use behind one dispatch lock, so the connection crosses threads.
+        self.db = sqlite3.connect(state_dir / "policy.db", check_same_thread=False)
         self.db.executescript("""
             PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS usage (scope TEXT PRIMARY KEY, amount TEXT NOT NULL);
@@ -79,6 +81,31 @@ class Policy:
                 self._set_slot(replay_key, scope, released, released)
         self.db.execute("DELETE FROM slot_claims WHERE replay_key=? AND reserved='0'", (replay_key,))
         self.db.execute("DELETE FROM signatures WHERE replay_key=? AND result IS NULL", (replay_key,))
+
+    def recover_unfinished(self) -> int:
+        """Refund every reservation left by a stopped or crashed daemon.
+
+        Call only at startup while holding the daemon's exclusive state lock,
+        before any request is accepted. ``sign`` stores a signature's result
+        before returning it, and the daemon sends a result only after ``sign``
+        returns, so a row whose result is still NULL never released a signature
+        outside custody. Released signatures stay counted. Returns the number of
+        replay slots refunded.
+        """
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            keys = [key for (key,) in self.db.execute(
+                "SELECT DISTINCT replay_key FROM signatures WHERE result IS NULL")]
+            keys += [key for (key,) in self.db.execute(
+                "SELECT DISTINCT replay_key FROM slot_claims WHERE released<>reserved") if key not in keys]
+            for key in keys:
+                self._release_unsigned(key)
+                self._record("startup_recovery", digest(key), "released_at_startup")
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        return len(keys)
 
     def _reserve(self, replay_key: str, claims):
         """Charge each scope up to the largest amount ever signed or reserved at this slot.
@@ -210,7 +237,10 @@ class Policy:
     def sign(self, operation: str, args: dict, sign_function):
         """Reserve, sign and journal one request.
 
-        - An exact retry under unchanged policy returns the stored signature.
+        - An exact retry returns the stored signature without signing again or
+          reserving budget. Under unchanged policy, only time-bound validity is
+          rechecked; under changed policy, the request must pass the current
+          policy in full.
         - A reservation whose signing raised or never completed is refunded and
           its slot freed, because its signature never left custody.
         - A different transaction at a ``tx:`` nonce slot is allowed when it
@@ -223,14 +253,18 @@ class Policy:
         policy_digest = digest(self.settings)
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            # Exact retries return the protected stored signature and never reserve twice.
-            previous = self.db.execute("SELECT result FROM signatures WHERE digest=? AND policy_digest=? AND result IS NOT NULL",
-                                       (request_digest, policy_digest)).fetchone()
+            # Exact retries return the protected stored signature and never sign
+            # or reserve twice, whatever policy was active when it was signed.
+            previous = self.db.execute("SELECT result, policy_digest FROM signatures WHERE digest=? AND result IS NOT NULL",
+                                       (request_digest,)).fetchone()
             if previous:
                 # A cached signature can still be spendable. Recheck time-bound
                 # proof/payment validity without claiming another budget unit or
-                # consuming the already used human marketplace approval.
-                if operation == "sign_x402_authorization":
+                # consuming the already used human marketplace approval. A
+                # changed policy must authorize the cached request again in full.
+                if previous[1] != policy_digest:
+                    self.authorize(operation, args)
+                elif operation == "sign_x402_authorization":
                     self._x402(args)
                 elif operation == "sign_siwx_message":
                     self.authorize(operation, args)
@@ -247,7 +281,7 @@ class Policy:
             if other and not replay_key.startswith("tx:"):
                 raise ValueError("A different request already used this signing nonce")
             self._reserve(replay_key, claims)
-            self.db.execute("INSERT OR REPLACE INTO signatures(replay_key,digest,policy_digest,result) VALUES(?,?,?,NULL)",
+            self.db.execute("INSERT INTO signatures(replay_key,digest,policy_digest,result) VALUES(?,?,?,NULL)",
                             (replay_key, request_digest, policy_digest))
             self._record(operation, request_digest, "replacement_reserved" if other else "reserved")
             # Commit BEFORE signing: a crash after signing must not release budget.

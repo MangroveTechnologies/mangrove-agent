@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import inspect
+import os
 import signal
 import socket
+import threading
 from pathlib import Path
 
 from src.custody.bootstrap import initialize
@@ -60,16 +63,67 @@ class Broker:
         return self.policy.sign(operation, arguments, perform)
 
 
+MAX_CONNECTIONS = 8
+READ_DEADLINE_SECONDS = 10
+
+
+def _acquire_state_lock(state_dir: Path) -> int:
+    """Hold an exclusive lock on the state directory for the daemon's lifetime.
+
+    The startup reservation sweep is safe only when no other daemon can be
+    signing from the same ledger, so a second daemon refuses to start.
+    """
+    descriptor = os.open(state_dir / "daemon.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(descriptor)
+        raise ValueError("A custody daemon is already running for this state directory") from None
+    return descriptor
+
+
+def _handle(connection, broker, agent_uid, dispatch_lock, slots):
+    """Read, authorize and answer one client; only dispatch is serialized."""
+    try:
+        with connection:
+            connection.settimeout(READ_DEADLINE_SECONDS)
+            try:
+                if peer_uid(connection) != agent_uid:
+                    raise ValueError("Unauthorized custody peer")
+                request = receive(connection, timeout_seconds=READ_DEADLINE_SECONDS)
+                with dispatch_lock:
+                    result = broker.dispatch(request)
+                send(connection, {"ok": True, "result": result})
+            except Exception:
+                # Never reflect a request, signature, internal exception or secret.
+                try:
+                    send(connection, {"ok": False, "error": "Custody operation refused"})
+                except (OSError, ValueError):
+                    pass  # The client disconnected or stalled; it gets no response.
+    finally:
+        slots.release()
+
+
 def serve(settings):
     path = Path(settings["socket_path"])
     if path.exists() or path.is_symlink():
         # Do not unlink an existing daemon's endpoint or arbitrary files.
         raise ValueError("Custody socket already exists; stop the old service and remove its stale socket as the administrator")
+    # The lock descriptor is never closed: the OS releases it when this
+    # process exits, so a successor cannot sweep reservations while a worker
+    # thread of this daemon may still be storing or sending a signature.
+    _acquire_state_lock(Path(settings["state_dir"]))
     broker = Broker(settings)
+    broker.policy.recover_unfinished()
     def terminate(_signum, _frame):
         raise SystemExit(0)
     signal.signal(signal.SIGTERM, terminate)
     signal.signal(signal.SIGINT, terminate)
+    # Each client reads its request in its own thread, so a silent or slow
+    # client holds one slot until its read deadline instead of blocking the
+    # service. Policy and signing still run one request at a time.
+    dispatch_lock = threading.Lock()
+    slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
         listener.bind(str(path))
         # Traversal is read-only to the agent; peer UID authenticates every call.
@@ -78,19 +132,16 @@ def serve(settings):
         try:
             while True:
                 connection, _ = listener.accept()
-                with connection:
-                    connection.settimeout(10)
-                    try:
-                        if peer_uid(connection) != settings["agent_uid"]:
-                            raise ValueError("Unauthorized custody peer")
-                        result = broker.dispatch(receive(connection))
-                        send(connection, {"ok": True, "result": result})
-                    except Exception:
-                        # Never reflect a request, signature, internal exception or secret.
+                if not slots.acquire(blocking=False):
+                    with connection:
+                        connection.settimeout(1)
                         try:
-                            send(connection, {"ok": False, "error": "Custody operation refused"})
+                            send(connection, {"ok": False, "error": "Custody service is busy"})
                         except (OSError, ValueError):
-                            pass
+                            pass  # A refused client that does not read gets nothing.
+                    continue
+                threading.Thread(target=_handle, args=(connection, broker, settings["agent_uid"], dispatch_lock, slots),
+                                 daemon=True).start()
         finally:
             path.unlink(missing_ok=True)
 

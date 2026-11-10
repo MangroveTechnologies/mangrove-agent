@@ -60,11 +60,13 @@ def test_real_synthetic_backup_goes_only_to_controlling_pty():
         os.close(output_write)
         runtime._active = True
         wallet_manager.reveal_wallet_secret = lambda _: SimpleNamespace(secret=synthetic_secret)
+        # The forked child must always leave through os._exit, never return into pytest.
+        status = 1
         try:
             terminal.display_wallet_backup(account.address)
-        except BaseException:
-            os._exit(1)
-        os._exit(0)
+            status = 0
+        finally:
+            os._exit(status)
     os.close(output_write)
     received, confirmed = bytearray(), False
     try:

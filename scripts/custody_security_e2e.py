@@ -107,16 +107,17 @@ def admin(action, answer, uid=CUSTODY):
         try:
             _, status = os.waitpid(child, 0)
         except ChildProcessError:
-            pass
+            pass  # The WNOHANG poll above already reaped the child and set status.
         return os.waitstatus_to_exitcode(status or 0), bytes(output)
     finally:
         os.close(fd)
 
 
 def start(uid, command, env, log):
-    stream = open(log, 'ab')
-    process = subprocess.Popen(command, user=uid, group=uid, extra_groups=[],
-                               cwd=ROOT / 'server', env=env, stdout=stream, stderr=stream)
+    # The child keeps its own duplicate of the log descriptor after Popen returns.
+    with open(log, 'ab') as stream:
+        process = subprocess.Popen(command, user=uid, group=uid, extra_groups=[],
+                                   cwd=ROOT / 'server', env=env, stdout=stream, stderr=stream)
     PROCESSES.append(process)
     return process
 
@@ -238,7 +239,7 @@ def provision():
             if httpx.get('http://127.0.0.1:19080/health', timeout=.3).status_code == 200:
                 return settings
         except httpx.HTTPError:
-            pass
+            pass  # The agent is still starting; poll again until the deadline.
         if agent.poll() is not None:
             break
         time.sleep(.05)
@@ -441,6 +442,17 @@ def exercise_frames():
         outcome = run_as(AGENT, [PYTHON, '-I', '-c', program, SOCKET], input=frame)
         check('socket refuses ' + name, b'"ok":true' not in outcome.stdout)
         check('daemon remains usable after ' + name, rpc('list_wallets', {}).get('ok') is True)
+    silent = subprocess.Popen([PYTHON, '-I', '-c', 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); '
+                               's.connect(sys.argv[1]); print("connected", flush=True); time.sleep(30)', SOCKET],
+                              user=AGENT, group=AGENT, extra_groups=[], stdout=subprocess.PIPE)
+    try:
+        check('silent agent client connects', silent.stdout.readline().strip() == b'connected')
+        started = time.monotonic()
+        usable = rpc('list_wallets', {}).get('ok') is True
+        check('silent agent client does not block another custody client', usable and time.monotonic() - started < 5)
+    finally:
+        silent.kill()
+        silent.wait()
 
 
 def exercise_migration():
@@ -451,6 +463,7 @@ def exercise_migration():
     database, keyfile = folder / 'legacy.db', folder / 'legacy.key'
     secret = Account.create()
     address = secret.address
+    external = Account.create().address  # Public identity only; its key is never created here.
     key = Fernet.generate_key()
     ciphertext = Fernet(key).encrypt(('0x' + secret.key.hex()).encode())
     keyfile.write_bytes(key)
@@ -460,19 +473,24 @@ def exercise_migration():
     conn.execute('INSERT INTO wallets(id,address,chain,network,chain_id,encrypted_secret,encryption_method,created_at,backup_confirmed_at) VALUES(?,?,?,?,?,?,?,?,?)',
                  ('synthetic-legacy-wallet', address, 'evm', 'testnet', 84532, ciphertext,
                   'fernet-v1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'))
+    conn.execute("INSERT INTO wallets(id,address,chain,network,chain_id,encrypted_secret,encryption_method,created_at) VALUES(?,?,?,?,?,X'',?,?)",
+                 ('synthetic-external-wallet', external, 'evm', 'testnet', 84532, 'external-custody', '2026-01-01T00:00:00Z'))
     conn.commit()
     conn.close()
     for path in (database, keyfile):
         os.chown(path, CUSTODY, CUSTODY)
         path.chmod(0o600)
     action = ['migrate', '--legacy-db', str(database), '--legacy-master-key', str(keyfile)]
-    code, _ = admin(action, 'MIGRATE STOPPED SNAPSHOT')
+    code, output = admin(action, 'MIGRATE STOPPED SNAPSHOT')
     check('human migration preserves a real synthetic legacy wallet', code == 0)
+    check('migration skips an external-custody row with a reason code',
+          ('Skipped ' + external + ': already_external_custody').encode() in output)
     code, _ = admin(action, 'MIGRATE STOPPED SNAPSHOT')
     check('migration safely resumes an already copied wallet', code == 0)
     listed = {item['address']: item for item in rpc('list_wallets', {}).get('result') or []}
     check('migration does not carry the agent-settable backup confirmation',
           address in listed and listed[address]['backup_confirmed_at'] is None)
+    check('skipped external-custody row creates no custody wallet', external not in listed)
     code, output = admin(['backup', address], 'DISPLAY SECRET')
     values = re.findall(rb'(?m)^0x[0-9a-fA-F]{64}\r?$', output)
     check('migrated secret recovers original public identity', code == 0 and len(values) == 1
@@ -483,19 +501,20 @@ def exercise_migration():
                '--legacy-db', str(database), '--receipt', str(receipt), '--custody-uid', str(CUSTODY)]
     check('agent UID cannot retire legacy ciphertext', run_as(AGENT, command).returncode != 0)
     changed = sqlite3.connect(database)
-    changed.execute("UPDATE wallets SET encrypted_secret=?", (b'tampered-ciphertext',))
+    changed.execute("UPDATE wallets SET encrypted_secret=? WHERE address=?", (b'tampered-ciphertext', address))
     changed.commit()
     changed.close()
     check('retirement refuses a changed source snapshot', run_as(0, command).returncode != 0)
     changed = sqlite3.connect(database)
-    changed.execute('UPDATE wallets SET encrypted_secret=?', (ciphertext,))
+    changed.execute('UPDATE wallets SET encrypted_secret=? WHERE address=?', (ciphertext, address))
     changed.commit()
     changed.close()
     check('root retirement accepts verified protected snapshot', run_as(0, command).returncode == 0)
     conn = sqlite3.connect(database)
-    row = conn.execute('SELECT address,encrypted_secret,encryption_method FROM wallets').fetchone()
+    rows = conn.execute('SELECT address,encrypted_secret,encryption_method FROM wallets ORDER BY id').fetchall()
     conn.close()
-    check('retired database retains address without wallet ciphertext', row == (address, b'', 'external-custody'))
+    check('retired database retains address without wallet ciphertext',
+          rows == [(external, b'', 'external-custody'), (address, b'', 'external-custody')])
     check('retired active DB bytes omit original ciphertext', ciphertext not in database.read_bytes())
     check('shared legacy master remains for unrelated encrypted records', keyfile.exists())
 
@@ -517,7 +536,7 @@ def exercise_auth_disabled():
             if httpx.get('http://127.0.0.1:19081/health', timeout=.3).status_code == 200:
                 break
         except httpx.HTTPError:
-            pass
+            pass  # The service is still starting; poll again until the deadline.
         if process.poll() is not None:
             raise AssertionError('auth-disabled test service startup')
         time.sleep(.05)

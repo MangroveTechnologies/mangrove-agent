@@ -678,3 +678,263 @@ def test_migration_requires_new_backup_confirmation(custody, protected_directory
         wm.require_backup_confirmed(account.address)
     wm.confirm_backup(account.address)
     wm.require_backup_confirmed(account.address)
+
+
+def _legacy_snapshot(directory, rows):
+    """Write a stopped legacy agent database and master key as private files."""
+    import sqlite3
+
+    from cryptography.fernet import Fernet
+
+    legacy_key = Fernet.generate_key()
+    directory.mkdir(mode=0o700)
+    database = directory / "agent.db"
+    conn = sqlite3.connect(database)
+    conn.execute("CREATE TABLE wallets (id TEXT, address TEXT, chain TEXT, network TEXT, chain_id INTEGER, "
+                 "encrypted_secret BLOB, encryption_method TEXT, label TEXT, created_at TEXT, "
+                 "metadata_json TEXT, backup_confirmed_at TEXT)")
+    for index, (address, secret, method) in enumerate(rows):
+        ciphertext = Fernet(legacy_key).encrypt(secret.encode()) if secret else b""
+        conn.execute("INSERT INTO wallets VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                     (f"id{index}", address, "evm", "testnet", 84532, ciphertext, method, None,
+                      "2026-01-01T00:00:00+00:00", None, None))
+    conn.commit()
+    conn.close()
+    os.chmod(database, 0o600)
+    keyfile = directory / "master.key"
+    keyfile.write_bytes(legacy_key)
+    os.chmod(keyfile, 0o600)
+    return database, keyfile
+
+
+def test_migration_skips_external_custody_rows_and_migrates_the_rest(custody, protected_directory):
+    """A legacy row already held by external custody has no ciphertext to migrate."""
+    import sqlite3
+
+    from src.custody.admin import migrate
+
+    wm, _, _, settings = custody
+    legacy, external = Account.create(), Account.create()
+    database, keyfile = _legacy_snapshot(protected_directory / "legacy", [
+        (legacy.address, "0x" + legacy.key.hex().removeprefix("0x"), "fernet-v1"),
+        (external.address, None, "external-custody"),
+    ])
+    result = migrate(database, keyfile, settings)
+    assert [item["address"] for item in result["wallets"]] == [legacy.address]
+    assert result["skipped"] == [{"address": external.address, "reason": "already_external_custody"}]
+    assert wm._load_secret(legacy.address) == "0x" + legacy.key.hex().removeprefix("0x")
+    assert wm._get_wallet_row(external.address) is None
+    assert migrate(database, keyfile, settings) == result
+
+    script = Path(__file__).resolve().parents[3] / "scripts/custody-retire-legacy.py"
+    spec = importlib.util.spec_from_file_location("retire_custody", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    from unittest.mock import patch
+
+    with patch.object(module.os, "geteuid", return_value=0):
+        module.retire(database, protected_directory / "migration-receipt.json", os.getuid())
+    check = sqlite3.connect(database)
+    methods = [method for (method,) in check.execute("SELECT encryption_method FROM wallets")]
+    check.close()
+    # After retirement no row keeps the migration_required gate closed.
+    assert "migration_required" not in {wm._custody_status(method) for method in methods}
+
+
+def test_migration_still_aborts_on_unknown_encryption(custody, protected_directory):
+    from src.custody.admin import migrate
+
+    wm, _, _, settings = custody
+    legacy = Account.create()
+    database, keyfile = _legacy_snapshot(protected_directory / "legacy", [
+        (legacy.address, "0x" + legacy.key.hex().removeprefix("0x"), "fernet-v1"),
+        (Account.create().address, "unknown", "rot13"),
+    ])
+    with pytest.raises(ValueError, match="no migration was committed"):
+        migrate(database, keyfile, settings)
+    assert wm._get_wallet_row(legacy.address) is None
+
+
+def test_startup_sweep_refunds_crashed_payment_reservation(custody):
+    """A crash between reservation and stored result left no signature outside custody."""
+    wm, wallet, broker, settings = custody
+    wm.confirm_backup(wallet.address)
+    request = payment(wallet, nonce=9, value=2000)
+    with pytest.raises(SystemExit):
+        broker.policy.sign("sign_x402_authorization", request["arguments"],
+                           lambda: (_ for _ in ()).throw(SystemExit()))
+    assert broker.policy.db.execute("SELECT amount FROM usage WHERE scope='x402'").fetchone()[0] == "2000"
+    restarted = Broker(settings)
+    assert restarted.policy.recover_unfinished() == 1
+    assert restarted.policy.db.execute("SELECT amount FROM usage WHERE scope='x402'").fetchone()[0] == "0"
+    assert restarted.policy.db.execute("SELECT count(*) FROM signatures").fetchone()[0] == 0
+    assert restarted.policy.db.execute("SELECT outcome FROM audit ORDER BY id DESC").fetchone()[0] == "released_at_startup"
+    # The freed budget pays a different payment; the never-signed nonce is not burned.
+    assert restarted.dispatch(payment(wallet, nonce=10, value=2000)).startswith("0x")
+
+
+def test_startup_sweep_keeps_released_signatures_counted(custody):
+    wm, wallet, broker, settings = custody
+    wm.confirm_backup(wallet.address)
+    signature = broker.dispatch(payment(wallet, nonce=11, value=2000))
+    restarted = Broker(settings)
+    assert restarted.policy.recover_unfinished() == 0
+    assert restarted.policy.db.execute("SELECT amount FROM usage WHERE scope='x402'").fetchone()[0] == "2000"
+    assert restarted.dispatch(payment(wallet, nonce=11, value=2000)) == signature
+    with pytest.raises(ValueError, match="budget"):
+        restarted.dispatch(payment(wallet, nonce=12, value=1001))
+
+
+def test_identical_payment_replay_signs_once_even_after_policy_change(custody, monkeypatch):
+    wm, wallet, broker, settings = custody
+    wm.confirm_backup(wallet.address)
+    calls = []
+    original = wm.sign_x402_authorization
+
+    def counting(**arguments):
+        calls.append(arguments["message"]["nonce"])
+        return original(**arguments)
+
+    monkeypatch.setattr(wm, "sign_x402_authorization", counting)
+    request = payment(wallet, nonce=21, value=1000)
+    signature = broker.dispatch(request)
+    assert broker.dispatch(copy_request(request)) == signature
+    # A benign policy change (higher lifetime cap) must not re-sign the cached payment.
+    settings["policy"]["x402"]["lifetime_micro_usd"] = 4000
+    changed = Broker(settings)
+
+    def fail(**_):
+        raise RuntimeError("synthetic signer failure")
+
+    monkeypatch.setattr(wm, "sign_x402_authorization", fail)
+    assert changed.dispatch(copy_request(request)) == signature
+    assert len(calls) == 1
+    assert changed.policy.db.execute("SELECT amount FROM usage WHERE scope='x402'").fetchone()[0] == "1000"
+    assert changed.policy.db.execute("SELECT count(*) FROM signatures WHERE result IS NOT NULL").fetchone()[0] == 1
+    # The signed nonce stays bound to its first payment.
+    with pytest.raises(ValueError, match="already used this signing nonce"):
+        changed.dispatch(payment(wallet, nonce=21, value=500))
+
+
+def copy_request(request):
+    return json.loads(json.dumps(request))
+
+
+class _EchoBroker:
+    class _Ledger:
+        def recover_unfinished(self):
+            return 0
+
+    def __init__(self, settings):
+        self.policy = self._Ledger()
+
+    def dispatch(self, request):
+        return {"echo": request["operation"]}
+
+
+def _serve_in_thread(monkeypatch, settings, broker_class=_EchoBroker):
+    import threading
+
+    from src.custody import daemon
+
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_: None)
+    monkeypatch.setattr(daemon, "Broker", broker_class)
+    errors = []
+
+    def run():
+        try:
+            daemon.serve(settings)
+        except Exception as error:  # noqa: BLE001 - reported to the test thread below
+            errors.append(error)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 5
+    while not Path(settings["socket_path"]).exists() and not errors and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return thread, errors
+
+
+def _rpc(path, request, timeout=5):
+    from src.custody.transport import send
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(timeout)
+        client.connect(path)
+        send(client, request)
+        return receive(client, timeout_seconds=timeout)
+
+
+@pytest.fixture
+def short_socket_dir():
+    """Unix socket paths are limited to about 104 bytes, so use a short scratch directory."""
+    with tempfile.TemporaryDirectory(prefix="mcs-", dir="/tmp") as directory:
+        yield Path(directory)
+
+
+def test_silent_client_does_not_block_other_custody_clients(protected_directory, short_socket_dir, monkeypatch):
+    settings = {"state_dir": str(protected_directory), "socket_path": str(short_socket_dir / "s.sock"),
+                "agent_uid": os.getuid()}
+    _, errors = _serve_in_thread(monkeypatch, settings)
+    assert not errors and Path(settings["socket_path"]).exists()
+    silent = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        silent.connect(settings["socket_path"])
+        time.sleep(0.2)  # the daemon has accepted the silent client and is waiting on it
+        started = time.monotonic()
+        response = _rpc(settings["socket_path"], {"operation": "list_wallets", "arguments": {}})
+        assert response == {"ok": True, "result": {"echo": "list_wallets"}}
+        assert time.monotonic() - started < 2
+    finally:
+        silent.close()
+
+
+def test_daemon_refuses_new_connections_beyond_the_concurrency_bound(protected_directory, short_socket_dir, monkeypatch):
+    from src.custody import daemon
+
+    settings = {"state_dir": str(protected_directory), "socket_path": str(short_socket_dir / "s.sock"),
+                "agent_uid": os.getuid()}
+    _serve_in_thread(monkeypatch, settings)
+    silent = []
+    try:
+        for _ in range(daemon.MAX_CONNECTIONS):
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection.connect(settings["socket_path"])
+            silent.append(connection)
+        time.sleep(0.2)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as extra:
+            extra.settimeout(2)
+            extra.connect(settings["socket_path"])
+            assert receive(extra, timeout_seconds=2) == {"ok": False, "error": "Custody service is busy"}
+    finally:
+        for connection in silent:
+            connection.close()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            if _rpc(settings["socket_path"], {"operation": "list_wallets", "arguments": {}})["ok"]:
+                break
+        except (OSError, ValueError):
+            pass  # slots free as the closed silent clients are reaped
+        time.sleep(0.05)
+    else:
+        pytest.fail("daemon did not recover after silent clients disconnected")
+
+
+def test_serve_sweeps_crashed_reservations_and_refuses_a_second_daemon(custody, short_socket_dir, monkeypatch):
+    wm, wallet, broker, settings = custody
+    wm.confirm_backup(wallet.address)
+    request = payment(wallet, nonce=31, value=2000)
+    with pytest.raises(SystemExit):
+        broker.policy.sign("sign_x402_authorization", request["arguments"],
+                           lambda: (_ for _ in ()).throw(SystemExit()))
+    settings.update(socket_path=str(short_socket_dir / "s.sock"), agent_uid=os.getuid())
+    _, errors = _serve_in_thread(monkeypatch, settings, broker_class=Broker)
+    assert not errors and Path(settings["socket_path"]).exists()
+    assert broker.policy.db.execute("SELECT amount FROM usage WHERE scope='x402'").fetchone()[0] == "0"
+    # A second daemon on the same state directory refuses before touching the ledger.
+    second = dict(settings, socket_path=str(short_socket_dir / "t.sock"))
+    from src.custody import daemon
+    with pytest.raises(ValueError, match="already running"):
+        daemon.serve(second)
+    assert not Path(second["socket_path"]).exists()
