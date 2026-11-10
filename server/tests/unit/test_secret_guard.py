@@ -347,24 +347,38 @@ def _never_checksummed_word() -> str:
                 if not any(secret_guard.bip39_checksum_valid([word] * n) for n in (12, 15, 18, 21, 24)))
 
 
+def _concatenated_words(count: int) -> str:
+    import random
+
+    rng = random.Random(7)
+    return " ".join("".join(rng.choice(["able", "about", "zoo"]) for _ in range(37)) for _ in range(count))
+
+
 @pytest.mark.parametrize("make_text", [
-    lambda: ("tx " + FAKE_TX + " ") * 25_000,                     # many hash-labelled hex values
-    lambda: '"private_key": "x", ' * 100_000,                      # many key-named fields
-    lambda: " ".join([_never_checksummed_word()] * 200_000),     # one long wordlist run, no checksum
-    lambda: ("act add " * 12 + "xyz ") * 20_000,                  # many short wordlist runs
-])
-def test_large_adversarial_text_is_scanned_quickly(make_text):
+    lambda n: ("tx " + FAKE_TX + " ") * n,                          # many hash-labelled hex values
+    lambda n: '"private_key": "x", ' * (n * 4),                      # many key-named fields
+    lambda n: " ".join([_never_checksummed_word()] * (n * 9)),     # one long wordlist run, no checksum
+    lambda n: ("act add " * 12 + "xyz ") * (n * 2 // 3),            # many short wordlist runs
+    lambda n: ("q" * 150 + " ") * (n // 2),                         # long letter runs
+    lambda n: _concatenated_words(n // 2),                          # letter runs made of wordlist words
+], ids=["labelled-hex", "key-fields", "word-run", "short-runs", "letter-runs", "concatenated-words"])
+def test_large_adversarial_text_is_scanned_in_linear_time(make_text):
+    """About 1 MB scans well under a second, and doubling the input at most triples the time."""
     import time
 
-    text = make_text()
-    assert len(text) >= 1_000_000
     secret_guard.bip39_words()  # load the wordlist once, outside the timing
-    for scan in (lambda: secret_guard.find_in_arguments({"query": text}),
-                 lambda: secret_guard.find_in_arguments({"payload": text}),
-                 lambda: secret_guard.find_in_result(text)):
-        started = time.perf_counter()
-        scan()
-        assert time.perf_counter() - started < 1.0
+    small, large = make_text(15_000), make_text(30_000)
+    assert len(small) >= 1_000_000
+    for scan in (lambda text: secret_guard.find_in_arguments({"query": text}),
+                 lambda text: secret_guard.find_in_arguments({"payload": text}),
+                 lambda text: secret_guard.find_in_result(text)):
+        timings = []
+        for text in (small, large):
+            started = time.perf_counter()
+            scan(text)
+            timings.append(time.perf_counter() - started)
+        assert timings[0] < 1.0
+        assert timings[1] < 3 * timings[0] + 0.05
 
 
 # --- Key-named flags next to public hashes -----------------------------------

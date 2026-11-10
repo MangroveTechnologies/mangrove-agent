@@ -60,8 +60,8 @@ Arguments (``find_in_arguments``):
    itself (consecutive wordlist entries) is not counted. A phrase with a wrong
    word is missed only when it also repeats a word: about 3% of 12-word and
    5% of 15-word phrases, under 1% from 18 words. One call evaluates at most
-   ``_WINDOW_BUDGET`` checksums; text needing more is refused as a possible
-   phrase, which keeps the scan linear in the input size.
+   ``_WINDOW_BUDGET`` checksums and split words; text needing more is refused
+   as a possible phrase, which keeps the scan linear in the input size.
 3. Any other string is refused when it holds 64 hex characters, with or
    without ``0x``, embedded in text (``"import my wallet 0x..."``) or anywhere
    in a free-text field (``PROSE_FIELD_NAMES``, such as ``query`` or
@@ -179,7 +179,7 @@ _MIN_INT_KEY = 1 << 192
 # Characters read before a match for hash labels, and before a 0x value for its field name.
 _LOOKBACK_CHARS = 256
 _ATTRIBUTION_CHARS = 80
-# Checksums one scan may evaluate before refusing the text as a possible phrase.
+# Checksums and split words one scan may evaluate before refusing the text as a possible phrase.
 _WINDOW_BUDGET = 50_000
 # Longest error message scanned and returned by redact_error.
 _ERROR_CHARS = 4000
@@ -384,78 +384,146 @@ def _phrase_runs(text: str, *, case_split: bool):
         yield run, joined
 
 
-_LETTER_RUN_RE = re.compile(r"[A-Za-z]{36,200}")
+# A letter run of 36 to 200 letters, not part of a longer alphanumeric token, with at least one
+# letter outside a-f, so hex strings are never split into words.
+_LETTER_RUN_RE = re.compile(r"(?<![A-Za-z0-9])(?=[A-Za-z]*[g-zG-Z])[A-Za-z]{36,200}(?![A-Za-z0-9])")
 
 
 def _segment(letters: str) -> list[str] | None:
-    """Split a lowercase letter run into BIP-39 words (3 to 8 letters each), or None."""
+    """Split a lowercase letter run into BIP-39 words (3 to 8 letters each), or None.
+
+    Positions are visited in order and only when a word ends there, so text
+    that is not made of wordlist words stops after its first few letters.
+    """
     words = bip39_words()
     size = len(letters)
-    following: list[int | None] = [None] * (size + 1)
-    following[size] = size
-    for start in range(size - 3, -1, -1):
-        for end in range(start + 3, min(start + 8, size) + 1):
-            if following[end] is not None and letters[start:end] in words:
-                following[start] = end
-                break
-    if following[0] is None:
+    previous: list[int] = [-1] * (size + 1)
+    reached = [False] * (size + 1)
+    reached[0] = True
+    for position in range(size):
+        if not reached[position]:
+            continue
+        for end in range(position + 3, min(position + 8, size) + 1):
+            if not reached[end] and letters[position:end] in words:
+                reached[end] = True
+                previous[end] = position
+    if not reached[size]:
         return None
-    parts, position = [], 0
-    while position < size:
-        end = following[position]
-        parts.append(letters[position:end])
-        position = end
-    return parts
+    parts, end = [], size
+    while end > 0:
+        parts.append(letters[previous[end]:end])
+        end = previous[end]
+    return parts[::-1]
+
+
+_RUN_TOKEN = r"(?<![a-z])[a-z]{3,8}(?![a-z])"
+# Twelve consecutive lowercase letter runs of wordlist length: a cheap test that a run of
+# 12 wordlist words may exist, before the tokens are checked against the wordlist.
+_RUN_CANDIDATE_RE = re.compile(_RUN_TOKEN + r"(?:[^a-z]+" + _RUN_TOKEN + r"){11}")
+
+
+def _has_long_run(tokens: list[str]) -> bool:
+    """At least 12 consecutive tokens are BIP-39 words."""
+    words = bip39_words()
+    count = 0
+    for token in tokens:
+        if token in words:
+            count += 1
+            if count >= _MNEMONIC_RUN:
+                return True
+        else:
+            count = 0
+    return False
+
+
+def _readings(text: str):
+    """(variant, case_split) pairs worth scanning for a phrase.
+
+    The case-split reading is skipped when the variant has no uppercase
+    letter (both readings are then the same), and a reading is skipped when
+    it has no run of 12 wordlist words. Letter runs long enough to be split by
+    ``_segment`` always keep the case-insensitive reading.
+    """
+    for variant in _text_variants(text):
+        lowered = variant.lower()
+        candidate = _RUN_CANDIDATE_RE.search(lowered) is not None
+        if (candidate and _has_long_run(_WORD_RE.findall(lowered))) or _LETTER_RUN_RE.search(variant):
+            yield variant, False
+        if lowered != variant and _has_long_run([token.lower() for token in _CASED_WORD_RE.findall(variant)]):
+            yield variant, True
 
 
 def has_recovery_phrase(text: str, budget: list[int] | None = None) -> bool:
     """A window of BIP-39 words that reads as a recovery phrase (rule 2 in the module docstring).
 
     The text is read twice: case-insensitively, and split at case changes as
-    well. Every window of 12, 15, 18, 21 or 24 words is checked, except an excerpt
+    well. Every window of 12, 15, 18, 21 or 24 words is checked by
+    ``_run_has_phrase``. A letter run of 36 to 200 letters with no separator
+    is split into wordlist words and checked the same way, as joined words.
+    ``budget`` holds the number of checksums and split words the caller may
+    still evaluate and is decremented; when it runs out the text is reported
+    as a phrase.
+    """
+    remaining = budget if budget is not None else [_WINDOW_BUDGET]
+    for variant, case_split in _readings(text):
+        for run, joined in _phrase_runs(variant, case_split=case_split):
+            if _run_has_phrase(run, joined, remaining):
+                return True
+        if case_split:
+            continue
+        segmented: set[str] = set()
+        for match in _LETTER_RUN_RE.finditer(variant):
+            letters = match.group(0).lower()
+            if letters in segmented:
+                continue
+            segmented.add(letters)
+            parts = _segment(letters)
+            if parts is None or len(parts) < _MNEMONIC_RUN:
+                continue
+            remaining[0] -= len(parts)
+            if remaining[0] < 0 or _run_has_phrase(parts, [False] + [True] * (len(parts) - 1), remaining):
+                return True
+    return False
+
+
+def _run_has_phrase(run: list[str], joined: list[bool], remaining: list[int]) -> bool:
+    """A window of ``run`` that counts as a recovery phrase.
+
+    Every window of 12, 15, 18, 21 or 24 words is checked, except an excerpt
     of the wordlist itself (consecutive wordlist entries). A window counts when
     its checksum is valid, or when it is not in alphabetical order and repeats
     no word (12 or 15 words) or at most one (18 to 24 words). A window that
-    crosses an underscore or case change counts only with a valid checksum and
-    at most one repeated word in four. A letter run of 36 to 200 letters with no
-    separator is split into wordlist words and checked the same way. ``budget`` holds the number of checksums
-    the caller may still evaluate and is decremented; when it runs out the
-    text is reported as a phrase.
+    crosses a join (``joined[i]`` for a word after the first) counts only with
+    a valid checksum and at most one repeated word in four.
     """
-    remaining = budget if budget is not None else [_WINDOW_BUDGET]
     index = _bip39_index()
     longest = _MNEMONIC_LENGTHS[-1]
-    readings = ((variant, case_split) for variant in _text_variants(text) for case_split in (False, True))
-    for variant, case_split in readings:
-        for run, joined in _phrase_runs(variant, case_split=case_split):
-            positions = [index[word] for word in run]
-            for start in range(len(positions) - _MNEMONIC_RUN + 1):
-                value, previous, repeats = 0, -1, 0
-                ascending = consecutive = True
-                crossing = False
-                seen: set[int] = set()
-                for count, position in enumerate(positions[start:start + longest], 1):
-                    value = (value << 11) | position
-                    if position in seen:
-                        repeats += 1
-                    seen.add(position)
-                    ascending = ascending and position > previous
-                    consecutive = consecutive and (previous < 0 or position == previous + 1)
-                    crossing = crossing or (count > 1 and joined[start + count - 1])
-                    previous = position
-                    if count not in _MNEMONIC_LENGTH_SET or consecutive:
-                        continue
-                    limit = _PLAIN_REPEATS_SHORT if count <= 15 else _PLAIN_REPEATS_LONG
-                    if not crossing and not ascending and repeats <= limit:
-                        return True
-                    if crossing and repeats > count // 4:
-                        continue
-                    remaining[0] -= 1
-                    if remaining[0] < 0 or _checksum_matches(value, count):
-                        return True
-        for match in () if case_split else _LETTER_RUN_RE.finditer(variant):
-            parts = _segment(match.group(0).lower())
-            if parts is not None and len(parts) >= _MNEMONIC_RUN and has_recovery_phrase("_".join(parts), remaining):
+    positions = [index[word] for word in run]
+    for start in range(len(positions) - _MNEMONIC_RUN + 1):
+        value, previous, repeats = 0, -1, 0
+        ascending = consecutive = True
+        crossing = False
+        seen: set[int] = set()
+        for count, position in enumerate(positions[start:start + longest], 1):
+            value = (value << 11) | position
+            if position in seen:
+                repeats += 1
+            seen.add(position)
+            ascending = ascending and position > previous
+            consecutive = consecutive and (previous < 0 or position == previous + 1)
+            crossing = crossing or (count > 1 and joined[start + count - 1])
+            previous = position
+            if crossing and repeats > longest // 4:
+                break  # no longer window from this start can count
+            if count not in _MNEMONIC_LENGTH_SET or consecutive:
+                continue
+            limit = _PLAIN_REPEATS_SHORT if count <= 15 else _PLAIN_REPEATS_LONG
+            if not crossing and not ascending and repeats <= limit:
+                return True
+            if crossing and repeats > count // 4:
+                continue
+            remaining[0] -= 1
+            if remaining[0] < 0 or _checksum_matches(value, count):
                 return True
     return False
 
@@ -529,11 +597,16 @@ def _hash_labelled(text: str, start: int) -> bool:
     words = _NAME_RE.findall(text, window_start, start)
     if window_start and words and _NAME_RE.match(text, window_start - 1) and _NAME_RE.match(text, window_start):
         words = words[1:]  # the first word may be cut off by the window
-    for word in words[-_KEY_CONTEXT_SPAN:]:
-        if normalize_field(word) in _KEY_CONTEXT_WORDS or (
-                normalize_field(word) not in KEY_FIELD_NAMES and is_key_field(word)):
-            return False
+    if any(_names_a_key(word) for word in words[-_KEY_CONTEXT_SPAN:]):
+        return False
     return any(normalize_field(word) in _HASH_WORDS for word in words[-_HASH_CONTEXT_WORDS:])
+
+
+@lru_cache(maxsize=8192)
+def _names_a_key(word: str) -> bool:
+    """A word near a value that cancels a hash label: a key word, or a key-named field other than ``key``."""
+    norm = normalize_field(word)
+    return norm in _KEY_CONTEXT_WORDS or (norm not in KEY_FIELD_NAMES and is_key_field(word))
 
 
 def _identifier_attributed(text: str, start: int) -> bool:
@@ -547,9 +620,8 @@ def _free_text_key_hit(text: str, field: str | None) -> str | None:
     if field is not None and _is_identifier_field(field):
         return None
     prose = field is not None and normalize_field(field) in PROSE_FIELD_NAMES
-    whole = text.strip()
     for match in _HEX_KEY_RE.finditer(text):
-        if not prose and whole == match.group(0):
+        if not prose and len(match.group(0)) + 64 > len(text) and text.strip() == match.group(0):
             continue
         if _hash_labelled(text, match.start()):
             continue
@@ -562,9 +634,10 @@ def _free_text_key_hit(text: str, field: str | None) -> str | None:
 
 def _phrase_at(text: str, position: int) -> bool:
     """At least 12 consecutive wordlist words, the first starting at ``position``."""
-    if position >= len(text) or not ("a" <= text[position].lower() <= "z"):
-        return False
     words = bip39_words()
+    first = _LETTERS_RE.match(text, position)
+    if first is None or first.group(0).lower() not in words:
+        return False
     count = 0
     for match in _LETTERS_RE.finditer(text, position):
         if match.group(0).lower() not in words:
@@ -575,23 +648,40 @@ def _phrase_at(text: str, position: int) -> bool:
     return False
 
 
+# The start of a hex key, XRPL seed or decimal integer key (checked for range after matching).
+_SECRET_START_RE = re.compile(
+    "(?P<hex>" + _HEX_KEY_RE.pattern + ")|(?P<seed>" + _XRPL_SEED_RE.pattern + ")|(?P<digits>"
+    + _DECIMAL_KEY_RE.pattern + ")")
+
+
+_WORDLIST_SHAPED = r"[A-Za-z]{3,8}(?![A-Za-z])"
+# A quoted field name whose raw value starts with a possible secret: a hex key, XRPL seed,
+# long decimal, or 12 letter runs of wordlist length. The value is a lookahead, so a value
+# never hides the field names inside it from later matches.
+_SECRET_VALUE_FIELD_RE = re.compile(
+    _QUOTED_FIELD_RE.pattern + r"""(?=[\s"'{\[]*(?:""" + _SECRET_START_RE.pattern + "|" + _WORDLIST_SHAPED
+    + r"(?:[^A-Za-z]+" + _WORDLIST_SHAPED + r"){11}))")
+
+
 def _raw_value_hit(text: str, position: int) -> str | None:
     """The raw value at ``position``, past whitespace, quotes and ``{`` or ``[``, is a secret shape."""
     prefix = _VALUE_PREFIX_RE.match(text, position)
     start = prefix.end() if prefix else position
-    if _HEX_KEY_RE.match(text, start):
-        return EVM_KEY
-    if _XRPL_SEED_RE.match(text, start):
-        return XRPL_SEED
-    digits = _DECIMAL_KEY_RE.match(text, start)
-    if digits and _is_int_key(int(digits.group(0))):
-        return EVM_KEY
+    shape = _SECRET_START_RE.match(text, start)
+    if shape is not None:
+        if shape.group("hex"):
+            return EVM_KEY
+        if shape.group("seed"):
+            return XRPL_SEED
+        if _is_int_key(int(shape.group("digits"))):
+            return EVM_KEY
     if _phrase_at(text, start):
         return MNEMONIC
     return None
 
 
-def _contextual_text_hit(text: str, *, arguments: bool, parsed: bool = False) -> str | None:
+def _contextual_text_hit(text: str, *, arguments: bool, parsed: bool = False,
+                         shapes_checked: bool = False) -> str | None:
     """Text that names a key field (quoted with ``"`` or ``'``).
 
     Refused when the raw value after the field name, past whitespace, quotes
@@ -602,20 +692,24 @@ def _contextual_text_hit(text: str, *, arguments: bool, parsed: bool = False) ->
     when it holds a recovery phrase (``has_recovery_phrase``). Argument scans pass
     ``parsed=True`` for JSON text because ``_json_text_hit`` applies its own
     raw-text rules; result scans always apply the text-wide rules.
+    ``shapes_checked`` skips the text-wide seed and phrase checks when the
+    caller has already applied them to the same text.
     """
-    named = False
-    for match in _QUOTED_FIELD_RE.finditer(text):
-        if not is_key_field(match.group(1), arguments=arguments):
-            continue
-        named = True
-        hit = _raw_value_hit(text, match.end())
-        if hit:
-            return hit
-    if not named or parsed:
+    for match in _SECRET_VALUE_FIELD_RE.finditer(text):
+        if is_key_field(match.group(1), arguments=arguments):
+            hit = _raw_value_hit(text, match.end())
+            if hit:
+                return hit
+    if parsed:
+        return None
+    named = any(is_key_field(match.group(1), arguments=arguments) for match in _QUOTED_FIELD_RE.finditer(text))
+    if not named:
         return None
     for match in _PREFIXED_KEY_RE.finditer(text):
         if not _hash_labelled(text, match.start()) and not _identifier_attributed(text, match.start()):
             return EVM_KEY
+    if shapes_checked:
+        return None
     if _XRPL_SEED_RE.search(text):
         return XRPL_SEED
     if has_recovery_phrase(text):
@@ -704,7 +798,8 @@ def find_in_arguments(arguments: Any) -> str | None:
             nested = _parse_json_text(value)
             if nested is not None:
                 return walk(nested, None) or _json_text_hit(value, nested)
-            return _free_text_key_hit(value, field) or _contextual_text_hit(value, arguments=True)
+            return _free_text_key_hit(value, field) or _contextual_text_hit(value, arguments=True,
+                                                                             shapes_checked=True)
         return None
 
     return walk(arguments, None) or (MNEMONIC if phrase_across_values(arguments, budget) else None)
