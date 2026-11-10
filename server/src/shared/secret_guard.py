@@ -47,9 +47,16 @@ Arguments (``find_in_arguments``):
    also form runs, but a window that crosses such a join counts only with a
    valid checksum and at most one repeated word in four, so ``snake_case`` and
    ``camelCase`` identifiers do not count. A phrase written with no separator
-   at all between its words (``abandonability...``) is not detected: finding
-   words in an unbroken letter run needs a segmentation search whose cost
-   and bypasses grew with every attempt to bound it, on every tool call.
+   at all between its words (``abandonability...``) is found when a run of
+   36 or more ASCII letters that is not made only of the hex letters a-f
+   holds a stretch that splits into 12 or more consecutive wordlist words
+   (``_concatenated_phrase``, one linear pass, case-insensitive, no
+   checksum), whatever letters, digits or other characters surround it.
+   Digits, other characters and non-ASCII letters end a run, and no run is
+   skipped for its length. A stretch whose words are camelCase or
+   PascalCase tokens, apart from at most two at its ends, is left to the
+   case-split reading above, which requires the checksum, so long
+   identifiers do not count.
    This scan catches accidental exposure of secrets in ordinary text; it is
    not the boundary that keeps wallet secrets out of reach of the agent. Text
    that is not ASCII is NFKC-normalized and read with invisible characters
@@ -65,7 +72,9 @@ Arguments (``find_in_arguments``):
    ``_WINDOW_BUDGET`` window starts and checksums, each charged before it is
    evaluated (a window start covers at most 24 words); text needing more is
    refused as a possible phrase. The scan is therefore linear in the input
-   size with a fixed cap on window work, and fails closed at the cap.
+   size with a fixed cap on window work, and fails closed at the cap. The
+   no-separator pass is linear without a cap, at most six word lookups per
+   letter.
 3. Any other string is refused when it holds 64 hex characters, with or
    without ``0x``, embedded in text (``"import my wallet 0x..."``) or anywhere
    in a free-text field (``PROSE_FIELD_NAMES``, such as ``query`` or
@@ -135,6 +144,9 @@ _CASED_WORD_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])")
 # Characters that render as nothing; a phrase may carry them inside or between words.
 _INVISIBLE_RE = re.compile("[\u00ad\u180e\u200b-\u200f\u2060-\u2064\ufeff]")
 _LETTERS_RE = re.compile(r"[A-Za-z]+")
+_MIN_WORD, _MAX_WORD = 3, 8
+_LETTER_RUN_RE = re.compile(r"[A-Za-z]{36,}")  # 12 words of at least 3 letters
+_NON_HEX_LETTER_RE = re.compile(r"[g-z]")
 _NAME_RE = re.compile(r"[A-Za-z0-9_]+")
 _NORMALIZE_RE = re.compile(r"[^a-z0-9]")
 _SEGMENT_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
@@ -383,15 +395,79 @@ def has_recovery_phrase(text: str, budget: list[int] | None = None) -> bool:
 
     The text is read twice: case-insensitively, and split at case changes as
     well. Every window of 12, 15, 18, 21 or 24 words is checked by
-    ``_run_has_phrase``. ``budget`` holds the number of window starts and
-    checksums the caller may still evaluate; each is charged before it is
-    evaluated, and when the budget runs out the text is reported as a phrase.
+    ``_run_has_phrase``, and every long letter run by ``_concatenated_phrase``.
+    ``budget`` holds the number of window starts and checksums the caller may
+    still evaluate; each is charged before it is evaluated, and when the
+    budget runs out the text is reported as a phrase.
     """
     remaining = budget if budget is not None else [_WINDOW_BUDGET]
     for variant, case_split in _readings(text):
         for run, joined in _phrase_runs(variant, case_split=case_split):
             if _run_has_phrase(run, joined, remaining):
                 return True
+    return any(_concatenated_phrase(variant) for variant in _text_variants(text))
+
+
+@lru_cache(maxsize=1)
+def _bip39_starts() -> frozenset[str]:
+    """The first three letters of every wordlist word (every word has at least three)."""
+    return frozenset(word[:3] for word in _bip39_list())
+
+
+# Words in a no-separator chain that must not be whole case tokens. The first and last
+# words of a camelCase stretch can be a suffix or prefix of a token, so two are not enough.
+_UNALIGNED_WORDS = 3
+
+
+def _concatenated_phrase(text: str) -> bool:
+    """A letter run holding 12 or more consecutive BIP-39 words with no separator.
+
+    Finds a phrase written with no separator between its words
+    (``abandonabilityable...``), in any case, with any letters around it.
+    Each run of 36 or more ASCII letters (``_LETTER_RUN_RE``) that is not made
+    only of the hex letters a-f (after the ``x`` of a ``0x`` prefix) is read
+    once, left to right, trying the six word lengths 3 to 8 at each position.
+    A word that is exactly one
+    ``_CASED_WORD_RE`` token of the run (``Token`` in ``inputToken``) is a
+    case token. ``chains[k][i]`` is the longest chain of words ending at
+    letter ``i`` that holds ``k`` words that are not case tokens (``k``
+    capped at ``_UNALIGNED_WORDS``); it is 0 where no such chain ends, so a
+    chain restarts after letters that are not words. A chain of 12 words
+    counts only with at least ``_UNALIGNED_WORDS`` such words: a stretch of
+    case tokens is a camelCase or PascalCase run, which the case-split
+    reading checks with the checksum, so identifiers such as
+    ``inputTokenOutputAmount...`` do not count, while all-lowercase,
+    all-uppercase, alternating-case and inner-capital runs do. No checksum is
+    used here, and the cost is linear in the text size.
+    """
+    words, starts = bip39_words(), _bip39_starts()
+    top = _UNALIGNED_WORDS
+    for match in _LETTER_RUN_RE.finditer(text):
+        run = match.group(0)
+        letters = run.lower()
+        if not _NON_HEX_LETTER_RE.search(letters[1:] if letters[0] == "x" else letters):
+            continue  # hex, including the x of a 0x prefix
+        token_end = {token.start(): token.end() for token in _CASED_WORD_RE.finditer(run)}
+        size = len(letters)
+        chains = [bytearray(size + 1) for _ in range(top + 1)]
+        for start in range(size - _MIN_WORD + 1):
+            if letters[start:start + _MIN_WORD] not in starts:
+                continue
+            before = [chain[start] for chain in chains]
+            for end in range(start + _MIN_WORD, min(start + _MAX_WORD, size) + 1):
+                if letters[start:end] not in words:
+                    continue
+                aligned = token_end.get(start) == end
+                for unaligned in range(top + 1):
+                    length = before[unaligned]
+                    if unaligned and not length:
+                        continue  # no chain with this many unaligned words ends at start
+                    target = unaligned if aligned else min(unaligned + 1, top)
+                    count = min(length + 1, 255)
+                    if target == top and count >= _MNEMONIC_RUN:
+                        return True
+                    if count > chains[target][end]:
+                        chains[target][end] = count
     return False
 
 

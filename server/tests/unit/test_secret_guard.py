@@ -577,6 +577,12 @@ def test_phrase_with_wordlist_words_around_it_is_caught(words, around):
 
 # --- Phrase encodings ------------------------------------------------------------
 
+def _random_letters(count: int, seed: int) -> str:
+    import random
+
+    return "".join(random.Random(seed).choices("abcdefghijklmnopqrstuvwxyz", k=count))
+
+
 def _alternate(text: str) -> str:
     return "".join(c.upper() if i % 2 else c for i, c in enumerate(text))
 
@@ -608,6 +614,15 @@ ENCODINGS = {
     "all caps, underscores": lambda p: {"query": "_".join(p).upper()},
     "pascal case": lambda p: {"query": "".join(w.title() for w in p)},
     "fullwidth, alternating case": lambda p: {"query": _fullwidth(_alternate(" ".join(p)))},
+    "no separator": lambda p: {"query": "".join(p)},
+    "no separator, alternating case": lambda p: {"query": _alternate("".join(p))},
+    "no separator, digits around": lambda p: {"query": "1" + "".join(p) + "2"},
+    "no separator, unicode letters around": lambda p: {"query": "é" + "".join(p) + "١"},
+    "no separator, random letters around": lambda p: {"query": "qzxj" * 60 + "".join(p) + "vqkx" * 60},
+    "no separator, inside a 5000-letter run": lambda p: {"query": "q" * 2500 + "".join(p) + "x" * 2500},
+    "no separator, camel case inner capitals": lambda p: {"query": "".join(w[:2] + w[2:].upper() for w in p)},
+    "no separator, random letters inside 5000": lambda p: {"query": _random_letters(2500, 3) + "".join(p)
+                                                                    + _random_letters(2500, 4)},
 }
 
 
@@ -621,18 +636,31 @@ def test_valid_phrase_encodings_are_caught(words, encoding):
     {"fields": ["input_token", "input_amount", "output_token", "output_amount", "slippage_bps"] * 4},
     {"query": "_".join(["input_token", "input_amount", "output_token", "output_amount"] * 4)},
     {"query": "inputTokenInputAmountOutputTokenOutputAmountEntryPriceExitPrice"},
+    {"query": "InputTokenOutputAmount" * 40},
     {"side": "buy", "order": "market", "time": "day", "symbol": "ETH", "venue": "base", "note": "open long"},
 ])
 def test_identifiers_and_enum_values_pass(arguments):
     assert secret_guard.find_in_arguments(arguments) is None
 
 
+def _base64(size: int, seed: int) -> str:
+    import base64
+    import random
+
+    return base64.b64encode(random.Random(seed).randbytes(size)).decode()
+
+
 @pytest.mark.parametrize("text", [
-    "deadbeefcafe" * 40,                       # hex letters only
+    "deadbeefcafe" * 40,                                  # hex letters only
     "0x" + "ab" * 32 + "cdef" * 30,
     "fedcba" * 100,
+    _base64(30_000, 1),                                   # long base64
+    "".join(_base64(48, seed) for seed in range(400)),
+    "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq " * 50,  # bech32 address
+    "rPEPPER7kfTD9w2To4CQk6UCfuHM9c6GDY " * 50,         # XRPL classic address
+    "0x" + "a" * 40 + " " + "0x" + "b0" * 20,             # EVM addresses
 ])
-def test_hex_strings_are_not_phrases(text):
+def test_hex_base64_and_address_strings_are_not_phrases(text):
     assert not secret_guard.has_recovery_phrase(text)
 
 
@@ -647,3 +675,18 @@ def test_window_budget_fails_closed_before_the_work():
     assert secret_guard.find_in_arguments({"query": run}) == secret_guard.MNEMONIC
     budget = [0]
     assert secret_guard.has_recovery_phrase(" ".join(PHRASES[12][:6] * 2), budget)  # no budget left
+
+
+@pytest.mark.parametrize("text,found", [
+    ("q" * 2_000_000, None),
+    (_random_letters(2_000_000, 5), None),
+    ("".join(PHRASES[12]) * 30_000, secret_guard.MNEMONIC),
+    ("InputTokenOutputAmount" * 90_000, secret_guard.MNEMONIC),  # past the window budget: fails closed
+], ids=["one-letter", "random-letters", "repeated-phrase", "camel-identifiers-past-budget"])
+def test_two_megabytes_of_letters_finish_in_under_a_second(text, found):
+    import time
+
+    secret_guard.bip39_words()
+    started = time.perf_counter()
+    assert secret_guard.find_in_arguments({"query": text}) == found
+    assert time.perf_counter() - started < 1.0
