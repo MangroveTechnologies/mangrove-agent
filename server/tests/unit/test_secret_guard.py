@@ -117,9 +117,14 @@ def test_ordinary_results_pass(result):
 
 # --- Parity with the Claude hook --------------------------------------------
 
+# Distinct, unordered wordlist words with a bad checksum, built from wordlist positions so this
+# file holds no phrase text.
+TYPO_PHRASE = " ".join(_WORDS[i] for i in (2047,2,1407,680,1875,1111,213,1993,1230,1124,359,553))
+
 _HOOK_CASES = [
     (FAKE_KEY, True),
-    (FAKE_PHRASE, True),
+    (TYPO_PHRASE, True),
+    (FAKE_PHRASE, False),  # an alphabetical excerpt of the wordlist
     (f"seed {FAKE_SEED}", True),
     (PROSE, False),
     ("0x" + "1f" * 31, False),
@@ -130,14 +135,14 @@ _HOOK_CASES = [
 @pytest.mark.skipif(shutil.which("bash") is None or shutil.which("python3") is None,
                     reason="hook needs bash and python3")
 @pytest.mark.parametrize("text,blocked", _HOOK_CASES)
-def test_strict_text_scan_agrees_with_the_hook_user_mode(text, blocked):
+def test_hook_user_mode_agrees_with_the_free_text_argument_scan(text, blocked):
     hook = subprocess.run(
         ["bash", str(HOOKS / "block-wallet-secrets.sh"), "--mode", "user"],
         input=json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": text}),
         capture_output=True, text=True, timeout=20,
     )
     assert hook.returncode == (2 if blocked else 0)
-    assert (secret_guard.find_in_text(text) is not None) is blocked
+    assert (secret_guard.find_in_arguments({"prompt": text}) is not None) is blocked
 
 
 # --- Bare hex keys (MetaMask export format) ---------------------------------

@@ -97,9 +97,12 @@ Client hooks (``scan_hook_content``): ``scripts/wallet_secret_guard.py``
 adapts this module to Claude Code and Codex hook events. Hook content (prompts,
 shell and file tool input, stdout, stderr, errors) is not a structured MCP
 payload, so it gets a strict, shape-preserving scan with the same secret
-shapes and wordlist: every string and number is checked with ``find_in_text``
-(any 64-hex value, any 12-word BIP-39 run, any XRPL seed), and dictionary keys
-are checked too. A string that parses as JSON (duplicate keys refused) is
+shapes and wordlist: every string and number is checked for any 64-hex value,
+integer key or XRPL seed, and for a recovery phrase by rule 2 of the argument
+scan (``has_recovery_phrase``); below a key-named field any 12-word run counts,
+as in ``find_in_text``. Dictionary keys are checked too, and the string values
+of the whole content are joined and checked for a phrase spread across them
+(``phrase_across_values``). A string that parses as JSON (duplicate keys refused) is
 scanned parsed and again as raw text with exempted values removed, so a parser
 difference fails closed. A key-named ancestor removes every exemption. The
 only exemptions are:
@@ -107,14 +110,21 @@ only exemptions are:
 - an exact HTTPS ``/tx/0x...`` link with no query or fragment on an
   allowlisted explorer host, in a ``url``-like field;
 - the single hash argument of a strict JSON-RPC 2.0 ``eth_getTransactionByHash``
-  or ``eth_getTransactionReceipt`` request, only below a dictionary whose
-  ``url`` or ``endpoint`` field is an allowlisted RPC host;
+  or ``eth_getTransactionReceipt`` request that is the dictionary naming an
+  allowlisted RPC host in its ``url`` or ``endpoint`` field, one of that
+  dictionary's field values (a dictionary or JSON text), or an element of a
+  batch list there; a request nested deeper gets no exemption;
 - tool output and errors: a line holding only a hash label and one 64-hex
   value (``Transaction hash: 0x...``), with spaces or tabs only;
 - structured MCP tool results: a 64-hex value that is the whole value of a
   public-hash field (``tx_hash``, ``block_hash``, ``sha256`` and similar).
 
 Label words in free text never exempt a value in hook content.
+
+``hook_raw_text_hit`` is the linear fallback for hook content too large or too
+deeply nested to walk: it scans serialized JSON text, with escapes read as
+spaces, for the same shapes, and checks the raw value of every key-named field.
+It allows none of the exemptions above.
 """
 from __future__ import annotations
 
@@ -789,6 +799,10 @@ def _jsonable(value: Any) -> Any:
 # --- Client hook content (strict) --------------------------------------------
 
 HOOK_REDACTED = "[wallet-secret content withheld]"
+
+
+class HookLimitError(ValueError):
+    """Hook content exceeded the depth or node limit of ``scan_hook_content``."""
 HOOK_MAX_DEPTH = 32
 HOOK_MAX_NODES = 100_000
 _HOOK_PUBLIC_HASH_FIELDS = frozenset({
@@ -867,40 +881,49 @@ def scan_hook_content(value: Any, *, output: bool, structured: bool = False) -> 
     exemption. A JSON-RPC transaction read is exempt only below a dict that
     names an allowlisted RPC host. A string that parses as JSON is scanned
     both parsed and as raw text with exempted values removed, so a parser
-    difference fails closed. Raises ``ValueError`` past the depth or node limit.
+    difference fails closed. Raises ``HookLimitError`` past the depth or node limit.
     """
     nodes = 0
+    budget = [_WINDOW_BUDGET]
+
+    def text_hit(text: str, secret: bool) -> bool:
+        if secret:
+            return find_in_text(text) is not None
+        return _hook_text_hit(text, budget)
 
     def scan(item: Any, secret: bool, field: str, depth: int, rpc_ok: bool,
              exempt: list[str]) -> tuple[Any, bool]:
         nonlocal nodes
         nodes += 1
         if depth > HOOK_MAX_DEPTH or nodes > HOOK_MAX_NODES:
-            raise ValueError("Detector traversal limit")
+            raise HookLimitError("Detector traversal limit")
         if isinstance(item, dict):
             result, hit = {}, False
-            rpc_ok = rpc_ok or (not secret and _rpc_endpoint(item))
-            rpc_read = rpc_ok and not secret and transaction_read_request(item)
+            endpoint = not secret and _rpc_endpoint(item)
+            rpc_read = (rpc_ok or endpoint) and not secret and transaction_read_request(item)
             for key, child in item.items():
                 clean_key, key_hit = scan(str(key), False, "", depth + 1, False, exempt)
                 name = normalize_field(str(key))
                 child_field = _RPC_HASH_PARAM if rpc_read and key == "params" else name
+                # Only the endpoint dictionary's own field values may hold the request.
                 clean, found = scan(child, secret or is_key_field(str(key), arguments=True),
-                                    child_field, depth + 1, rpc_ok, exempt)
+                                    child_field, depth + 1, endpoint, exempt)
                 result[clean_key] = clean
                 hit = hit or found or key_hit
             return result, hit
         if isinstance(item, (list, tuple)):
             result_list, hit = [], False
             for child in item:
-                clean, found = scan(child, secret, field, depth + 1, rpc_ok, exempt)
+                # A batch list passes the exemption to its request dictionaries, not to nested lists.
+                clean, found = scan(child, secret, field, depth + 1,
+                                    rpc_ok and isinstance(child, (dict, str)), exempt)
                 result_list.append(clean)
                 hit = hit or found
             return result_list, hit
         if isinstance(item, bool) or item is None:
             return item, False
         if isinstance(item, (int, float)):
-            return (HOOK_REDACTED, True) if find_in_text(str(item)) else (item, False)
+            return (HOOK_REDACTED, True) if text_hit(str(item), secret) else (item, False)
         if not isinstance(item, str):
             return item, False
         decoded = _decode_json(item)
@@ -911,7 +934,7 @@ def scan_hook_content(value: Any, *, output: bool, structured: bool = False) -> 
                 raw = item
                 for value_text in nested_exempt:
                     raw = raw.replace(json.dumps(value_text)[1:-1], " ")
-                hit = find_in_text(raw) is not None
+                hit = text_hit(raw, secret)
                 clean = HOOK_REDACTED if hit else clean
             if hit:
                 return (json.dumps(clean, ensure_ascii=True) if clean != HOOK_REDACTED else clean), True
@@ -932,8 +955,42 @@ def scan_hook_content(value: Any, *, output: bool, structured: bool = False) -> 
                 candidate = _PUBLIC_HASH_LINE.sub("[public hash]", candidate)
                 if candidate != item:
                     exempt.append(item)
-        if find_in_text(candidate):
+        if text_hit(candidate, secret):
             return HOOK_REDACTED, True
         return item, False
 
-    return scan(value, False, "", 0, False, [])
+    clean, hit = scan(value, False, "", 0, False, [])
+    if not hit and phrase_across_values(value, budget):
+        return _redact_strings(value), True
+    return clean, hit
+
+
+def _redact_strings(value: Any) -> Any:
+    """``value`` with every string replaced by ``HOOK_REDACTED``, keeping its shape."""
+    if isinstance(value, dict):
+        return {key: _redact_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_strings(item) for item in value]
+    return HOOK_REDACTED if isinstance(value, str) else value
+
+
+def _hook_text_hit(text: str, budget: list[int]) -> bool:
+    """Any 64-hex value, integer key or XRPL seed, or a recovery phrase (``has_recovery_phrase``)."""
+    return bool(_XRPL_SEED_RE.search(text) or _HEX_KEY_RE.search(text)
+                or next(_decimal_keys(text), None) is not None or has_recovery_phrase(text, budget))
+
+
+_JSON_ESCAPE_RE = re.compile(r"\\(?:u[0-9a-fA-F]{4}|.)", re.DOTALL)
+
+
+def hook_raw_text_hit(text: str) -> bool:
+    """Linear scan of serialized hook content that is too large or deep to walk.
+
+    JSON escapes are read as spaces, so a phrase split by an escaped newline
+    still reads as words. True for any 64-hex value, integer key, XRPL seed or
+    recovery phrase, and for a key-named field whose raw value is a secret shape.
+    """
+    plain = _JSON_ESCAPE_RE.sub(" ", text)
+    if _hook_text_hit(plain, [_WINDOW_BUDGET]):
+        return True
+    return _contextual_text_hit(plain, arguments=True, parsed=True) is not None

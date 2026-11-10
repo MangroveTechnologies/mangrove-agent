@@ -336,7 +336,7 @@ tool arguments and results.
 
 | Client | Repository protection | Limit |
 | --- | --- | --- |
-| Claude Code | Shared detector through `.claude/settings.json`, the plugin hooks, or restricted `chat.sh` settings; prompt checks, pre-tool denial, post-tool replacement and failure detection | A failure hook stops continuation but has no documented error replacement. Original output can enter telemetry before a post-tool hook. |
+| Claude Code | Shared detector through `.claude/settings.json`, the plugin hooks, or restricted `chat.sh` settings; prompt checks, pre-tool denial, post-tool replacement and failure detection | A failure hook that finds a secret stops continuation, because the event has no documented error replacement. Original output can enter telemetry before a post-tool hook. |
 | Codex helper session | Native invocation tables from `.codex/session-hooks.toml`, reviewed and trusted in the client; prompt checks, pre-tool denial and post-tool block | A direct `codex` launch does not install this profile. Version and enabled hooks must be checked in that session. Specialized/hosted tools can bypass the local function-tool hook path. |
 | Perplexity Computer | Server-side guard only | No compatible custom pre/post-tool contract has been verified. A policy file or command wrapper is not an enforced hook. |
 | Grok Bot | Server-side guard only; see [Grok Bot](clients/grok-bot.md) | Enterprise inference hooks are separate, optional model-input checks. They do not prevent a tool action that has already run. |
@@ -347,7 +347,9 @@ the module that holds the MCP boundary's detector, so the shapes and wordlist
 are shared. Hook content is shell, file and prompt text rather than a
 structured MCP payload, so its rules are stricter than the MCP argument rules:
 every string and number is checked for any 64-hex value (with or without
-`0x`), any run of 12 BIP-39 words and any XRPL seed shape, including nested
+`0x`), any integer key, any XRPL seed shape and any recovery phrase under the
+argument rule above (below a secret-named field, any run of 12 BIP-39 words),
+including nested
 JSON, serialized MCP text, structured results, stdout, stderr and errors. JSON
 text with duplicate keys is scanned as plain text, and other JSON text is also
 scanned raw with exempted values removed. Label words in free text, such as
@@ -358,9 +360,19 @@ or `eth_getTransactionReceipt` request whose call names `https://mainnet.base.or
 or `https://sepolia.base.org` in a URL or endpoint field. Tool output and errors
 also allow a line holding only a hash label and one hash
 (`Transaction hash: 0x...`), and MCP tool results also allow the whole value of
-a public transaction, block or digest hash field. A secret-named ancestor
-removes every exemption. Content mislabeled as public data, images, arbitrary
+a public transaction, block or digest hash field. The JSON-RPC exemption applies
+only to the request that is the endpoint object itself, one of its field values
+or an element of a batch list there, never to a request nested deeper. A
+secret-named ancestor removes every exemption. The string values of the whole
+content are also joined and checked for a phrase spread across them. Content mislabeled as public data, images, arbitrary
 encodings and specialized tool paths are outside this heuristic.
+
+Tool output or an error larger than 1 MiB, or too deeply nested to walk, gets a
+linear scan of its serialized text instead, with no exemptions. Input larger
+than 8 MiB is not scanned. When a check cannot complete (unreadable or oversize
+input, a missing detector, a traversal limit on input or any other error), the
+tool call is denied, the prompt is blocked, tool output is withheld and a tool
+error gets a block reason; a failed check never stops the session.
 
 Pre-tool checks deny known export commands, reveal URLs and wallet key file access.
 They are not a shell sandbox: renamed scripts, aliases or arbitrary code can

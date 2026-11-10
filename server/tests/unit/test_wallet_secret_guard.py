@@ -19,7 +19,9 @@ detector = guard.load_detector()
 # Zero is outside the EVM private key range. These fixtures control no account.
 ZERO = '0' * 64
 HEX = '0x' + ZERO
-PHRASE = ' '.join(['abandon'] * 12)  # Wordlist-shaped; deliberately invalid checksum.
+# Distinct, unordered wordlist words with an invalid checksum, built from wordlist positions so
+# this file holds no phrase text.
+PHRASE = ' '.join(sorted(detector.bip39_words())[i] for i in (2047,2,1407,680,1875,1111,213,1993,1230,1124,359,553))
 XRPL = 'sEd' + '1' * 28  # Shape-only; deliberately invalid Base58Check.
 
 
@@ -240,35 +242,102 @@ def test_malformed_and_oversize_input_fail_without_printing_payload(raw):
     assert b'could not complete' in result.stderr
 
 
-def test_traversal_limit_is_safe():
+def test_traversal_limit_on_output_falls_back_to_the_linear_scan():
     output = HEX
     for _ in range(detector.HOOK_MAX_DEPTH + 2):
         output = {'nested': output}
     result = invoke('codex', 'PostToolUse', tool_response=output)
-    assert result.returncode == 2
+    assert result.returncode == 0
+    assert json.loads(result.stdout)['decision'] == 'block'
     assert HEX not in result.stdout + result.stderr
 
 
-@pytest.mark.parametrize('mode', ['user', 'pre', 'tool', 'failure', None])
-@pytest.mark.parametrize('failure', ['malformed', 'detector', 'depth'])
-def test_claude_inspection_failure_stops_continuation(mode, failure, monkeypatch, capsys, tmp_path):
-    payload = {'hook_event_name': 'PostToolUse', 'tool_response': HEX}
-    if failure == 'depth':
-        for _ in range(detector.HOOK_MAX_DEPTH + 2):
-            payload = {'nested': payload}
-        payload = {'hook_event_name': 'PostToolUse', 'tool_response': payload,
-                   'prompt': payload, 'tool_input': payload, 'error': payload}
-    raw = b'{"sensitive":' if failure == 'malformed' else json.dumps(payload).encode()
-    if failure == 'detector':
-        monkeypatch.setattr(guard, 'DETECTOR', tmp_path / 'missing.py')
-    argv = ['guard', '--client', 'claude'] + (['--mode', mode] if mode else [])
+def _run_main(monkeypatch, capsys, client, mode, raw):
+    argv = ['guard', '--client', client] + (['--mode', mode] if mode else [])
     monkeypatch.setattr(sys, 'argv', argv)
     monkeypatch.setattr(sys, 'stdin', io.TextIOWrapper(io.BytesIO(raw)))
-    assert guard.main() == 0
+    status = guard.main()
     captured = capsys.readouterr()
-    assert json.loads(captured.out)['continue'] is False
-    assert 'could not complete' in captured.out
     assert HEX not in captured.out + captured.err
+    assert 'payload text' not in captured.out + captured.err
+    assert 'Traceback' not in captured.err
+    return status, (json.loads(captured.out) if captured.out else None), captured.err
+
+
+def _failing_payload(failure):
+    payload = {'hook_event_name': 'PostToolUse', 'tool_response': {'stdout': HEX, 'interrupted': False}}
+    if failure == 'depth':
+        nested = HEX
+        for _ in range(detector.HOOK_MAX_DEPTH + 2):
+            nested = {'nested': nested}
+        payload.update(prompt=nested, tool_input=nested)
+    return b'{"sensitive":' if failure == 'malformed' else json.dumps(payload).encode()
+
+
+@pytest.mark.parametrize('client', ['claude', 'codex'])
+@pytest.mark.parametrize('failure', ['malformed', 'detector', 'depth', 'crash'])
+def test_failed_pretool_check_denies_the_tool_call(client, failure, monkeypatch, capsys, tmp_path):
+    if failure == 'detector':
+        monkeypatch.setattr(guard, 'DETECTOR', tmp_path / 'missing.py')
+    if failure == 'crash':
+        monkeypatch.setattr(guard, 'response', lambda *a, **k: (_ for _ in ()).throw(KeyError('payload text')))
+    status, output, _ = _run_main(monkeypatch, capsys, client, 'pre', _failing_payload(failure))
+    assert status == 0
+    decision = output['hookSpecificOutput']
+    assert decision['hookEventName'] == 'PreToolUse'
+    assert decision['permissionDecision'] == 'deny'
+    assert 'could not complete' in decision['permissionDecisionReason']
+
+
+@pytest.mark.parametrize('client', ['claude', 'codex'])
+@pytest.mark.parametrize('failure', ['malformed', 'detector', 'depth', 'crash'])
+def test_failed_prompt_check_blocks_the_prompt(client, failure, monkeypatch, capsys, tmp_path):
+    if failure == 'detector':
+        monkeypatch.setattr(guard, 'DETECTOR', tmp_path / 'missing.py')
+    if failure == 'crash':
+        monkeypatch.setattr(guard, 'response', lambda *a, **k: (_ for _ in ()).throw(KeyError('payload text')))
+    status, output, err = _run_main(monkeypatch, capsys, client, 'user', _failing_payload(failure))
+    assert status == 2
+    assert output['decision'] == 'block'
+    assert 'could not complete' in err
+
+
+@pytest.mark.parametrize('client', ['claude', 'codex'])
+@pytest.mark.parametrize('mode', ['tool', None])
+@pytest.mark.parametrize('failure', ['malformed', 'detector', 'crash'])
+def test_failed_output_check_withholds_without_stopping_the_session(client, mode, failure, monkeypatch,
+                                                                    capsys, tmp_path):
+    if failure == 'detector':
+        monkeypatch.setattr(guard, 'DETECTOR', tmp_path / 'missing.py')
+    if failure == 'crash':
+        monkeypatch.setattr(guard, 'response', lambda *a, **k: (_ for _ in ()).throw(KeyError('payload text')))
+    raw = _failing_payload(failure)
+    if failure == 'malformed':
+        raw = b'{"hook_event_name": "PostToolUse", "tool_response": {"stdout": "' + HEX.encode()
+    status, output, _ = _run_main(monkeypatch, capsys, client, mode, raw)
+    assert status == 0
+    assert 'continue' not in output
+    assert output['decision'] == 'block'
+    assert 'could not complete' in output['reason']
+    if client == 'claude':
+        assert output['hookSpecificOutput']['hookEventName'] == 'PostToolUse'
+        assert 'updatedToolOutput' in output['hookSpecificOutput']
+
+
+@pytest.mark.parametrize('client', ['claude', 'codex'])
+def test_failed_error_check_does_not_stop_the_session(client, monkeypatch, capsys):
+    monkeypatch.setattr(guard, 'response', lambda *a, **k: (_ for _ in ()).throw(KeyError('payload text')))
+    status, output, _ = _run_main(monkeypatch, capsys, client, 'failure',
+                                  json.dumps({'hook_event_name': 'PostToolUseFailure', 'error': HEX}).encode())
+    assert status == 0
+    assert 'continue' not in output
+    assert output['decision'] == 'block'
+
+
+def test_unknown_event_with_unreadable_input_exits_2(monkeypatch, capsys):
+    status, output, err = _run_main(monkeypatch, capsys, 'codex', None, b'\xff\xfe')
+    assert status == 2 and output is None
+    assert 'could not complete' in err
 
 
 @pytest.mark.parametrize('relative', ['.claude/settings.json', '.claude-plugin/hooks.json',
@@ -386,3 +455,137 @@ def test_adapter_runs_without_eth_account(tmp_path):
 def test_json_rpc_exemption_requires_an_allowlisted_rpc_host(arguments):
     result = invoke('claude', 'PreToolUse', tool_name='WebFetch', tool_input=arguments)
     assert json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'] == 'deny'
+
+
+# --- Phrase detection in hook content ----------------------------------------
+
+def _generated_phrase() -> list[str]:
+    """A checksummed phrase with distinct words, generated for the test; it guards no funds."""
+    import secrets
+
+    words = sorted(detector.bip39_words())
+    while True:
+        phrase = [secrets.choice(words) for _ in range(11)]
+        for last in words:
+            candidate = phrase + [last]
+            if len(set(candidate)) == 12 and detector.bip39_checksum_valid(candidate):
+                return candidate
+
+
+def _tracked_text_files():
+    names = subprocess.run(['git', '-C', str(ROOT), 'ls-files', '-z'], capture_output=True, check=True).stdout
+    for name in filter(None, names.decode().split('\0')):
+        try:
+            yield name, (ROOT / name).read_text(encoding='utf-8')
+        except (UnicodeDecodeError, OSError):
+            continue
+
+
+@pytest.mark.skipif(not (ROOT / '.git').exists(), reason='needs a git checkout')
+def test_no_tracked_repository_file_trips_the_hook_phrase_scan():
+    """Ordinary text never reads as a phrase. 64-hex values, integer keys and seeds are
+    blanked first: the hook refuses those shapes by design (hashes in docs and fixtures)."""
+    hits = []
+    for name, text in _tracked_text_files():
+        plain = detector._XRPL_SEED_RE.sub(' ', detector._DECIMAL_KEY_RE.sub(' ', detector._HEX_KEY_RE.sub(' ', text)))
+        for output in (False, True):
+            if detector.scan_hook_content(plain, output=output)[1]:
+                hits.append((name, output))
+    assert hits == []
+
+
+@pytest.mark.parametrize('variant', ['valid', 'one_wrong_word', 'underscores'])
+@pytest.mark.parametrize('client', ['claude', 'codex'])
+def test_phrases_are_caught_in_prompts_and_output(client, variant):
+    words = _generated_phrase()
+    if variant == 'one_wrong_word':
+        words[4] = next(w for w in sorted(detector.bip39_words())
+                        if w not in words and not detector.bip39_checksum_valid(words[:4] + [w] + words[5:]))
+    text = ('_' if variant == 'underscores' else ' ').join(words)
+    prompt = invoke(client, 'UserPromptSubmit', prompt='restore ' + text)
+    assert prompt.returncode == 2 and text not in prompt.stdout + prompt.stderr
+    output = invoke(client, 'PostToolUse', tool_name='Bash', tool_response={'stdout': text, 'stderr': ''})
+    assert json.loads(output.stdout)['decision'] == 'block'
+    assert text not in output.stdout + output.stderr
+
+
+def test_repeated_wordlist_run_counts_only_under_a_key_named_field():
+    run = ' '.join(['abandon'] * 12)
+    assert not detector.scan_hook_content({'stdout': run}, output=True)[1]
+    assert detector.scan_hook_content({'private_key': run}, output=True)[1]
+
+
+def test_phrase_as_a_list_of_words_is_caught():
+    words = _generated_phrase()
+    clean, hit = detector.scan_hook_content({'words': words}, output=False)
+    assert hit and words[0] not in json.dumps(clean)
+
+
+# --- Large output ---------------------------------------------------------------
+
+def _bars(count):
+    return [{'timestamp': 1700000000 + i, 'open': 1.0 + i, 'high': 2.0, 'low': 0.5, 'close': 1.5,
+             'volume': 1234.5, 'symbol': 'ETH'} for i in range(count)]
+
+
+@pytest.mark.parametrize('client', ['claude', 'codex'])
+@pytest.mark.parametrize('shape', ['shell', 'mcp_text', 'mcp_structured'])
+@pytest.mark.parametrize('secret', [False, True])
+def test_multi_megabyte_json_output_is_scanned_quickly_without_halting(client, shape, secret):
+    import time
+
+    rows = _bars(20_000)
+    if secret:
+        rows[12_345]['symbol'] = HEX
+    text = json.dumps({'bars': rows})
+    response = {'shell': {'stdout': text, 'stderr': '', 'interrupted': False},
+                'mcp_text': {'content': [{'type': 'text', 'text': text}]},
+                'mcp_structured': {'content': [{'type': 'text', 'text': text}], 'structuredContent': {'bars': rows}},
+                }[shape]
+    tool = 'Bash' if shape == 'shell' else 'mcp__mangrove-agent__get_ohlcv'
+    started = time.perf_counter()
+    result = invoke(client, 'PostToolUse', tool_name=tool, tool_response=response)
+    assert time.perf_counter() - started < 2.5
+    assert result.returncode == 0
+    assert '"continue"' not in result.stdout
+    if secret:
+        assert json.loads(result.stdout)['decision'] == 'block'
+        assert HEX not in result.stdout + result.stderr
+    else:
+        assert result.stdout == result.stderr == ''
+
+
+@pytest.mark.parametrize('client', ['claude', 'codex'])
+def test_output_above_the_input_limit_is_withheld_without_halting(client):
+    filler = 'x' * (guard.MAX_BYTES + 10)
+    payload = json.dumps({'hook_event_name': 'PostToolUse', 'tool_name': 'Bash',
+                          'tool_response': {'stdout': filler, 'stderr': ''}})
+    result = subprocess.run([sys.executable, str(SCRIPT), '--client', client],
+                            input=payload, capture_output=True, text=True)
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
+    assert output['decision'] == 'block' and 'continue' not in output
+
+
+# --- RPC exemption scope ----------------------------------------------------------
+
+ENVELOPE = {'jsonrpc': '2.0', 'id': 1, 'method': 'eth_getTransactionReceipt', 'params': [HEX]}
+
+
+@pytest.mark.parametrize('arguments', [
+    {'url': 'https://mainnet.base.org', 'json': {'wrapper': ENVELOPE}},
+    {'url': 'https://mainnet.base.org', 'json': {'a': {'b': {'c': ENVELOPE}}}},
+    {'url': 'https://mainnet.base.org', 'json': [[ENVELOPE]]},
+    {'url': 'https://mainnet.base.org', 'json': {'wrapper': json.dumps(ENVELOPE)}},
+    {'url': 'https://mainnet.base.org', 'json': {'nested': {'url': 'https://example.invalid', 'body': ENVELOPE}}},
+])
+def test_rpc_exemption_is_not_inherited_by_nested_fields(arguments):
+    result = invoke('codex', 'PreToolUse', tool_input=arguments)
+    assert json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'] == 'deny'
+    assert HEX not in result.stdout + result.stderr
+
+
+def test_rpc_batch_of_transaction_reads_passes():
+    result = invoke('codex', 'PreToolUse', tool_input={'url': 'https://mainnet.base.org',
+                                                       'json': [ENVELOPE, dict(ENVELOPE, id=2)]})
+    assert result.returncode == 0 and result.stdout == ''
