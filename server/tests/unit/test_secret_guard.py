@@ -55,11 +55,16 @@ def test_wordlist_matches_the_claude_hook_list():
     assert secret_guard.bip39_words() == hook_words
 
 
-def test_wordlist_falls_back_to_the_repository_copy_without_eth_account(monkeypatch):
+def test_wordlist_reads_the_repository_copy_without_eth_account(monkeypatch):
     def missing(_package):
         raise ModuleNotFoundError("eth_account")
 
     monkeypatch.setattr(secret_guard.resources, "files", missing)
+    assert secret_guard._wordlist_text().split() == list(secret_guard._bip39_list())
+
+
+def test_wordlist_falls_back_to_eth_account_without_the_repository_copy(monkeypatch, tmp_path):
+    monkeypatch.setattr(secret_guard, "_REPOSITORY_WORDLIST", tmp_path / "missing.txt")
     assert secret_guard._wordlist_text().split() == list(secret_guard._bip39_list())
 
 

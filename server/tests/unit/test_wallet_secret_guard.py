@@ -528,15 +528,12 @@ def _bars(count):
              'volume': 1234.5, 'symbol': 'ETH'} for i in range(count)]
 
 
-@pytest.mark.parametrize('client', ['claude', 'codex'])
-@pytest.mark.parametrize('shape', ['shell', 'mcp_text', 'mcp_structured'])
-@pytest.mark.parametrize('secret', [False, True])
-def test_multi_megabyte_json_output_is_scanned_quickly_without_halting(client, shape, secret):
+def _timed_output_hook(client, shape, count, secret):
     import time
 
-    rows = _bars(20_000)
+    rows = _bars(count)
     if secret:
-        rows[12_345]['symbol'] = HEX
+        rows[count // 2]['symbol'] = HEX
     text = json.dumps({'bars': rows})
     response = {'shell': {'stdout': text, 'stderr': '', 'interrupted': False},
                 'mcp_text': {'content': [{'type': 'text', 'text': text}]},
@@ -545,7 +542,19 @@ def test_multi_megabyte_json_output_is_scanned_quickly_without_halting(client, s
     tool = 'Bash' if shape == 'shell' else 'mcp__mangrove-agent__get_ohlcv'
     started = time.perf_counter()
     result = invoke(client, 'PostToolUse', tool_name=tool, tool_response=response)
-    assert time.perf_counter() - started < 2.5
+    return time.perf_counter() - started, result
+
+
+@pytest.mark.parametrize('client', ['claude', 'codex'])
+@pytest.mark.parametrize('shape', ['shell', 'mcp_text', 'mcp_structured'])
+@pytest.mark.parametrize('secret', [False, True])
+def test_multi_megabyte_json_output_is_scanned_quickly_without_halting(client, shape, secret):
+    """About 2.7 MB of JSON output finishes well inside the hook timeout, in time linear in its size."""
+    count = 11_000 if shape == 'mcp_structured' else 20_000
+    half, _ = _timed_output_hook(client, shape, count // 2, secret)
+    elapsed, result = _timed_output_hook(client, shape, count, secret)
+    assert elapsed < 2.5
+    assert elapsed < 3 * half + 0.3
     assert result.returncode == 0
     assert '"continue"' not in result.stdout
     if secret:

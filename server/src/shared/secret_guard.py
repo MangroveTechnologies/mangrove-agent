@@ -12,10 +12,10 @@ Secret shapes:
   prefix. ``wallet_manager.import_wallet`` accepts both forms, and the bare
   form is what MetaMask's "Show private key" displays.
 - BIP-39 recovery phrase: consecutive words from the English BIP-39 list,
-  read from ``eth_account`` (a runtime dependency, present in the Docker image).
-  When ``eth_account`` is not importable, as under the system ``python3`` that
-  runs the Claude hook, the identical repository copy
-  ``.claude/hooks/bip39-english.txt`` is read instead.
+  read from the repository copy ``.claude/hooks/bip39-english.txt`` when it is
+  present, so the client hooks start without importing ``eth_account``, and
+  otherwise from ``eth_account`` (a runtime dependency, present in the Docker
+  image, which excludes ``.claude/``). A test keeps the two lists identical.
 - XRPL family seed: ``s`` followed by 28 base58 characters (``sEd`` for Ed25519).
 - EVM private key as an integer: a JSON integer, or a run of 58 to 78 decimal
   digits, whose value is a valid secp256k1 scalar of at least 2**192. Token
@@ -273,10 +273,10 @@ _REPOSITORY_WORDLIST = Path(__file__).resolve().parents[3] / ".claude" / "hooks"
 
 
 def _wordlist_text() -> str:
-    try:
-        return (resources.files("eth_account.hdaccount") / "wordlist" / "english.txt").read_text("utf-8")
-    except ModuleNotFoundError:
+    """The repository copy when present (the hooks then never import ``eth_account``), else ``eth_account``'s."""
+    if _REPOSITORY_WORDLIST.is_file():
         return _REPOSITORY_WORDLIST.read_text("utf-8")
+    return (resources.files("eth_account.hdaccount") / "wordlist" / "english.txt").read_text("utf-8")
 
 
 @lru_cache(maxsize=1)
