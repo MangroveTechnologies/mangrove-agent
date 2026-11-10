@@ -144,6 +144,44 @@ def test_get_quote_rejects_dust(monkeypatch):
     client.dex.get_quote.assert_not_called()
 
 
+def test_quote_amount_survives_markets_float_transport(monkeypatch):
+    """Markets types amounts as float and builds 1inch calls from int(float(amount))."""
+    from decimal import Decimal
+
+    requested = 123_456_789_012_345_678_901
+    assert int(float(requested)) != requested
+    human = Decimal(requested) / 10**18
+    client = _client_with_decimals({_WETH.lower(): 18, _USDC.lower(): 6})
+
+    def markets_get_quote(**kwargs):
+        client.dex.get_quote.return_value.model_dump.return_value = {
+            "quote_id": "q1", "input_amount": float(kwargs["amount"]), "output_amount": float(10**20 + 1),
+        }
+        return client.dex.get_quote.return_value
+
+    client.dex.get_quote.side_effect = markets_get_quote
+    monkeypatch.setattr(dex_service, "mangrove_markets_client", lambda: client)
+
+    out = dex_service.get_quote(_WETH, _USDC, human, 8453)
+
+    sent = client.dex.get_quote.call_args.kwargs["amount"]
+    assert type(sent) is int and int(float(sent)) == sent
+    assert requested - 2**14 < sent <= requested
+    assert out["input_amount_base_units"] == sent == dex_service.swap_base_units(human, 18)
+    assert type(out["output_amount_base_units"]) is int
+    assert out["output_amount_base_units"] == int(Decimal(float(10**20 + 1)))
+
+
+@pytest.mark.parametrize("requested", [1, 2**53 - 1, 2**53 + 1, 123_456_789_012_345_678_901, 2**256 - 1])
+def test_float_exact_base_units_is_the_largest_round_trip_value_not_above_request(requested):
+    import math
+    from decimal import Decimal
+
+    exact = dex_service.float_exact_base_units(requested)
+    assert int(float(exact)) == exact <= requested
+    assert Decimal(math.nextafter(float(exact), math.inf)) > requested
+
+
 @pytest.mark.parametrize("matches", [[], [("USDC", _USDC), ("USDC", _WETH)], [("USD", _USDC)]])
 def test_signing_token_resolution_refuses_missing_or_ambiguous_symbol(matches):
     from types import SimpleNamespace

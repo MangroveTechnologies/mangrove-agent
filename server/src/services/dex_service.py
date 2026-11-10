@@ -30,6 +30,7 @@ always receives the base units it expects.
 """
 from __future__ import annotations
 
+import math
 from decimal import Decimal
 from typing import Any
 
@@ -155,6 +156,48 @@ def to_base_units(amount: float, decimals: int) -> int:
     return int(Decimal(str(amount)) * (Decimal(10) ** decimals))
 
 
+def float_exact_base_units(raw: int) -> int:
+    """Return the largest integer <= ``raw`` that a float represents exactly.
+
+    MangroveMarkets types swap and approval amounts as float and builds the
+    1inch request from ``int(float(amount))``. Integers above 2**53 lose
+    low-order bits on that path, and float rounding can move them up. The
+    returned value is unchanged by that conversion, so the quote, the approval
+    and the signed intent all use one amount that is never above the request.
+    """
+    if type(raw) is not int or raw < 0:
+        raise ValidationError("Base-unit amount must be a non-negative integer.")
+    try:
+        nearest = float(raw)
+    except OverflowError:
+        raise ValidationError("Base-unit amount exceeds the transport range.") from None
+    if int(nearest) > raw:
+        nearest = math.nextafter(nearest, 0.0)
+    return int(nearest)
+
+
+def swap_base_units(amount: float | Decimal, decimals: int) -> int:
+    """Human input amount -> the exact base units quoted, approved and signed.
+
+    Raises ``ValidationError`` when the amount rounds to 0 base units.
+    """
+    raw = float_exact_base_units(to_base_units(amount, decimals))
+    if raw <= 0:
+        raise ValidationError(
+            f"amount {amount} is too small to quote: it rounds to 0 base "
+            f"units for a {decimals}-decimal token.",
+            suggestion="Increase the amount.",
+        )
+    return raw
+
+
+def _exact_number(value: Any) -> Decimal:
+    """Exact Decimal value of a JSON number; a float keeps all of its bits."""
+    if isinstance(value, bool):
+        raise ValueError("boolean is not an amount")
+    return Decimal(value) if isinstance(value, float) else Decimal(str(value))
+
+
 def from_base_units(raw: float | int | str, decimals: int) -> float:
     """Integer base units -> human token amount."""
     return float(Decimal(str(raw)) / (Decimal(10) ** decimals))
@@ -174,18 +217,16 @@ def get_quote(
     ETH, 25 USDC). It is converted to the token's base units before the
     backend call; the returned ``input_amount`` / ``output_amount`` are
     converted back to human units. The raw base-unit values are preserved
-    as ``*_base_units`` for callers that need them.
+    as exact integers in ``*_base_units`` for callers that need them.
+
+    The requested base units are ``swap_base_units(amount, decimals)``, the
+    largest float-exact value not above the request, and the quote must echo
+    exactly that value. Callers approve and sign ``input_amount_base_units``.
     """
     client = mangrove_markets_client()
 
     in_decimals = resolve_decimals(client, chain_id, input_token)
-    raw_amount = to_base_units(amount, in_decimals)
-    if raw_amount <= 0:
-        raise ValidationError(
-            f"amount {amount} is too small to quote: it rounds to 0 base "
-            f"units for a {in_decimals}-decimal token.",
-            suggestion="Increase the amount.",
-        )
+    raw_amount = swap_base_units(amount, in_decimals)
 
     kwargs: dict[str, Any] = {
         "input_token": input_token,
@@ -208,16 +249,24 @@ def get_quote(
     raw_in = data.get("input_amount")
     raw_out = data.get("output_amount")
     # A quote may supply a price; it cannot replace the requested operation.
-    if raw_in is None or Decimal(str(raw_in)) != raw_amount:
+    if raw_in is None:
         raise SdkError("DEX quote input amount differs from the requested amount.")
+    try:
+        exact_in = _exact_number(raw_in)
+        exact_out = None if raw_out is None else _exact_number(raw_out)
+    except (ValueError, ArithmeticError, TypeError):
+        raise SdkError("DEX quote amounts are not numbers.") from None
+    if exact_in != raw_amount:
+        raise SdkError("DEX quote input amount differs from the requested amount.")
+    if exact_out is not None and exact_out.is_finite() and exact_out == exact_out.to_integral_value():
+        raw_out = int(exact_out)
     if data.get("chain_id") is not None and data["chain_id"] != chain_id:
         raise SdkError("DEX quote chain differs from the requested chain.")
     for field, requested in (("src_token_address", input_token), ("dst_token_address", output_token)):
         if data.get(field) and _is_address(requested) and str(data[field]).lower() != requested.lower():
             raise SdkError("DEX quote asset differs from the requested token.")
-    if raw_in is not None:
-        data["input_amount_base_units"] = raw_in
-        data["input_amount"] = from_base_units(raw_in, in_decimals)
+    data["input_amount_base_units"] = raw_amount
+    data["input_amount"] = from_base_units(raw_amount, in_decimals)
     if raw_out is not None:
         data["output_amount_base_units"] = raw_out
         data["output_amount"] = from_base_units(raw_out, out_decimals)

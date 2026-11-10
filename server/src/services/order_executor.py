@@ -5,10 +5,12 @@ Takes an OrderIntent and executes it:
   build a simulated Trade row with mode=paper, status=simulated,
   tx_hash=None.
 - Live mode: full 6-step DEX swap via mangrovemarkets:
-    1. dex_service.get_quote (human amount -> base units at the boundary)
-    2. dex.approve_token (may return None if allowance already set)
-    3. If approval returned: wallet_manager.sign → dex.broadcast → poll tx_status
-    4. dex.prepare_swap
+    1. dex_service.get_quote (human amount -> float-exact base units)
+    2. dex.approve_token for exactly the quoted base units (may return None)
+    3. If approval returned: wallet_manager.sign → dex.broadcast → poll
+       tx_status, then re-quote the same base units
+    4. dex.prepare_swap from the latest quote, bound to an intent built
+       from that quote
     5. wallet_manager.sign → dex.broadcast
     6. poll dex.tx_status until confirmed
   Build a Trade row with mode=live, tx_hash, fill price from quote.
@@ -187,6 +189,34 @@ def _resolve_tokens(intent: OrderIntent) -> tuple[str, str, float]:
     return intent.symbol, "USDC", intent.amount
 
 
+def _swap_intent(
+    quote: dict,
+    *,
+    chain_id: int,
+    wallet_address: str,
+    router_address: str,
+    input_token: str,
+    output_token: str,
+    amount_base_units: int,
+    slippage_pct: float,
+) -> SwapIntent:
+    """Intent for the swap that ``quote`` prepares, at the approved amount.
+
+    The minimum output comes from this quote, the one prepare_swap builds
+    from, after the reviewed routing fee and the caller's slippage.
+    """
+    if quote.get("input_amount_base_units") != amount_base_units:
+        raise SdkError("DEX quote amount differs from the approved swap amount.")
+    return SwapIntent(
+        chain_id, wallet_address, router_address, input_token, output_token,
+        amount_base_units, minimum_return(
+            quote.get("output_amount_base_units"), slippage_pct,
+            routing_fee_bps=ONEINCH_ROUTING_FEE_BPS,
+        ),
+        routing_fee_bps=ONEINCH_ROUTING_FEE_BPS,
+    )
+
+
 def _handle_approval(
     client: Any,
     input_token: str,
@@ -323,32 +353,39 @@ def _live_swap(
         quote_id=quote.get("quote_id"),
     )
 
+    # The quote's float-exact base units are the one amount approved, prepared
+    # and signed. The current provider estimates the swap against on-chain
+    # allowance, so a first swap needs its finite approval confirmed before
+    # prepare_swap can return calldata. Unsupported routes may therefore leave
+    # that bounded allowance and approval gas, never a swap.
+    amount_base_units = quote["input_amount_base_units"]
+    approval_tx_hash = _handle_approval(
+        client, input_token, chain_id, wallet_address, venue_id,
+        amount_base_units=amount_base_units, router_address=router_address,
+    )
+    if approval_tx_hash:
+        # The swap is prepared after the approval confirms, so its minimum
+        # output and recorded fees come from a quote taken after it as well.
+        quote = dex_service.get_quote(
+            input_token=input_token,
+            output_token=output_token,
+            amount=input_amount,
+            chain_id=chain_id,
+            venue_id=venue_id,
+        )
+    swap_intent = _swap_intent(
+        quote, chain_id=chain_id, wallet_address=wallet_address, router_address=router_address,
+        input_token=input_token, output_token=output_token,
+        amount_base_units=amount_base_units, slippage_pct=slippage_pct,  # type: ignore[arg-type]
+    )
     fees: dict[str, Any] = {
         "venue_fee": quote.get("venue_fee", 0.0),
         "mangrove_fee": quote.get("mangrove_fee", 0.0),
         "price_impact_percent": quote.get("price_impact_percent", 0.0),
         "routing_fee_cap_bps": ONEINCH_ROUTING_FEE_BPS,
+        "minimum_return_base_units": str(swap_intent.min_return_amount),
+        "gross_quote_output_base_units": str(quote.get("output_amount_base_units")),
     }
-
-    # Bind intent before the approval. The current provider estimates the swap
-    # against on-chain allowance, so a first swap needs its finite approval
-    # confirmed before prepare_swap can return calldata. Unsupported routes may
-    # therefore leave that bounded allowance and approval gas, never a swap.
-    amount_base_units = dex_service.to_base_units(input_amount, quote["input_token_decimals"])
-    swap_intent = SwapIntent(
-        chain_id, wallet_address, router_address, input_token, output_token,
-        amount_base_units, minimum_return(
-            quote.get("output_amount_base_units"), slippage_pct,
-            routing_fee_bps=ONEINCH_ROUTING_FEE_BPS,
-        ),
-        routing_fee_bps=ONEINCH_ROUTING_FEE_BPS,
-    )
-    fees["minimum_return_base_units"] = str(swap_intent.min_return_amount)
-    fees["gross_quote_output_base_units"] = str(quote.get("output_amount_base_units"))
-    approval_tx_hash = _handle_approval(
-        client, input_token, chain_id, wallet_address, venue_id,
-        amount_base_units=amount_base_units, router_address=router_address,
-    )
 
     # 4. Prepare swap (nonce is fetched after the confirmed approval).
     # Upstream `dex.prepare_swap` takes slippage as a PERCENTAGE

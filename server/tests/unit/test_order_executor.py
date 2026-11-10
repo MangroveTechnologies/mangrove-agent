@@ -411,6 +411,96 @@ def test_approval_cannot_escalate_allowance_to_unlimited(
     mock_markets.dex.broadcast.assert_not_called()
 
 
+def test_live_requotes_after_approval_and_binds_minimum_to_that_quote(
+    temp_db, mock_mangroveai, mock_markets, stub_sign, monkeypatch,
+):
+    """The swap floor comes from the quote the provider prepares after approval."""
+    from types import SimpleNamespace
+
+    from src.services import order_executor
+    from src.services.transaction_intent import ONEINCH_ROUTING_FEE_BPS, minimum_return
+
+    calls, signed = [], []
+    original_quote = mock_markets.dex.get_quote.side_effect
+    original_prepare = mock_markets.dex.prepare_swap.side_effect
+
+    def get_quote(**kwargs):
+        calls.append("quote")
+        quote = original_quote(**kwargs)
+        if calls.count("quote") > 1:  # the price moved while the approval confirmed
+            quote.raw_output = quote.raw_output * 99 // 100
+            quote.model_dump.return_value["output_amount"] = quote.raw_output
+        return quote
+
+    mock_markets.dex.get_quote.side_effect = get_quote
+    mock_markets.dex.approve_token.side_effect = (
+        lambda **kwargs: calls.append("approve") or SimpleNamespace(payload=approval_payload())
+    )
+    mock_markets.dex.prepare_swap.side_effect = lambda **kwargs: calls.append("prepare") or original_prepare(**kwargs)
+    mock_markets.dex.broadcast.side_effect = (
+        lambda **kwargs: calls.append("broadcast") or SimpleNamespace(tx_hash="0xdeadbeef")
+    )
+    monkeypatch.setattr(
+        order_executor, "wallet_sign",
+        lambda payload, wallet_address, chain_id=None, *, intent=None: signed.append(intent) or "0xSIGNED",
+    )
+
+    trade = order_executor.execute_one(_intent(), mode="live", strategy_id="s1", wallet_address=WALLET,
+                                       chain_id=8453, slippage_pct=.002)
+
+    assert calls == ["quote", "approve", "broadcast", "quote", "prepare", "broadcast"]
+    refreshed = 99 * 10**17 // 100
+    approval, swap = signed
+    assert approval.amount == swap.amount == 250_000_000
+    assert swap.min_return_amount == minimum_return(refreshed, .002, routing_fee_bps=ONEINCH_ROUTING_FEE_BPS)
+    assert trade.fees["gross_quote_output_base_units"] == str(refreshed)
+    assert trade.status == "confirmed"
+
+
+def test_live_amount_is_float_exact_for_quote_approval_and_intent(
+    temp_db, mock_mangroveai, mock_markets, stub_sign, monkeypatch,
+):
+    """Markets reads amounts as float and builds calldata from int(float(amount))."""
+    from types import SimpleNamespace
+
+    from src.services import order_executor
+
+    original_quote = mock_markets.dex.get_quote.side_effect
+
+    def float_quote(**kwargs):
+        quote = original_quote(**kwargs)
+        quote.model_dump.return_value["input_amount"] = float(kwargs["amount"])
+        return quote
+
+    def float_approval(**kwargs):
+        return SimpleNamespace(payload=approval_payload(WETH, int(float(kwargs["amount"]))))
+
+    def float_prepare(**kwargs):
+        requested = mock_markets.dex.get_quote.call_args.kwargs
+        payload = generic_swap_payload(WETH, USDC, int(float(requested["amount"])), 10**30, WALLET)
+        return SimpleNamespace(payload=payload)
+
+    signed = []
+    mock_markets.dex.get_quote.side_effect = float_quote
+    mock_markets.dex.approve_token.side_effect = float_approval
+    mock_markets.dex.prepare_swap.side_effect = float_prepare
+    monkeypatch.setattr(
+        order_executor, "wallet_sign",
+        lambda payload, wallet_address, chain_id=None, *, intent=None: signed.append(intent) or "0xSIGNED",
+    )
+
+    # 123.456789012345678901 ETH reaches the boundary as 123456789012345680000 wei,
+    # which float transport would turn into 123456789012345683968 wei.
+    order_executor.execute_one(_intent("sell", "ETH", 123.456789012345678901), mode="live", strategy_id="s1",
+                               wallet_address=WALLET, chain_id=8453, slippage_pct=.002)
+
+    quoted = mock_markets.dex.get_quote.call_args.kwargs["amount"]
+    approval, swap = signed
+    assert int(float(quoted)) == quoted <= 123_456_789_012_345_680_000
+    assert mock_markets.dex.approve_token.call_args.kwargs["amount"] == quoted
+    assert approval.amount == swap.amount == quoted
+
+
 def test_live_quotes_in_base_units(temp_db, mock_mangroveai, mock_markets, stub_sign):
     """#122 + #139 regression: a cron buy intent's amount is ASSET units
     (engine position_size). Buying 0.04 ETH at the 2500 mark price spends

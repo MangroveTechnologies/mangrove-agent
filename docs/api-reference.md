@@ -158,9 +158,11 @@ payments signed by it.
 `POST /dex/quote` body: `input_token`, `output_token`, `amount` (human units, greater than 0,
 for example `0.001` for 0.001 ETH), `chain_id`, optional `venue_id`. The agent converts the
 amount to the token's base units for the upstream call and converts the returned
-`input_amount` and `output_amount` back to human units. The raw values are kept as
-`input_amount_base_units` and `output_amount_base_units`, next to `input_token_decimals` and
-`output_token_decimals`.
+`input_amount` and `output_amount` back to human units. MangroveMarkets carries amounts as
+floats, so the requested base units are rounded down to the largest value a float holds
+exactly; a quote that echoes a different input amount is refused. The base-unit values are
+kept as exact integers in `input_amount_base_units` and `output_amount_base_units`, next to
+`input_token_decimals` and `output_token_decimals`.
 
 `POST /dex/swap` body: `input_token`, `output_token`, `amount` (input amount), `chain_id`,
 `wallet_address`, `slippage_pct`, `mev_protection` (default false), optional `venue_id`,
