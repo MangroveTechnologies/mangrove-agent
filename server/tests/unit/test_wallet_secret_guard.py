@@ -565,6 +565,17 @@ def test_multi_megabyte_json_output_is_scanned_quickly_without_halting(client, s
 
 
 @pytest.mark.parametrize('client', ['claude', 'codex'])
+def test_large_plain_output_keeps_a_key_after_a_backslash_whole(client):
+    """A plain-string output above the structured limit is scanned as it is, not only JSON-unescaped."""
+    key = 'ab' + '3c' * 31
+    line = 'saved C:\\wallets\\' + key + '\n'
+    for output in (line, 'x' * (guard.STRUCTURED_BYTES + 10) + '\n' + line):
+        result = invoke(client, 'PostToolUse', tool_name='Bash', tool_response=output)
+        assert json.loads(result.stdout)['decision'] == 'block'
+        assert key not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('client', ['claude', 'codex'])
 def test_output_above_the_input_limit_is_withheld_without_halting(client):
     filler = 'x' * (guard.MAX_BYTES + 10)
     payload = json.dumps({'hook_event_name': 'PostToolUse', 'tool_name': 'Bash',
