@@ -690,3 +690,29 @@ def test_two_megabytes_of_letters_finish_in_under_a_second(text, found):
     started = time.perf_counter()
     assert secret_guard.find_in_arguments({"query": text}) == found
     assert time.perf_counter() - started < 1.0
+
+
+# --- Error messages are scanned whole, before they are cut or redacted ---------
+
+def test_key_split_by_the_error_length_cut_is_withheld():
+    message = "x " * ((secret_guard._ERROR_CHARS - 63) // 2) + "key " + BARE_KEY
+    assert secret_guard.redact_error(message, {}) == ("", secret_guard.EVM_KEY)
+
+
+def test_phrase_split_by_the_error_length_cut_is_withheld():
+    phrase = " ".join(PHRASES[12])
+    message = "x" * (secret_guard._ERROR_CHARS - len(" ".join(PHRASES[12][:11])) - 1) + " " + phrase
+    assert secret_guard.redact_error(message, {}) == ("", secret_guard.MNEMONIC)
+
+
+def test_phrase_broken_by_redacting_an_argument_word_is_withheld():
+    phrase = PHRASES[12]
+    label = " ".join(phrase[4:6])  # two words of the phrase, long enough to be redacted
+    assert len(label) >= 8
+    assert secret_guard.redact_error(f"restore failed: {' '.join(phrase)}", {"label": label})[1] == secret_guard.MNEMONIC
+
+
+def test_secret_shaped_argument_echo_is_redacted_not_withheld():
+    digest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    assert secret_guard.redact_error(f"unknown dataset {digest}", {"dataset": digest}) == (
+        "unknown dataset [argument value]", None)

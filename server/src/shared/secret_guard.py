@@ -848,22 +848,40 @@ def _argument_texts(value: Any):
             yield str(item)
 
 
-def redact_error(message: str, arguments: Any) -> tuple[str, str | None]:
-    """Remove argument values that an error message repeats, then scan the rest.
+def _bare_secret(text: str) -> bool:
+    """``text`` alone reads as a secret in free text."""
+    return find_in_arguments({"message": text}) is not None
 
-    Every argument string, key or integer of 8 or more characters that appears
-    in ``message`` is replaced with ``[argument value]``, and a message longer
-    than ``_ERROR_CHARS`` is cut to that length. Returns the redacted message
-    and the secret kind found in it (as free text, then as result text), or
-    None when it holds none.
+
+def redact_error(message: str, arguments: Any) -> tuple[str, str | None]:
+    """Scan an error message, then remove the argument values it repeats.
+
+    The whole message is scanned before anything is cut or replaced (as free
+    text, then as result text), so a secret cannot be split into parts the
+    scan misses. An argument value that is secret-shaped on its own, such as a
+    64-hex digest the caller passed and the argument checks allowed, is an
+    echo of the caller's input, so those values are removed before this scan.
+    Any other argument value, such as one word of a recovery phrase, stays in
+    place. When the message holds no secret, every argument string, key or
+    integer of 8 or more characters that appears in it is replaced with
+    ``[argument value]``, and a message longer than ``_ERROR_CHARS`` is cut to
+    that length. Returns the redacted message and the secret kind found
+    (with an empty message), or None when the message holds none.
     """
-    if len(message) > _ERROR_CHARS:
-        message = message[:_ERROR_CHARS] + "..."
     values = sorted({text for text in _argument_texts(arguments) if len(text) >= 8}, key=len, reverse=True)
+    scanned = message
+    for text in values:
+        if text in scanned and _bare_secret(text):
+            scanned = scanned.replace(text, " ")
+    found = find_in_arguments({"message": scanned}) or find_in_result(scanned)
+    if found:
+        return "", found
     for text in values:
         if text in message:
             message = message.replace(text, "[argument value]")
-    return message, find_in_arguments({"message": message}) or find_in_result(message)
+    if len(message) > _ERROR_CHARS:
+        message = message[:_ERROR_CHARS] + "..."
+    return message, None
 
 
 def _jsonable(value: Any) -> Any:
