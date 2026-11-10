@@ -5,6 +5,7 @@ import argparse
 import getpass
 import hashlib
 import json
+import re
 import sqlite3
 import sys
 import warnings
@@ -15,6 +16,26 @@ from src.custody.policy import Policy, digest
 from src.custody.transport import check_ancestors, check_owned_path
 
 EXTERNAL_CUSTODY = "external-custody"
+_PUBLIC_ADDRESS = {
+    "evm": re.compile(r"0x[0-9a-fA-F]{40}"),
+    "xrpl": re.compile(r"r[1-9A-HJ-NP-Za-km-z]{24,34}"),
+}
+
+
+def terminal_text(value) -> str:
+    """Render untrusted text for the administrator terminal with control characters escaped."""
+    text = value if isinstance(value, str) else str(value)
+    if text.isascii() and text.isprintable():
+        return text
+    return repr(text)
+
+
+def _public_address(row) -> str | None:
+    """Return the row's address only when it is a well-formed address for its chain."""
+    address, pattern = row["address"], _PUBLIC_ADDRESS.get(row["chain"])
+    if isinstance(address, str) and pattern and pattern.fullmatch(address):
+        return address
+    return None
 
 
 def require_terminal():
@@ -34,6 +55,9 @@ def migrate(legacy_db: Path, legacy_key: Path, settings: dict) -> dict:
     Rows whose ``encryption_method`` is ``external-custody`` hold no agent
     ciphertext; their key is already held outside the agent database. They are
     skipped and listed under ``skipped`` with reason ``already_external_custody``.
+    A skipped row whose address is not a well-formed public address for its
+    chain is listed with reason ``invalid_address`` and its ``repr()`` form,
+    never the raw database value.
     Any other unexpected encryption method aborts before a wallet is written.
     """
     import os
@@ -55,7 +79,9 @@ def migrate(legacy_db: Path, legacy_key: Path, settings: dict) -> dict:
     prepared, receipt, skipped = [], [], []
     for row in rows:
         if row["encryption_method"] == EXTERNAL_CUSTODY:
-            skipped.append({"address": row["address"], "reason": "already_external_custody"})
+            address = _public_address(row)
+            skipped.append({"address": address, "reason": "already_external_custody"} if address else
+                           {"address": repr(row["address"]), "reason": "invalid_address"})
             continue
         if row["encryption_method"] != "fernet-v1":
             raise ValueError("Unexpected legacy wallet encryption; no migration was committed")
@@ -114,6 +140,13 @@ def migrate(legacy_db: Path, legacy_key: Path, settings: dict) -> dict:
     return result
 
 
+def print_migration_result(result: dict) -> None:
+    for item in result["skipped"]:
+        print("Skipped " + terminal_text(item["address"]) + ": " + terminal_text(item["reason"]))
+    print("Migrated " + str(len(result["wallets"])) + " wallets. Original snapshots and any other backups still contain recoverable secrets.")
+    print("Backup confirmations were not carried over. Verify each wallet's backup, then run confirm-backup ADDRESS for it.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
@@ -141,7 +174,7 @@ def main():
 
         display_wallet_backup(args.address)
     elif args.action == "confirm-backup":
-        print("Wallet: " + args.address)
+        print("Wallet: " + terminal_text(args.address))
         if input("Type BACKED UP only after securely saving the secret: ") != "BACKED UP":
             raise ValueError("Backup confirmation cancelled")
         wallet_manager.confirm_backup(args.address)
@@ -158,15 +191,11 @@ def main():
             del secret
         result = wallet_manager.import_wallet(token, chain=args.chain, network=args.network,
                                               chain_id=args.chain_id, label=args.label)
-        print("Imported wallet: " + result.address)
+        print("Imported wallet: " + terminal_text(result.address))
     elif args.action == "migrate":
         if input("Type MIGRATE STOPPED SNAPSHOT after stopping the legacy agent and protecting its recovery copies: ") != "MIGRATE STOPPED SNAPSHOT":
             raise ValueError("Migration cancelled")
-        result = migrate(args.legacy_db, args.legacy_master_key, settings)
-        for item in result["skipped"]:
-            print("Skipped " + item["address"] + ": " + item["reason"])
-        print("Migrated " + str(len(result["wallets"])) + " wallets. Original snapshots and any other backups still contain recoverable secrets.")
-        print("Backup confirmations were not carried over. Verify each wallet's backup, then run confirm-backup ADDRESS for it.")
+        print_migration_result(migrate(args.legacy_db, args.legacy_master_key, settings))
     elif args.action == "approve-marketplace":
         request = json.loads(args.request_file.read_text())
         if request.get("operation") != "sign_marketplace_proof" or set(request) != {"operation", "arguments"}:

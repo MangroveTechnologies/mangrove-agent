@@ -938,3 +938,29 @@ def test_serve_sweeps_crashed_reservations_and_refuses_a_second_daemon(custody, 
     with pytest.raises(ValueError, match="already running"):
         daemon.serve(second)
     assert not Path(second["socket_path"]).exists()
+
+
+def test_migration_never_prints_a_crafted_skipped_address(custody, protected_directory, capsys):
+    """A legacy row's address is untrusted DB text: it must not reach the terminal raw."""
+    from src.custody.admin import migrate, print_migration_result
+
+    _, _, _, settings = custody
+    legacy, external = Account.create(), Account.create()
+    crafted = "0x" + "ab" * 20 + "\x1b[2J\nMigrated 999 wallets"
+    database, keyfile = _legacy_snapshot(protected_directory / "legacy", [
+        (legacy.address, "0x" + legacy.key.hex().removeprefix("0x"), "fernet-v1"),
+        (crafted, None, "external-custody"),
+        (external.address, None, "external-custody"),
+    ])
+    result = migrate(database, keyfile, settings)
+    assert [item["address"] for item in result["wallets"]] == [legacy.address]
+    reasons = {item["reason"]: item["address"] for item in result["skipped"]}
+    assert reasons["already_external_custody"] == external.address
+    assert reasons["invalid_address"] == repr(crafted)
+    print_migration_result(result)
+    printed = capsys.readouterr().out
+    assert "\x1b" not in printed
+    assert "Skipped " + external.address + ": already_external_custody\n" in printed
+    assert "\\x1b[2J\\nMigrated 999 wallets" in printed
+    assert all(line.startswith(("Skipped ", "Migrated 1 wallets", "Backup confirmations"))
+               for line in printed.splitlines())

@@ -254,7 +254,9 @@ master key, preserves metadata, commits atomically, and writes
 a private receipt containing addresses and hashes of original ciphertext. Rows
 already marked `external-custody` hold no agent ciphertext; migration skips
 them, prints `Skipped ADDRESS: already_external_custody` for each, and lists
-them in the receipt. Any other unexpected encryption method stops the migration
+them in the receipt. A skipped row whose address is not a well-formed address
+for its chain is reported as `invalid_address` with control characters escaped,
+never printed raw. Any other unexpected encryption method stops the migration
 before a wallet is written. A
 same-snapshot retry verifies already migrated identities and resumes receipt
 creation without overwriting them. Backup confirmations are not carried over,
