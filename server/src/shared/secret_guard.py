@@ -172,6 +172,7 @@ _WINDOW_BUDGET = 50_000
 # Longest error message scanned and returned by redact_error.
 _ERROR_CHARS = 4000
 _ERROR_ECHOES = 100
+_ERROR_VALUE_CHARS = 4096  # values up to this long are redacted whole at the cut
 _ERROR_VALUES = 1000
 
 # Normalized field names that carry key material.
@@ -868,7 +869,9 @@ def redact_error(message: str, arguments: Any) -> tuple[str, str | None]:
     recovery phrase, stays in place. When the message holds no secret, its
     first ``_ERROR_CHARS`` characters are returned, with every argument
     string, key or integer of 8 or more characters (the ``_ERROR_VALUES``
-    longest) that appears in them replaced with ``[argument value]``. Returns
+    longest) that appears in them replaced with ``[argument value]``. The
+    replacement reads a fixed ``_ERROR_CHARS + _ERROR_VALUE_CHARS`` prefix, so
+    its cost does not depend on the input size. Returns
     the redacted message and the secret kind found (with an empty message), or
     None when there is none.
     """
@@ -881,7 +884,7 @@ def redact_error(message: str, arguments: Any) -> tuple[str, str | None]:
     found = find_in_arguments({"message": scanned}) or find_in_result(scanned)
     if found:
         return "", found
-    head = message[:_ERROR_CHARS + max((len(text) for text in values), default=0)]
+    head = message[:_ERROR_CHARS + _ERROR_VALUE_CHARS]
     for text in values:
         if text in head:
             head = head.replace(text, "[argument value]")

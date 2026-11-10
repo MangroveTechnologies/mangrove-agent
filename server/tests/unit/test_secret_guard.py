@@ -733,3 +733,13 @@ def test_phrase_padded_across_the_error_cut_is_withheld():
     phrase = PHRASES[12]
     message = "x" * 3000 + " " + " ".join(phrase[:11]) + " " * 5000 + phrase[11]
     assert secret_guard.redact_error(message, {}) == ("", secret_guard.MNEMONIC)
+
+
+def test_huge_single_argument_echoed_in_an_error_is_bounded():
+    import time
+
+    big = "v" * 2_000_000
+    started = time.perf_counter()
+    redacted, found = secret_guard.redact_error(big + " failed", {"payload": big})
+    assert time.perf_counter() - started < 2.0
+    assert found is None and len(redacted) <= secret_guard._ERROR_CHARS + 3
