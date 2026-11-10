@@ -569,6 +569,10 @@ def test_phrase_with_wordlist_words_around_it_is_caught(words, around):
 
 # --- Phrase encodings ------------------------------------------------------------
 
+def _alternate(text: str) -> str:
+    return "".join(c.upper() if i % 2 else c for i, c in enumerate(text))
+
+
 def _fullwidth(text: str) -> str:
     return "".join(chr(ord(c) + 0xFEE0) if c.isalpha() else c for c in text)
 
@@ -591,6 +595,14 @@ ENCODINGS = {
     "split across fields": lambda p: {"first": " ".join(p[:5]), "second": " ".join(p[5:])},
     "camel case": lambda p: {"query": p[0] + "".join(w.title() for w in p[1:])},
     "no separator": lambda p: {"query": "".join(p)},
+    "alternating case": lambda p: {"query": _alternate(" ".join(p))},
+    "alternating case, underscores": lambda p: {"query": _alternate("_".join(p))},
+    "alternating case, no separator": lambda p: {"query": _alternate("".join(p))},
+    "inner capital": lambda p: {"query": " ".join(w[:3] + w[3:].capitalize() for w in p)},
+    "all caps, underscores": lambda p: {"query": "_".join(p).upper()},
+    "camel case, inner capitals": lambda p: {"query": p[0] + "".join(w[:2].title() + w[2:].capitalize() for w in p[1:])},
+    "pascal case": lambda p: {"query": "".join(w.title() for w in p)},
+    "fullwidth, alternating case": lambda p: {"query": _fullwidth(_alternate(" ".join(p)))},
 }
 
 

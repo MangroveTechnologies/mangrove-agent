@@ -342,19 +342,24 @@ def has_mnemonic(text: str) -> bool:
     return any(len(run) >= _MNEMONIC_RUN for variant in _text_variants(text) for run in _word_runs(variant))
 
 
-def _phrase_runs(text: str):
+def _phrase_runs(text: str, *, case_split: bool):
     """Runs of BIP-39 words as (words, joined) pairs.
 
+    Without ``case_split``, words are the letter runs of the lowercased text,
+    whatever their case (``aBaNdOn`` is ``abandon``). With it, a letter run is
+    also split where a lowercase letter meets an uppercase one (``wordWord``).
     ``joined[i]`` is True when word ``i`` meets the word before it without a
-    plain separator: across an underscore (``word_word``) or at a case change
-    (``wordWord``). Any other non-letter text separates words without ending
-    the run; a non-wordlist word ends it.
+    plain separator: across an underscore (``word_word``) or at a case change.
+    Any other non-letter text separates words without ending the run; a
+    non-wordlist word ends it.
     """
     words = bip39_words()
     run: list[str] = []
     joined: list[bool] = []
     end = 0
-    for match in _CASED_WORD_RE.finditer(text):
+    if not case_split:
+        text = text.lower()
+    for match in (_CASED_WORD_RE if case_split else _WORD_RE).finditer(text):
         token = match.group(0).lower()
         gap_joined = match.start() == end or "_" in text[end:match.start()]
         end = match.end()
@@ -396,7 +401,8 @@ def _segment(letters: str) -> list[str] | None:
 def has_recovery_phrase(text: str, budget: list[int] | None = None) -> bool:
     """A window of BIP-39 words that reads as a recovery phrase (rule 2 in the module docstring).
 
-    Every window of 12, 15, 18, 21 or 24 words is checked, except an excerpt
+    The text is read twice: case-insensitively, and split at case changes as
+    well. Every window of 12, 15, 18, 21 or 24 words is checked, except an excerpt
     of the wordlist itself (consecutive wordlist entries). A window counts when
     its checksum is valid, or when it is not in alphabetical order and repeats
     no word (12 or 15 words) or at most one (18 to 24 words). A window that
@@ -409,8 +415,9 @@ def has_recovery_phrase(text: str, budget: list[int] | None = None) -> bool:
     remaining = budget if budget is not None else [_WINDOW_BUDGET]
     index = _bip39_index()
     longest = _MNEMONIC_LENGTHS[-1]
-    for variant in _text_variants(text):
-        for run, joined in _phrase_runs(variant):
+    readings = ((variant, case_split) for variant in _text_variants(text) for case_split in (False, True))
+    for variant, case_split in readings:
+        for run, joined in _phrase_runs(variant, case_split=case_split):
             positions = [index[word] for word in run]
             for start in range(len(positions) - _MNEMONIC_RUN + 1):
                 value, previous, repeats = 0, -1, 0
@@ -436,7 +443,7 @@ def has_recovery_phrase(text: str, budget: list[int] | None = None) -> bool:
                     remaining[0] -= 1
                     if remaining[0] < 0 or _checksum_matches(value, count):
                         return True
-        for match in _LETTER_RUN_RE.finditer(variant):
+        for match in () if case_split else _LETTER_RUN_RE.finditer(variant):
             parts = _segment(match.group(0).lower())
             if parts is not None and len(parts) >= _MNEMONIC_RUN and has_recovery_phrase("_".join(parts), remaining):
                 return True
