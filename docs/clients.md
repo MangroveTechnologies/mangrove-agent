@@ -194,22 +194,34 @@ Grok, Grok Bot and Perplexity, the restricted launcher and remote MCP clients.
 
 | Control | Where it is enforced | Applies to |
 |---|---|---|
-| Refuse a wallet secret in tool arguments: an EVM private key (64 hex characters, with or without `0x`) in a key-named field, in `vault_token` or inside free text; a BIP-39 recovery phrase with a valid checksum anywhere; or an XRPL family seed anywhere. Nothing is sent to the tool or upstream. Error code `SECRET_IN_ARGUMENTS`. | MCP call boundary, `PricedFastMCP.call_tool` in `server/src/mcp/server.py`, using `server/src/shared/secret_guard.py` | Every MCP tool call, local or forwarded to MangroveAI or Markets |
+| Refuse a wallet secret in tool arguments: an EVM private key (64 hex characters, with or without `0x`, or the same key written as an integer) in a key-named field, in `vault_token` or inside free text; a BIP-39 recovery phrase anywhere, including one with a mistyped word or bad checksum; or an XRPL family seed anywhere. Nothing is sent to the tool or upstream. Error code `SECRET_IN_ARGUMENTS`. | MCP call boundary, `PricedFastMCP.call_tool` in `server/src/mcp/server.py`, using `server/src/shared/secret_guard.py` | Every MCP tool call, local or forwarded to MangroveAI or Markets |
 | Withhold a tool result that carries a key, recovery phrase or seed in a key-named field. Error code `SECRET_IN_RESULT`; the operation may already have run. | Same boundary | Every MCP tool result |
+| Remove argument values and validation input values from a tool error message, and withhold an error message that still carries a secret. Error code `SECRET_IN_ERROR`; the operation may already have run. | Same boundary | Every MCP tool error |
 | Refuse a live swap when the wallet holds 0 of the input token on that chain, before any quote or approval is signed. Error code `WALLET_INPUT_BALANCE_EMPTY`. | `dex_service.require_input_balance`, called from the live swap path in `order_executor` and from `dex_confirmed.execute` for live strategy entries | MCP `execute_swap`, REST `/dex/swap` and live strategy entries. Live strategy exits are not checked, so a stale zero reading cannot hold back a protective exit. |
 
 Field names are compared after lowercasing and removing `_` and `-`, so
-`privateKey`, `PRIVATE_KEY` and `private_key` are the same key-named field.
+`privateKey`, `PRIVATE_KEY` and `private_key` are the same key-named field. A
+name with a `seed`, `secret` or `mnemonic` part (`order_seed`, `seedHex`) is
+also key-named and is never treated as a hash or id field.
 Transaction hashes, definition and config hashes, order ids and sha256 digests
 have the same shape as a private key. A 64-hex value outside a key-named field
 therefore passes when its field is named for a hash or id (`tx_hash`,
 `definition_hash`, `order_id`), when it is the whole value of a field that is not
 free text, or when a word such as `tx`, `transaction` or `hash` comes just before
-it. In free-text fields such as `query` and `description`, any other 64-hex
-value is refused. A run of wordlist words counts as a recovery phrase outside a
-key-named field only when it has a valid BIP-39 checksum, so strategy prose made
-of wordlist words passes. The full rules are in the `secret_guard.py` module
-docstring. A test keeps the BIP-39 wordlist identical to the hook's.
+it and no nearby word such as `private` or `seed` names a key. In free-text fields such as `query` and `description`, any other 64-hex
+value is refused. Outside a key-named field, 12 to 24 consecutive wordlist words
+count as a recovery phrase when they have a valid BIP-39 checksum, or when they
+repeat no word (one from 18 words) and are not in alphabetical order, so a phrase
+with a mistyped word is still refused. Words joined by underscores or case changes, or
+spread over a list or several fields, count when they have a valid checksum, so
+`snake_case` field names do not. Strategy prose made of wordlist words repeats them
+(`price above average, volume above average`) and passes unless one of its
+windows happens to pass the checksum. A phrase written with no separator between its
+words (`abandonability...`) is found when a letter run holds 12 or more consecutive
+wordlist words, unless they are the parts of a camelCase or PascalCase identifier, which
+count only with a valid checksum. This scan catches accidental exposure in ordinary text and is not
+the custody boundary for wallet secrets. The full rules are in the `secret_guard.py`
+module docstring. A test keeps the BIP-39 wordlist identical to the hook's.
 
 The balance check fails open, like the hook it replaces: if the balance cannot
 be read, or the token is a symbol other than USDC, the swap continues to its own
@@ -310,6 +322,18 @@ remain in place. See [restricted chat](restricted-chat.md).
 
 ## Perplexity Computer
 
+To add the hosted MangroveAI connector, open **Plugins > Add custom >
+Import plugin from GitHub** in Perplexity and enter
+`https://github.com/MangroveTechnologies/mangrove-agent/tree/main/plugins/perplexity`.
+You can also upload a ZIP of the contents of [the plugin folder](../plugins/perplexity).
+On the imported plugin page, connect the MangroveAI connector and sign in to
+Mangrove. The hosted OAuth server must allow Perplexity's client metadata host.
+To check the connection, select the plugin in Computer and ask it to use
+MangroveAI's `query_knowledge` tool to explain what drawdown means in a backtest.
+
+The hosted connector provides research and backtesting tools. For the local
+agent and its execution tools, use the command client described below.
+
 Use the install-from-an-agent workflow above inside Computer's execution
 environment. The provided command client gives the installing Perplexity agent
 immediate tool access without a custom cloud connector, a new Project/Space,
@@ -343,7 +367,7 @@ authority cannot claim this isolation.
 
 | Client | Repository protection | Limit |
 | --- | --- | --- |
-| Claude Code | Shared detector through `.claude/settings.json`, the plugin hooks, or restricted `chat.sh` settings; prompt checks, pre-tool denial, post-tool replacement and failure detection | A failure hook stops continuation but has no documented error replacement. Original output can enter telemetry before a post-tool hook. |
+| Claude Code | Shared detector through `.claude/settings.json`, the plugin hooks, or restricted `chat.sh` settings; prompt checks, pre-tool denial, post-tool replacement and failure detection | A failure hook that finds a secret stops continuation, because the event has no documented error replacement. Original output can enter telemetry before a post-tool hook. |
 | Codex helper session | Native invocation tables from `.codex/session-hooks.toml`, reviewed and trusted in the client; prompt checks, pre-tool denial and post-tool block | A direct `codex` launch does not install this profile. Version and enabled hooks must be checked in that session. Specialized/hosted tools can bypass the local function-tool hook path. |
 | Perplexity Computer | Restricted service access and external custody | No compatible custom pre/post-tool contract has been verified. A policy file or command wrapper is not an enforced hook. |
 | Grok Bot | Restricted service access and external custody; see [Grok Bot](clients/grok-bot.md) | Enterprise inference hooks are separate, optional model-input checks. They do not prevent a tool action that has already run. |
@@ -354,7 +378,9 @@ the module that holds the MCP boundary's detector, so the shapes and wordlist
 are shared. Hook content is shell, file and prompt text rather than a
 structured MCP payload, so its rules are stricter than the MCP argument rules:
 every string and number is checked for any 64-hex value (with or without
-`0x`), any run of 12 BIP-39 words and any XRPL seed shape, including nested
+`0x`), any integer key, any XRPL seed shape and any recovery phrase under the
+argument rule above (below a secret-named field, any run of 12 BIP-39 words),
+including nested
 JSON, serialized MCP text, structured results, stdout, stderr and errors. JSON
 text with duplicate keys is scanned as plain text, and other JSON text is also
 scanned raw with exempted values removed. Label words in free text, such as
@@ -365,9 +391,19 @@ or `eth_getTransactionReceipt` request whose call names `https://mainnet.base.or
 or `https://sepolia.base.org` in a URL or endpoint field. Tool output and errors
 also allow a line holding only a hash label and one hash
 (`Transaction hash: 0x...`), and MCP tool results also allow the whole value of
-a public transaction, block or digest hash field. A secret-named ancestor
-removes every exemption. Content mislabeled as public data, images, arbitrary
+a public transaction, block or digest hash field. The JSON-RPC exemption applies
+only to the request that is the endpoint object itself, one of its field values
+or an element of a batch list there, never to a request nested deeper. A
+secret-named ancestor removes every exemption. The string values of the whole
+content are also joined and checked for a phrase spread across them. Content mislabeled as public data, images, arbitrary
 encodings and specialized tool paths are outside this heuristic.
+
+Tool output or an error larger than 1 MiB, or too deeply nested to walk, gets a
+linear scan of its serialized text instead, with no exemptions. Input larger
+than 8 MiB is not scanned. When a check cannot complete (unreadable or oversize
+input, a missing detector, a traversal limit on input or any other error), the
+tool call is denied, the prompt is blocked, tool output is withheld and a tool
+error gets a block reason; a failed check never stops the session.
 
 Pre-tool checks deny known export commands, reveal URLs and custody file access.
 They are not a shell sandbox: renamed scripts, aliases or arbitrary code can

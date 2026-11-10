@@ -216,3 +216,33 @@ def test_large_uint256_quote_keeps_integer_precision():
     denominator = 10_000 * 1000
     expected = (numerator + denominator - 1) // denominator
     assert ti.minimum_return(quoted, .002, routing_fee_bps=25) == expected
+
+
+GWEI = 10**9
+
+
+def polygon_payload(**overrides):
+    # Polygon PoS: a 25-30 gwei minimum tip and Markets' maxFeePerGas of
+    # 2 * baseFee + tip put ordinary swaps well above the default 100 gwei cap.
+    fields = dict(chainId=137, gas=400_000, maxFeePerGas=150 * GWEI, maxPriorityFeePerGas=30 * GWEI)
+    return payload(**{**fields, **overrides})
+
+
+def test_ordinary_polygon_swap_fits_the_polygon_fee_policy():
+    normalized = ti.validate_transaction(polygon_payload(), swap_intent(chain_id=137), WALLET, 137)
+    assert normalized["chainId"] == 137 and normalized["maxFeePerGas"] == 150 * GWEI
+
+
+@pytest.mark.parametrize("changes", [
+    {"maxFeePerGas": 5_000 * GWEI},
+    {"gas": 2_000_000, "maxFeePerGas": 1_500 * GWEI},
+])
+def test_polygon_fee_policy_still_refuses_absurd_fees(changes):
+    with pytest.raises(SigningError, match="gas fee"):
+        ti.validate_transaction(polygon_payload(**changes), swap_intent(chain_id=137), WALLET, 137)
+
+
+def test_polygon_fee_policy_does_not_widen_other_chains():
+    tx = polygon_payload(chainId=1)
+    with pytest.raises(SigningError, match="gas fee"):
+        ti.validate_transaction(tx, swap_intent(chain_id=1), WALLET, 1)

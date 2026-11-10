@@ -301,7 +301,7 @@ These controls are enforced in the agent, independent of the AI client.
 - **Strict signing.** Transaction ABI and immutable intent bind chain, token, router, executor, amount, output floor, recipient, value and fees. New delegation/auth-list signing and unreviewed selectors/chains fail closed. x402, SIWX and marketplace proofs retain separate guarded structures, validity and approval controls. Migration does not revoke already released signatures or recover trust in a copied key.
 - **Secret guard at the MCP boundary.** Every tool call is checked before it runs: a private
   key (64 hex characters, with or without `0x`) in a key-named field, in `vault_token` or
-  inside free text, a recovery phrase with a valid BIP-39 checksum, or an XRPL seed is refused
+  inside free text, a recovery phrase (also with a mistyped word), or an XRPL seed is refused
   without calling the tool or upstream. A result with a secret in a key-named field is
   withheld. `server/src/shared/secret_guard.py` is the only detector; the Claude Code
   and Codex hooks call its stricter hook-content scan. See [guardrails across clients](clients.md#guardrails-across-clients).

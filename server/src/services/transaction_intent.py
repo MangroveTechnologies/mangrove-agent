@@ -4,6 +4,19 @@ This validator has no wallet/database/key access and runs again in custody.
 Router addresses alone do not authorize a call. Only canonical approve and
 generic swap ABI encodings whose effects match the operation are supported.
 Optimized pool routes need a separate, independently verified pool adapter.
+
+Trusted input from MangroveMarkets: token metadata. When an order names a
+token by symbol, its contract address comes from Markets token search, and the
+decimals that turn a human amount into base units come from Markets token info
+or search. A wrong address or decimals value from Markets produces a
+consistent but wrong intent, which this validator cannot detect. Locally, the
+callers refuse ambiguous symbol matches and quotes that change the requested
+assets, chain or base-unit amount, and this module checks that every signed
+transaction matches the intent: chain, wallet, reviewed router, input and
+output addresses, exact amount and approval amount, a minimum output derived
+from the quote and the slippage cap, recipient, native value, and per-chain
+gas bounds. The quote's price is also Markets data; the minimum output bounds
+slippage relative to that quote, not to an independent price source.
 """
 from __future__ import annotations
 
@@ -25,8 +38,14 @@ SUPPORTED_CHAINS = frozenset({1, 10, 56, 100, 137, 8453, 42161, 43114, 59144})
 NATIVE_TOKEN = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 ZERO_ADDRESS = "0x" + "00" * 20
 MAX_GAS = 2_000_000
-MAX_GAS_PRICE = 100_000_000_000
-MAX_TOTAL_FEE = 20_000_000_000_000_000
+_GWEI = 10**9
+# Fee bounds in each chain's native token: (max gas price, max gas * price).
+# The default suits chains whose native token trades near or above ETH-class
+# prices. Polygon PoS enforces a 25-30 gwei minimum tip and Markets sets
+# maxFeePerGas to 2 * baseFee + tip, so ordinary swaps there exceed 100 gwei
+# while POL fees stay small; its bound is 2,000 gwei and 2 POL.
+DEFAULT_FEE_POLICY = (100 * _GWEI, 20_000_000_000_000_000)
+CHAIN_FEE_POLICY = {137: (2_000 * _GWEI, 2 * 10**18)}
 MAX_CALLDATA_BYTES = 131_072
 # Current Markets Classic Swap partner fee (0.25%), separately authorized from
 # price slippage. Its quote adapter returns gross output, while prepare_swap
@@ -297,7 +316,8 @@ def validate_transaction(
         if price == 0 or tx["maxPriorityFeePerGas"] > price:
             raise SigningError("Invalid EIP-1559 gas price bounds.")
         tx["type"] = 2
-    if tx["gas"] > MAX_GAS or price > MAX_GAS_PRICE or tx["gas"] * price > MAX_TOTAL_FEE:
+    max_price, max_fee = CHAIN_FEE_POLICY.get(intent.chain_id, DEFAULT_FEE_POLICY)
+    if tx["gas"] > MAX_GAS or price > max_price or tx["gas"] * price > max_fee:
         raise SigningError("Transaction exceeds the maximum gas fee policy.")
     if isinstance(intent, ApprovalIntent):
         if address(tx["to"]) != address(intent.token_address) or tx["value"] != 0:
