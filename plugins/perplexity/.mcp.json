@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mangroveai": {
+      "type": "streamable-http",
+      "url": "https://api.mangrovedeveloper.ai/mcp/connect"
+    }
+  }
+}

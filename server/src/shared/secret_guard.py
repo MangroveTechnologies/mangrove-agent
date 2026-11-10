@@ -12,56 +12,113 @@ Secret shapes:
   prefix. ``wallet_manager.import_wallet`` accepts both forms, and the bare
   form is what MetaMask's "Show private key" displays.
 - BIP-39 recovery phrase: consecutive words from the English BIP-39 list,
-  read from ``eth_account`` (a runtime dependency, present in the Docker image).
-  When ``eth_account`` is not importable, as under the system ``python3`` that
-  runs the Claude hook, the identical repository copy
-  ``.claude/hooks/bip39-english.txt`` is read instead.
+  read from the repository copy ``.claude/hooks/bip39-english.txt`` when it is
+  present, so the client hooks start without importing ``eth_account``, and
+  otherwise from ``eth_account`` (a runtime dependency, present in the Docker
+  image, which excludes ``.claude/``). A test keeps the two lists identical.
 - XRPL family seed: ``s`` followed by 28 base58 characters (``sEd`` for Ed25519).
+- EVM private key as an integer: a JSON integer, or a run of 58 to 78 decimal
+  digits, whose value is a valid secp256k1 scalar of at least 2**192. Token
+  amounts stay far below that bound (10**30 is 1e12 tokens at 18 decimals),
+  and an unlimited approval (2**256 - 1) is above the curve order.
 
 Field names are normalized before matching: lowercased, with every character
 other than a letter or digit removed, so ``privateKey``, ``PRIVATE_KEY``,
 ``private-key`` and ``private_key`` are the same field. A field is key-named
-when its normalized name is in ``KEY_FIELD_NAMES`` or contains one of
-``KEY_FIELD_MARKERS``.
+when its normalized name is in ``KEY_FIELD_NAMES``, contains one of
+``KEY_FIELD_MARKERS``, or has a name segment in ``KEY_FIELD_SEGMENTS``
+(``order_seed``, ``seedHex``). Segments are the snake, kebab and camel case
+parts of the name.
 
 Arguments (``find_in_arguments``):
 
 1. A key-named field, or ``vault_token``, is refused when its value holds any
    secret shape: 64 hex characters with or without ``0x``, a run of 12 or more
-   BIP-39 words (no checksum needed), or an XRPL seed. A vault token is a
-   22-character URL-safe handle, so a key-shaped one is a pasted secret.
-2. Any string is refused when it holds an XRPL seed, or a 12, 15, 18, 21 or
-   24-word window of BIP-39 words with a valid BIP-39 checksum. Words are the
-   letter runs of the text, so a phrase separated by spaces, commas, hyphens,
-   newlines or list numbers (``1. word 2. word``) is found. The checksum
-   keeps strategy prose made of wordlist words (``price above average``) from
-   being refused; such a run still has about a 1 in 16 chance per 12-word
-   window of passing it.
+   BIP-39 words (no checksum needed), an XRPL seed, or an integer key. A vault
+   token is a 22-character URL-safe handle, so a key-shaped one is a pasted
+   secret.
+2. Any string is refused when it holds an XRPL seed or a recovery phrase
+   (``has_recovery_phrase``): a window of 12, 15, 18, 21 or 24 consecutive
+   BIP-39 words that has a valid BIP-39 checksum, or that is not in
+   alphabetical order and repeats no word (12 or 15 words) or at most one
+   word (18 to 24 words). A phrase with a mistyped word or a bad checksum is
+   therefore still refused, and a checksum-valid phrase is refused whatever
+   its order or repeats. Words are the letter runs of the text, so a phrase
+   separated by spaces, commas, hyphens, newlines or list numbers (``1. word
+   2. word``) is found, also with other wordlist words around it. Words
+   joined by an underscore or a case change (``word_word``, ``wordWord``)
+   also form runs, but a window that crosses such a join counts only with a
+   valid checksum and at most one repeated word in four, so ``snake_case`` and
+   ``camelCase`` identifiers do not count. A phrase written with no separator
+   at all between its words (``abandonability...``) is found when a run of
+   36 or more ASCII letters that is not made only of the hex letters a-f
+   holds a stretch that splits into 12 or more consecutive wordlist words
+   (``_concatenated_phrase``, one linear pass, case-insensitive, no
+   checksum), whatever letters, digits or other characters surround it.
+   Digits, other characters and non-ASCII letters end a run, and no run is
+   skipped for its length. A stretch whose words are camelCase or
+   PascalCase tokens, apart from at most two at its ends, is left to the
+   case-split reading above, which requires the checksum, so long
+   identifiers do not count.
+   This scan catches accidental exposure of secrets in ordinary text; it is
+   not the boundary that keeps wallet secrets out of reach of the agent. Text
+   that is not ASCII is NFKC-normalized and read with invisible characters
+   both removed and as spaces. The string values of the arguments are also
+   joined in order and scanned the same way, which finds a phrase passed as
+   a list of words or split across fields. Strategy prose made of
+   wordlist words repeats them (``price above average, volume above
+   average``), so it counts only when one of its windows happens to pass the
+   checksum (about 1 in 16 per 12-word window). An excerpt of the wordlist
+   itself (consecutive wordlist entries) is not counted. A phrase with a wrong
+   word is missed only when it also repeats a word: about 3% of 12-word and
+   5% of 15-word phrases, under 1% from 18 words. One call evaluates at most
+   ``_WINDOW_BUDGET`` window starts and checksums, each charged before it is
+   evaluated (a window start covers at most 24 words); text needing more is
+   refused as a possible phrase. The scan is therefore linear in the input
+   size with a fixed cap on window work, and fails closed at the cap. The
+   no-separator pass is linear without a cap, at most six word lookups per
+   letter.
 3. Any other string is refused when it holds 64 hex characters, with or
    without ``0x``, embedded in text (``"import my wallet 0x..."``) or anywhere
    in a free-text field (``PROSE_FIELD_NAMES``, such as ``query`` or
    ``description``). Because 32-byte identifiers have the same shape, a value
-   passes when its field is named for a hash or identifier (the normalized
-   name contains ``hash``, ``digest`` or ``txid``, or ends in ``id``), when it
-   is the whole value of a field that is not free text (a transaction hash,
-   definition or config hash, order id or sha256 digest), or when one of the
-   three words before it labels it as a hash (``tx``, ``transaction``,
-   ``hash``, ``block``, ``digest``, ``order`` and similar, ``_HASH_WORDS``).
+   passes when its field is named for a hash or identifier (a name segment in
+   ``_IDENTIFIER_SEGMENTS`` or a normalized name in ``_HASH_WORDS``, and no
+   key-named part), when it is the whole value of a field that is not free
+   text (a transaction hash, definition or config hash, order id or sha256
+   digest), or when one of the three words before it labels it as a hash
+   (``tx``, ``transaction``, ``hash``, ``block``, ``digest``, ``order`` and
+   similar, ``_HASH_WORDS``) and none of them is a key word such as ``key``
+   or ``seed``. Integer keys follow the same rules, except that a whole
+   decimal value is refused unless its field is an identifier.
+4. A string that parses as JSON is walked as a structure and also scanned as
+   raw text: a key-named field whose raw value is a secret shape, which the
+   parser can hide behind a later duplicate key, and any 64-hex or integer key
+   in the text that is not one of the parsed string values (a key used as an
+   object key, for example), unless it is labelled as a hash.
 
 Results (``find_in_result``): only key-named fields count, because results
 routinely carry transaction hashes. JSON carried as text content is parsed
-and walked. Other text that names a key field (quoted with ``"`` or ``'``) is
-withheld when the field's value is key-shaped, when a ``0x`` key appears
-anywhere in it without a hash label, or when it also holds a 12-word run or
-an XRPL seed.
+and walked, and its raw text is then scanned like any other text. Text that
+names a key field (quoted with ``"`` or ``'``) is withheld when the field's
+raw value is a secret shape, when a ``0x`` key appears anywhere in it without
+a hash label and is not the value of a field named exactly as a public hash
+(``approval_tx``, ``tx_hash``; ``_ATTRIBUTED_HASH_FIELDS``), or when it also
+holds an XRPL seed or a recovery phrase (rule 2).
+
+Errors (``redact_error``): an error message has every argument value it
+repeats removed, and is withheld when what remains holds a secret shape.
 
 Client hooks (``scan_hook_content``): ``scripts/wallet_secret_guard.py``
 adapts this module to Claude Code and Codex hook events. Hook content (prompts,
 shell and file tool input, stdout, stderr, errors) is not a structured MCP
 payload, so it gets a strict, shape-preserving scan with the same secret
-shapes and wordlist: every string and number is checked with ``find_in_text``
-(any 64-hex value, any 12-word BIP-39 run, any XRPL seed), and dictionary keys
-are checked too. A string that parses as JSON (duplicate keys refused) is
+shapes and wordlist: every string and number is checked for any 64-hex value,
+integer key or XRPL seed, and for a recovery phrase by rule 2 of the argument
+scan (``has_recovery_phrase``); below a key-named field any 12-word run counts,
+as in ``find_in_text``. Dictionary keys are checked too, and the string values
+of the whole content are joined and checked for a phrase spread across them
+(``phrase_across_values``). A string that parses as JSON (duplicate keys refused) is
 scanned parsed and again as raw text with exempted values removed, so a parser
 difference fails closed. A key-named ancestor removes every exemption. The
 only exemptions are:
@@ -69,20 +126,28 @@ only exemptions are:
 - an exact HTTPS ``/tx/0x...`` link with no query or fragment on an
   allowlisted explorer host, in a ``url``-like field;
 - the single hash argument of a strict JSON-RPC 2.0 ``eth_getTransactionByHash``
-  or ``eth_getTransactionReceipt`` request, only below a dictionary whose
-  ``url`` or ``endpoint`` field is an allowlisted RPC host;
+  or ``eth_getTransactionReceipt`` request that is the dictionary naming an
+  allowlisted RPC host in its ``url`` or ``endpoint`` field, one of that
+  dictionary's field values (a dictionary or JSON text), or an element of a
+  batch list there; a request nested deeper gets no exemption;
 - tool output and errors: a line holding only a hash label and one 64-hex
   value (``Transaction hash: 0x...``), with spaces or tabs only;
 - structured MCP tool results: a 64-hex value that is the whole value of a
   public-hash field (``tx_hash``, ``block_hash``, ``sha256`` and similar).
 
 Label words in free text never exempt a value in hook content.
+
+``hook_raw_text_hit`` is the linear fallback for hook content too large or too
+deeply nested to walk: it scans serialized JSON text, with escapes read as
+spaces, for the same shapes, and checks the raw value of every key-named field.
+It allows none of the exemptions above.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import re
+import unicodedata
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
@@ -100,17 +165,45 @@ LABELS = {
 }
 
 _HEX_KEY_RE = re.compile(r"(?<![0-9A-Za-z])(?:0[xX])?[0-9a-fA-F]{64}(?![0-9A-Za-z])")
+_DECIMAL_KEY_RE = re.compile(r"(?<![0-9A-Za-z.])[0-9]{58,78}(?![0-9A-Za-z.])")
 _XRPL_SEED_RE = re.compile(
     r"(?<![a-zA-Z0-9])s(?:Ed[1-9A-HJ-NP-Za-km-z]{28}|[1-9A-HJ-NP-Za-km-z]{28})(?![a-zA-Z0-9])"
 )
 _WORD_RE = re.compile(r"[a-z]+")
+# A place where the case-split reading differs from the plain one.
+_CASE_CHANGE_RE = re.compile(r"[a-z][A-Z]|[A-Z][A-Z][a-z]")
+# Letter runs, split at lower-to-upper case changes (``inputToken`` is two words).
+_CASED_WORD_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])")
+# Characters that render as nothing; a phrase may carry them inside or between words.
+_INVISIBLE_RE = re.compile("[\u00ad\u180e\u200b-\u200f\u2060-\u2064\ufeff]")
+_LETTERS_RE = re.compile(r"[A-Za-z]+")
+_MIN_WORD, _MAX_WORD = 3, 8
+_LETTER_RUN_RE = re.compile(r"[A-Za-z]{36,}")  # 12 words of at least 3 letters
+_NON_HEX_LETTER_RE = re.compile(r"[g-z]")
 _NAME_RE = re.compile(r"[A-Za-z0-9_]+")
 _NORMALIZE_RE = re.compile(r"[^a-z0-9]")
+_SEGMENT_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 _QUOTED_FIELD_RE = re.compile(r"""["']([A-Za-z0-9_\-]{1,64})["']\s*[:=]""")
 _VALUE_PREFIX_RE = re.compile(r"""[\s"'{\[]*""")
 _PREFIXED_KEY_RE = re.compile(r"(?<![0-9A-Za-z])0[xX][0-9a-fA-F]{64}(?![0-9A-Za-z])")
+_ATTRIBUTED_RE = re.compile(r"""["']([A-Za-z0-9_\-]{1,64})["']\s*[:=]\s*["']?\s*$""")
 _MNEMONIC_RUN = 12
 _MNEMONIC_LENGTHS = (12, 15, 18, 21, 24)
+_MNEMONIC_LENGTH_SET = frozenset(_MNEMONIC_LENGTHS)
+# Repeated words a recovery-phrase window may hold without a valid checksum,
+# for 12-15 and for 18-24 words.
+_PLAIN_REPEATS_SHORT, _PLAIN_REPEATS_LONG = 0, 1
+# secp256k1 group order; a private key is an integer in [1, n).
+_SECP256K1_N = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
+# Smallest integer treated as a key. A random key is below it with probability 2**-64.
+_MIN_INT_KEY = 1 << 192
+# Characters read before a match for hash labels, and before a 0x value for its field name.
+_LOOKBACK_CHARS = 256
+_ATTRIBUTION_CHARS = 80
+# Window starts and checksums one scan may evaluate before refusing the text as a possible phrase.
+_WINDOW_BUDGET = 50_000
+# Longest error message scanned and returned by redact_error.
+_ERROR_CHARS = 4000
 
 # Normalized field names that carry key material.
 KEY_FIELD_NAMES = frozenset({
@@ -124,6 +217,8 @@ KEY_FIELD_MARKERS = (
     "privatekey", "privkey", "secretkey", "seedphrase", "mnemonic",
     "recoveryphrase", "walletsecret", "masterkey", "signingkey",
 )
+# A field name with one of these segments is also key-named, for example ``order_seed``.
+KEY_FIELD_SEGMENTS = frozenset({"seed", "secret", "mnemonic", "privkey", "passphrase"})
 # Key-named in tool arguments only: import_wallet takes the vault token there.
 _ARGUMENT_KEY_FIELDS = frozenset({"vaulttoken"})
 # Normalized free-text argument fields; a 64-hex value here is never an identifier.
@@ -137,35 +232,70 @@ _HASH_WORDS = frozenset({
     "blockhash", "block", "digest", "sha256", "checksum", "receipt", "order",
     "orderid", "orderhash", "id", "definitionhash", "confighash",
 })
+# Field name segments that name a hash or identifier.
+_IDENTIFIER_SEGMENTS = frozenset({"hash", "digest", "txid", "txhash", "id", "ids", "tx", "txn", "checksum", "sha"})
+# Normalized field names whose 0x value in result text is a public hash (exact match only).
+_ATTRIBUTED_HASH_FIELDS = _HASH_WORDS | frozenset({
+    "approvaltx", "approvaltxhash", "swaptx", "swaptxhash", "lasttx", "lasttxhash",
+    "sourceconfighash", "codehash", "requesthash", "contractdigest",
+})
+# Normalized words that, among the words before a value, cancel a hash label.
+# ``key`` alone is excluded because exchange asset keys (``"key": "XXBT"``) are common.
+_KEY_CONTEXT_WORDS = frozenset({"private", "privatekey", "privkey", "secret", "secretkey", "seed",
+                                "seedphrase", "mnemonic", "recoveryphrase", "signingkey", "masterkey"})
 _HASH_CONTEXT_WORDS = 3
+_KEY_CONTEXT_SPAN = 5
 
 
 def normalize_field(name: str) -> str:
     return _NORMALIZE_RE.sub("", name.lower())
 
 
+def _segments(name: str) -> list[str]:
+    return [part.lower() for part in _SEGMENT_RE.findall(name)]
+
+
+@lru_cache(maxsize=4096)
 def is_key_field(name: str | None, *, arguments: bool = False) -> bool:
-    """True when a field name, after normalization, names key material."""
+    """True when a field name, after normalization or by one of its segments, names key material."""
     if name is None:
         return False
     norm = normalize_field(name)
     if norm in KEY_FIELD_NAMES or (arguments and norm in _ARGUMENT_KEY_FIELDS):
         return True
-    return any(marker in norm for marker in KEY_FIELD_MARKERS)
+    if any(marker in norm for marker in KEY_FIELD_MARKERS):
+        return True
+    return any(segment in KEY_FIELD_SEGMENTS for segment in _segments(name))
 
 
-def _is_identifier_field(norm: str) -> bool:
-    return "hash" in norm or "digest" in norm or "txid" in norm or norm.endswith("id")
+@lru_cache(maxsize=4096)
+def _is_identifier_field(name: str) -> bool:
+    """A field named for a hash or identifier, with no key-named part."""
+    if is_key_field(name, arguments=True):
+        return False
+    if normalize_field(name) in _HASH_WORDS:
+        return True
+    return any(segment in _IDENTIFIER_SEGMENTS for segment in _segments(name))
+
+
+def _is_int_key(value: int) -> bool:
+    return _MIN_INT_KEY <= value < _SECP256K1_N
+
+
+def _decimal_keys(text: str):
+    for match in _DECIMAL_KEY_RE.finditer(text):
+        if _is_int_key(int(match.group(0))):
+            yield match
 
 
 _REPOSITORY_WORDLIST = Path(__file__).resolve().parents[3] / ".claude" / "hooks" / "bip39-english.txt"
 
 
 def _wordlist_text() -> str:
-    try:
-        return (resources.files("eth_account.hdaccount") / "wordlist" / "english.txt").read_text("utf-8")
-    except ModuleNotFoundError:
+    """The repository copy when present (the hooks then never import ``eth_account``), else ``eth_account``'s."""
+    if _REPOSITORY_WORDLIST.is_file():
         return _REPOSITORY_WORDLIST.read_text("utf-8")
+    return (resources.files("eth_account.hdaccount") / "wordlist" / "english.txt").read_text("utf-8")
 
 
 @lru_cache(maxsize=1)
@@ -186,10 +316,18 @@ def _bip39_index() -> dict[str, int]:
     return {word: position for position, word in enumerate(_bip39_list())}
 
 
+def _checksum_matches(value: int, count: int) -> bool:
+    """``value`` packs ``count`` 11-bit word indexes; True when its checksum bits are correct."""
+    checksum_bits = count // 3
+    entropy = (value >> checksum_bits).to_bytes((count * 11 - checksum_bits) // 8, "big")
+    expected = hashlib.sha256(entropy).digest()[0] >> (8 - checksum_bits)
+    return expected == value & ((1 << checksum_bits) - 1)
+
+
 def bip39_checksum_valid(words: list[str] | tuple[str, ...]) -> bool:
     """True when ``words`` is an English BIP-39 phrase of 12-24 words with a valid checksum."""
     count = len(words)
-    if count not in _MNEMONIC_LENGTHS:
+    if count not in _MNEMONIC_LENGTH_SET:
         return False
     index = _bip39_index()
     value = 0
@@ -198,10 +336,7 @@ def bip39_checksum_valid(words: list[str] | tuple[str, ...]) -> bool:
         if position is None:
             return False
         value = (value << 11) | position
-    checksum_bits = count // 3
-    entropy = (value >> checksum_bits).to_bytes((count * 11 - checksum_bits) // 8, "big")
-    expected = hashlib.sha256(entropy).digest()[0] >> (8 - checksum_bits)
-    return expected == value & ((1 << checksum_bits) - 1)
+    return _checksum_matches(value, count)
 
 
 def _word_runs(text: str) -> list[list[str]]:
@@ -221,30 +356,241 @@ def _word_runs(text: str) -> list[list[str]]:
     return runs
 
 
+def _text_variants(text: str) -> list[str]:
+    """``text`` as scanned for phrases: ASCII text as is; other text NFKC-normalized
+    (fullwidth letters become ASCII), once with invisible characters removed and
+    once with them read as spaces."""
+    if text.isascii():
+        return [text]
+    normalized = unicodedata.normalize("NFKC", text)
+    if not _INVISIBLE_RE.search(normalized):
+        return [normalized]
+    return [_INVISIBLE_RE.sub("", normalized), _INVISIBLE_RE.sub(" ", normalized)]
+
+
 def has_mnemonic(text: str) -> bool:
     """A run of at least 12 BIP-39 words; no checksum (the hook's rule)."""
-    return any(len(run) >= _MNEMONIC_RUN for run in _word_runs(text))
+    return any(len(run) >= _MNEMONIC_RUN for variant in _text_variants(text) for run in _word_runs(variant))
 
 
-def has_valid_mnemonic(text: str) -> bool:
-    """A 12, 15, 18, 21 or 24-word window of BIP-39 words with a valid checksum.
+def _phrase_runs(text: str, *, case_split: bool):
+    """Runs of BIP-39 words as (words, joined) pairs.
 
-    Words are the letter runs of the lowercased text, so spaces, commas,
-    hyphens, newlines and list numbers all separate words without ending a run.
+    Without ``case_split``, words are the letter runs of the lowercased text,
+    whatever their case (``aBaNdOn`` is ``abandon``). With it, a letter run is
+    also split where a lowercase letter meets an uppercase one (``wordWord``).
+    ``joined[i]`` is True when word ``i`` meets the word before it without a
+    plain separator: across an underscore (``word_word``) or at a case change.
+    Any other non-letter text separates words without ending the run; a
+    non-wordlist word ends it.
     """
-    for run in _word_runs(text):
-        for length in _MNEMONIC_LENGTHS:
-            for start in range(len(run) - length + 1):
-                if bip39_checksum_valid(run[start:start + length]):
-                    return True
+    words = bip39_words()
+    run: list[str] = []
+    joined: list[bool] = []
+    end = 0
+    if not case_split:
+        text = text.lower()
+    for match in (_CASED_WORD_RE if case_split else _WORD_RE).finditer(text):
+        token = match.group(0).lower()
+        gap_joined = match.start() == end or "_" in text[end:match.start()]
+        end = match.end()
+        if token in words:
+            joined.append(bool(run) and gap_joined)
+            run.append(token)
+            continue
+        if len(run) >= _MNEMONIC_RUN:
+            yield run, joined
+        run, joined = [], []
+    if len(run) >= _MNEMONIC_RUN:
+        yield run, joined
+
+
+def _has_long_run(tokens: list[str]) -> bool:
+    """At least 12 consecutive tokens are BIP-39 words."""
+    words = bip39_words()
+    count = 0
+    for token in tokens:
+        if token in words:
+            count += 1
+            if count >= _MNEMONIC_RUN:
+                return True
+        else:
+            count = 0
     return False
+
+
+def _readings(text: str):
+    """(variant, case_split) pairs worth scanning for a phrase.
+
+    The case-split reading is skipped when the variant has no case change
+    inside a letter run (both readings are then the same), and a reading is
+    skipped when it has no run of 12 wordlist words.
+    """
+    for variant in _text_variants(text):
+        lowered = variant.lower()
+        if _has_long_run(_WORD_RE.findall(lowered)):
+            yield variant, False
+        if _CASE_CHANGE_RE.search(variant) and _has_long_run(
+                " ".join(_CASED_WORD_RE.findall(variant)).lower().split()):
+            yield variant, True
+
+
+def has_recovery_phrase(text: str, budget: list[int] | None = None) -> bool:
+    """A window of BIP-39 words that reads as a recovery phrase (rule 2 in the module docstring).
+
+    The text is read twice: case-insensitively, and split at case changes as
+    well. Every window of 12, 15, 18, 21 or 24 words is checked by
+    ``_run_has_phrase``, and every long letter run by ``_concatenated_phrase``.
+    ``budget`` holds the number of window starts and checksums the caller may
+    still evaluate; each is charged before it is evaluated, and when the
+    budget runs out the text is reported as a phrase.
+    """
+    remaining = budget if budget is not None else [_WINDOW_BUDGET]
+    for variant, case_split in _readings(text):
+        for run, joined in _phrase_runs(variant, case_split=case_split):
+            if _run_has_phrase(run, joined, remaining):
+                return True
+    return any(_concatenated_phrase(variant) for variant in _text_variants(text))
+
+
+@lru_cache(maxsize=1)
+def _bip39_starts() -> frozenset[str]:
+    """The first three letters of every wordlist word (every word has at least three)."""
+    return frozenset(word[:3] for word in _bip39_list())
+
+
+# Words in a no-separator chain that must not be whole case tokens. The first and last
+# words of a camelCase stretch can be a suffix or prefix of a token, so two are not enough.
+_UNALIGNED_WORDS = 3
+
+
+def _concatenated_phrase(text: str) -> bool:
+    """A letter run holding 12 or more consecutive BIP-39 words with no separator.
+
+    Finds a phrase written with no separator between its words
+    (``abandonabilityable...``), in any case, with any letters around it.
+    Each run of 36 or more ASCII letters (``_LETTER_RUN_RE``) that is not made
+    only of the hex letters a-f (after the ``x`` of a ``0x`` prefix) is read
+    once, left to right, trying the six word lengths 3 to 8 at each position.
+    A word that is exactly one
+    ``_CASED_WORD_RE`` token of the run (``Token`` in ``inputToken``) is a
+    case token. ``chains[k][i]`` is the longest chain of words ending at
+    letter ``i`` that holds ``k`` words that are not case tokens (``k``
+    capped at ``_UNALIGNED_WORDS``); it is 0 where no such chain ends, so a
+    chain restarts after letters that are not words. A chain of 12 words
+    counts only with at least ``_UNALIGNED_WORDS`` such words: a stretch of
+    case tokens is a camelCase or PascalCase run, which the case-split
+    reading checks with the checksum, so identifiers such as
+    ``inputTokenOutputAmount...`` do not count, while all-lowercase,
+    all-uppercase, alternating-case and inner-capital runs do. No checksum is
+    used here, and the cost is linear in the text size.
+    """
+    words, starts = bip39_words(), _bip39_starts()
+    top = _UNALIGNED_WORDS
+    for match in _LETTER_RUN_RE.finditer(text):
+        run = match.group(0)
+        letters = run.lower()
+        if not _NON_HEX_LETTER_RE.search(letters[1:] if letters[0] == "x" else letters):
+            continue  # hex, including the x of a 0x prefix
+        token_end = {token.start(): token.end() for token in _CASED_WORD_RE.finditer(run)}
+        size = len(letters)
+        chains = [bytearray(size + 1) for _ in range(top + 1)]
+        for start in range(size - _MIN_WORD + 1):
+            if letters[start:start + _MIN_WORD] not in starts:
+                continue
+            before = [chain[start] for chain in chains]
+            for end in range(start + _MIN_WORD, min(start + _MAX_WORD, size) + 1):
+                if letters[start:end] not in words:
+                    continue
+                aligned = token_end.get(start) == end
+                for unaligned in range(top + 1):
+                    length = before[unaligned]
+                    if unaligned and not length:
+                        continue  # no chain with this many unaligned words ends at start
+                    target = unaligned if aligned else min(unaligned + 1, top)
+                    count = min(length + 1, 255)
+                    if target == top and count >= _MNEMONIC_RUN:
+                        return True
+                    if count > chains[target][end]:
+                        chains[target][end] = count
+    return False
+
+
+def _run_has_phrase(run: list[str], joined: list[bool], remaining: list[int]) -> bool:
+    """A window of ``run`` that counts as a recovery phrase.
+
+    Every window of 12, 15, 18, 21 or 24 words is checked, except an excerpt
+    of the wordlist itself (consecutive wordlist entries). A window counts when
+    its checksum is valid, or when it is not in alphabetical order and repeats
+    no word (12 or 15 words) or at most one (18 to 24 words). A window that
+    crosses a join (``joined[i]`` for a word after the first) counts only with
+    a valid checksum and at most one repeated word in four.
+    """
+    index = _bip39_index()
+    longest = _MNEMONIC_LENGTHS[-1]
+    positions = [index[word] for word in run]
+    for start in range(len(positions) - _MNEMONIC_RUN + 1):
+        remaining[0] -= 1
+        if remaining[0] < 0:
+            return True  # budget spent: fail closed
+        value, previous, repeats = 0, -1, 0
+        ascending = consecutive = True
+        crossing = False
+        seen: set[int] = set()
+        for count, position in enumerate(positions[start:start + longest], 1):
+            value = (value << 11) | position
+            if position in seen:
+                repeats += 1
+            seen.add(position)
+            ascending = ascending and position > previous
+            consecutive = consecutive and (previous < 0 or position == previous + 1)
+            crossing = crossing or (count > 1 and joined[start + count - 1])
+            previous = position
+            if crossing and repeats > longest // 4:
+                break  # no longer window from this start can count
+            if count not in _MNEMONIC_LENGTH_SET or consecutive:
+                continue
+            limit = _PLAIN_REPEATS_SHORT if count <= 15 else _PLAIN_REPEATS_LONG
+            if not crossing and not ascending and repeats <= limit:
+                return True
+            if crossing and repeats > count // 4:
+                continue
+            remaining[0] -= 1
+            if remaining[0] < 0 or _checksum_matches(value, count):
+                return True
+    return False
+
+
+def _string_leaves(value: Any):
+    """String values in a structure, in document order (object keys excluded)."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            stack.extend(reversed(list(item.values())))
+        elif isinstance(item, (list, tuple)):
+            stack.extend(reversed(item))
+        elif isinstance(item, str):
+            yield item
+
+
+def phrase_across_values(value: Any, budget: list[int] | None = None) -> bool:
+    """A recovery phrase whose words are spread over several string values.
+
+    The values are joined in document order with an underscore between them,
+    so a window that spans two values counts only with a valid checksum
+    (``has_recovery_phrase``). This finds a phrase passed as a list of words
+    or split across fields.
+    """
+    leaves = list(_string_leaves(value))
+    return len(leaves) > 1 and has_recovery_phrase(" _ ".join(leaves), budget)
 
 
 def find_in_text(text: str) -> str | None:
     """Strict scan of a value that should hold no key material: any secret shape."""
     if _XRPL_SEED_RE.search(text):
         return XRPL_SEED
-    if _HEX_KEY_RE.search(text):
+    if _HEX_KEY_RE.search(text) or next(_decimal_keys(text), None) is not None:
         return EVM_KEY
     if has_mnemonic(text):
         return MNEMONIC
@@ -253,6 +599,10 @@ def find_in_text(text: str) -> str | None:
 
 def _key_value_hit(value: Any) -> str | None:
     """A key-named field holding any secret shape."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return EVM_KEY if _is_int_key(value) else None
     if isinstance(value, str):
         return find_in_text(value)
     if isinstance(value, (dict, list, tuple)):
@@ -271,51 +621,167 @@ def _parse_json_text(text: str) -> Any:
 
 
 def _hash_labelled(text: str, start: int) -> bool:
-    before = _NAME_RE.findall(text[:start])[-_HASH_CONTEXT_WORDS:]
-    return any(normalize_field(word) in _HASH_WORDS for word in before)
+    """One of the three words before ``start`` labels the value as a hash, and no nearby word names a key.
+
+    Only the ``_LOOKBACK_CHARS`` characters before ``start`` are read, so the
+    check costs the same for every match.
+    """
+    window_start = max(0, start - _LOOKBACK_CHARS)
+    words = _NAME_RE.findall(text, window_start, start)
+    if window_start and words and _NAME_RE.match(text, window_start - 1) and _NAME_RE.match(text, window_start):
+        words = words[1:]  # the first word may be cut off by the window
+    if any(_names_a_key(word) for word in words[-_KEY_CONTEXT_SPAN:]):
+        return False
+    return any(normalize_field(word) in _HASH_WORDS for word in words[-_HASH_CONTEXT_WORDS:])
 
 
-def _free_text_hex_hit(text: str, field: str | None) -> str | None:
-    """A 64-hex value in a non-key argument string that is not an identifier."""
-    norm = normalize_field(field) if field is not None else ""
-    if norm and _is_identifier_field(norm):
+@lru_cache(maxsize=8192)
+def _names_a_key(word: str) -> bool:
+    """A word near a value that cancels a hash label: a key word, or a key-named field other than ``key``."""
+    norm = normalize_field(word)
+    return norm in _KEY_CONTEXT_WORDS or (norm not in KEY_FIELD_NAMES and is_key_field(word))
+
+
+def _identifier_attributed(text: str, start: int) -> bool:
+    """The value at ``start`` follows a quoted field named exactly as a public hash (``"approval_tx": "0x..."``)."""
+    match = _ATTRIBUTED_RE.search(text, max(0, start - _ATTRIBUTION_CHARS), start)
+    return bool(match) and normalize_field(match.group(1)) in _ATTRIBUTED_HASH_FIELDS
+
+
+def _free_text_key_hit(text: str, field: str | None) -> str | None:
+    """A 64-hex or integer key in a non-key argument string that is not an identifier."""
+    if field is not None and _is_identifier_field(field):
         return None
-    prose = norm in PROSE_FIELD_NAMES
+    prose = field is not None and normalize_field(field) in PROSE_FIELD_NAMES
     for match in _HEX_KEY_RE.finditer(text):
-        if not prose and text.strip() == match.group(0):
+        if not prose and len(match.group(0)) + 64 > len(text) and text.strip() == match.group(0):
             continue
         if _hash_labelled(text, match.start()):
             continue
         return EVM_KEY
+    for match in _decimal_keys(text):
+        if not _hash_labelled(text, match.start()):
+            return EVM_KEY
     return None
 
 
-def _contextual_text_hit(text: str, *, arguments: bool) -> str | None:
-    """Non-JSON text that names a key field (quoted with ``"`` or ``'``).
+def _phrase_at(text: str, position: int) -> bool:
+    """At least 12 consecutive wordlist words, the first starting at ``position``."""
+    words = bip39_words()
+    first = _LETTERS_RE.match(text, position)
+    if first is None or first.group(0).lower() not in words:
+        return False
+    count = 0
+    for match in _LETTERS_RE.finditer(text, position):
+        if match.group(0).lower() not in words:
+            return False
+        count += 1
+        if count == _MNEMONIC_RUN:
+            return True
+    return False
 
-    Refused when the value after the field name, past whitespace, quotes and
-    opening ``{`` or ``[``, is key-shaped (with or without ``0x``); when a
-    ``0x`` key appears anywhere in the text and is not labelled as a hash; or
-    when the text also holds a 12-word run or an XRPL seed.
-    """
-    named = False
-    for match in _QUOTED_FIELD_RE.finditer(text):
-        if not is_key_field(match.group(1), arguments=arguments):
-            continue
-        named = True
-        rest = text[match.end():]
-        prefix = _VALUE_PREFIX_RE.match(rest)
-        if _HEX_KEY_RE.match(rest, prefix.end() if prefix else 0):
+
+# The start of a hex key, XRPL seed or decimal integer key (checked for range after matching).
+_SECRET_START_RE = re.compile(
+    "(?P<hex>" + _HEX_KEY_RE.pattern + ")|(?P<seed>" + _XRPL_SEED_RE.pattern + ")|(?P<digits>"
+    + _DECIMAL_KEY_RE.pattern + ")")
+
+
+_WORDLIST_SHAPED = r"[A-Za-z]{3,8}(?![A-Za-z])"
+# A quoted field name whose raw value starts with a possible secret: a hex key, XRPL seed,
+# long decimal, or 12 letter runs of wordlist length. The value is a lookahead, so a value
+# never hides the field names inside it from later matches.
+_SECRET_VALUE_FIELD_RE = re.compile(
+    _QUOTED_FIELD_RE.pattern + r"""(?=[\s"'{\[]*(?:""" + _SECRET_START_RE.pattern + "|" + _WORDLIST_SHAPED
+    + r"(?:[^A-Za-z]+" + _WORDLIST_SHAPED + r"){11}))")
+
+
+def _raw_value_hit(text: str, position: int) -> str | None:
+    """The raw value at ``position``, past whitespace, quotes and ``{`` or ``[``, is a secret shape."""
+    prefix = _VALUE_PREFIX_RE.match(text, position)
+    start = prefix.end() if prefix else position
+    shape = _SECRET_START_RE.match(text, start)
+    if shape is not None:
+        if shape.group("hex"):
             return EVM_KEY
+        if shape.group("seed"):
+            return XRPL_SEED
+        if _is_int_key(int(shape.group("digits"))):
+            return EVM_KEY
+    if _phrase_at(text, start):
+        return MNEMONIC
+    return None
+
+
+def _contextual_text_hit(text: str, *, arguments: bool, parsed: bool = False,
+                         shapes_checked: bool = False) -> str | None:
+    """Text that names a key field (quoted with ``"`` or ``'``).
+
+    Refused when the raw value after the field name, past whitespace, quotes
+    and opening ``{`` or ``[``, is a secret shape. Unless ``parsed`` is True,
+    it is also refused when a ``0x`` key appears anywhere in it that is
+    neither labelled as a hash nor the value of a field named exactly as a
+    public hash (``_ATTRIBUTED_HASH_FIELDS``), when it holds an XRPL seed, or
+    when it holds a recovery phrase (``has_recovery_phrase``). Argument scans pass
+    ``parsed=True`` for JSON text because ``_json_text_hit`` applies its own
+    raw-text rules; result scans always apply the text-wide rules.
+    ``shapes_checked`` skips the text-wide seed and phrase checks when the
+    caller has already applied them to the same text.
+    """
+    for match in _SECRET_VALUE_FIELD_RE.finditer(text):
+        if is_key_field(match.group(1), arguments=arguments):
+            hit = _raw_value_hit(text, match.end())
+            if hit:
+                return hit
+    if parsed:
+        return None
+    named = any(is_key_field(match.group(1), arguments=arguments) for match in _QUOTED_FIELD_RE.finditer(text))
     if not named:
         return None
     for match in _PREFIXED_KEY_RE.finditer(text):
-        if not _hash_labelled(text, match.start()):
+        if not _hash_labelled(text, match.start()) and not _identifier_attributed(text, match.start()):
             return EVM_KEY
+    if shapes_checked:
+        return None
     if _XRPL_SEED_RE.search(text):
         return XRPL_SEED
-    if has_mnemonic(text):
+    if has_recovery_phrase(text):
         return MNEMONIC
+    return None
+
+
+def _walked_strings(value: Any):
+    """Every string and integer value and every object key in a parsed JSON value, as text."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key, child in item.items():
+                yield str(key)
+                stack.append(child)
+        elif isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, str):
+            yield item
+        elif isinstance(item, int) and not isinstance(item, bool):
+            yield str(item)
+
+
+def _json_text_hit(text: str, parsed: Any) -> str | None:
+    """Raw-text rules for an argument string that parsed as JSON (rule 4 in the module docstring)."""
+    hit = _contextual_text_hit(text, arguments=True, parsed=True)
+    if hit:
+        return hit
+    seen: set[str] = set()
+    for item in _walked_strings(parsed):
+        seen.update(match.group(0) for match in _HEX_KEY_RE.finditer(item))
+        seen.update(match.group(0) for match in _DECIMAL_KEY_RE.finditer(item))
+    for match in _HEX_KEY_RE.finditer(text):
+        if match.group(0) not in seen and not _hash_labelled(text, match.start()):
+            return EVM_KEY
+    for match in _decimal_keys(text):
+        if match.group(0) not in seen and not _hash_labelled(text, match.start()):
+            return EVM_KEY
     return None
 
 
@@ -325,6 +791,14 @@ def find_in_arguments(arguments: Any) -> str | None:
     The rules are in the module docstring. Transaction hashes in hash-named
     fields, as whole field values, or labelled as hashes in text pass.
     """
+    budget = [_WINDOW_BUDGET]
+
+    def object_key(key: str) -> str | None:
+        if _XRPL_SEED_RE.search(key):
+            return XRPL_SEED
+        if has_recovery_phrase(key, budget):
+            return MNEMONIC
+        return _free_text_key_hit(key, "text")
 
     def walk(value: Any, field: str | None) -> str | None:
         if is_key_field(field, arguments=True):
@@ -333,7 +807,7 @@ def find_in_arguments(arguments: Any) -> str | None:
                 return hit
         if isinstance(value, dict):
             for key, item in value.items():
-                hit = walk(item, str(key))
+                hit = object_key(str(key)) or walk(item, str(key))
                 if hit:
                     return hit
             return None
@@ -343,18 +817,25 @@ def find_in_arguments(arguments: Any) -> str | None:
                 if hit:
                     return hit
             return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            if _is_int_key(value) and not (field is not None and _is_identifier_field(field)):
+                return EVM_KEY
+            return None
         if isinstance(value, str):
             if _XRPL_SEED_RE.search(value):
                 return XRPL_SEED
-            if has_valid_mnemonic(value):
+            if has_recovery_phrase(value, budget):
                 return MNEMONIC
             nested = _parse_json_text(value)
             if nested is not None:
-                return walk(nested, None)
-            return _free_text_hex_hit(value, field) or _contextual_text_hit(value, arguments=True)
+                return walk(nested, None) or _json_text_hit(value, nested)
+            return _free_text_key_hit(value, field) or _contextual_text_hit(value, arguments=True,
+                                                                             shapes_checked=True)
         return None
 
-    return walk(arguments, None)
+    return walk(arguments, None) or (MNEMONIC if phrase_across_values(arguments, budget) else None)
 
 
 def find_in_result(result: Any) -> str | None:
@@ -362,7 +843,7 @@ def find_in_result(result: Any) -> str | None:
 
     Only key-named fields count, because results routinely carry transaction
     hashes. JSON carried as text content is parsed and walked, and the raw
-    text is then scanned with ``_contextual_text_hit`` as well, so a parser
+    text is then checked with ``_contextual_text_hit`` as well, so a parser
     that drops duplicate keys cannot hide a key-named value.
     """
 
@@ -395,6 +876,41 @@ def find_in_result(result: Any) -> str | None:
     return walk(_jsonable(result), None)
 
 
+def _argument_texts(value: Any):
+    """String leaves, object keys and integers in tool arguments, as text."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key, child in item.items():
+                yield str(key)
+                stack.append(child)
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+        elif isinstance(item, str):
+            yield item
+        elif isinstance(item, int) and not isinstance(item, bool):
+            yield str(item)
+
+
+def redact_error(message: str, arguments: Any) -> tuple[str, str | None]:
+    """Remove argument values that an error message repeats, then scan the rest.
+
+    Every argument string, key or integer of 8 or more characters that appears
+    in ``message`` is replaced with ``[argument value]``, and a message longer
+    than ``_ERROR_CHARS`` is cut to that length. Returns the redacted message
+    and the secret kind found in it (as free text, then as result text), or
+    None when it holds none.
+    """
+    if len(message) > _ERROR_CHARS:
+        message = message[:_ERROR_CHARS] + "..."
+    values = sorted({text for text in _argument_texts(arguments) if len(text) >= 8}, key=len, reverse=True)
+    for text in values:
+        if text in message:
+            message = message.replace(text, "[argument value]")
+    return message, find_in_arguments({"message": message}) or find_in_result(message)
+
+
 def _jsonable(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         try:
@@ -411,6 +927,10 @@ def _jsonable(value: Any) -> Any:
 # --- Client hook content (strict) --------------------------------------------
 
 HOOK_REDACTED = "[wallet-secret content withheld]"
+
+
+class HookLimitError(ValueError):
+    """Hook content exceeded the depth or node limit of ``scan_hook_content``."""
 HOOK_MAX_DEPTH = 32
 HOOK_MAX_NODES = 100_000
 _HOOK_PUBLIC_HASH_FIELDS = frozenset({
@@ -489,40 +1009,49 @@ def scan_hook_content(value: Any, *, output: bool, structured: bool = False) -> 
     exemption. A JSON-RPC transaction read is exempt only below a dict that
     names an allowlisted RPC host. A string that parses as JSON is scanned
     both parsed and as raw text with exempted values removed, so a parser
-    difference fails closed. Raises ``ValueError`` past the depth or node limit.
+    difference fails closed. Raises ``HookLimitError`` past the depth or node limit.
     """
     nodes = 0
+    budget = [_WINDOW_BUDGET]
+
+    def text_hit(text: str, secret: bool) -> bool:
+        if secret:
+            return find_in_text(text) is not None
+        return _hook_text_hit(text, budget)
 
     def scan(item: Any, secret: bool, field: str, depth: int, rpc_ok: bool,
              exempt: list[str]) -> tuple[Any, bool]:
         nonlocal nodes
         nodes += 1
         if depth > HOOK_MAX_DEPTH or nodes > HOOK_MAX_NODES:
-            raise ValueError("Detector traversal limit")
+            raise HookLimitError("Detector traversal limit")
         if isinstance(item, dict):
             result, hit = {}, False
-            rpc_ok = rpc_ok or (not secret and _rpc_endpoint(item))
-            rpc_read = rpc_ok and not secret and transaction_read_request(item)
+            endpoint = not secret and _rpc_endpoint(item)
+            rpc_read = (rpc_ok or endpoint) and not secret and transaction_read_request(item)
             for key, child in item.items():
                 clean_key, key_hit = scan(str(key), False, "", depth + 1, False, exempt)
                 name = normalize_field(str(key))
                 child_field = _RPC_HASH_PARAM if rpc_read and key == "params" else name
+                # Only the endpoint dictionary's own field values may hold the request.
                 clean, found = scan(child, secret or is_key_field(str(key), arguments=True),
-                                    child_field, depth + 1, rpc_ok, exempt)
+                                    child_field, depth + 1, endpoint, exempt)
                 result[clean_key] = clean
                 hit = hit or found or key_hit
             return result, hit
         if isinstance(item, (list, tuple)):
             result_list, hit = [], False
             for child in item:
-                clean, found = scan(child, secret, field, depth + 1, rpc_ok, exempt)
+                # A batch list passes the exemption to its request dictionaries, not to nested lists.
+                clean, found = scan(child, secret, field, depth + 1,
+                                    rpc_ok and isinstance(child, (dict, str)), exempt)
                 result_list.append(clean)
                 hit = hit or found
             return result_list, hit
         if isinstance(item, bool) or item is None:
             return item, False
         if isinstance(item, (int, float)):
-            return (HOOK_REDACTED, True) if find_in_text(str(item)) else (item, False)
+            return (HOOK_REDACTED, True) if text_hit(str(item), secret) else (item, False)
         if not isinstance(item, str):
             return item, False
         decoded = _decode_json(item)
@@ -533,7 +1062,7 @@ def scan_hook_content(value: Any, *, output: bool, structured: bool = False) -> 
                 raw = item
                 for value_text in nested_exempt:
                     raw = raw.replace(json.dumps(value_text)[1:-1], " ")
-                hit = find_in_text(raw) is not None
+                hit = text_hit(raw, secret)
                 clean = HOOK_REDACTED if hit else clean
             if hit:
                 return (json.dumps(clean, ensure_ascii=True) if clean != HOOK_REDACTED else clean), True
@@ -554,8 +1083,42 @@ def scan_hook_content(value: Any, *, output: bool, structured: bool = False) -> 
                 candidate = _PUBLIC_HASH_LINE.sub("[public hash]", candidate)
                 if candidate != item:
                     exempt.append(item)
-        if find_in_text(candidate):
+        if text_hit(candidate, secret):
             return HOOK_REDACTED, True
         return item, False
 
-    return scan(value, False, "", 0, False, [])
+    clean, hit = scan(value, False, "", 0, False, [])
+    if not hit and phrase_across_values(value, budget):
+        return _redact_strings(value), True
+    return clean, hit
+
+
+def _redact_strings(value: Any) -> Any:
+    """``value`` with every string replaced by ``HOOK_REDACTED``, keeping its shape."""
+    if isinstance(value, dict):
+        return {key: _redact_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_strings(item) for item in value]
+    return HOOK_REDACTED if isinstance(value, str) else value
+
+
+def _hook_text_hit(text: str, budget: list[int]) -> bool:
+    """Any 64-hex value, integer key or XRPL seed, or a recovery phrase (``has_recovery_phrase``)."""
+    return bool(_XRPL_SEED_RE.search(text) or _HEX_KEY_RE.search(text)
+                or next(_decimal_keys(text), None) is not None or has_recovery_phrase(text, budget))
+
+
+_JSON_ESCAPE_RE = re.compile(r"\\(?:u[0-9a-fA-F]{4}|.)", re.DOTALL)
+
+
+def hook_raw_text_hit(text: str) -> bool:
+    """Linear scan of serialized hook content that is too large or deep to walk.
+
+    JSON escapes are read as spaces, so a phrase split by an escaped newline
+    still reads as words. True for any 64-hex value, integer key, XRPL seed or
+    recovery phrase, and for a key-named field whose raw value is a secret shape.
+    """
+    plain = _JSON_ESCAPE_RE.sub(" ", text)
+    if _hook_text_hit(plain, [_WINDOW_BUDGET]):
+        return True
+    return _contextual_text_hit(plain, arguments=True, parsed=True) is not None
