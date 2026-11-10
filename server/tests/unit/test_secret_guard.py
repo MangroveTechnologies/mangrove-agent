@@ -416,3 +416,24 @@ def test_integer_encoded_key_in_result_is_withheld():
 ])
 def test_large_amounts_and_identifiers_pass(arguments):
     assert secret_guard.find_in_arguments(arguments) is None
+
+
+# --- Parsed JSON results keep the text-wide rules ----------------------------
+
+@pytest.mark.parametrize("text,kind", [
+    # A key used as an object key: the structural walk reads keys only as field names.
+    ('{"private_key": null, "' + FAKE_KEY + '": "x"}', secret_guard.EVM_KEY),
+    # An identifier-looking field that is not an exactly named hash field.
+    ('{"wallet_secret_saved": true, "settlement_id": "' + FAKE_KEY + '"}', secret_guard.EVM_KEY),
+    ('{"has_private_key": true, "note": "' + FAKE_KEY + '"}', secret_guard.EVM_KEY),
+    # A checksummed phrase used as an object key beside a key-named field.
+    ('{"mnemonic": null, "' + REAL_PHRASE + '": 1}', secret_guard.MNEMONIC),
+    ('{"seed_phrase": "", "backup": {"' + FAKE_SEED + '": true}}', secret_guard.XRPL_SEED),
+])
+def test_parsed_json_results_still_apply_text_wide_rules(text, kind):
+    assert secret_guard.find_in_result([TextContent(type="text", text=text)]) == kind
+
+
+def test_transaction_hash_under_an_exact_hash_field_passes():
+    text = json.dumps({"has_private_key": False, "approval_tx": FAKE_TX, "tx_hash": "0x" + "cd" * 32})
+    assert secret_guard.find_in_result([TextContent(type="text", text=text)]) is None

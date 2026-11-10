@@ -64,11 +64,12 @@ Arguments (``find_in_arguments``):
 
 Results (``find_in_result``): only key-named fields count, because results
 routinely carry transaction hashes. JSON carried as text content is parsed
-and walked, and its raw text is withheld when a key-named field's raw value
-is a secret shape. Other text that names a key field (quoted with ``"`` or
-``'``) is withheld when the field's value is a secret shape, when a ``0x`` key
-appears anywhere in it without a hash label and is not the value of an
-identifier-named field, or when it also holds a 12-word run or an XRPL seed.
+and walked, and its raw text is then scanned like any other text. Text that
+names a key field (quoted with ``"`` or ``'``) is withheld when the field's
+raw value is a secret shape, when a ``0x`` key appears anywhere in it without
+a hash label and is not the value of a field named exactly as a public hash
+(``approval_tx``, ``tx_hash``; ``_ATTRIBUTED_HASH_FIELDS``), or when it also
+holds an XRPL seed or a BIP-39 phrase with a valid checksum.
 
 Errors (``redact_error``): an error message has every argument value it
 repeats removed, and is withheld when what remains holds a secret shape.
@@ -155,6 +156,11 @@ _HASH_WORDS = frozenset({
 })
 # Field name segments that name a hash or identifier.
 _IDENTIFIER_SEGMENTS = frozenset({"hash", "digest", "txid", "txhash", "id", "ids", "tx", "txn", "checksum", "sha"})
+# Normalized field names whose 0x value in result text is a public hash (exact match only).
+_ATTRIBUTED_HASH_FIELDS = _HASH_WORDS | frozenset({
+    "approvaltx", "approvaltxhash", "swaptx", "swaptxhash", "lasttx", "lasttxhash",
+    "sourceconfighash", "codehash", "requesthash", "contractdigest",
+})
 # Normalized words that, among the words before a value, cancel a hash label.
 # ``key`` alone is excluded because exchange asset keys (``"key": "XXBT"``) are common.
 _KEY_CONTEXT_WORDS = frozenset({"private", "privatekey", "privkey", "secret", "secretkey", "seed",
@@ -344,9 +350,9 @@ def _hash_labelled(text: str, start: int) -> bool:
 
 
 def _identifier_attributed(text: str, start: int) -> bool:
-    """The value at ``start`` follows a quoted identifier-named field (``"approval_tx": "0x..."``)."""
+    """The value at ``start`` follows a quoted field named exactly as a public hash (``"approval_tx": "0x..."``)."""
     match = _ATTRIBUTED_RE.search(text, max(0, start - _ATTRIBUTION_CHARS), start)
-    return bool(match) and _is_identifier_field(match.group(1))
+    return bool(match) and normalize_field(match.group(1)) in _ATTRIBUTED_HASH_FIELDS
 
 
 def _free_text_key_hit(text: str, field: str | None) -> str | None:
@@ -402,12 +408,13 @@ def _contextual_text_hit(text: str, *, arguments: bool, parsed: bool = False) ->
     """Text that names a key field (quoted with ``"`` or ``'``).
 
     Refused when the raw value after the field name, past whitespace, quotes
-    and opening ``{`` or ``[``, is a secret shape. When the text did not parse
-    as JSON (``parsed`` is False), it is also refused when a ``0x`` key appears
-    anywhere in it that is neither labelled as a hash nor the value of an
-    identifier-named field, or when it holds a 12-word run or an XRPL seed.
-    Parsed JSON skips those text-wide rules because its values were already
-    walked field by field.
+    and opening ``{`` or ``[``, is a secret shape. Unless ``parsed`` is True,
+    it is also refused when a ``0x`` key appears anywhere in it that is
+    neither labelled as a hash nor the value of a field named exactly as a
+    public hash (``_ATTRIBUTED_HASH_FIELDS``), when it holds an XRPL seed, or
+    when it holds a BIP-39 phrase with a valid checksum. Argument scans pass
+    ``parsed=True`` for JSON text because ``_json_text_hit`` applies its own
+    raw-text rules; result scans always apply the text-wide rules.
     """
     named = False
     for match in _QUOTED_FIELD_RE.finditer(text):
@@ -424,7 +431,7 @@ def _contextual_text_hit(text: str, *, arguments: bool, parsed: bool = False) ->
             return EVM_KEY
     if _XRPL_SEED_RE.search(text):
         return XRPL_SEED
-    if has_mnemonic(text):
+    if has_valid_mnemonic(text):
         return MNEMONIC
     return None
 
@@ -545,7 +552,9 @@ def find_in_result(result: Any) -> str | None:
         if isinstance(value, str):
             nested = _parse_json_text(value)
             if nested is not None:
-                return walk(nested, None) or _contextual_text_hit(value, arguments=False, parsed=True)
+                hit = walk(nested, None)
+                if hit:
+                    return hit
             return _contextual_text_hit(value, arguments=False)
         return None
 
