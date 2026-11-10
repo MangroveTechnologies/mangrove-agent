@@ -215,7 +215,9 @@ with a mistyped word is still refused. Words joined by underscores or case chang
 spread over a list or several fields, count when they have a valid checksum, so
 `snake_case` field names do not. Strategy prose made of wordlist words repeats them
 (`price above average, volume above average`) and passes unless one of its
-windows happens to pass the checksum. The full rules are in the `secret_guard.py` module
+windows happens to pass the checksum. A phrase written with no separator between its
+words (`abandonability...`) is not detected; this scan catches accidental exposure in
+ordinary text and is not the custody boundary for wallet secrets. The full rules are in the `secret_guard.py` module
 docstring. A test keeps the BIP-39 wordlist identical to the hook's.
 
 The balance check fails open, like the hook it replaces: if the balance cannot
