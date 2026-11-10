@@ -42,9 +42,15 @@ Arguments (``find_in_arguments``):
    therefore still refused, and a checksum-valid phrase is refused whatever
    its order or repeats. Words are the letter runs of the text, so a phrase
    separated by spaces, commas, hyphens, newlines or list numbers (``1. word
-   2. word``) is found, also with other wordlist words around it. A
-   non-wordlist word or an underscore ends a run, so ``snake_case``
-   identifiers (``input_token``) never form one. Strategy prose made of
+   2. word``) is found, also with other wordlist words around it. Words
+   joined by an underscore or a case change (``word_word``, ``wordWord``) or
+   written with no separator also form runs, but a window that crosses such a
+   join counts only with a valid checksum and at most one repeated word in
+   four, so ``snake_case`` and ``camelCase`` identifiers do not count. Text
+   that is not ASCII is NFKC-normalized and read with invisible characters
+   both removed and as spaces. The string values of the arguments are also
+   joined in order and scanned the same way, which finds a phrase passed as
+   a list of words or split across fields. Strategy prose made of
    wordlist words repeats them (``price above average, volume above
    average``), so it counts only when one of its windows happens to pass the
    checksum (about 1 in 16 per 12-word window). An excerpt of the wordlist
@@ -94,6 +100,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from functools import lru_cache
 from importlib import resources
 from typing import Any
@@ -114,7 +121,10 @@ _XRPL_SEED_RE = re.compile(
     r"(?<![a-zA-Z0-9])s(?:Ed[1-9A-HJ-NP-Za-km-z]{28}|[1-9A-HJ-NP-Za-km-z]{28})(?![a-zA-Z0-9])"
 )
 _WORD_RE = re.compile(r"[a-z]+")
-_WORD_OR_UNDERSCORE_RE = re.compile(r"[a-z]+|_")
+# Letter runs, split at lower-to-upper case changes (``inputToken`` is two words).
+_CASED_WORD_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])")
+# Characters that render as nothing; a phrase may carry them inside or between words.
+_INVISIBLE_RE = re.compile("[\u00ad\u180e\u200b-\u200f\u2060-\u2064\ufeff]")
 _LETTERS_RE = re.compile(r"[A-Za-z]+")
 _NAME_RE = re.compile(r"[A-Za-z0-9_]+")
 _NORMALIZE_RE = re.compile(r"[^a-z0-9]")
@@ -263,16 +273,12 @@ def bip39_checksum_valid(words: list[str] | tuple[str, ...]) -> bool:
     return _checksum_matches(value, count)
 
 
-def _word_runs(text: str, *, identifiers_split: bool = False) -> list[list[str]]:
-    """Maximal runs of consecutive BIP-39 words in ``text``.
-
-    With ``identifiers_split``, an underscore also ends a run, so the parts of
-    a ``snake_case`` identifier (``input_token``) never join a phrase.
-    """
+def _word_runs(text: str) -> list[list[str]]:
+    """Maximal runs of consecutive BIP-39 words in ``text``."""
     words = bip39_words()
     runs: list[list[str]] = []
     run: list[str] = []
-    for token in (_WORD_OR_UNDERSCORE_RE if identifiers_split else _WORD_RE).findall(text.lower()):
+    for token in _WORD_RE.findall(text.lower()):
         if token in words:
             run.append(token)
             continue
@@ -284,50 +290,147 @@ def _word_runs(text: str, *, identifiers_split: bool = False) -> list[list[str]]
     return runs
 
 
+def _text_variants(text: str) -> list[str]:
+    """``text`` as scanned for phrases: ASCII text as is; other text NFKC-normalized
+    (fullwidth letters become ASCII), once with invisible characters removed and
+    once with them read as spaces."""
+    if text.isascii():
+        return [text]
+    normalized = unicodedata.normalize("NFKC", text)
+    if not _INVISIBLE_RE.search(normalized):
+        return [normalized]
+    return [_INVISIBLE_RE.sub("", normalized), _INVISIBLE_RE.sub(" ", normalized)]
+
+
 def has_mnemonic(text: str) -> bool:
     """A run of at least 12 BIP-39 words; no checksum (the hook's rule)."""
-    return any(len(run) >= _MNEMONIC_RUN for run in _word_runs(text))
+    return any(len(run) >= _MNEMONIC_RUN for variant in _text_variants(text) for run in _word_runs(variant))
+
+
+def _phrase_runs(text: str):
+    """Runs of BIP-39 words as (words, joined) pairs.
+
+    ``joined[i]`` is True when word ``i`` meets the word before it without a
+    plain separator: across an underscore (``word_word``) or at a case change
+    (``wordWord``). Any other non-letter text separates words without ending
+    the run; a non-wordlist word ends it.
+    """
+    words = bip39_words()
+    run: list[str] = []
+    joined: list[bool] = []
+    end = 0
+    for match in _CASED_WORD_RE.finditer(text):
+        token = match.group(0).lower()
+        gap_joined = match.start() == end or "_" in text[end:match.start()]
+        end = match.end()
+        if token in words:
+            joined.append(bool(run) and gap_joined)
+            run.append(token)
+            continue
+        if len(run) >= _MNEMONIC_RUN:
+            yield run, joined
+        run, joined = [], []
+    if len(run) >= _MNEMONIC_RUN:
+        yield run, joined
+
+
+_LETTER_RUN_RE = re.compile(r"[A-Za-z]{36,200}")
+
+
+def _segment(letters: str) -> list[str] | None:
+    """Split a lowercase letter run into BIP-39 words (3 to 8 letters each), or None."""
+    words = bip39_words()
+    size = len(letters)
+    following: list[int | None] = [None] * (size + 1)
+    following[size] = size
+    for start in range(size - 3, -1, -1):
+        for end in range(start + 3, min(start + 8, size) + 1):
+            if following[end] is not None and letters[start:end] in words:
+                following[start] = end
+                break
+    if following[0] is None:
+        return None
+    parts, position = [], 0
+    while position < size:
+        end = following[position]
+        parts.append(letters[position:end])
+        position = end
+    return parts
 
 
 def has_recovery_phrase(text: str, budget: list[int] | None = None) -> bool:
     """A window of BIP-39 words that reads as a recovery phrase (rule 2 in the module docstring).
 
-    Words are the letter runs of the lowercased text, so spaces, commas,
-    hyphens, newlines and list numbers all separate words without ending a run;
-    a non-wordlist word or an underscore ends it. Every window of 12, 15, 18,
-    21 or 24 words is checked, except an excerpt of the wordlist itself
-    (consecutive wordlist entries). ``budget`` holds the number of checksums
+    Every window of 12, 15, 18, 21 or 24 words is checked, except an excerpt
+    of the wordlist itself (consecutive wordlist entries). A window counts when
+    its checksum is valid, or when it is not in alphabetical order and repeats
+    no word (12 or 15 words) or at most one (18 to 24 words). A window that
+    crosses an underscore or case change counts only with a valid checksum and
+    at most one repeated word in four. A letter run of 36 to 200 letters with no
+    separator is split into wordlist words and checked the same way. ``budget`` holds the number of checksums
     the caller may still evaluate and is decremented; when it runs out the
     text is reported as a phrase.
     """
     remaining = budget if budget is not None else [_WINDOW_BUDGET]
     index = _bip39_index()
     longest = _MNEMONIC_LENGTHS[-1]
-    for run in _word_runs(text, identifiers_split=True):
-        if len(run) < _MNEMONIC_RUN:
-            continue
-        positions = [index[word] for word in run]
-        for start in range(len(positions) - _MNEMONIC_RUN + 1):
-            value, previous, repeats = 0, -1, 0
-            ascending = consecutive = True
-            seen: set[int] = set()
-            for count, position in enumerate(positions[start:start + longest], 1):
-                value = (value << 11) | position
-                if position in seen:
-                    repeats += 1
-                seen.add(position)
-                ascending = ascending and position > previous
-                consecutive = consecutive and (previous < 0 or position == previous + 1)
-                previous = position
-                if count not in _MNEMONIC_LENGTH_SET or consecutive:
-                    continue
-                limit = _PLAIN_REPEATS_SHORT if count <= 15 else _PLAIN_REPEATS_LONG
-                if not ascending and repeats <= limit:
-                    return True
-                remaining[0] -= 1
-                if remaining[0] < 0 or _checksum_matches(value, count):
-                    return True
+    for variant in _text_variants(text):
+        for run, joined in _phrase_runs(variant):
+            positions = [index[word] for word in run]
+            for start in range(len(positions) - _MNEMONIC_RUN + 1):
+                value, previous, repeats = 0, -1, 0
+                ascending = consecutive = True
+                crossing = False
+                seen: set[int] = set()
+                for count, position in enumerate(positions[start:start + longest], 1):
+                    value = (value << 11) | position
+                    if position in seen:
+                        repeats += 1
+                    seen.add(position)
+                    ascending = ascending and position > previous
+                    consecutive = consecutive and (previous < 0 or position == previous + 1)
+                    crossing = crossing or (count > 1 and joined[start + count - 1])
+                    previous = position
+                    if count not in _MNEMONIC_LENGTH_SET or consecutive:
+                        continue
+                    limit = _PLAIN_REPEATS_SHORT if count <= 15 else _PLAIN_REPEATS_LONG
+                    if not crossing and not ascending and repeats <= limit:
+                        return True
+                    if crossing and repeats > count // 4:
+                        continue
+                    remaining[0] -= 1
+                    if remaining[0] < 0 or _checksum_matches(value, count):
+                        return True
+        for match in _LETTER_RUN_RE.finditer(variant):
+            parts = _segment(match.group(0).lower())
+            if parts is not None and len(parts) >= _MNEMONIC_RUN and has_recovery_phrase("_".join(parts), remaining):
+                return True
     return False
+
+
+def _string_leaves(value: Any):
+    """String values in a structure, in document order (object keys excluded)."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            stack.extend(reversed(list(item.values())))
+        elif isinstance(item, (list, tuple)):
+            stack.extend(reversed(item))
+        elif isinstance(item, str):
+            yield item
+
+
+def phrase_across_values(value: Any, budget: list[int] | None = None) -> bool:
+    """A recovery phrase whose words are spread over several string values.
+
+    The values are joined in document order with an underscore between them,
+    so a window that spans two values counts only with a valid checksum
+    (``has_recovery_phrase``). This finds a phrase passed as a list of words
+    or split across fields.
+    """
+    leaves = list(_string_leaves(value))
+    return len(leaves) > 1 and has_recovery_phrase(" _ ".join(leaves), budget)
 
 
 def find_in_text(text: str) -> str | None:
@@ -552,7 +655,7 @@ def find_in_arguments(arguments: Any) -> str | None:
             return _free_text_key_hit(value, field) or _contextual_text_hit(value, arguments=True)
         return None
 
-    return walk(arguments, None)
+    return walk(arguments, None) or (MNEMONIC if phrase_across_values(arguments, budget) else None)
 
 
 def find_in_result(result: Any) -> str | None:
