@@ -1132,11 +1132,21 @@ _JSON_ESCAPE_RE = re.compile(r"\\(?:u[0-9a-fA-F]{4}|.)", re.DOTALL)
 def hook_raw_text_hit(text: str) -> bool:
     """Linear scan of serialized hook content that is too large or deep to walk.
 
-    JSON escapes are read as spaces, so a phrase split by an escaped newline
-    still reads as words. True for any 64-hex value, integer key, XRPL seed or
-    recovery phrase, and for a key-named field whose raw value is a secret shape.
+    The text is read twice: as it is, and with JSON escapes read as spaces so
+    a phrase split by an escaped newline still reads as words. Reading it as
+    it is keeps a value that follows a literal backslash (``C:\\wallets\\<key>``)
+    whole. True when either reading holds any 64-hex value, integer key, XRPL
+    seed or recovery phrase, or a key-named field whose raw value is a secret
+    shape.
     """
-    plain = _JSON_ESCAPE_RE.sub(" ", text)
-    if _hook_text_hit(plain, [_WINDOW_BUDGET]):
-        return True
-    return _contextual_text_hit(plain, arguments=True, parsed=True) is not None
+    readings = [text]
+    unescaped = _JSON_ESCAPE_RE.sub(" ", text)
+    if unescaped != text:
+        readings.append(unescaped)
+    budget = [_WINDOW_BUDGET]
+    for reading in readings:
+        if _hook_text_hit(reading, budget):
+            return True
+        if _contextual_text_hit(reading, arguments=True, parsed=True) is not None:
+            return True
+    return False
