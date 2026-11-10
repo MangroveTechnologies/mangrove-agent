@@ -346,41 +346,53 @@ _NON_HEX_LETTER_RE = re.compile(r"[g-zG-Z]")
 
 
 def _long_letter_runs(text: str):
-    """Letter runs of 36 to 200 letters that are not part of a longer alphanumeric
-    token and hold a letter outside a-f, so hex strings are never split into words."""
+    """Maximal letter runs of 36 letters or more, of any length and whatever
+    characters border them, that hold a letter outside a-f (hex is never split)."""
     for match in _LONG_LETTERS_RE.finditer(text):
-        start, end = match.span()
-        if end - start > 200 or (start and text[start - 1].isalnum()) or (end < len(text) and text[end].isalnum()):
-            continue
         if _NON_HEX_LETTER_RE.search(match.group(0)):
             yield match.group(0)
 
 
-def _segment(letters: str) -> list[str] | None:
-    """Split a lowercase letter run into BIP-39 words (3 to 8 letters each), or None.
+@lru_cache(maxsize=1)
+def _bip39_prefixes() -> frozenset[str]:
+    """Every prefix of three letters or more of a wordlist word (all words have at least three)."""
+    return frozenset(word[:size] for word in _bip39_list() for size in range(3, len(word) + 1))
 
-    Positions are visited in order and only when a word ends there, so text
-    that is not made of wordlist words stops after its first few letters.
+
+def _word_chains(letters: str) -> list[list[str]]:
+    """Chains of 12 or more consecutive wordlist words found anywhere in a lowercase letter run.
+
+    For each position the longest chain of words ending there is kept, with
+    chains allowed to start at any position, so letters before, between or
+    after a phrase do not hide it. A position is extended only through
+    wordlist prefixes, so text that is not made of wordlist words costs one
+    lookup per letter. Each chain is returned once, from its last word.
     """
-    words = bip39_words()
+    words, prefixes = bip39_words(), _bip39_prefixes()
     size = len(letters)
-    previous: list[int] = [-1] * (size + 1)
-    reached = [False] * (size + 1)
-    reached[0] = True
-    for position in range(size):
-        if not reached[position]:
+    length = [0] * (size + 1)
+    previous = [-1] * (size + 1)
+    extended = [False] * (size + 1)
+    for start in range(size - 2):
+        if letters[start:start + 3] not in prefixes:
             continue
-        for end in range(position + 3, min(position + 8, size) + 1):
-            if not reached[end] and letters[position:end] in words:
-                reached[end] = True
-                previous[end] = position
-    if not reached[size]:
-        return None
-    parts, end = [], size
-    while end > 0:
-        parts.append(letters[previous[end]:end])
-        end = previous[end]
-    return parts[::-1]
+        for end in range(start + 3, min(start + 8, size) + 1):
+            piece = letters[start:end]
+            if piece not in prefixes:
+                break
+            if end - start >= 3 and piece in words and length[start] + 1 > length[end]:
+                length[end] = length[start] + 1
+                previous[end] = start
+                extended[start] = True
+    chains = []
+    for end in range(size + 1):
+        if length[end] >= _MNEMONIC_RUN and not extended[end]:
+            chain, position = [], end
+            while length[position] > 0:
+                chain.append(letters[previous[position]:position])
+                position = previous[position]
+            chains.append(chain[::-1])
+    return chains
 
 
 def _has_long_run(tokens: list[str]) -> bool:
@@ -403,7 +415,7 @@ def _readings(text: str):
     The case-split reading is skipped when the variant has no case change
     inside a letter run (both readings are then the same), and a reading is skipped when
     it has no run of 12 wordlist words. Letter runs long enough to be split by
-    ``_segment`` always keep the case-insensitive reading.
+    ``_word_chains`` always keep the case-insensitive reading.
     """
     for variant in _text_variants(text):
         lowered = variant.lower()
@@ -419,8 +431,9 @@ def has_recovery_phrase(text: str, budget: list[int] | None = None) -> bool:
 
     The text is read twice: case-insensitively, and split at case changes as
     well. Every window of 12, 15, 18, 21 or 24 words is checked by
-    ``_run_has_phrase``. A letter run of 36 to 200 letters with no separator
-    is split into wordlist words and checked the same way, as joined words.
+    ``_run_has_phrase``. In a letter run of 36 letters or more with no
+    separator, every chain of 12 or more wordlist words (``_word_chains``) is
+    checked the same way, as joined words.
     ``budget`` holds the number of checksums and split words the caller may
     still evaluate and is decremented; when it runs out the text is reported
     as a phrase.
@@ -438,12 +451,10 @@ def has_recovery_phrase(text: str, budget: list[int] | None = None) -> bool:
             if letters in segmented:
                 continue
             segmented.add(letters)
-            parts = _segment(letters)
-            if parts is None or len(parts) < _MNEMONIC_RUN:
-                continue
-            remaining[0] -= len(parts)
-            if remaining[0] < 0 or _run_has_phrase(parts, [False] + [True] * (len(parts) - 1), remaining):
-                return True
+            for parts in _word_chains(letters):
+                remaining[0] -= len(parts)
+                if remaining[0] < 0 or _run_has_phrase(parts, [False] + [True] * (len(parts) - 1), remaining):
+                    return True
     return False
 
 

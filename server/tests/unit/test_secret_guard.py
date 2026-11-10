@@ -347,7 +347,9 @@ def _concatenated_words(count: int) -> str:
     lambda n: ("act add " * 12 + "xyz ") * (n * 2 // 3),            # many short wordlist runs
     lambda n: ("q" * 150 + " ") * (n // 2),                         # long letter runs
     lambda n: _concatenated_words(n // 2),                          # letter runs made of wordlist words
-], ids=["labelled-hex", "key-fields", "word-run", "short-runs", "letter-runs", "concatenated-words"])
+    lambda n: "q" * (n * 70),                                       # one letter run of a megabyte
+], ids=["labelled-hex", "key-fields", "word-run", "short-runs", "letter-runs", "concatenated-words",
+        "one-letter-run"])
 def test_large_adversarial_text_is_scanned_in_linear_time(make_text):
     """About 1 MB scans well under a second, and doubling the input at most triples the time."""
     import time
@@ -608,6 +610,10 @@ ENCODINGS = {
     "camel case, inner capitals": lambda p: {"query": p[0] + "".join(w[:2].title() + w[2:].capitalize() for w in p[1:])},
     "pascal case": lambda p: {"query": "".join(w.title() for w in p)},
     "fullwidth, alternating case": lambda p: {"query": _fullwidth(_alternate(" ".join(p)))},
+    "no separator, digits around": lambda p: {"query": "1" + "".join(p) + "2"},
+    "no separator, unicode letters around": lambda p: {"query": "\u00e9" + "".join(p) + "\u0661"},
+    "no separator, padded past 200 letters": lambda p: {"query": "q" * 150 + "".join(p) + "x" * 150},
+    "no separator, wordlist padding": lambda p: {"query": "zoo" * 80 + "".join(p) + "able" * 60},
 }
 
 
@@ -625,3 +631,12 @@ def test_valid_phrase_encodings_are_caught(words, encoding):
 ])
 def test_identifiers_and_enum_values_pass(arguments):
     assert secret_guard.find_in_arguments(arguments) is None
+
+
+@pytest.mark.parametrize("text", [
+    "deadbeefcafe" * 40,                       # hex letters only
+    "0x" + "ab" * 32 + "cdef" * 30,
+    "fedcba" * 100,
+])
+def test_hex_strings_are_not_split_into_words(text):
+    assert not secret_guard.has_recovery_phrase(text)
