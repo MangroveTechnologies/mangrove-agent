@@ -121,6 +121,8 @@ _XRPL_SEED_RE = re.compile(
     r"(?<![a-zA-Z0-9])s(?:Ed[1-9A-HJ-NP-Za-km-z]{28}|[1-9A-HJ-NP-Za-km-z]{28})(?![a-zA-Z0-9])"
 )
 _WORD_RE = re.compile(r"[a-z]+")
+# A place where the case-split reading differs from the plain one.
+_CASE_CHANGE_RE = re.compile(r"[a-z][A-Z]|[A-Z][A-Z][a-z]")
 # Letter runs, split at lower-to-upper case changes (``inputToken`` is two words).
 _CASED_WORD_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])")
 # Characters that render as nothing; a phrase may carry them inside or between words.
@@ -339,9 +341,19 @@ def _phrase_runs(text: str, *, case_split: bool):
         yield run, joined
 
 
-# A letter run of 36 to 200 letters, not part of a longer alphanumeric token, with at least one
-# letter outside a-f, so hex strings are never split into words.
-_LETTER_RUN_RE = re.compile(r"(?<![A-Za-z0-9])(?=[A-Za-z]*[g-zG-Z])[A-Za-z]{36,200}(?![A-Za-z0-9])")
+_LONG_LETTERS_RE = re.compile(r"[A-Za-z]{36,}")
+_NON_HEX_LETTER_RE = re.compile(r"[g-zG-Z]")
+
+
+def _long_letter_runs(text: str):
+    """Letter runs of 36 to 200 letters that are not part of a longer alphanumeric
+    token and hold a letter outside a-f, so hex strings are never split into words."""
+    for match in _LONG_LETTERS_RE.finditer(text):
+        start, end = match.span()
+        if end - start > 200 or (start and text[start - 1].isalnum()) or (end < len(text) and text[end].isalnum()):
+            continue
+        if _NON_HEX_LETTER_RE.search(match.group(0)):
+            yield match.group(0)
 
 
 def _segment(letters: str) -> list[str] | None:
@@ -371,12 +383,6 @@ def _segment(letters: str) -> list[str] | None:
     return parts[::-1]
 
 
-_RUN_TOKEN = r"(?<![a-z])[a-z]{3,8}(?![a-z])"
-# Twelve consecutive lowercase letter runs of wordlist length: a cheap test that a run of
-# 12 wordlist words may exist, before the tokens are checked against the wordlist.
-_RUN_CANDIDATE_RE = re.compile(_RUN_TOKEN + r"(?:[^a-z]+" + _RUN_TOKEN + r"){11}")
-
-
 def _has_long_run(tokens: list[str]) -> bool:
     """At least 12 consecutive tokens are BIP-39 words."""
     words = bip39_words()
@@ -394,17 +400,17 @@ def _has_long_run(tokens: list[str]) -> bool:
 def _readings(text: str):
     """(variant, case_split) pairs worth scanning for a phrase.
 
-    The case-split reading is skipped when the variant has no uppercase
-    letter (both readings are then the same), and a reading is skipped when
+    The case-split reading is skipped when the variant has no case change
+    inside a letter run (both readings are then the same), and a reading is skipped when
     it has no run of 12 wordlist words. Letter runs long enough to be split by
     ``_segment`` always keep the case-insensitive reading.
     """
     for variant in _text_variants(text):
         lowered = variant.lower()
-        candidate = _RUN_CANDIDATE_RE.search(lowered) is not None
-        if (candidate and _has_long_run(_WORD_RE.findall(lowered))) or _LETTER_RUN_RE.search(variant):
+        if _has_long_run(_WORD_RE.findall(lowered)) or next(_long_letter_runs(variant), None) is not None:
             yield variant, False
-        if lowered != variant and _has_long_run([token.lower() for token in _CASED_WORD_RE.findall(variant)]):
+        if _CASE_CHANGE_RE.search(variant) and _has_long_run(
+                " ".join(_CASED_WORD_RE.findall(variant)).lower().split()):
             yield variant, True
 
 
@@ -427,8 +433,8 @@ def has_recovery_phrase(text: str, budget: list[int] | None = None) -> bool:
         if case_split:
             continue
         segmented: set[str] = set()
-        for match in _LETTER_RUN_RE.finditer(variant):
-            letters = match.group(0).lower()
+        for run_letters in _long_letter_runs(variant):
+            letters = run_letters.lower()
             if letters in segmented:
                 continue
             segmented.add(letters)
