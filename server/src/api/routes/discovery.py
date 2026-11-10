@@ -11,10 +11,12 @@
 from __future__ import annotations
 
 import importlib.metadata
+import sqlite3
 import time
 from collections import Counter
 from datetime import datetime, timezone
 
+import anyio
 from fastapi import APIRouter, Depends
 
 from src import __version__
@@ -134,6 +136,7 @@ async def status() -> dict:
 
     return {
         "access_mode": access_mode,
+        "oauth_connection": await anyio.to_thread.run_sync(_oauth_connection_status) if access_mode == "oauth" else None,
         "agent_name": agent_identity.get_name(),
         "version": server_version,
         "server_version": server_version,
@@ -175,6 +178,17 @@ def _portfolio_risk_status() -> dict:
         return {"tripped": None, "error": "unavailable"}
 
 
+def _oauth_connection_status() -> dict:
+    from src.services import mangrove_oauth
+    from src.shared.errors import AgentError
+
+    try:
+        return mangrove_oauth.status()
+    except (AgentError, OSError, sqlite3.Error):
+        return {"connected": False, "reason": "credential_store_unavailable",
+                "action": "Restore access to the OAuth credential store and its encryption key, then check OAuth status again."}
+
+
 def _x402_spend_status() -> dict:
     """Outbound x402 budget for /status. Never fail /status over it.
 
@@ -201,4 +215,5 @@ async def tools() -> dict:
     server = create_mcp_server()
     remote_and_local = await server.list_tools()
     return {"tools": [tool.model_dump(by_alias=True, exclude_none=True)
-                      for tool in remote_and_local], "mangroveai_status": "available" if server.mangroveai_available else "unavailable"}
+                      for tool in remote_and_local], "mangroveai_status": "available" if server.mangroveai_available else "unavailable",
+            "mangroveai_error": server.mangroveai_error}
