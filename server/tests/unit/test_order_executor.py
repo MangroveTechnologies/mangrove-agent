@@ -677,3 +677,39 @@ def test_unknown_mode_raises(temp_db, mock_mangroveai, mock_markets):
 
     with pytest.raises(SigningError):
         execute_one(_intent(), mode="backtest", strategy_id="s1")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("quote service unavailable"), None])
+def test_failure_after_a_confirmed_approval_is_reported_and_recorded(
+    temp_db, mock_mangroveai, mock_markets, stub_sign, monkeypatch, failure,
+):
+    """A re-quote or intent failure after the approval confirms names the approval and records a failed trade."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from src.services import order_executor
+    from src.services.trade_log import list_trades
+    from src.shared.errors import SdkError
+
+    original_quote = mock_markets.dex.get_quote.side_effect
+    calls = []
+
+    def get_quote(**kwargs):
+        calls.append(1)
+        quote = original_quote(**kwargs)
+        if len(calls) > 1:
+            if failure is not None:
+                raise failure
+            quote.model_dump.return_value["input_amount"] = quote.model_dump.return_value["input_amount"] + 1
+        return quote
+
+    mock_markets.dex.get_quote.side_effect = get_quote
+    mock_markets.dex.approve_token.return_value = SimpleNamespace(payload=approval_payload())
+    monkeypatch.setattr(order_executor, "wallet_sign", MagicMock(return_value="0xSIGNED"))
+    with pytest.raises(SdkError) as raised:
+        order_executor.execute_one(_intent(), mode="live", strategy_id="s1", wallet_address=WALLET,
+                                   chain_id=8453, slippage_pct=.002)
+    assert "was confirmed" in raised.value.message
+    assert mock_markets.dex.prepare_swap.call_count == 0
+    (trade,) = list_trades("s1")
+    assert trade.status == "failed" and trade.fees["swap_broadcast"] is False
