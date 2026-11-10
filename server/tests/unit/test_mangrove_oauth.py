@@ -586,3 +586,46 @@ def test_login_requires_tool_permission_before_registration(env, monkeypatch, sc
     with pytest.raises(oauth.OAuthError, match='at least one tool permission'):
         oauth.start(scopes)
     assert oauth._pending is None
+
+
+def test_failed_refresh_status_explains_reconnect_without_replaying(env, monkeypatch):
+    connect(monkeypatch)
+    with oauth.store() as conn:
+        record = oauth.read(conn)
+        record['expires_at'] = 0
+        oauth.save(conn, record)
+    calls = []
+    def rejected(*args, **kwargs):
+        calls.append(True)
+        raise oauth.OAuthError('Mangrove sign-in returned HTTP 400.')
+    monkeypatch.setattr(oauth, 'post', rejected)
+    with pytest.raises(oauth.OAuthError):
+        oauth.access_token()
+    state = oauth.status()
+    assert not state['connected']
+    assert state['reason'] == 'refresh_incomplete'
+    assert '--oauth login' in state['action']
+    with pytest.raises(oauth.OAuthError):
+        oauth.access_token()
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('state', ['disconnected', 'retired', 'issuer_changed'])
+def test_status_guides_required_cleanup_before_login(env, monkeypatch, state):
+    connect(monkeypatch)
+    with oauth.store() as conn:
+        record = oauth.read(conn)
+        if state == 'disconnected':
+            record['state'] = 'disconnected'
+        elif state == 'retired':
+            record['retired'] = {'issuer': oauth.issuer()}
+        else:
+            record['issuer'] = 'https://previous.example'
+        oauth.save(conn, record)
+    status = oauth.status()
+    assert status['revocation_pending'] is True
+    assert '--oauth disconnect' in status['action']
+    assert '--oauth login' not in status['action']
+    with pytest.raises(oauth.OAuthError) as refused:
+        oauth.start()
+    assert status['action'] == refused.value.message

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
@@ -230,3 +231,67 @@ def test_status_resolves_legacy_authentication_mode(client, monkeypatch, key, ex
     body = client.get("/api/v1/agent/status").json()
     assert body["access_mode"] == expected
     assert (body["x402_spend"] is None) == (expected == "api-key")
+
+
+def test_oauth_failure_is_visible_in_status_and_catalog(client, monkeypatch):
+    from unittest.mock import AsyncMock
+    from src.config import app_config
+    from src.services import mangrove_oauth
+    monkeypatch.setattr(app_config, 'MANGROVE_ACCESS_MODE', 'oauth')
+    monkeypatch.setattr(mangrove_oauth, 'status', lambda: {
+        'connected': False, 'reason': 'refresh_incomplete',
+        'action': 'Run ./scripts/setup.sh --auth oauth --oauth login to reconnect.',
+    })
+    monkeypatch.setattr('src.mcp.mangrove_proxy.catalog', AsyncMock(
+        side_effect=mangrove_oauth.OAuthError('private upstream detail')))
+    status = client.get('/api/v1/agent/status').json()
+    assert status['oauth_connection']['reason'] == 'refresh_incomplete'
+    catalog = client.get('/api/v1/agent/tools').json()
+    assert catalog['mangroveai_status'] == 'unavailable'
+    assert catalog['mangroveai_error']['code'] == 'OAUTH_CONNECTION_REQUIRED'
+    assert '--oauth login' in catalog['mangroveai_error']['message']
+    assert 'private upstream detail' not in str(catalog)
+
+
+@pytest.mark.asyncio
+async def test_oauth_status_keeps_event_loop_responsive(client, monkeypatch):
+    import asyncio
+    import threading
+    from src.api.routes import discovery
+    from src.config import app_config
+    from src.services import mangrove_oauth
+
+    monkeypatch.setattr(app_config, 'MANGROVE_ACCESS_MODE', 'oauth')
+    heartbeat = threading.Event()
+    def waiting_status():
+        return {'connected': False, 'heartbeat_seen': heartbeat.wait(timeout=1)}
+    monkeypatch.setattr(mangrove_oauth, 'status', waiting_status)
+    async def tick():
+        await asyncio.sleep(0.01)
+        heartbeat.set()
+    result, _ = await asyncio.gather(discovery.status(), tick())
+    assert result['oauth_connection']['heartbeat_seen'] is True
+
+
+@pytest.mark.parametrize('error_type', [OSError, sqlite3.OperationalError])
+def test_oauth_store_errors_are_sanitized(client, monkeypatch, error_type):
+    from src.config import app_config
+    from src.services import mangrove_oauth
+    monkeypatch.setattr(app_config, 'MANGROVE_ACCESS_MODE', 'oauth')
+    def failed():
+        raise error_type('private filesystem or database detail')
+    monkeypatch.setattr(mangrove_oauth, 'status', failed)
+    response = client.get('/api/v1/agent/status')
+    assert response.status_code == 200
+    assert response.json()['oauth_connection']['reason'] == 'credential_store_unavailable'
+    assert 'private filesystem' not in response.text
+
+
+def test_corrupt_oauth_store_keeps_status_available(client, monkeypatch, tmp_path):
+    from src.config import app_config
+    monkeypatch.setattr(app_config, 'MANGROVE_ACCESS_MODE', 'oauth')
+    monkeypatch.setattr(app_config, 'DB_PATH', str(tmp_path / 'agent.db'))
+    (tmp_path / 'oauth.db').write_bytes(b'not a sqlite database')
+    response = client.get('/api/v1/agent/status')
+    assert response.status_code == 200
+    assert response.json()['oauth_connection']['reason'] == 'credential_store_unavailable'

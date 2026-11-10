@@ -75,3 +75,18 @@ async def test_non_oauth_discovery_and_calls_keep_existing_paths(catalog, monkey
     catalog.assert_awaited_once()
     result = await server.call_tool('agent_list_paper_schedules', {})
     assert 'existing schedules' in str(result)
+
+@pytest.mark.asyncio
+async def test_discovery_exposes_connection_failure_and_clears_on_recovery(catalog, monkeypatch):
+    server = PricedFastMCP('availability-test')
+    monkeypatch.setattr(mangrove_proxy, 'catalog', AsyncMock(
+        side_effect=mangrove_oauth.OAuthError('sensitive upstream detail')))
+    await server.list_tools()
+    assert not server.mangroveai_available
+    assert server.mangroveai_error['code'] == 'OAUTH_CONNECTION_REQUIRED'
+    assert '--oauth login' in server.mangroveai_error['message']
+    assert 'sensitive' not in str(server.mangroveai_error)
+    monkeypatch.setattr(mangrove_proxy, 'catalog', AsyncMock(return_value=[]))
+    await server.list_tools()
+    assert server.mangroveai_available
+    assert server.mangroveai_error is None

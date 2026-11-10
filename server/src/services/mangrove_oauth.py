@@ -283,7 +283,26 @@ def status():
         connected = bool(enabled() and record and record.get('state') == 'connected'
                          and record.get('issuer') == issuer() and record.get('resource') == endpoint()
                          and (record.get('refresh_token') or record['expires_at'] > time.time()))
-        return {'connected': connected, 'revocation_pending': bool(record and (record.get('retired') or record.get('state') == 'disconnected')), 'pending': bool(_pending and _pending['expires_at'] > time.time()),
+        reason = None
+        if not connected:
+            if record and record.get('state') == 'refresh_pending':
+                reason = 'refresh_incomplete'
+            elif record and (record.get('issuer') != issuer() or record.get('resource') != endpoint()):
+                reason = 'connection_destination_changed'
+            elif record and record.get('state') == 'connected':
+                reason = 'access_token_expired'
+            else:
+                reason = 'sign_in_required'
+        action = None if connected else 'Run ./scripts/setup.sh --auth oauth --oauth login to reconnect.'
+        cleanup_required = False
+        try:
+            require_replaceable(record)
+        except OAuthError as exc:
+            cleanup_required = True
+            action = exc.message
+        return {'connected': connected, 'revocation_pending': cleanup_required, 'pending': bool(_pending and _pending['expires_at'] > time.time()),
+                'reason': reason,
+                'action': action,
                 'scopes': record['scope'].split() if connected else [],
                 'expires_at': record['expires_at'] if connected else None}
 

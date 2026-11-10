@@ -1297,6 +1297,14 @@ def launch_chat(cfg: dict) -> int:
                               cwd=workspace, env=env, check=False).returncode
 
 
+def verify_oauth_connection(cfg):
+    catalog = request(cfg, '/api/v1/agent/tools', timeout=40)
+    if catalog.get('mangroveai_status') != 'available':
+        raise SetupError('Mangrove OAuth connection verification failed. Setup is incomplete. '
+                         'Run ./scripts/setup.sh --auth oauth --oauth login to reconnect. '
+                         'No API-key or wallet fallback was attempted.')
+
+
 def oauth_command(cfg, command, scopes, *, yes=False):
     require_auth(cfg)
     if command == 'oauth-setup' and cfg.get('MANGROVE_ACCESS_MODE') != 'oauth':
@@ -1309,8 +1317,13 @@ def oauth_command(cfg, command, scopes, *, yes=False):
     current = request(cfg, '/api/v1/agent/oauth/status')
     if command == 'oauth-status':
         print('Connected.' if current.get('connected') else 'Sign-in required.')
+        if current.get('action'):
+            print(current['action'])
+        elif not current.get('connected'):
+            print('Run ./scripts/setup.sh --auth oauth --oauth login to reconnect.')
         return
     if command == 'oauth-setup' and current.get('connected'):
+        verify_oauth_connection(cfg)
         print('Already signed in to Mangrove. Using your saved OAuth connection.')
         return
     if cfg.get('MANGROVE_ACCESS_MODE') != 'oauth':
@@ -1337,6 +1350,7 @@ def oauth_command(cfg, command, scopes, *, yes=False):
             state = request(cfg, '/api/v1/agent/oauth/status', timeout=40)
             if not state.get('pending'):
                 if state.get('connected') and state.get('expires_at') != current.get('expires_at'):
+                    verify_oauth_connection(cfg)
                     print('Connected to Mangrove. No API key was needed.')
                     if state.get('revocation_pending'):
                         print('The previous grant could not be revoked. Run ./scripts/setup.sh --oauth disconnect when the original issuer is available and follow its cleanup instructions. This also disconnects the new grant; sign in again after cleanup. Portal revocation alone does not clear the local cleanup receipt.')
@@ -1488,6 +1502,10 @@ def main():
                     # then 15s on MangroveAI. Let those bounded reads finish;
                     # wallet mutations keep the short timeout and no retries.
                     catalog = request(cfg, '/api/v1/agent/tools', timeout=45)
+                    if (cfg.get('MANGROVE_ACCESS_MODE') == 'oauth'
+                            and catalog.get('mangroveai_status') != 'available'):
+                        raise SetupError('Mangrove OAuth verification failed; setup is incomplete. '
+                                         'Run ./scripts/setup.sh --auth oauth --oauth login to reconnect.')
                     names = {item['name'] for item in catalog['tools']}
                     required = {'create_wallet', 'import_wallet', 'list_wallets'}
                     if upstream_reachable and catalog.get('mangroveai_status') != 'unavailable':
