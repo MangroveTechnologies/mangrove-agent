@@ -149,35 +149,52 @@ not configured on the service, `get_x_post_counts` returns 503 and `run_backtest
 the X rules. Depleted credits, a rate limit or a gap make the X rules evaluate False and
 the condition is logged.
 
-## Example: strategies on social sentiment and holder signals
+## Example: a social sentiment exit
 
-Seven signals read Cambrian data. Five are in the `social` category and read the
-sentiment of posts about an asset: `social_sentiment_surge` and
-`social_sentiment_capitulation` (triggers on an unusually bullish or bearish
-reading), `social_crowd_bullish` (a filter: recent posts lean more bullish than
-the asset's norm), `social_crowd_cooling` (a filter: recent posts lean no more
-bullish than the norm) and `social_price_divergence` (a trigger: price fell while the
-crowd stayed as bullish as usual). Two are in the `onchain` category and read a
-token's holders: `holder_growth_trend` (a filter: the holder count is growing) and
-`whale_share_divergence` (a trigger: price fell while wallets holding $100,000 or
-more held a larger share of the value). The holder signals work on Solana tokens
-only. Ask in plain words:
+The connected server's `list_signals` and `get_signal` results are authoritative for
+availability, composability and parameter defaults. Check them before composing a strategy.
 
-> Which social and holder signals are available? Build a BTC strategy that buys an
-> RSI dip only while the crowd is cooling, then backtest it.
+`social_price_divergence`, in the `social` category, is an exit for long positions, never an
+entry. It is not yet available on the production Mangrove service
+(`api.mangrovedeveloper.ai`). The signal reads Cambrian Deep42 sentiment data, and that
+service does not attach this data to price bars yet. `get_signal` therefore reports the
+signal as disabled and non-composable, with the reason that the data columns it reads are
+not attached, so it would never fire. A new strategy cannot use it there, and the agent
+should report the signal as unavailable instead of substituting another signal.
 
-The agent finds the signals with `list_signals` (category `social` or `onchain`),
-builds the strategy with the server's `strategy-composition` skill and
-`save_strategy`, using `social_crowd_cooling` as a filter beside a trigger, and
-backtests it with `run_backtest`. You do not supply any data: MangroveAI attaches
-the sentiment and holder columns itself, in a backtest as in live evaluation, and
-a bar sees only values already known when it closes.
+The signal fires when the closing price fell at least `min_drop_pct` percent over the last
+`window` bars while the crowd's average net bullish share of posts (bullish minus bearish)
+over those bars stayed at or above its average over the `window_baseline` readings before
+them: the price is dropping and the crowd is not reacting yet. All three parameters count
+bars, not days. The defaults are `window=7`, `min_drop_pct=3.0` and `window_baseline=60`, so
+on daily bars the signal looks for a 3% drop over 7 days against the 60 days before. The
+knowledge base tested it on daily bars. It types the signal as a trigger because it has no
+exit-only type, so the signal belongs only in the exit rules of a strategy that has its own
+entry trigger and a price filter. On a service that attaches Cambrian data, ask in plain
+words:
 
-If the data source is off on the service, each of the seven signals shows as
-non-composable in `list_signals`. A new strategy cannot be built on it, and a
-strategy that already names one gets `False` from it rather than an error. The
-agent should report that the signal is unavailable instead of substituting another
-signal.
+> Build a BTC strategy on daily bars that enters on an RSI cross up while price is above its
+> 60-day SMA and exits when the price drops while the crowd stays bullish, then backtest it.
+
+The agent checks the signal with `get_signal`, builds the strategy with the server's
+`strategy-composition` skill and `save_strategy`, with a price trigger and a price filter for
+entry and `social_price_divergence` in the exit rules, and backtests it with `run_backtest`.
+You do not supply any data: a service that attaches Cambrian data adds the sentiment columns
+itself, in a backtest as in live evaluation, and a bar sees a daily bucket only after that
+bucket has ended. Deep42 returns older buckets with today's scoring, so a backtest sees past
+sentiment as it is scored now, not as it was known at the time.
+
+Six other Cambrian signals are disabled for new strategies: `social_sentiment_surge`,
+`social_sentiment_capitulation`, `social_crowd_bullish` and `social_crowd_cooling`
+(`social`), and `whale_share_divergence` and `holder_growth_trend` (`onchain`, Solana holder
+data). The production service reports each as disabled and non-composable, so a new strategy
+cannot use them. The reason `get_signal` gives is a backtest result: in Oracle engine
+strategy backtests on daily bars, no tested version of any of them beat a reference strategy
+that enters on an RSI cross up with a price filter, on a later period that was not used to
+choose its settings, and several lost money. The social signals were tested on BTC, ETH, SOL,
+XRP, DOGE, BNB and LINK, and the holder signals on six Solana tokens. `get_signal` returns
+the figures for each signal. A stored strategy that names one keeps evaluating it. The agent
+should not suggest them.
 
 ## If something is unavailable
 
