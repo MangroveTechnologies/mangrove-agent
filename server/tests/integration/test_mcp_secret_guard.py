@@ -183,3 +183,50 @@ async def test_swap_result_with_transaction_hashes_passes(mcp_server, monkeypatc
     monkeypatch.setattr("src.mcp.mangrove_proxy.call_tool", AsyncMock(return_value=ok))
     result = await mcp_server.call_tool("some_upstream_tool", {"definition_hash": "ef" * 32})
     assert result is ok
+
+
+async def _call_text(mcp_server, name, arguments) -> tuple[str, object]:
+    """The text a client receives: the result, or the message of the raised error."""
+    try:
+        result = await mcp_server.call_tool(name, arguments)
+    except Exception as exc:  # noqa: BLE001 - the transport sends str(exc) to the client
+        return str(exc), exc
+    return json.dumps(result.model_dump()), result
+
+
+@pytest.mark.asyncio
+async def test_error_message_holding_a_key_is_withheld(mcp_server, monkeypatch):
+    upstream = AsyncMock(side_effect=RuntimeError(f"wallet decrypt failed for key {FAKE_KEY}"))
+    monkeypatch.setattr("src.mcp.mangrove_proxy.call_tool", upstream)
+    text, outcome = await _call_text(mcp_server, "some_upstream_tool", {})
+    assert FAKE_KEY not in text
+    assert _body(outcome)["code"] == "SECRET_IN_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_validation_error_does_not_echo_argument_values(mcp_server):
+    value = f"tx {BARE_KEY}"  # passes the argument scan as a labelled hash
+    text, outcome = await _call_text(mcp_server, "x402_spend_status", {"limit": value})
+    assert isinstance(outcome, Exception)
+    assert "1f1f1f" not in text
+    assert "limit" in text
+
+
+@pytest.mark.asyncio
+async def test_error_message_repeating_an_argument_is_redacted(mcp_server, monkeypatch):
+    digest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    upstream = AsyncMock(side_effect=ValueError(f"unknown dataset {digest}"))
+    monkeypatch.setattr("src.mcp.mangrove_proxy.call_tool", upstream)
+    text, outcome = await _call_text(mcp_server, "some_upstream_tool", {"dataset": digest})
+    assert isinstance(outcome, Exception)
+    assert digest not in text
+    assert text == "unknown dataset [argument value]"
+
+
+@pytest.mark.asyncio
+async def test_ordinary_errors_are_raised_unchanged(mcp_server, monkeypatch):
+    error = ValueError("upstream timed out")
+    monkeypatch.setattr("src.mcp.mangrove_proxy.call_tool", AsyncMock(side_effect=error))
+    with pytest.raises(ValueError) as raised:
+        await mcp_server.call_tool("some_upstream_tool", {"symbol": "ETH"})
+    assert raised.value is error

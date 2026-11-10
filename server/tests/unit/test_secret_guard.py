@@ -306,3 +306,122 @@ def test_result_text_with_key_field_and_nearby_key_is_withheld(text):
 ])
 def test_json_text_results_are_also_scanned_as_raw_text(text):
     assert secret_guard.find_in_result(text) == secret_guard.EVM_KEY
+
+
+# --- JSON argument text is scanned as raw text too --------------------------
+
+@pytest.mark.parametrize("arguments,kind", [
+    # The JSON parser keeps the last duplicate key, so the parsed object hides the first value.
+    ({"payload": '{"private_key": "' + FAKE_KEY + '", "private_key": "redacted"}'}, secret_guard.EVM_KEY),
+    ({"payload": '{"mnemonic": "' + FAKE_PHRASE + '", "mnemonic": null}'}, secret_guard.MNEMONIC),
+    # The structural walk reads keys only as field names.
+    ({"payload": '{"' + FAKE_KEY + '": 1}'}, secret_guard.EVM_KEY),
+    ({"payload": '{"wallets": {"' + BARE_KEY + '": {"chain": "evm"}}}'}, secret_guard.EVM_KEY),
+])
+def test_json_text_arguments_are_also_scanned_as_raw_text(arguments, kind):
+    assert secret_guard.find_in_arguments(arguments) == kind
+
+
+def test_json_text_arguments_with_identifiers_pass():
+    payload = json.dumps({"strategy_id": "ab" * 32, "tx_hash": FAKE_TX, "definition_hash": SHA256_DIGEST})
+    assert secret_guard.find_in_arguments({"payload": payload}) is None
+
+
+# --- Scan time is linear in the input size -----------------------------------
+
+def _never_checksummed_word() -> str:
+    return next(word for word in _WORDS
+                if not any(secret_guard.bip39_checksum_valid([word] * n) for n in (12, 15, 18, 21, 24)))
+
+
+@pytest.mark.parametrize("make_text", [
+    lambda: ("tx " + FAKE_TX + " ") * 25_000,                     # many hash-labelled hex values
+    lambda: '"private_key": "x", ' * 100_000,                      # many key-named fields
+    lambda: " ".join([_never_checksummed_word()] * 200_000),     # one long wordlist run, no checksum
+    lambda: ("act add " * 12 + "xyz ") * 20_000,                  # many short wordlist runs
+])
+def test_large_adversarial_text_is_scanned_quickly(make_text):
+    import time
+
+    text = make_text()
+    assert len(text) >= 1_000_000
+    secret_guard.bip39_words()  # load the wordlist once, outside the timing
+    for scan in (lambda: secret_guard.find_in_arguments({"query": text}),
+                 lambda: secret_guard.find_in_arguments({"payload": text}),
+                 lambda: secret_guard.find_in_result(text)):
+        started = time.perf_counter()
+        scan()
+        assert time.perf_counter() - started < 1.0
+
+
+# --- Key-named flags next to public hashes -----------------------------------
+
+@pytest.mark.parametrize("result", [
+    _text_result({"has_private_key": False, "last_tx": FAKE_TX, "status": "confirmed"}),
+    _text_result({"mnemonic_backed_up": True, "summary": STRATEGY_PROSE[0]}),
+    [TextContent(type="text", text="{'private_key_stored': True, 'approval_tx': '" + FAKE_TX + "'}")],
+])
+def test_key_named_flags_beside_public_values_pass(result):
+    assert secret_guard.find_in_result(result) is None
+
+
+# --- Identifier exemptions never cover secret-bearing names ------------------
+
+@pytest.mark.parametrize("field", ["order_seed", "seed_hex", "wallet_seed_id", "secretHash", "private_key_tx"])
+def test_secret_bearing_field_names_are_never_exempted(field):
+    assert secret_guard.find_in_arguments({field: BARE_KEY}) == secret_guard.EVM_KEY
+    assert secret_guard.find_in_result(_text_result({field: FAKE_KEY})) == secret_guard.EVM_KEY
+
+
+@pytest.mark.parametrize("arguments", [
+    {"query": f"my private key for order {FAKE_KEY}"},
+    {"note": f"seed id {BARE_KEY}"},
+    {"liquid": f"value {FAKE_KEY}"},
+])
+def test_hash_labels_beside_secret_words_do_not_exempt(arguments):
+    assert secret_guard.find_in_arguments(arguments) == secret_guard.EVM_KEY
+
+
+@pytest.mark.parametrize("arguments", [
+    {"txHash": "note " + FAKE_TX},
+    {"approval_tx_hash": FAKE_TX},
+    {"orderId": "ref " + FAKE_TX},
+])
+def test_segment_identifier_names_still_pass(arguments):
+    assert secret_guard.find_in_arguments(arguments) is None
+
+
+# --- Private keys written as integers ----------------------------------------
+
+INT_KEY = int("1f" * 32, 16)              # a valid secp256k1 scalar, as an integer
+SECP256K1_N = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
+
+
+@pytest.mark.parametrize("arguments", [
+    {"value": INT_KEY},
+    {"value": str(INT_KEY)},
+    {"private_key": INT_KEY},
+    {"query": f"my key is {INT_KEY}"},
+    {"payload": json.dumps({"private_key": INT_KEY})},
+    {"items": [1, 2, INT_KEY]},
+])
+def test_integer_encoded_keys_in_arguments_are_refused(arguments):
+    assert secret_guard.find_in_arguments(arguments) == secret_guard.EVM_KEY
+
+
+def test_integer_encoded_key_in_result_is_withheld():
+    assert secret_guard.find_in_result(_text_result({"private_key": INT_KEY})) == secret_guard.EVM_KEY
+    assert secret_guard.find_in_result({"wallet": {"secret": str(INT_KEY)}}) == secret_guard.EVM_KEY
+
+
+@pytest.mark.parametrize("arguments", [
+    {"amount": 10 ** 30},                     # 1e12 tokens with 18 decimals
+    {"amount_wei": str(2 ** 128)},
+    {"allowance": 2 ** 256 - 1},              # unlimited approval: above the curve order
+    {"allowance": str(SECP256K1_N)},          # not a valid scalar
+    {"token_id": INT_KEY},                    # uint256 token ids are identifiers
+    {"query": f"what is tx {INT_KEY}?"},
+    {"flag": True, "count": 12},
+])
+def test_large_amounts_and_identifiers_pass(arguments):
+    assert secret_guard.find_in_arguments(arguments) is None
