@@ -36,21 +36,23 @@ Arguments (``find_in_arguments``):
    secret.
 2. Any string is refused when it holds an XRPL seed or a recovery phrase
    (``has_recovery_phrase``): a window of 12, 15, 18, 21 or 24 consecutive
-   BIP-39 words whose words are not in alphabetical order and that repeats no
-   word (12 or 15 words) or at most one word (18 to 24 words). The checksum is
-   not required, so a phrase with a mistyped word or a bad checksum is still
-   refused; a window whose checksum is valid also counts with one repeated
-   word (two from 18 words). Words are the letter runs of the text, so a
-   phrase separated by spaces, commas, hyphens, newlines or list numbers
-   (``1. word 2. word``) is found. Text made of wordlist words repeats them
-   (``price above average, volume above average``, ``input token input
-   token``) and an excerpt of the wordlist is alphabetical, so neither counts.
-   The limits miss a phrase with a valid checksum with probability below
-   0.2%. A phrase with a wrong word is missed only when it also repeats a
-   word: about 3% of 12-word and 5% of 15-word phrases, under 1% from 18
-   words. One call checks at
-   most ``_WINDOW_BUDGET`` checksums; text needing more is refused as a
-   possible phrase, which keeps the scan linear in the input size.
+   BIP-39 words that has a valid BIP-39 checksum, or that is not in
+   alphabetical order and repeats no word (12 or 15 words) or at most one
+   word (18 to 24 words). A phrase with a mistyped word or a bad checksum is
+   therefore still refused, and a checksum-valid phrase is refused whatever
+   its order or repeats. Words are the letter runs of the text, so a phrase
+   separated by spaces, commas, hyphens, newlines or list numbers (``1. word
+   2. word``) is found, also with other wordlist words around it. A
+   non-wordlist word or an underscore ends a run, so ``snake_case``
+   identifiers (``input_token``) never form one. Strategy prose made of
+   wordlist words repeats them (``price above average, volume above
+   average``), so it counts only when one of its windows happens to pass the
+   checksum (about 1 in 16 per 12-word window). An excerpt of the wordlist
+   itself (consecutive wordlist entries) is not counted. A phrase with a wrong
+   word is missed only when it also repeats a word: about 3% of 12-word and
+   5% of 15-word phrases, under 1% from 18 words. One call evaluates at most
+   ``_WINDOW_BUDGET`` checksums; text needing more is refused as a possible
+   phrase, which keeps the scan linear in the input size.
 3. Any other string is refused when it holds 64 hex characters, with or
    without ``0x``, embedded in text (``"import my wallet 0x..."``) or anywhere
    in a free-text field (``PROSE_FIELD_NAMES``, such as ``query`` or
@@ -112,6 +114,7 @@ _XRPL_SEED_RE = re.compile(
     r"(?<![a-zA-Z0-9])s(?:Ed[1-9A-HJ-NP-Za-km-z]{28}|[1-9A-HJ-NP-Za-km-z]{28})(?![a-zA-Z0-9])"
 )
 _WORD_RE = re.compile(r"[a-z]+")
+_WORD_OR_UNDERSCORE_RE = re.compile(r"[a-z]+|_")
 _LETTERS_RE = re.compile(r"[A-Za-z]+")
 _NAME_RE = re.compile(r"[A-Za-z0-9_]+")
 _NORMALIZE_RE = re.compile(r"[^a-z0-9]")
@@ -123,10 +126,9 @@ _ATTRIBUTED_RE = re.compile(r"""["']([A-Za-z0-9_\-]{1,64})["']\s*[:=]\s*["']?\s*
 _MNEMONIC_RUN = 12
 _MNEMONIC_LENGTHS = (12, 15, 18, 21, 24)
 _MNEMONIC_LENGTH_SET = frozenset(_MNEMONIC_LENGTHS)
-# Repeated words a recovery-phrase window may hold, for 12-15 and 18-24 words:
-# without a valid checksum, and with one.
+# Repeated words a recovery-phrase window may hold without a valid checksum,
+# for 12-15 and for 18-24 words.
 _PLAIN_REPEATS_SHORT, _PLAIN_REPEATS_LONG = 0, 1
-_CHECKSUM_REPEATS_SHORT, _CHECKSUM_REPEATS_LONG = 1, 2
 # secp256k1 group order; a private key is an integer in [1, n).
 _SECP256K1_N = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
 # Smallest integer treated as a key. A random key is below it with probability 2**-64.
@@ -261,12 +263,16 @@ def bip39_checksum_valid(words: list[str] | tuple[str, ...]) -> bool:
     return _checksum_matches(value, count)
 
 
-def _word_runs(text: str) -> list[list[str]]:
-    """Maximal runs of consecutive BIP-39 words in ``text``."""
+def _word_runs(text: str, *, identifiers_split: bool = False) -> list[list[str]]:
+    """Maximal runs of consecutive BIP-39 words in ``text``.
+
+    With ``identifiers_split``, an underscore also ends a run, so the parts of
+    a ``snake_case`` identifier (``input_token``) never join a phrase.
+    """
     words = bip39_words()
     runs: list[list[str]] = []
     run: list[str] = []
-    for token in _WORD_RE.findall(text.lower()):
+    for token in (_WORD_OR_UNDERSCORE_RE if identifiers_split else _WORD_RE).findall(text.lower()):
         if token in words:
             run.append(token)
             continue
@@ -287,36 +293,37 @@ def has_recovery_phrase(text: str, budget: list[int] | None = None) -> bool:
     """A window of BIP-39 words that reads as a recovery phrase (rule 2 in the module docstring).
 
     Words are the letter runs of the lowercased text, so spaces, commas,
-    hyphens, newlines and list numbers all separate words without ending a run.
-    ``budget`` holds the number of checksums the caller may still evaluate and
-    is decremented; when it runs out the text is reported as a phrase.
+    hyphens, newlines and list numbers all separate words without ending a run;
+    a non-wordlist word or an underscore ends it. Every window of 12, 15, 18,
+    21 or 24 words is checked, except an excerpt of the wordlist itself
+    (consecutive wordlist entries). ``budget`` holds the number of checksums
+    the caller may still evaluate and is decremented; when it runs out the
+    text is reported as a phrase.
     """
     remaining = budget if budget is not None else [_WINDOW_BUDGET]
     index = _bip39_index()
     longest = _MNEMONIC_LENGTHS[-1]
-    for run in _word_runs(text):
+    for run in _word_runs(text, identifiers_split=True):
         if len(run) < _MNEMONIC_RUN:
             continue
         positions = [index[word] for word in run]
         for start in range(len(positions) - _MNEMONIC_RUN + 1):
-            value, previous, repeats, ascending = 0, -1, 0, True
+            value, previous, repeats = 0, -1, 0
+            ascending = consecutive = True
             seen: set[int] = set()
             for count, position in enumerate(positions[start:start + longest], 1):
                 value = (value << 11) | position
                 if position in seen:
                     repeats += 1
-                    if repeats > _CHECKSUM_REPEATS_LONG:
-                        break
                 seen.add(position)
                 ascending = ascending and position > previous
+                consecutive = consecutive and (previous < 0 or position == previous + 1)
                 previous = position
-                if count not in _MNEMONIC_LENGTH_SET or ascending:
+                if count not in _MNEMONIC_LENGTH_SET or consecutive:
                     continue
-                short = count <= 15
-                if repeats <= (_PLAIN_REPEATS_SHORT if short else _PLAIN_REPEATS_LONG):
+                limit = _PLAIN_REPEATS_SHORT if count <= 15 else _PLAIN_REPEATS_LONG
+                if not ascending and repeats <= limit:
                     return True
-                if repeats > (_CHECKSUM_REPEATS_SHORT if short else _CHECKSUM_REPEATS_LONG):
-                    continue
                 remaining[0] -= 1
                 if remaining[0] < 0 or _checksum_matches(value, count):
                     return True

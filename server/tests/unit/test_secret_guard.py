@@ -218,10 +218,11 @@ def test_hex_key_in_free_text_is_refused(arguments):
 
 # --- Recovery phrases outside key-named fields -----------------------------
 
-STRATEGY_PROSE = [
-    "price above average, volume above average, trend above zero, exit when price below average",
-    "average cross slow average above zero exit when price drop below level",
-]
+# Kept apart in the source: written next to each other, the two read as one
+# 26-word run of wordlist words, and two of its 12-word windows pass the checksum.
+CROSSOVER_PROSE = "average cross slow average above zero exit when price drop below level"
+THRESHOLD_PROSE = "price above average, volume above average, trend above zero, exit when price below average"
+STRATEGY_PROSE = [THRESHOLD_PROSE, CROSSOVER_PROSE]
 
 
 @pytest.mark.parametrize("text", STRATEGY_PROSE)
@@ -488,9 +489,10 @@ def test_phrase_with_or_without_valid_checksum_is_caught(words, variant):
 @pytest.mark.parametrize("text", [
     " ".join(_WORDS[:24]),                                         # an excerpt of the wordlist
     " ".join(_WORDS[100:130]),
-    "input token input token input amount input amount output token output token output amount",
+    "input_token input_token input_amount input_amount output_token output_token output_amount output_amount",
     "entry price entry amount entry time exit price exit amount exit time",
-    STRATEGY_PROSE[0] + ", " + STRATEGY_PROSE[1],
+    THRESHOLD_PROSE,
+    CROSSOVER_PROSE,
 ])
 def test_wordlist_excerpts_and_repetitive_text_pass(text):
     assert not secret_guard.has_recovery_phrase(text)
@@ -510,3 +512,47 @@ def _tracked_text_files():
 def test_no_tracked_repository_file_reads_as_a_recovery_phrase():
     hits = [name for name, text in _tracked_text_files() if secret_guard.has_recovery_phrase(text)]
     assert hits == []
+
+
+def _with_valid_last_word(words: list[str], above: int = -1) -> list[str]:
+    """``words`` with the last word replaced by the first one that makes the checksum valid."""
+    for candidate in _WORDS[above + 1:]:
+        if secret_guard.bip39_checksum_valid(words[:-1] + [candidate]):
+            return words[:-1] + [candidate]
+    raise AssertionError("no checksum-valid last word")
+
+
+def _assert_caught_everywhere(phrase: str) -> None:
+    assert secret_guard.find_in_arguments({"query": phrase}) == secret_guard.MNEMONIC
+    result_text = json.dumps({"mnemonic": "redacted", "note": phrase})
+    assert secret_guard.find_in_result([TextContent(type="text", text=result_text)]) == secret_guard.MNEMONIC
+    assert secret_guard.redact_error(f"restore failed: {phrase}", {})[1] == secret_guard.MNEMONIC
+
+
+@pytest.mark.parametrize("words", [12, 24])
+def test_checksum_valid_phrase_with_repeated_words_is_caught(words):
+    phrase = list(PHRASES[words])
+    phrase[3], phrase[6], phrase[9] = phrase[0], phrase[1], phrase[0]  # three repeats
+    phrase = _with_valid_last_word(phrase)
+    assert len(set(phrase)) <= words - 3 and secret_guard.bip39_checksum_valid(phrase)
+    _assert_caught_everywhere(" ".join(phrase))
+
+
+@pytest.mark.parametrize("words", [12, 24])
+def test_checksum_valid_phrase_in_alphabetical_order_is_caught(words):
+    step = 1500 // words
+    positions = [i * step + 3 for i in range(words - 1)]          # ascending, with gaps
+    phrase = _with_valid_last_word([_WORDS[p] for p in positions] + [_WORDS[0]], above=positions[-1])
+    assert phrase == sorted(phrase) and secret_guard.bip39_checksum_valid(phrase)
+    _assert_caught_everywhere(" ".join(phrase))
+
+
+@pytest.mark.parametrize("words", [12, 24])
+@pytest.mark.parametrize("around", [("zoo", "zone"), ("first", "first")])
+def test_phrase_with_wordlist_words_around_it_is_caught(words, around):
+    phrase = PHRASES[words]
+    for variant in (phrase, _mistyped(phrase)):
+        text = " ".join([around[0], *variant, around[1]])
+        _assert_caught_everywhere(text)
+        repeated = " ".join([variant[0], *variant, variant[-1]])  # a repeat on each side
+        _assert_caught_everywhere(repeated)

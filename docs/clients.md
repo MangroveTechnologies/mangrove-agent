@@ -209,10 +209,12 @@ therefore passes when its field is named for a hash or id (`tx_hash`,
 free text, or when a word such as `tx`, `transaction` or `hash` comes just before
 it and no nearby word such as `private` or `seed` names a key. In free-text fields such as `query` and `description`, any other 64-hex
 value is refused. Outside a key-named field, 12 to 24 consecutive wordlist words
-count as a recovery phrase when they repeat no word (one from 18 words) and are
-not in alphabetical order; a valid BIP-39 checksum also allows one repeated word
-(two from 18 words). Strategy prose and field lists made of wordlist words repeat
-them (`price above average, volume above average`), so they pass. The full rules are in the `secret_guard.py` module
+count as a recovery phrase when they have a valid BIP-39 checksum, or when they
+repeat no word (one from 18 words) and are not in alphabetical order, so a phrase
+with a mistyped word is still refused. An underscore ends a run, so `snake_case`
+field names never form one. Strategy prose made of wordlist words repeats them
+(`price above average, volume above average`) and passes unless one of its
+windows happens to pass the checksum. The full rules are in the `secret_guard.py` module
 docstring. A test keeps the BIP-39 wordlist identical to the hook's.
 
 The balance check fails open, like the hook it replaces: if the balance cannot
