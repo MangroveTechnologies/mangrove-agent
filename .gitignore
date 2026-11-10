@@ -52,6 +52,7 @@ docker-compose.override.yml
 # user's ~/.claude.json (user scope) and also as a convenience copy at
 # the repo root. Per-user state — never committed.
 .mcp.json
+!/plugins/perplexity/.mcp.json
 
 # Per-install native client configuration (templates are public; credentials
 # are supplied only to the launched child process).
