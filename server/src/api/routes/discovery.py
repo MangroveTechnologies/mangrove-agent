@@ -16,8 +16,8 @@ import time
 from collections import Counter
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
 import anyio
+from fastapi import APIRouter, Depends
 
 from src import __version__
 from src.config import app_config
