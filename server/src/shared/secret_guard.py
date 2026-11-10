@@ -46,10 +46,15 @@ Arguments (``find_in_arguments``):
    its order or repeats. Words are the letter runs of the text, so a phrase
    separated by spaces, commas, hyphens, newlines or list numbers (``1. word
    2. word``) is found, also with other wordlist words around it. Words
-   joined by an underscore or a case change (``word_word``, ``wordWord``) or
-   written with no separator also form runs, but a window that crosses such a
-   join counts only with a valid checksum and at most one repeated word in
-   four, so ``snake_case`` and ``camelCase`` identifiers do not count. Text
+   joined by an underscore or a case change (``word_word``, ``wordWord``)
+   also form runs, but a window that crosses such a join counts only with a
+   valid checksum and at most one repeated word in four, so ``snake_case`` and
+   ``camelCase`` identifiers do not count. A phrase written with no separator
+   at all between its words (``abandonability...``) is not detected: finding
+   words in an unbroken letter run needs a segmentation search whose cost
+   and bypasses grew with every attempt to bound it, on every tool call.
+   This scan catches accidental exposure of secrets in ordinary text; it is
+   not the boundary that keeps wallet secrets out of reach of the agent. Text
    that is not ASCII is NFKC-normalized and read with invisible characters
    both removed and as spaces. The string values of the arguments are also
    joined in order and scanned the same way, which finds a phrase passed as
@@ -60,8 +65,10 @@ Arguments (``find_in_arguments``):
    itself (consecutive wordlist entries) is not counted. A phrase with a wrong
    word is missed only when it also repeats a word: about 3% of 12-word and
    5% of 15-word phrases, under 1% from 18 words. One call evaluates at most
-   ``_WINDOW_BUDGET`` checksums and split words; text needing more is refused
-   as a possible phrase, which keeps the scan linear in the input size.
+   ``_WINDOW_BUDGET`` window starts and checksums, each charged before it is
+   evaluated (a window start covers at most 24 words); text needing more is
+   refused as a possible phrase. The scan is therefore linear in the input
+   size with a fixed cap on window work, and fails closed at the cap.
 3. Any other string is refused when it holds 64 hex characters, with or
    without ``0x``, embedded in text (``"import my wallet 0x..."``) or anywhere
    in a free-text field (``PROSE_FIELD_NAMES``, such as ``query`` or
@@ -181,7 +188,7 @@ _MIN_INT_KEY = 1 << 192
 # Characters read before a match for hash labels, and before a 0x value for its field name.
 _LOOKBACK_CHARS = 256
 _ATTRIBUTION_CHARS = 80
-# Checksums and split words one scan may evaluate before refusing the text as a possible phrase.
+# Window starts and checksums one scan may evaluate before refusing the text as a possible phrase.
 _WINDOW_BUDGET = 50_000
 # Longest error message scanned and returned by redact_error.
 _ERROR_CHARS = 4000
@@ -386,60 +393,6 @@ def _phrase_runs(text: str, *, case_split: bool):
         yield run, joined
 
 
-_LONG_LETTERS_RE = re.compile(r"[A-Za-z]{36,}")
-_NON_HEX_LETTER_RE = re.compile(r"[g-zG-Z]")
-
-
-def _long_letter_runs(text: str):
-    """Maximal letter runs of 36 letters or more, of any length and whatever
-    characters border them, that hold a letter outside a-f (hex is never split)."""
-    for match in _LONG_LETTERS_RE.finditer(text):
-        if _NON_HEX_LETTER_RE.search(match.group(0)):
-            yield match.group(0)
-
-
-@lru_cache(maxsize=1)
-def _bip39_prefixes() -> frozenset[str]:
-    """Every prefix of three letters or more of a wordlist word (all words have at least three)."""
-    return frozenset(word[:size] for word in _bip39_list() for size in range(3, len(word) + 1))
-
-
-def _word_chains(letters: str) -> list[list[str]]:
-    """Chains of 12 or more consecutive wordlist words found anywhere in a lowercase letter run.
-
-    For each position the longest chain of words ending there is kept, with
-    chains allowed to start at any position, so letters before, between or
-    after a phrase do not hide it. A position is extended only through
-    wordlist prefixes, so text that is not made of wordlist words costs one
-    lookup per letter. Each chain is returned once, from its last word.
-    """
-    words, prefixes = bip39_words(), _bip39_prefixes()
-    size = len(letters)
-    length = [0] * (size + 1)
-    previous = [-1] * (size + 1)
-    extended = [False] * (size + 1)
-    for start in range(size - 2):
-        if letters[start:start + 3] not in prefixes:
-            continue
-        for end in range(start + 3, min(start + 8, size) + 1):
-            piece = letters[start:end]
-            if piece not in prefixes:
-                break
-            if end - start >= 3 and piece in words and length[start] + 1 > length[end]:
-                length[end] = length[start] + 1
-                previous[end] = start
-                extended[start] = True
-    chains = []
-    for end in range(size + 1):
-        if length[end] >= _MNEMONIC_RUN and not extended[end]:
-            chain, position = [], end
-            while length[position] > 0:
-                chain.append(letters[previous[position]:position])
-                position = previous[position]
-            chains.append(chain[::-1])
-    return chains
-
-
 def _has_long_run(tokens: list[str]) -> bool:
     """At least 12 consecutive tokens are BIP-39 words."""
     words = bip39_words()
@@ -458,13 +411,12 @@ def _readings(text: str):
     """(variant, case_split) pairs worth scanning for a phrase.
 
     The case-split reading is skipped when the variant has no case change
-    inside a letter run (both readings are then the same), and a reading is skipped when
-    it has no run of 12 wordlist words. Letter runs long enough to be split by
-    ``_word_chains`` always keep the case-insensitive reading.
+    inside a letter run (both readings are then the same), and a reading is
+    skipped when it has no run of 12 wordlist words.
     """
     for variant in _text_variants(text):
         lowered = variant.lower()
-        if _has_long_run(_WORD_RE.findall(lowered)) or next(_long_letter_runs(variant), None) is not None:
+        if _has_long_run(_WORD_RE.findall(lowered)):
             yield variant, False
         if _CASE_CHANGE_RE.search(variant) and _has_long_run(
                 " ".join(_CASED_WORD_RE.findall(variant)).lower().split()):
@@ -476,30 +428,15 @@ def has_recovery_phrase(text: str, budget: list[int] | None = None) -> bool:
 
     The text is read twice: case-insensitively, and split at case changes as
     well. Every window of 12, 15, 18, 21 or 24 words is checked by
-    ``_run_has_phrase``. In a letter run of 36 letters or more with no
-    separator, every chain of 12 or more wordlist words (``_word_chains``) is
-    checked the same way, as joined words.
-    ``budget`` holds the number of checksums and split words the caller may
-    still evaluate and is decremented; when it runs out the text is reported
-    as a phrase.
+    ``_run_has_phrase``. ``budget`` holds the number of window starts and
+    checksums the caller may still evaluate; each is charged before it is
+    evaluated, and when the budget runs out the text is reported as a phrase.
     """
     remaining = budget if budget is not None else [_WINDOW_BUDGET]
     for variant, case_split in _readings(text):
         for run, joined in _phrase_runs(variant, case_split=case_split):
             if _run_has_phrase(run, joined, remaining):
                 return True
-        if case_split:
-            continue
-        segmented: set[str] = set()
-        for run_letters in _long_letter_runs(variant):
-            letters = run_letters.lower()
-            if letters in segmented:
-                continue
-            segmented.add(letters)
-            for parts in _word_chains(letters):
-                remaining[0] -= len(parts)
-                if remaining[0] < 0 or _run_has_phrase(parts, [False] + [True] * (len(parts) - 1), remaining):
-                    return True
     return False
 
 
@@ -517,6 +454,9 @@ def _run_has_phrase(run: list[str], joined: list[bool], remaining: list[int]) ->
     longest = _MNEMONIC_LENGTHS[-1]
     positions = [index[word] for word in run]
     for start in range(len(positions) - _MNEMONIC_RUN + 1):
+        remaining[0] -= 1
+        if remaining[0] < 0:
+            return True  # budget spent: fail closed
         value, previous, repeats = 0, -1, 0
         ascending = consecutive = True
         crossing = False
