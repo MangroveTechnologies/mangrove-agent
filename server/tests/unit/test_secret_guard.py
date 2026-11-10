@@ -30,11 +30,18 @@ FAKE_PHRASE = " ".join(_WORDS[:12])    # 12 wordlist words, not a valid checksum
 
 
 def _real_phrase(words: int = 12) -> str:
-    """A fresh checksummed phrase generated for the test; never a real wallet's."""
+    """A fresh checksummed phrase with distinct words, generated for the test; never a real wallet's.
+
+    Distinct words keep the result independent of the repeated-word limits,
+    which a random phrase exceeds with probability below 0.2%.
+    """
     from eth_account.hdaccount.mnemonic import Mnemonic
     from eth_account.types import Language
 
-    return Mnemonic(Language.ENGLISH).generate(words)
+    while True:
+        phrase = Mnemonic(Language.ENGLISH).generate(words)
+        if len(set(phrase.split())) == words:
+            return phrase
 
 
 REAL_PHRASE = _real_phrase()
@@ -218,7 +225,7 @@ def test_hex_key_in_free_text_is_refused(arguments):
     assert secret_guard.find_in_arguments(arguments) == secret_guard.EVM_KEY
 
 
-# --- Recovery phrases need a valid checksum outside key-named fields --------
+# --- Recovery phrases outside key-named fields -----------------------------
 
 STRATEGY_PROSE = [
     "price above average, volume above average, trend above zero, exit when price below average",
@@ -446,3 +453,69 @@ def test_parsed_json_results_still_apply_text_wide_rules(text, kind):
 def test_transaction_hash_under_an_exact_hash_field_passes():
     text = json.dumps({"has_private_key": False, "approval_tx": FAKE_TX, "tx_hash": "0x" + "cd" * 32})
     assert secret_guard.find_in_result([TextContent(type="text", text=text)]) is None
+
+
+# --- Recovery phrases without a valid checksum --------------------------------
+
+def _fixture_phrase(label: bytes, words: int) -> list[str]:
+    """A checksummed phrase derived from a public label; it guards no funds."""
+    import hashlib
+
+    entropy = hashlib.sha256(label).digest()[:words * 4 // 3]
+    bits = words // 3
+    value = (int.from_bytes(entropy, "big") << bits) | (hashlib.sha256(entropy).digest()[0] >> (8 - bits))
+    phrase = [_WORDS[(value >> (11 * (words - 1 - i))) & 2047] for i in range(words)]
+    assert secret_guard.bip39_checksum_valid(phrase) and len(set(phrase)) == words
+    return phrase
+
+
+def _mistyped(phrase: list[str]) -> list[str]:
+    for word in _WORDS:
+        typo = phrase[:4] + [word] + phrase[5:]
+        if word not in phrase and not secret_guard.bip39_checksum_valid(typo):
+            return typo
+    raise AssertionError("no typo found")
+
+
+PHRASES = {12: _fixture_phrase(b"secret-guard fixture 12", 12),
+           24: _fixture_phrase(b"secret-guard fixture 24b", 24)}
+
+
+@pytest.mark.parametrize("words", [12, 24])
+@pytest.mark.parametrize("variant", ["valid", "one_wrong_word"])
+def test_phrase_with_or_without_valid_checksum_is_caught(words, variant):
+    phrase = " ".join(PHRASES[words] if variant == "valid" else _mistyped(PHRASES[words]))
+    assert secret_guard.find_in_arguments({"query": f"restore: {phrase}"}) == secret_guard.MNEMONIC
+    assert secret_guard.find_in_arguments({"payload": json.dumps({"words": phrase})}) == secret_guard.MNEMONIC
+    result_text = json.dumps({"mnemonic": "redacted", "note": phrase})
+    assert secret_guard.find_in_result([TextContent(type="text", text=result_text)]) == secret_guard.MNEMONIC
+    assert secret_guard.find_in_result(f'"seed_phrase": see below\n{phrase}') == secret_guard.MNEMONIC
+    message, found = secret_guard.redact_error(f"restore failed for {phrase}", {})
+    assert found == secret_guard.MNEMONIC
+
+
+@pytest.mark.parametrize("text", [
+    " ".join(_WORDS[:24]),                                         # an excerpt of the wordlist
+    " ".join(_WORDS[100:130]),
+    "input token input token input amount input amount output token output token output amount",
+    "entry price entry amount entry time exit price exit amount exit time",
+    STRATEGY_PROSE[0] + ", " + STRATEGY_PROSE[1],
+])
+def test_wordlist_excerpts_and_repetitive_text_pass(text):
+    assert not secret_guard.has_recovery_phrase(text)
+    assert secret_guard.find_in_arguments({"description": text}) is None
+
+
+def _tracked_text_files():
+    names = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z"], capture_output=True, check=True).stdout
+    for name in filter(None, names.decode().split("\0")):
+        try:
+            yield name, (REPO / name).read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+
+
+@pytest.mark.skipif(shutil.which("git") is None or not (REPO / ".git").exists(), reason="needs a git checkout")
+def test_no_tracked_repository_file_reads_as_a_recovery_phrase():
+    hits = [name for name, text in _tracked_text_files() if secret_guard.has_recovery_phrase(text)]
+    assert hits == []

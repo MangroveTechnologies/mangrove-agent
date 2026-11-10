@@ -37,14 +37,22 @@ Arguments (``find_in_arguments``):
    BIP-39 words (no checksum needed), an XRPL seed, or an integer key. A vault
    token is a 22-character URL-safe handle, so a key-shaped one is a pasted
    secret.
-2. Any string is refused when it holds an XRPL seed, or a 12, 15, 18, 21 or
-   24-word window of BIP-39 words with a valid BIP-39 checksum. Words are the
-   letter runs of the text, so a phrase separated by spaces, commas, hyphens,
-   newlines or list numbers (``1. word 2. word``) is found. The checksum
-   keeps strategy prose made of wordlist words (``price above average``) from
-   being refused; such a run still has about a 1 in 16 chance per 12-word
-   window of passing it. One call checks at most ``_WINDOW_BUDGET`` windows;
-   text with more consecutive wordlist words than that is refused as a
+2. Any string is refused when it holds an XRPL seed or a recovery phrase
+   (``has_recovery_phrase``): a window of 12, 15, 18, 21 or 24 consecutive
+   BIP-39 words whose words are not in alphabetical order and that repeats no
+   word (12 or 15 words) or at most one word (18 to 24 words). The checksum is
+   not required, so a phrase with a mistyped word or a bad checksum is still
+   refused; a window whose checksum is valid also counts with one repeated
+   word (two from 18 words). Words are the letter runs of the text, so a
+   phrase separated by spaces, commas, hyphens, newlines or list numbers
+   (``1. word 2. word``) is found. Text made of wordlist words repeats them
+   (``price above average, volume above average``, ``input token input
+   token``) and an excerpt of the wordlist is alphabetical, so neither counts.
+   The limits miss a phrase with a valid checksum with probability below
+   0.2%. A phrase with a wrong word is missed only when it also repeats a
+   word: about 3% of 12-word and 5% of 15-word phrases, under 1% from 18
+   words. One call checks at
+   most ``_WINDOW_BUDGET`` checksums; text needing more is refused as a
    possible phrase, which keeps the scan linear in the input size.
 3. Any other string is refused when it holds 64 hex characters, with or
    without ``0x``, embedded in text (``"import my wallet 0x..."``) or anywhere
@@ -72,7 +80,7 @@ names a key field (quoted with ``"`` or ``'``) is withheld when the field's
 raw value is a secret shape, when a ``0x`` key appears anywhere in it without
 a hash label and is not the value of a field named exactly as a public hash
 (``approval_tx``, ``tx_hash``; ``_ATTRIBUTED_HASH_FIELDS``), or when it also
-holds an XRPL seed or a BIP-39 phrase with a valid checksum.
+holds an XRPL seed or a recovery phrase (rule 2).
 
 Errors (``redact_error``): an error message has every argument value it
 repeats removed, and is withheld when what remains holds a secret shape.
@@ -138,6 +146,10 @@ _ATTRIBUTED_RE = re.compile(r"""["']([A-Za-z0-9_\-]{1,64})["']\s*[:=]\s*["']?\s*
 _MNEMONIC_RUN = 12
 _MNEMONIC_LENGTHS = (12, 15, 18, 21, 24)
 _MNEMONIC_LENGTH_SET = frozenset(_MNEMONIC_LENGTHS)
+# Repeated words a recovery-phrase window may hold, for 12-15 and 18-24 words:
+# without a valid checksum, and with one.
+_PLAIN_REPEATS_SHORT, _PLAIN_REPEATS_LONG = 0, 1
+_CHECKSUM_REPEATS_SHORT, _CHECKSUM_REPEATS_LONG = 1, 2
 # secp256k1 group order; a private key is an integer in [1, n).
 _SECP256K1_N = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
 # Smallest integer treated as a key. A random key is below it with probability 2**-64.
@@ -145,7 +157,7 @@ _MIN_INT_KEY = 1 << 192
 # Characters read before a match for hash labels, and before a 0x value for its field name.
 _LOOKBACK_CHARS = 256
 _ATTRIBUTION_CHARS = 80
-# Checksum windows one argument scan may evaluate before refusing the text as a possible phrase.
+# Checksums one scan may evaluate before refusing the text as a possible phrase.
 _WINDOW_BUDGET = 50_000
 # Longest error message scanned and returned by redact_error.
 _ERROR_CHARS = 4000
@@ -306,13 +318,13 @@ def has_mnemonic(text: str) -> bool:
     return any(len(run) >= _MNEMONIC_RUN for run in _word_runs(text))
 
 
-def has_valid_mnemonic(text: str, budget: list[int] | None = None) -> bool:
-    """A 12, 15, 18, 21 or 24-word window of BIP-39 words with a valid checksum.
+def has_recovery_phrase(text: str, budget: list[int] | None = None) -> bool:
+    """A window of BIP-39 words that reads as a recovery phrase (rule 2 in the module docstring).
 
     Words are the letter runs of the lowercased text, so spaces, commas,
     hyphens, newlines and list numbers all separate words without ending a run.
-    ``budget`` holds the number of windows the caller may still evaluate and is
-    decremented; when it runs out the text is reported as a phrase.
+    ``budget`` holds the number of checksums the caller may still evaluate and
+    is decremented; when it runs out the text is reported as a phrase.
     """
     remaining = budget if budget is not None else [_WINDOW_BUDGET]
     index = _bip39_index()
@@ -322,10 +334,23 @@ def has_valid_mnemonic(text: str, budget: list[int] | None = None) -> bool:
             continue
         positions = [index[word] for word in run]
         for start in range(len(positions) - _MNEMONIC_RUN + 1):
-            value = 0
+            value, previous, repeats, ascending = 0, -1, 0, True
+            seen: set[int] = set()
             for count, position in enumerate(positions[start:start + longest], 1):
                 value = (value << 11) | position
-                if count not in _MNEMONIC_LENGTH_SET:
+                if position in seen:
+                    repeats += 1
+                    if repeats > _CHECKSUM_REPEATS_LONG:
+                        break
+                seen.add(position)
+                ascending = ascending and position > previous
+                previous = position
+                if count not in _MNEMONIC_LENGTH_SET or ascending:
+                    continue
+                short = count <= 15
+                if repeats <= (_PLAIN_REPEATS_SHORT if short else _PLAIN_REPEATS_LONG):
+                    return True
+                if repeats > (_CHECKSUM_REPEATS_SHORT if short else _CHECKSUM_REPEATS_LONG):
                     continue
                 remaining[0] -= 1
                 if remaining[0] < 0 or _checksum_matches(value, count):
@@ -447,7 +472,7 @@ def _contextual_text_hit(text: str, *, arguments: bool, parsed: bool = False) ->
     it is also refused when a ``0x`` key appears anywhere in it that is
     neither labelled as a hash nor the value of a field named exactly as a
     public hash (``_ATTRIBUTED_HASH_FIELDS``), when it holds an XRPL seed, or
-    when it holds a BIP-39 phrase with a valid checksum. Argument scans pass
+    when it holds a recovery phrase (``has_recovery_phrase``). Argument scans pass
     ``parsed=True`` for JSON text because ``_json_text_hit`` applies its own
     raw-text rules; result scans always apply the text-wide rules.
     """
@@ -466,7 +491,7 @@ def _contextual_text_hit(text: str, *, arguments: bool, parsed: bool = False) ->
             return EVM_KEY
     if _XRPL_SEED_RE.search(text):
         return XRPL_SEED
-    if has_valid_mnemonic(text):
+    if has_recovery_phrase(text):
         return MNEMONIC
     return None
 
@@ -517,7 +542,7 @@ def find_in_arguments(arguments: Any) -> str | None:
     def object_key(key: str) -> str | None:
         if _XRPL_SEED_RE.search(key):
             return XRPL_SEED
-        if has_valid_mnemonic(key, budget):
+        if has_recovery_phrase(key, budget):
             return MNEMONIC
         return _free_text_key_hit(key, "text")
 
@@ -547,7 +572,7 @@ def find_in_arguments(arguments: Any) -> str | None:
         if isinstance(value, str):
             if _XRPL_SEED_RE.search(value):
                 return XRPL_SEED
-            if has_valid_mnemonic(value, budget):
+            if has_recovery_phrase(value, budget):
                 return MNEMONIC
             nested = _parse_json_text(value)
             if nested is not None:

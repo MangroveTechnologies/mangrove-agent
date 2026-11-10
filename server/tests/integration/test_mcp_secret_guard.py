@@ -61,6 +61,8 @@ async def test_secret_is_never_forwarded_upstream(mcp_server, monkeypatch):
     from eth_account.types import Language
 
     phrase = Mnemonic(Language.ENGLISH).generate(12)  # generated for the test
+    while len(set(phrase.split())) < 12:  # distinct words: independent of the repeated-word limits
+        phrase = Mnemonic(Language.ENGLISH).generate(12)
     result = await mcp_server.call_tool("kb_search", {"query": phrase})
     assert _body(result)["code"] == "SECRET_IN_ARGUMENTS"
     upstream.assert_not_called()
