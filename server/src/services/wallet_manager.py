@@ -479,8 +479,9 @@ def _reveal_cmd_for(vault_token: str) -> str:
 def _reveal_cmd_for_address(address: str) -> str:
     import shlex
 
-    if custody_runtime._admin_command_prefix:
-        return shlex.join([*custody_runtime._admin_command_prefix, "backup", address])
+    prefix = custody_runtime.admin_command_prefix()
+    if prefix:
+        return shlex.join([*prefix, "backup", address])
     return f"Human administrator: use the protected custody-service.py admin backup for {address}; follow docs/custody.md for installation paths."
 
 
