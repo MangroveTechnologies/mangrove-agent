@@ -264,13 +264,56 @@ async def test_oauth_status_keeps_event_loop_responsive(client, monkeypatch):
     monkeypatch.setattr(app_config, 'MANGROVE_ACCESS_MODE', 'oauth')
     heartbeat = threading.Event()
     def waiting_status():
-        return {'connected': False, 'heartbeat_seen': heartbeat.wait(timeout=1)}
+        return {'connected': heartbeat.wait(timeout=1)}
     monkeypatch.setattr(mangrove_oauth, 'status', waiting_status)
     async def tick():
         await asyncio.sleep(0.01)
         heartbeat.set()
     result, _ = await asyncio.gather(discovery.status(), tick())
-    assert result['oauth_connection']['heartbeat_seen'] is True
+    assert result['oauth_connection']['connected'] is True
+
+
+@pytest.mark.asyncio
+async def test_free_status_omits_oauth_grant_details(client, monkeypatch):
+    """REST /status and the MCP status tool (same route function) need no key."""
+    from src.api.routes import discovery
+    from src.config import app_config
+    from src.services import mangrove_oauth
+
+    monkeypatch.setattr(app_config, 'MANGROVE_ACCESS_MODE', 'oauth')
+    monkeypatch.setattr(mangrove_oauth, 'status', lambda: {
+        'connected': True, 'revocation_pending': True, 'pending': True, 'reason': None,
+        'action': 'OAuth grant revocation is pending for https://issuer.example.test. Configure it.',
+        'scopes': ['strategies:read', 'offline_access'], 'expires_at': 1_900_000_000,
+    })
+    expected = {
+        'connected': True, 'revocation_pending': True, 'reason': None,
+        'action': 'OAuth grant cleanup is pending. Run ./scripts/setup.sh --oauth status '
+                  'for the cleanup instructions.',
+    }
+    response = client.get('/api/v1/agent/status')
+    assert response.json()['oauth_connection'] == expected
+    assert (await discovery.status())['oauth_connection'] == expected
+    for private in ('issuer.example.test', 'strategies:read', '1900000000'):
+        assert private not in response.text
+
+
+@pytest.mark.parametrize('reported,reason', [
+    ({'connected': False, 'reason': 'access_token_expired'}, 'access_token_expired'),
+    ({'connected': False, 'reason': 'Private upstream text'}, None),
+    ({'connected': False}, None),
+])
+def test_free_status_oauth_reason_and_action_are_fixed(client, monkeypatch, reported, reason):
+    from src.config import app_config
+    from src.services import mangrove_oauth
+
+    monkeypatch.setattr(app_config, 'MANGROVE_ACCESS_MODE', 'oauth')
+    monkeypatch.setattr(mangrove_oauth, 'status', lambda: {**reported, 'action': 'Private upstream text'})
+    connection = client.get('/api/v1/agent/status').json()['oauth_connection']
+    assert connection == {
+        'connected': False, 'revocation_pending': False, 'reason': reason,
+        'action': 'Run ./scripts/setup.sh --auth oauth --oauth login to reconnect.',
+    }
 
 
 @pytest.mark.parametrize('error_type', [OSError, sqlite3.OperationalError])

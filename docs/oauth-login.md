@@ -87,7 +87,7 @@ command confirms when all retained grants have been cleaned up.
 
 ## Status reporting
 
-Agent status identifies the active `access_mode`. In OAuth mode, `oauth_connection` reports local credential readiness and a reconnect action when needed; it is not a live server verification. Tool discovery reports `mangroveai_error` when the remote catalog cannot be loaded. An incomplete refresh requires reconnecting because replaying a potentially rotated refresh token is unsafe. Its `x402_spend` field is null
+Agent status identifies the active `access_mode`. In OAuth mode, `oauth_connection` reports local credential readiness: `connected`, `revocation_pending`, a fixed `reason` code and a fixed `action` sentence when something needs attention; it is not a live server verification. Agent status is free and needs no API key, so it omits granted scopes, token expiry, sign-in state and issuer details. The authenticated `/api/v1/agent/oauth/status` route returns them, and `./scripts/setup.sh --oauth status` uses it to print the full cleanup instructions. Tool discovery reports `mangroveai_error` when the remote catalog cannot be loaded. An incomplete refresh requires reconnecting because replaying a potentially rotated refresh token is unsafe. Its `x402_spend` field is null
 for OAuth and API-key connections; that wallet budget is not account quota.
 Saved spending records remain available through the explicit spending-status tool.
 
