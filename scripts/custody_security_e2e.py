@@ -442,7 +442,8 @@ def exercise_frames():
         outcome = run_as(AGENT, [PYTHON, '-I', '-c', program, SOCKET], input=frame)
         check('socket refuses ' + name, b'"ok":true' not in outcome.stdout)
         check('daemon remains usable after ' + name, rpc('list_wallets', {}).get('ok') is True)
-    silent = subprocess.Popen([PYTHON, '-I', '-c', 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); '
+    silent = subprocess.Popen([PYTHON, '-I', '-c',
+                               'import socket,sys,time; s=socket.socket(socket.AF_UNIX); ' +
                                's.connect(sys.argv[1]); print("connected", flush=True); time.sleep(30)', SOCKET],
                               user=AGENT, group=AGENT, extra_groups=[], stdout=subprocess.PIPE)
     try:
