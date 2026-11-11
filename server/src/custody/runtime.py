@@ -4,7 +4,6 @@ This flag is routing, not the security boundary. Separate OS ownership of keys,
 policy, installation and process provides that boundary.
 """
 _active = False
-_admin_command_prefix: tuple[str, ...] | None = None
 
 
 def active() -> bool:
