@@ -5,10 +5,12 @@ Takes an OrderIntent and executes it:
   build a simulated Trade row with mode=paper, status=simulated,
   tx_hash=None.
 - Live mode: full 6-step DEX swap via mangrovemarkets:
-    1. dex_service.get_quote (human amount -> base units at the boundary)
-    2. dex.approve_token (may return None if allowance already set)
-    3. If approval returned: wallet_manager.sign → dex.broadcast → poll tx_status
-    4. dex.prepare_swap
+    1. dex_service.get_quote (human amount -> float-exact base units)
+    2. dex.approve_token for exactly the quoted base units (may return None)
+    3. If approval returned: wallet_manager.sign → dex.broadcast → poll
+       tx_status, then re-quote the same base units
+    4. dex.prepare_swap from the latest quote, bound to an intent built
+       from that quote
     5. wallet_manager.sign → dex.broadcast
     6. poll dex.tx_status until confirmed
   Build a Trade row with mode=live, tx_hash, fill price from quote.
@@ -25,6 +27,7 @@ Callers:
 
 from __future__ import annotations
 
+import math
 import time
 import uuid
 from typing import Any, Literal
@@ -32,9 +35,18 @@ from typing import Any, Literal
 from src.config import app_config
 from src.models.domain import OrderIntent, Position, Trade
 from src.services import dex_service, trade_log
+from src.services.transaction_intent import (
+    NATIVE_TOKEN,
+    ONEINCH_ROUTING_FEE_BPS,
+    ApprovalIntent,
+    SwapIntent,
+    minimum_return,
+    router_for_chain,
+    validate_transaction,
+)
 from src.services.wallet_manager import sign as wallet_sign
 from src.shared.clients.mangrove import mangrove_ai_client, mangrove_markets_client
-from src.shared.errors import SdkError, SigningError
+from src.shared.errors import SdkError, SigningError, ValidationError
 from src.shared.logging import get_logger
 
 _log = get_logger(__name__)
@@ -143,7 +155,7 @@ def _validate_slippage(slippage_pct: float | None) -> None:
                 "live with an allocation block that includes slippage_pct."
             ),
         )
-    if slippage_pct <= 0 or slippage_pct > 0.0025:
+    if not isinstance(slippage_pct, (int, float)) or not math.isfinite(slippage_pct) or slippage_pct <= 0 or slippage_pct > 0.0025:
         raise SigningError(
             f"slippage_pct {slippage_pct} outside allowed range (0, 0.0025].",
             suggestion=(
@@ -177,19 +189,53 @@ def _resolve_tokens(intent: OrderIntent) -> tuple[str, str, float]:
     return intent.symbol, "USDC", intent.amount
 
 
+def _swap_intent(
+    quote: dict,
+    *,
+    chain_id: int,
+    wallet_address: str,
+    router_address: str,
+    input_token: str,
+    output_token: str,
+    amount_base_units: int,
+    slippage_pct: float,
+) -> SwapIntent:
+    """Intent for the swap that ``quote`` prepares, at the approved amount.
+
+    The minimum output comes from this quote, the one prepare_swap builds
+    from, after the reviewed routing fee and the caller's slippage.
+    """
+    if quote.get("input_amount_base_units") != amount_base_units:
+        raise SdkError("DEX quote amount differs from the approved swap amount.")
+    return SwapIntent(
+        chain_id, wallet_address, router_address, input_token, output_token,
+        amount_base_units, minimum_return(
+            quote.get("output_amount_base_units"), slippage_pct,
+            routing_fee_bps=ONEINCH_ROUTING_FEE_BPS,
+        ),
+        routing_fee_bps=ONEINCH_ROUTING_FEE_BPS,
+    )
+
+
 def _handle_approval(
     client: Any,
     input_token: str,
     chain_id: int,
     wallet_address: str,
     venue_id: str | None,
+    *,
+    amount_base_units: int,
+    router_address: str,
 ) -> str | None:
     """Steps 2-3: approve token + sign/broadcast + poll. Returns approval tx_hash or None."""
+    if input_token == NATIVE_TOKEN:
+        return None
     try:
         approval_tx = client.dex.approve_token(
             token_address=input_token,
             chain_id=chain_id,
             wallet_address=wallet_address,
+            amount=amount_base_units,
         )
     except Exception as e:  # noqa: BLE001
         raise SdkError(f"dex.approve_token failed: {e}") from e
@@ -197,10 +243,14 @@ def _handle_approval(
     if approval_tx is None:
         return None
 
+    approval_payload = getattr(approval_tx, "payload", {})
+    approval_intent = ApprovalIntent(chain_id, wallet_address, input_token, router_address, amount_base_units)
+    validate_transaction(approval_payload, approval_intent, wallet_address, chain_id)
     signed_approval = wallet_sign(
-        getattr(approval_tx, "payload", {}),
+        approval_payload,
         wallet_address,
         chain_id=chain_id,
+        intent=approval_intent,
     )
     _log.info("order.live.signed", kind="approval", wallet=wallet_address)
     try:
@@ -210,6 +260,8 @@ def _handle_approval(
 
     approval_tx_hash = getattr(broadcast_result, "tx_hash", None)
     _log.info("order.live.broadcast", kind="approval", tx_hash=approval_tx_hash)
+    if not approval_tx_hash:
+        raise SdkError("Approval broadcast outcome is unresolved: no transaction hash; no swap submitted.")
     if approval_tx_hash:
         poll_result = _poll_tx(approval_tx_hash, chain_id, venue_id)
         if poll_result["status"] not in ("confirmed", "success"):
@@ -253,6 +305,11 @@ def _live_swap(
 
     client = mangrove_markets_client()
     input_token, output_token, input_amount = _resolve_tokens(intent)
+    requested_input_token, requested_output_token = input_token, output_token
+    # These assets come from the original order, never prepare_swap's payload.
+    input_token = dex_service.resolve_token_address(client, chain_id, input_token)
+    output_token = dex_service.resolve_token_address(client, chain_id, output_token)
+    router_address = router_for_chain(chain_id)
 
     # Allocation cap: cron intents are sized by the ENGINE off its own
     # simulated account, not off the user's allocation block. Never spend
@@ -296,33 +353,82 @@ def _live_swap(
         quote_id=quote.get("quote_id"),
     )
 
-    fees: dict[str, Any] = {
-        "venue_fee": quote.get("venue_fee", 0.0),
-        "mangrove_fee": quote.get("mangrove_fee", 0.0),
-        "price_impact_percent": quote.get("price_impact_percent", 0.0),
-    }
-
-    # 2-3. Conditional token approval
-    approval_tx_hash = _handle_approval(client, input_token, chain_id, wallet_address, venue_id)
-
-    # 4. Prepare swap
-    # Upstream `dex.prepare_swap` takes slippage as a PERCENTAGE
-    # (1.0 = 1%, documented in MangroveMarkets-MCP-Server/src/dex/tools.py).
-    # Our API convention is DECIMAL (0.005 = 0.5%) to match the rest of
-    # the trading stack (MangroveAI trading defaults: backtest slippage_pct
-    # = 0.004 = 0.4%). Convert at the boundary.
+    # The quote's float-exact base units are the one amount approved, prepared
+    # and signed. The current provider estimates the swap against on-chain
+    # allowance, so a first swap needs its finite approval confirmed before
+    # prepare_swap can return calldata. Unsupported routes may therefore leave
+    # that bounded allowance and approval gas, never a swap.
+    amount_base_units = quote["input_amount_base_units"]
+    approval_tx_hash = _handle_approval(
+        client, input_token, chain_id, wallet_address, venue_id,
+        amount_base_units=amount_base_units, router_address=router_address,
+    )
+    # Everything between a confirmed approval and the signed swap runs in one
+    # try, so any failure there (re-quote, intent, prepare, validation,
+    # signing) is reported and recorded with the approval it leaves behind.
+    fees: dict[str, Any] = {}
     sdk_slippage = slippage_pct * 100.0  # type: ignore[operator]
     try:
-        swap_tx = client.dex.prepare_swap(
-            quote_id=quote["quote_id"],
-            wallet_address=wallet_address,
-            slippage=sdk_slippage,
+        if approval_tx_hash:
+            # The swap is prepared after the approval confirms, so its minimum
+            # output and recorded fees come from a quote taken after it as well.
+            quote = dex_service.get_quote(
+                input_token=input_token,
+                output_token=output_token,
+                amount=input_amount,
+                chain_id=chain_id,
+                venue_id=venue_id,
+            )
+        swap_intent = _swap_intent(
+            quote, chain_id=chain_id, wallet_address=wallet_address, router_address=router_address,
+            input_token=input_token, output_token=output_token,
+            amount_base_units=amount_base_units, slippage_pct=slippage_pct,  # type: ignore[arg-type]
         )
-    except Exception as e:  # noqa: BLE001
-        raise SdkError(f"dex.prepare_swap failed: {e}") from e
+        fees = {
+            "venue_fee": quote.get("venue_fee", 0.0),
+            "mangrove_fee": quote.get("mangrove_fee", 0.0),
+            "price_impact_percent": quote.get("price_impact_percent", 0.0),
+            "routing_fee_cap_bps": ONEINCH_ROUTING_FEE_BPS,
+            "minimum_return_base_units": str(swap_intent.min_return_amount),
+            "gross_quote_output_base_units": str(quote.get("output_amount_base_units")),
+        }
 
-    # 5. Sign + broadcast the swap
-    signed_swap = wallet_sign(getattr(swap_tx, "payload", {}), wallet_address, chain_id=chain_id)
+        # 4. Prepare swap (nonce is fetched after the confirmed approval).
+        # Upstream `dex.prepare_swap` takes slippage as a PERCENTAGE
+        # (1.0 = 1%, documented in MangroveMarkets-MCP-Server/src/dex/tools.py).
+        # Our API convention is DECIMAL (0.005 = 0.5%) to match the rest of
+        # the trading stack (MangroveAI trading defaults: backtest slippage_pct
+        # = 0.004 = 0.4%). Convert at the boundary.
+        try:
+            swap_tx = client.dex.prepare_swap(
+                quote_id=quote["quote_id"], wallet_address=wallet_address, slippage=sdk_slippage,
+            )
+        except Exception as e:  # noqa: BLE001
+            raise SdkError(f"dex.prepare_swap failed: {e}") from e
+        validate_transaction(getattr(swap_tx, "payload", {}), swap_intent, wallet_address, chain_id)
+        # 5. Sign only the transaction matching the original operation.
+        signed_swap = wallet_sign(
+            getattr(swap_tx, "payload", {}), wallet_address, chain_id=chain_id, intent=swap_intent,
+        )
+    except Exception as exc:
+        if not approval_tx_hash:
+            raise
+        detail = getattr(exc, "message", None) or str(exc) or type(exc).__name__
+        message = (
+            f"Swap was not broadcast. Approval {approval_tx_hash} was confirmed; "
+            f"its bounded allowance and gas remain. {detail}"
+        )
+        trade_log.log_trade(Trade(
+            id=str(uuid.uuid4()), strategy_id=strategy_id, evaluation_id=evaluation_id,
+            order_intent=intent, mode="live", tx_hash=None,
+            input_token=requested_input_token, input_amount=input_amount,
+            output_token=requested_output_token, output_amount=0, fill_price=0,
+            fees={**fees, "approval_tx_hash": approval_tx_hash, "swap_broadcast": False,
+                  "error": detail}, status="failed", executed_at=trade_log.now_utc(),
+        ))
+        if isinstance(exc, (SigningError, SdkError, ValidationError)):
+            raise type(exc)(message, suggestion=exc.suggestion) from None
+        raise SdkError(message) from exc
     _log.info("order.live.signed", kind="swap", wallet=wallet_address)
     try:
         broadcast_result = client.dex.broadcast(signed_tx=signed_swap, chain_id=chain_id, venue_id=venue_id)
@@ -360,9 +466,9 @@ def _live_swap(
         order_intent=intent,
         mode="live",
         tx_hash=tx_hash,
-        input_token=input_token,
+        input_token=requested_input_token,
         input_amount=input_amount,
-        output_token=output_token,
+        output_token=requested_output_token,
         output_amount=output_amount,
         fill_price=fill_price,
         fees={**fees, "approval_tx_hash": approval_tx_hash},

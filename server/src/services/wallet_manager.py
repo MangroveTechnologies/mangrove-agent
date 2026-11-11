@@ -10,7 +10,8 @@ Responsibilities:
   pattern: user's bash CLI posts the raw key to /internal/stash-secret
   and gets back a vault_token, then calls import_wallet with that id.
 - List stored wallets (addresses + metadata only; never returns secrets).
-- Sign arbitrary EVM transactions locally. The SDK never sees the key.
+- Sign EVM transactions locally, only when their decoded effects match a
+  locally built transaction intent. The SDK never sees the key.
 - Sign x402 payment authorizations (EIP-3009 TransferWithAuthorization) locally,
   behind their own narrow guard. Separate door from sign(); see below.
 - Gate live trading on explicit user backup confirmation (backup_confirmed_at).
@@ -34,7 +35,6 @@ from typing import Literal
 
 from eth_account import Account
 from eth_account.datastructures import SignedTransaction
-from eth_utils import to_checksum_address
 from pydantic import BaseModel
 
 from src.services.secret_vault import vault
@@ -54,113 +54,11 @@ _ENCRYPTION_METHOD = "fernet-v1"
 
 
 # ---------------------------------------------------------------------------
-# Signing guard — hardens against the EIP-7702 / arbitrary-message attack
-# surface that drained a workshop test wallet on 2026-04-24.
-#
-# Invariant: the agent signs ONLY things directly related to a 1inch swap —
-# a call to a 1inch AggregationRouter, OR the ERC-20 approve() whose spender
-# is a 1inch router. Any other shape (arbitrary EOA transfers, non-1inch
-# DEX routers, EIP-7702 set-code txs, authorization lists, personal_sign
-# messages) is refused before the private key is decrypted.
-# ---------------------------------------------------------------------------
-
-# Canonical 1inch AggregationRouter deployments. 1inch uses deterministic
-# CREATE2 deploys so the same addresses apply on Base mainnet (chain_id 8453)
-# AND Base Sepolia testnet (chain_id 84532). New-user flows start on
-# testnet — the guard must not discriminate by chain. If 1inch ships a V7
-# or a new chain deploys at a different address, add it here.
-_ONEINCH_ROUTERS: set[str] = {
-    "0x1111111254eeb25477b68fb85ed929f73a960582",  # V5 AggregationRouter
-    "0x111111125421ca6dc452d289314280a0f8842a65",  # V6 AggregationRouter
-}
-
-# ERC-20 `approve(address,uint256)` function selector.
-_APPROVE_SELECTOR = "0x095ea7b3"
-
-
-def _is_oneinch_router(addr: str | None) -> bool:
-    if not addr:
-        return False
-    return addr.lower() in _ONEINCH_ROUTERS
-
-
-def _extract_approve_spender(data: str | bytes | None) -> str | None:
-    """If `data` is a well-formed ERC-20 approve() call, return the spender
-    address (lowercase 0x-prefixed hex). Return None otherwise."""
-    if data is None:
-        return None
-    s = data.decode() if isinstance(data, bytes) else str(data)
-    s = s.lower()
-    if not s.startswith(_APPROVE_SELECTOR):
-        return None
-    # 4-byte selector (10 hex chars including 0x) + 32-byte spender slot (64 hex chars)
-    if len(s) < 10 + 64:
-        return None
-    spender_slot = s[10 : 10 + 64]
-    # Spender is the last 20 bytes (40 hex chars) of the left-padded 32-byte slot.
-    return "0x" + spender_slot[-40:]
-
-
-def _validate_sign_target(normalized_tx: dict) -> None:
-    """Refuse to sign anything that isn't a direct 1inch swap or a 1inch-bound approve().
-
-    Raises SigningError if the payload is anything else. Must run BEFORE the
-    private key is decrypted so rejected payloads never touch plaintext.
-    """
-    tx_type = normalized_tx.get("type")
-    if tx_type in (3, 4):
-        # 3 = EIP-4844 blob (not used for swaps), 4 = EIP-7702 set-code (the
-        # exact shape of the 2026-04-24 workshop drain).
-        raise SigningError(
-            f"Refused to sign tx of type {tx_type}: only EIP-155 (type 0) and "
-            "EIP-1559 (type 2) txs are permitted by the signing guard. "
-            "Type 4 is EIP-7702 set-code — the attack shape that drained the "
-            "workshop test wallet on 2026-04-24.",
-            suggestion="If this was produced by the SDK, treat as a bug or supply-chain attack — do not bypass the guard without explicit review.",
-        )
-    if "authorizationList" in normalized_tx or "authorization_list" in normalized_tx:
-        raise SigningError(
-            "Refused to sign: tx contains an EIP-7702 authorization list. "
-            "The agent only signs classic 1inch swap txs — authorization-based "
-            "delegation is not permitted.",
-            suggestion="Investigate the code path that built this payload — it should be using the standard dex.prepare_swap flow.",
-        )
-
-    to_addr = normalized_tx.get("to")
-    if not to_addr:
-        raise SigningError(
-            "Refused to sign: tx has no `to` field (contract deployment or bare call). "
-            "The signing guard permits only txs to 1inch routers or ERC-20 approve()-for-1inch.",
-            suggestion="Check the SDK's prepare_swap output — a real swap always has `to` populated with a router address.",
-        )
-
-    # Happy path 1: direct call to a 1inch AggregationRouter (the swap itself).
-    if _is_oneinch_router(to_addr):
-        return
-
-    # Happy path 2: ERC-20 approve() whose spender is a 1inch router (the
-    # approve step that precedes the swap when allowance != max).
-    spender = _extract_approve_spender(normalized_tx.get("data"))
-    if spender is not None and _is_oneinch_router(spender):
-        return
-
-    raise SigningError(
-        f"Refused to sign: `to` address {to_addr} is not a known 1inch router, "
-        "and the tx is not an approve() with a 1inch spender. The signing guard "
-        "permits only direct 1inch swaps and their required token approvals — "
-        "no arbitrary transfers, no non-1inch DEX routing, no EIP-7702 delegation.",
-        suggestion=f"Known 1inch routers: {sorted(_ONEINCH_ROUTERS)}. If the SDK legitimately routes through a different aggregator, the guard's allowlist must be explicitly expanded with review.",
-    )
-
-
-# ---------------------------------------------------------------------------
-# x402 payment signing guard — a SECOND narrow door, NOT a widening of the one
-# above.
+# x402 payment signing has a separate EIP-3009 validator from transactions.
 #
 # An x402 payment is EIP-712 typed data (EIP-3009 TransferWithAuthorization),
 # not a transaction dict. It has no top-level `to`, no tx `type` and no
-# authorizationList, so _validate_sign_target can neither inspect it nor
-# meaningfully refuse it — it is a different shape entirely.
+# authorizationList, so transaction validation cannot meaningfully refuse it — it is a different shape entirely.
 #
 # It is also NOT inert. The signature IS the payment instrument: whoever holds
 # a signed authorization can submit it on-chain and pull `value` USDC from
@@ -185,7 +83,7 @@ _X402_PRIMARY_TYPE = "TransferWithAuthorization"
 # address inside a Base-Sepolia payload is refused, and vice versa. That
 # pairing is the check — neither half means anything alone.
 #
-# Hardcoded on purpose, matching _ONEINCH_ROUTERS. X402_USDC_CONTRACT exists
+# Hardcoded on purpose. X402_USDC_CONTRACT exists
 # in config and is deliberately NOT read here: a guard whose allowlist comes
 # from config can be widened by editing config, which defeats the point of
 # having a guard. Adding a chain is a reviewed source change.
@@ -989,47 +887,6 @@ def _load_secret(address: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-_INT_FIELDS = {
-    "nonce", "gas", "gasLimit", "gasPrice",
-    "maxFeePerGas", "maxPriorityFeePerGas",
-    "value", "chainId", "type",
-}
-
-
-def _apply_tx_type(out: dict) -> None:
-    """Mutate `out` to enforce consistent EIP-1559 vs legacy tx type fields."""
-    has_eip1559 = (
-        out.get("maxFeePerGas") is not None
-        and out.get("maxPriorityFeePerGas") is not None
-    )
-    if has_eip1559:
-        out.setdefault("type", 2)
-        out.pop("gasPrice", None)
-    elif "gasPrice" in out:
-        out.pop("maxFeePerGas", None)
-        out.pop("maxPriorityFeePerGas", None)
-        out.pop("type", None)
-
-
-def _normalize_payload(payload: dict, chain_id: int | None = None) -> dict:
-    out: dict = {}
-    for k, v in payload.items():
-        if v is None:
-            continue
-        if k in _INT_FIELDS and isinstance(v, str):
-            out[k] = int(v, 16) if v.startswith("0x") else int(v)
-        elif k == "to" and isinstance(v, str) and v.startswith("0x"):
-            out[k] = to_checksum_address(v)
-        else:
-            out[k] = v
-
-    if chain_id is not None and "chainId" not in out:
-        out["chainId"] = chain_id
-
-    _apply_tx_type(out)
-    return out
-
-
 def _account_from_secret(secret: str):
     """Derive the signing account from a decrypted secret (key or mnemonic).
 
@@ -1043,22 +900,18 @@ def _account_from_secret(secret: str):
     return Account.from_mnemonic(secret)
 
 
-def sign(unsigned_tx: dict, wallet_address: str, chain_id: int | None = None) -> str:
-    """Sign an EVM transaction with the wallet's key.
+def sign(unsigned_tx: dict, wallet_address: str, chain_id: int | None = None, *, intent=None) -> str:
+    """Sign a transaction whose decoded effects match its immutable intent.
 
-    NOTE: callers that represent live money movement (execute_swap, live
-    strategy evaluator) MUST call require_backup_confirmed(wallet_address)
-    first. sign() itself does not gate — some callers (paper mode, signing
-    approval txs during a read-only quote path) legitimately need to sign
-    without a backup. The gate lives one layer up.
+    transaction_intent.validate_transaction refuses every other payload,
+    including EIP-7702 type 4 transactions and authorization lists, before
+    the key is decrypted. Callers that move live funds (execute_swap, live
+    strategy evaluation) MUST call require_backup_confirmed(wallet_address)
+    first; sign() itself does not gate on backup confirmation.
     """
-    normalized = _normalize_payload(unsigned_tx, chain_id=chain_id)
+    from src.services.transaction_intent import validate_transaction
 
-    # Signing guard: refuse non-1inch payloads BEFORE the key is decrypted.
-    # Defense in depth against SDK compromise / rogue code paths / EIP-7702
-    # phishing. See _validate_sign_target docstring for full rationale.
-    _validate_sign_target(normalized)
-
+    normalized = validate_transaction(unsigned_tx, intent, wallet_address, chain_id)
     secret = _load_secret(wallet_address)
     try:
         account = _account_from_secret(secret)

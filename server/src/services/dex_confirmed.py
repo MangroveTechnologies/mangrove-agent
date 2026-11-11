@@ -15,6 +15,12 @@ from src.models.domain import OrderIntent
 from src.services import broker_store as store
 from src.services import confirmed_execution as confirmed
 from src.services import dex_service, receipt_settlement
+from src.services.transaction_intent import (
+    ONEINCH_ROUTING_FEE_BPS,
+    ApprovalIntent,
+    router_for_chain,
+    validate_transaction,
+)
 from src.shared.errors import SdkError
 
 PENDING = ("submitting", "pending", "uncertain")
@@ -219,41 +225,64 @@ def execute(oid, intent, wallet_address, chain_id, slippage_pct, max_input_amoun
             approval_required=False,
         )
         update(oid, context=context)
-        quote = dex_service.get_quote(
-            input_token=in_address, output_token=out_address, amount=amount, chain_id=chain_id
+
+        def quote_swap():
+            return dex_service.get_quote(
+                input_token=in_address, output_token=out_address, amount=amount, chain_id=chain_id
+            )
+
+        quote = quote_swap()
+        router_address = router_for_chain(chain_id)
+        # One float-exact amount is quoted, approved and signed. It must match
+        # the settlement decimals recorded in this order's context.
+        amount_base_units = quote.get("input_amount_base_units")
+        if amount_base_units != dex_service.swap_base_units(amount, in_decimals):
+            raise SdkError("DEX quote amount differs from the settlement token amount.")
+        # The provider prepares a swap only against confirmed allowance, so the
+        # approval is signed and mined before the swap is prepared.
+        approval = client.dex.approve_token(
+            token_address=in_address, chain_id=chain_id, wallet_address=wallet_address,
+            amount=amount_base_units,
         )
-        swap = client.dex.prepare_swap(
-            quote_id=quote["quote_id"], wallet_address=wallet_address, slippage=slippage_pct * 100
-        )
-        payload = getattr(swap, "payload", {})
-        _zero_value(payload)
-        wallet_manager._validate_sign_target(wallet_manager._normalize_payload(payload, chain_id=chain_id))
-        approval = client.dex.approve_token(token_address=in_address, chain_id=chain_id, wallet_address=wallet_address)
         if approval is not None:
             approval_payload = getattr(approval, "payload", {})
             _zero_value(approval_payload)
-            wallet_manager._validate_sign_target(wallet_manager._normalize_payload(approval_payload, chain_id=chain_id))
+            approval_intent = ApprovalIntent(
+                chain_id, wallet_address, in_address, router_address, amount_base_units,
+            )
+            validate_transaction(approval_payload, approval_intent, wallet_address, chain_id)
             update(oid, context=dict(approval_required=True, approval_recipient=approval_payload.get("to")))
-        update(oid, context=dict(router_address=payload.get("to"), signed_native_value="0"))
-        if approval is not None:
             _authorize_entry(oid, intent)
-            signed = executor.wallet_sign(approval_payload, wallet_address, chain_id=chain_id)
+            signed = executor.wallet_sign(
+                approval_payload, wallet_address, chain_id=chain_id, intent=approval_intent,
+            )
             approval_hash = _signed_hash(signed)
             update(oid, context=dict(approval_tx_hash=approval_hash))
             broadcast_signed(client, signed, approval_hash)
             if executor._poll_tx(approval_hash, chain_id)["status"] not in ("confirmed", "success"):
                 raise SdkError("Approval outcome is unresolved; no swap submitted.")
-            # Refresh the nonce after a mined approval; validate the refreshed
-            # unsigned transaction before the swap signature as well.
-            swap = client.dex.prepare_swap(
-                quote_id=quote["quote_id"], wallet_address=wallet_address, slippage=slippage_pct * 100
-            )
-            payload = getattr(swap, "payload", {})
-            _zero_value(payload)
-            wallet_manager._validate_sign_target(wallet_manager._normalize_payload(payload, chain_id=chain_id))
-            update(oid, context=dict(router_address=payload.get("to"), signed_native_value="0"))
+            # The minimum output comes from a quote taken after the approval,
+            # the one the swap is prepared from.
+            quote = quote_swap()
+        swap_intent = executor._swap_intent(
+            quote, chain_id=chain_id, wallet_address=wallet_address, router_address=router_address,
+            input_token=in_address, output_token=out_address,
+            amount_base_units=amount_base_units, slippage_pct=slippage_pct,
+        )
+        update(oid, context=dict(
+            routing_fee_cap_bps=ONEINCH_ROUTING_FEE_BPS,
+            minimum_return_base_units=str(swap_intent.min_return_amount),
+            gross_quote_output_base_units=str(quote.get("output_amount_base_units")),
+        ))
+        swap = client.dex.prepare_swap(
+            quote_id=quote["quote_id"], wallet_address=wallet_address, slippage=slippage_pct * 100
+        )
+        payload = getattr(swap, "payload", {})
+        _zero_value(payload)
+        validate_transaction(payload, swap_intent, wallet_address, chain_id)
+        update(oid, context=dict(router_address=payload.get("to"), signed_native_value="0"))
         _authorize_entry(oid, intent)
-        signed = executor.wallet_sign(payload, wallet_address, chain_id=chain_id)
+        signed = executor.wallet_sign(payload, wallet_address, chain_id=chain_id, intent=swap_intent)
         tx_hash = _signed_hash(signed)
         update(oid, status="pending", tx_hash=tx_hash)
         broadcast_signed(client, signed, tx_hash)

@@ -128,6 +128,9 @@ def test_get_quote_sends_base_units_and_returns_human(monkeypatch):
     assert out["input_amount"] == 0.001
     assert out["output_amount"] == 2.5
     assert out["output_amount_base_units"] == 2_500_000
+    assert out["routing_fee_cap_bps"] == 25
+    assert out["output_amount_after_max_routing_fee_base_units"] == 2_493_750
+    assert out["output_amount_after_max_routing_fee"] == 2.49375
 
 
 def test_get_quote_rejects_dust(monkeypatch):
@@ -139,6 +142,75 @@ def test_get_quote_rejects_dust(monkeypatch):
             input_token=_USDC, output_token=_WETH, amount=0.0000001, chain_id=8453,
         )
     client.dex.get_quote.assert_not_called()
+
+
+def test_quote_amount_survives_markets_float_transport(monkeypatch):
+    """Markets types amounts as float and builds 1inch calls from int(float(amount))."""
+    from decimal import Decimal
+
+    requested = 123_456_789_012_345_678_901
+    assert int(float(requested)) != requested
+    human = Decimal(requested) / 10**18
+    client = _client_with_decimals({_WETH.lower(): 18, _USDC.lower(): 6})
+
+    def markets_get_quote(**kwargs):
+        client.dex.get_quote.return_value.model_dump.return_value = {
+            "quote_id": "q1", "input_amount": float(kwargs["amount"]), "output_amount": float(10**20 + 1),
+        }
+        return client.dex.get_quote.return_value
+
+    client.dex.get_quote.side_effect = markets_get_quote
+    monkeypatch.setattr(dex_service, "mangrove_markets_client", lambda: client)
+
+    out = dex_service.get_quote(_WETH, _USDC, human, 8453)
+
+    sent = client.dex.get_quote.call_args.kwargs["amount"]
+    assert type(sent) is int and int(float(sent)) == sent
+    assert requested - 2**14 < sent <= requested
+    assert out["input_amount_base_units"] == sent == dex_service.swap_base_units(human, 18)
+    assert type(out["output_amount_base_units"]) is int
+    assert out["output_amount_base_units"] == int(Decimal(float(10**20 + 1)))
+
+
+@pytest.mark.parametrize("requested", [1, 2**53 - 1, 2**53 + 1, 123_456_789_012_345_678_901, 2**256 - 1])
+def test_float_exact_base_units_is_the_largest_round_trip_value_not_above_request(requested):
+    import math
+    from decimal import Decimal
+
+    exact = dex_service.float_exact_base_units(requested)
+    assert int(float(exact)) == exact <= requested
+    assert Decimal(math.nextafter(float(exact), math.inf)) > requested
+
+
+@pytest.mark.parametrize("matches", [[], [("USDC", _USDC), ("USDC", _WETH)], [("USD", _USDC)]])
+def test_signing_token_resolution_refuses_missing_or_ambiguous_symbol(matches):
+    from types import SimpleNamespace
+
+    client = MagicMock()
+    client.dex.token_search.return_value = [SimpleNamespace(symbol=symbol, address=addr) for symbol, addr in matches]
+    with pytest.raises(SdkError, match="exact token-symbol"):
+        dex_service.resolve_token_address(client, 8453, "USDC")
+
+
+def test_signing_token_resolution_preserves_explicit_address_without_lookup():
+    client = MagicMock()
+    assert dex_service.resolve_token_address(client, 8453, _USDC) == _USDC.lower()
+    client.dex.token_search.assert_not_called()
+
+
+@pytest.mark.parametrize("changes", [
+    {"input_amount": 1_000_001}, {"chain_id": 1}, {"src_token_address": _WETH},
+    {"dst_token_address": _USDC},
+])
+def test_quote_response_cannot_change_requested_operation(monkeypatch, changes):
+    client = _client_with_decimals({_WETH.lower(): 18, _USDC.lower(): 6})
+    client.dex.get_quote.return_value.model_dump.return_value = {
+        "quote_id": "q1", "input_amount": 1_000_000, "output_amount": 400_000_000_000_000,
+        **changes,
+    }
+    monkeypatch.setattr(dex_service, "mangrove_markets_client", lambda: client)
+    with pytest.raises(SdkError, match="differs"):
+        dex_service.get_quote(_USDC, _WETH, 1, 8453)
 
 
 # -- live swap preflight (server-side replacement for preflight-swap.sh) ----

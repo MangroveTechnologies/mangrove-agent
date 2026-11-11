@@ -294,16 +294,16 @@ def test_finalized_receipt_adapter_clean_and_known_bad(ledger, monkeypatch, muta
 def test_execute_preflight_and_locally_hashed_broadcast_controls(ledger, monkeypatch, outcome):
     from eth_utils import keccak
 
-    from src.services import order_executor, wallet_manager
+    from src.services import order_executor
     from src.shared.clients import mangrove
+    from tests.dex_fixtures import generic_swap_payload
 
     localhash = "0x" + keccak(hexstr="0x0102").hex()
-    router = next(iter(wallet_manager._ONEINCH_ROUTERS))
 
     class RPC:
         def __call__(self, method, args):
             if method == "eth_chainId":
-                return "0x1" if outcome == "wrong_chain" else hex(84532)
+                return "0x1" if outcome == "wrong_chain" else hex(8453)
             if method == "eth_getBlockByNumber":
                 return dict(number="0x123", hash="0x" + "bb" * 32)
             if method == "eth_getTransactionReceipt":
@@ -322,15 +322,8 @@ def test_execute_preflight_and_locally_hashed_broadcast_controls(ledger, monkeyp
     sdk = MagicMock()
     sdk.dex.token_search.return_value = [SimpleNamespace(symbol="BTC", address=ASSET, decimals=18)]
     sdk.dex.token_info.return_value = SimpleNamespace(decimals=6)
-    payload = dict(
-        to=router,
-        value=1 if outcome == "native_value" else 0,
-        data="0x1234",
-        gas=100000,
-        gasPrice=1,
-        nonce=0,
-        chainId=84532,
-    )
+    payload = generic_swap_payload(QUOTE, ASSET, 200_000_000, 99_999, WALLET)
+    payload["value"] = 1 if outcome == "native_value" else 0
     sdk.dex.prepare_swap.return_value = SimpleNamespace(payload=payload)
     sdk.dex.approve_token.return_value = None
     monkeypatch.setattr(mangrove, "mangrove_markets_client", lambda: sdk)
@@ -341,7 +334,10 @@ def test_execute_preflight_and_locally_hashed_broadcast_controls(ledger, monkeyp
                 conn.execute("UPDATE strategies SET status='inactive' WHERE id='s'")
             if outcome == "stale_during_quote":
                 conn.execute("UPDATE strategies SET book_revision=book_revision+1 WHERE id='s'")
-        return dict(quote_id="quote", output_amount=99999)
+        return dict(
+            quote_id="quote", input_amount_base_units=200_000_000,
+            output_amount=99999, output_amount_base_units=99999,
+        )
 
     monkeypatch.setattr(dex.dex_service, "get_quote", quote)
 
@@ -363,10 +359,10 @@ def test_execute_preflight_and_locally_hashed_broadcast_controls(ledger, monkeyp
     sdk.dex.broadcast.side_effect = broadcast
     oid = dex.reserve("s", "eval", intent(), dict(id="p"), confirmed.snapshot_revision("s"))
     if outcome == "clean":
-        dex.execute(oid, intent(), WALLET, 84532, 0.002, 1000)
+        dex.execute(oid, intent(), WALLET, 8453, 0.002, 1000)
     else:
         with pytest.raises(Exception):
-            dex.execute(oid, intent(), WALLET, 84532, 0.002, 1000)
+            dex.execute(oid, intent(), WALLET, 8453, 0.002, 1000)
     row = dex.orders("s")[0]
     state, positions, _, complete = confirmed.dex_inputs("s", 100)
     assert positions == [] and state["cash_balance"] == 1000
@@ -383,6 +379,102 @@ def test_execute_preflight_and_locally_hashed_broadcast_controls(ledger, monkeyp
         assert row["tx_hash"] == localhash
         assert row["status"] == ("pending" if outcome == "clean" else "uncertain")
         assert complete is False
+
+
+class _FinalRPC:
+    def __call__(self, method, args):
+        if method == "eth_chainId":
+            return hex(8453)
+        if method == "eth_getBlockByNumber":
+            return dict(number="0x123", hash="0x" + "bb" * 32)
+        if method == "eth_getTransactionReceipt":
+            return None
+        raise AssertionError(method)
+
+    def close(self):
+        pass
+
+
+def test_execute_approves_before_preparing_and_binds_the_swap_to_the_post_approval_quote(ledger, monkeypatch):
+    """The provider prepares a swap only against confirmed allowance, and the
+    minimum output must come from the quote that the prepared swap uses."""
+    from src.services import order_executor
+    from src.services.transaction_intent import ONEINCH_ROUTING_FEE_BPS, minimum_return
+    from src.shared.clients import mangrove
+    from tests.dex_fixtures import approval_payload, generic_swap_payload
+
+    calls = []
+    monkeypatch.setattr(dex, "receipt_rpc", lambda _: _FinalRPC())
+    sdk = MagicMock()
+    sdk.dex.token_search.return_value = [SimpleNamespace(symbol="BTC", address=ASSET, decimals=18)]
+    sdk.dex.token_info.return_value = SimpleNamespace(decimals=6)
+    sdk.dex.approve_token.side_effect = lambda **kwargs: (
+        calls.append("approve") or SimpleNamespace(payload=approval_payload(QUOTE, kwargs["amount"]))
+    )
+    monkeypatch.setattr(mangrove, "mangrove_markets_client", lambda: sdk)
+    outputs = iter([99_999, 95_000])  # the price moves while the approval confirms
+
+    def quote(**kwargs):
+        calls.append("quote")
+        out = next(outputs)
+        return dict(
+            quote_id=f"quote-{out}", input_amount_base_units=200_000_000,
+            output_amount=out, output_amount_base_units=out,
+        )
+
+    def prepare(**kwargs):
+        calls.append("prepare:" + kwargs["quote_id"])
+        out = int(kwargs["quote_id"].split("-")[1])
+        floor = minimum_return(out, 0.002, routing_fee_bps=ONEINCH_ROUTING_FEE_BPS)
+        return SimpleNamespace(payload=generic_swap_payload(QUOTE, ASSET, 200_000_000, floor, WALLET))
+
+    def sign(payload, wallet, *, chain_id, intent):
+        calls.append("sign:" + intent.kind)
+        signed.append(intent)
+        return "0x01" if intent.kind == "approval" else "0x02"
+
+    signed = []
+    monkeypatch.setattr(dex.dex_service, "get_quote", quote)
+    sdk.dex.prepare_swap.side_effect = prepare
+    sdk.dex.broadcast.side_effect = lambda **kwargs: calls.append("broadcast") or SimpleNamespace(tx_hash=None)
+    monkeypatch.setattr(order_executor, "wallet_sign", sign)
+    monkeypatch.setattr(order_executor, "_poll_tx", lambda *a: calls.append("poll") or {"status": "confirmed"})
+
+    oid = dex.reserve("s", "eval", intent(), dict(id="p"), confirmed.snapshot_revision("s"))
+    dex.execute(oid, intent(), WALLET, 8453, 0.002, 1000)
+
+    assert calls == [
+        "quote", "approve", "sign:approval", "broadcast", "poll",
+        "quote", "prepare:quote-95000", "sign:swap", "broadcast",
+    ]
+    approval, swap = signed
+    assert approval.amount == swap.amount == 200_000_000
+    assert swap.min_return_amount == minimum_return(95_000, 0.002, routing_fee_bps=ONEINCH_ROUTING_FEE_BPS)
+    context = json.loads(dex.orders("s")[0]["context_json"])
+    assert context["gross_quote_output_base_units"] == "95000"
+    assert context["approval_required"] is True
+
+
+def test_execute_refuses_a_quote_amount_that_differs_from_settlement_decimals(ledger, monkeypatch):
+    from src.services import order_executor
+    from src.shared.clients import mangrove
+
+    monkeypatch.setattr(dex, "receipt_rpc", lambda _: _FinalRPC())
+    sdk = MagicMock()
+    sdk.dex.token_search.return_value = [SimpleNamespace(symbol="BTC", address=ASSET, decimals=18)]
+    sdk.dex.token_info.return_value = SimpleNamespace(decimals=6)
+    monkeypatch.setattr(mangrove, "mangrove_markets_client", lambda: sdk)
+    monkeypatch.setattr(dex.dex_service, "get_quote", lambda **kwargs: dict(
+        quote_id="q", input_amount_base_units=200_000_000_000_000_000_000,
+        output_amount=1, output_amount_base_units=1,
+    ))
+    sign = MagicMock()
+    monkeypatch.setattr(order_executor, "wallet_sign", sign)
+    oid = dex.reserve("s", "eval", intent(), dict(id="p"), confirmed.snapshot_revision("s"))
+    with pytest.raises(SdkError, match="amount"):
+        dex.execute(oid, intent(), WALLET, 8453, 0.002, 1000)
+    sdk.dex.approve_token.assert_not_called()
+    sign.assert_not_called()
 
 
 def test_tied_new_close_cursor_replays_complete_history(ledger):

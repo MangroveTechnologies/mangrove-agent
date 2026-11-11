@@ -23,7 +23,7 @@ trading action this agent takes.
 
 1. `${CLAUDE_PLUGIN_ROOT}/.claude/rules/trading-bot-workflow.md` — how to load live server workflow instructions over MCP.
 2. `${CLAUDE_PLUGIN_ROOT}/.claude/rules/wallet-presentation.md` — creating, importing and presenting
-   wallets; the out-of-band secret flow; testnet-first defaults; the 1inch-only signing guard.
+   wallets; the out-of-band secret flow; testnet-first defaults; strict transaction-intent signing.
 3. `${CLAUDE_PLUGIN_ROOT}/.claude/rules/risk-management.md` — engine-side per-strategy gates and the
    agent-side portfolio kill switch, so you explain blocked trades correctly and never rebuild a
    control that already exists.

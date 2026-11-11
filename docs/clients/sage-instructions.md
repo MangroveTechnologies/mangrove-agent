@@ -245,7 +245,7 @@ a new paid launch; preserve its original operation identity for recovery.
 
 ## SOURCE: .claude/rules/wallet-presentation.md
 
-<!-- sha256: 3c3457037f7a8c7ced7590b4f8630004432b0b1556c03d4bd3b0643e116f6b01 -->
+<!-- sha256: b5a726e727e6b3ad3b2bd67c089795d573d50b4564b77bb30beea256c12b17c5 -->
 
 # Wallet Presentation
 
@@ -285,22 +285,22 @@ For `create_wallet`, default to **testnet** unless the user says "mainnet" / "re
 - Network: `testnet`
 - Chain ID: `84532` (Base Sepolia)
 
-State: *"Creating your wallet on Base Sepolia (testnet). You can fund it from a free sepolia-ETH faucet and practice the signing + swap flow with zero real-money risk."*
+State: *"Creating your wallet on Base Sepolia (testnet). You can fund it from a free sepolia-ETH faucet and practice x402 payments with zero real-money risk. Swaps are not signed on Base Sepolia."*
 
 **Mainnet** (only when explicitly asked): chain `evm`, network `mainnet`, chain ID `8453` (Base). Always flag the switch: *"Switching to Base mainnet - this wallet will transact real funds. Start with 1-5 USDC test deposit and use paper mode before any live allocation."*
 
-**Why testnet-first:** new users learn the signing + swap mechanics safely. A compromised key on testnet is free to recover from; on mainnet it costs real USDC (see the 2026-04-24 EIP-7702 drain that prompted the hard signing guard).
+**Why testnet-first:** new users learn wallet and payment mechanics safely. A compromised key on testnet is free to recover from; on mainnet it costs real USDC (see the 2026-04-24 EIP-7702 drain that prompted the hard signing guard). Swap signing is refused on Base Sepolia; do not promise a testnet swap.
 
 ## Signing guard -- what the agent can and cannot sign
 
-Hard invariant enforced at `server/src/services/wallet_manager.py::_validate_sign_target`. The agent signs ONLY:
+Hard invariant enforced by `transaction_intent.validate_transaction`, which `wallet_manager.sign()` runs before the key is decrypted. The intent comes from the original order, never the prepared transaction. The agent signs ONLY:
 
-1. Direct calls to known 1inch AggregationRouters (V5 `0x1111111254...A960582`, V6 `0x111111125421...f8842A65`).
-2. ERC-20 `approve(spender, amount)` where the spender is a 1inch router (required before a swap).
+1. A generic 1inch V5/V6 router swap whose decoded chain, wallet, assets, amount, minimum output, recipient and value match the intent.
+2. An ERC-20 `approve(router, amount)` for exactly the intended amount.
 
-Anything else -- arbitrary token transfers to EOAs, non-1inch DEX routing, EIP-7702 set-code txs, `authorizationList` fields, EIP-191 `personal_sign` messages -- is refused **before** the private key is decrypted. Defense in depth against SDK compromise, supply-chain attacks, and phishing flows that ask the agent to sign a delegation the user didn't understand.
+Anything else -- EOA transfers, unknown selectors, EIP-7702 set-code txs, `authorizationList` fields, unreviewed chains, `personal_sign` messages -- is refused **before** the private key is decrypted. Defense in depth against SDK compromise, supply-chain attacks, and phishing flows that ask the agent to sign a delegation the user didn't understand.
 
-If the SDK legitimately routes through a different aggregator one day, the `_ONEINCH_ROUTERS` allowlist must be expanded explicitly with review -- never bypass the guard silently.
+Supporting another router, function or chain is a reviewed change to `transaction_intent.py` -- never bypass the guard.
 
 ## Approving remote actions
 
