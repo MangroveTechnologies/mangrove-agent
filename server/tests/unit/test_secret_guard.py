@@ -55,6 +55,19 @@ def test_wordlist_matches_the_claude_hook_list():
     assert secret_guard.bip39_words() == hook_words
 
 
+def test_wordlist_reads_the_repository_copy_without_eth_account(monkeypatch):
+    def missing(_package):
+        raise ModuleNotFoundError("eth_account")
+
+    monkeypatch.setattr(secret_guard.resources, "files", missing)
+    assert secret_guard._wordlist_text().split() == list(secret_guard._bip39_list())
+
+
+def test_wordlist_falls_back_to_eth_account_without_the_repository_copy(monkeypatch, tmp_path):
+    monkeypatch.setattr(secret_guard, "_REPOSITORY_WORDLIST", tmp_path / "missing.txt")
+    assert secret_guard._wordlist_text().split() == list(secret_guard._bip39_list())
+
+
 @pytest.mark.parametrize("arguments,kind", [
     ({"vault_token": FAKE_KEY}, secret_guard.EVM_KEY),
     ({"config": {"private_key": FAKE_KEY}}, secret_guard.EVM_KEY),
@@ -109,9 +122,14 @@ def test_ordinary_results_pass(result):
 
 # --- Parity with the Claude hook --------------------------------------------
 
+# Distinct, unordered wordlist words with a bad checksum, built from wordlist positions so this
+# file holds no phrase text.
+TYPO_PHRASE = " ".join(_WORDS[i] for i in (2047,2,1407,680,1875,1111,213,1993,1230,1124,359,553))
+
 _HOOK_CASES = [
     (FAKE_KEY, True),
-    (FAKE_PHRASE, True),
+    (TYPO_PHRASE, True),
+    (FAKE_PHRASE, False),  # an alphabetical excerpt of the wordlist
     (f"seed {FAKE_SEED}", True),
     (PROSE, False),
     ("0x" + "1f" * 31, False),
@@ -122,13 +140,14 @@ _HOOK_CASES = [
 @pytest.mark.skipif(shutil.which("bash") is None or shutil.which("python3") is None,
                     reason="hook needs bash and python3")
 @pytest.mark.parametrize("text,blocked", _HOOK_CASES)
-def test_strict_text_scan_agrees_with_the_hook_user_mode(text, blocked):
+def test_hook_user_mode_agrees_with_the_free_text_argument_scan(text, blocked):
     hook = subprocess.run(
         ["bash", str(HOOKS / "block-wallet-secrets.sh"), "--mode", "user"],
-        input=text, capture_output=True, text=True, timeout=20,
+        input=json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": text}),
+        capture_output=True, text=True, timeout=20,
     )
     assert hook.returncode == (2 if blocked else 0)
-    assert (secret_guard.find_in_text(text) is not None) is blocked
+    assert (secret_guard.find_in_arguments({"prompt": text}) is not None) is blocked
 
 
 # --- Bare hex keys (MetaMask export format) ---------------------------------
