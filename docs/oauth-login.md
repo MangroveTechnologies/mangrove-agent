@@ -54,7 +54,7 @@ switching; changing modes does not automatically revoke the other credential.
 
 ## Reconnect, additional permissions and disconnect
 
-Use the same setup entry point for sign-in and extra permissions. Setup automatically uses a saved OAuth connection and reports that you are already signed in. If sign-in is needed, it opens the browser automatically. `--oauth login` explicitly starts a new browser sign-in when you want to reconnect or change accounts. Status and disconnect require the local agent to be running:
+Use the same setup entry point for sign-in and extra permissions. Setup verifies a saved OAuth connection against the live MCP catalog before reporting that you are already signed in. If verification fails, setup stops with reconnect instructions instead of completing with only local tools. If sign-in is needed, it opens the browser automatically. `--oauth login` explicitly starts a new browser sign-in when you want to reconnect or change accounts. Status and disconnect require the local agent to be running:
 
 ```bash
 ./scripts/setup.sh --oauth status
@@ -87,7 +87,7 @@ command confirms when all retained grants have been cleaned up.
 
 ## Status reporting
 
-Agent status identifies the active `access_mode`. Its `x402_spend` field is null
+Agent status identifies the active `access_mode`. In OAuth mode, `oauth_connection` reports local credential readiness and a reconnect action when needed; it is not a live server verification. Tool discovery reports `mangroveai_error` when the remote catalog cannot be loaded. An incomplete refresh requires reconnecting because replaying a potentially rotated refresh token is unsafe. Its `x402_spend` field is null
 for OAuth and API-key connections; that wallet budget is not account quota.
 Saved spending records remain available through the explicit spending-status tool.
 

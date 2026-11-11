@@ -1624,6 +1624,8 @@ def test_oauth_setup_opens_browser_and_waits_for_callback(monkeypatch, capsys, c
     calls = []
     def request(cfg, path, payload=None, **kwargs):
         calls.append((path, payload))
+        if path.endswith('/tools'):
+            return {'mangroveai_status': 'available'}
         if path.endswith('/start'):
             return {'authorization_url': 'https://api.mangrovedeveloper.ai/oauth/authorize?state=example'}
         if path.endswith('/status'):
@@ -1644,6 +1646,8 @@ def test_oauth_setup_automatically_reuses_connection(monkeypatch, capsys, comman
     cfg = {'API_KEYS': 'local-private', 'AUTH_ENABLED': True, 'MANGROVE_ACCESS_MODE': 'oauth'}
     started = []
     def request(cfg, path, payload=None, **kwargs):
+        if path.endswith('/tools'):
+            return {'mangroveai_status': 'available'}
         if path.endswith('/start'):
             started.append(payload)
             return {'authorization_url': 'https://api.mangrovedeveloper.ai/oauth/authorize?state=example'}
@@ -1729,6 +1733,8 @@ def test_oauth_reconnect_reports_required_local_cleanup(monkeypatch, capsys):
     def request(cfg, path, payload=None, **kwargs):
         if path.endswith('/status'):
             return next(states)
+        if path.endswith('/tools'):
+            return {'mangroveai_status': 'available'}
         if path.endswith('/start'):
             return {'authorization_url': 'https://api.mangrovedeveloper.ai/oauth/authorize?state=synthetic'}
         return {}
@@ -2445,3 +2451,51 @@ def test_robinhood_mid_login_skip_continues_without_retry_prompt(monkeypatch, ca
     output = capsys.readouterr().out
     assert 'Robinhood: skipped;' in output
     assert 'connected and verified' not in output
+
+@pytest.mark.parametrize('connected', [True, False])
+def test_oauth_setup_rejects_unavailable_catalog(monkeypatch, capsys, connected):
+    cfg = {'API_KEYS': 'local-private', 'AUTH_ENABLED': True, 'MANGROVE_ACCESS_MODE': 'oauth'}
+    started = []
+    def request(cfg, path, payload=None, **kwargs):
+        if path.endswith('/status'):
+            return {'connected': connected or bool(started), 'pending': False,
+                    'expires_at': 456 if started else 123}
+        if path.endswith('/start'):
+            started.append(True)
+            return {'authorization_url': 'https://api.mangrovedeveloper.ai/oauth/authorize?state=example'}
+        if path.endswith('/tools'):
+            return {'mangroveai_status': 'unavailable', 'tools': [{'name': 'status'}]}
+        return {}
+    monkeypatch.setattr(setup, 'request', request)
+    monkeypatch.setattr(setup.webbrowser, 'open', Mock())
+    with pytest.raises(setup.SetupError, match='verification failed.*Setup is incomplete'):
+        setup.oauth_command(cfg, 'oauth-setup', [])
+    output = capsys.readouterr().out
+    assert 'Using your saved OAuth connection' not in output
+    assert 'Connected to Mangrove.' not in output
+
+
+def test_final_verification_cannot_skip_failed_oauth_catalog(monkeypatch, capsys):
+    monkeypatch.setattr(sys, 'argv', ['setup_support.py', 'verify'])
+    monkeypatch.setattr(setup, 'read_config', lambda: {'MANGROVE_ACCESS_MODE': 'oauth'})
+    monkeypatch.setattr(setup, 'check', lambda cfg: None)
+    monkeypatch.setattr(setup, 'check_upstream', lambda cfg: True)
+    def request(cfg, path, **kwargs):
+        if path == '/health':
+            return {'scheduler_running': True}
+        return {'mangroveai_status': 'unavailable', 'tools': [
+            {'name': name} for name in ['create_wallet', 'import_wallet', 'list_wallets']]}
+    monkeypatch.setattr(setup, 'request', request)
+    assert setup.main() == 1
+    assert 'setup is incomplete' in capsys.readouterr().err
+
+
+def test_oauth_status_shows_cleanup_for_still_connected_grant(monkeypatch, capsys):
+    cfg = {'API_KEYS': 'synthetic-local', 'AUTH_ENABLED': True, 'MANGROVE_ACCESS_MODE': 'oauth'}
+    monkeypatch.setattr(setup, 'request', lambda *a, **k: {
+        'connected': True, 'revocation_pending': True,
+        'action': 'Run ./scripts/setup.sh --oauth disconnect to finish cleanup.'})
+    setup.oauth_command(cfg, 'oauth-status', [])
+    output = capsys.readouterr().out
+    assert 'Connected.' in output
+    assert '--oauth disconnect' in output

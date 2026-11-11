@@ -73,8 +73,15 @@ class PricedFastMCP(FastMCP):
         try:
             upstream = await mangrove_proxy.catalog()
             self.mangroveai_available = True
-        except AgentError:
+            self.mangroveai_error = None
+        except AgentError as error:
             self.mangroveai_available = False
+            self.mangroveai_error = {
+                'code': error.code,
+                'message': ('Mangrove OAuth connection could not be verified. Run '
+                            './scripts/setup.sh --auth oauth --oauth login to reconnect.'
+                            if oauth_mode else 'MangroveAI tool discovery failed. Check the configured connection.'),
+            }
             upstream = []
         names = {tool.name for tool in result}
         if any(tool.name in names for tool in upstream):
