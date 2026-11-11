@@ -136,6 +136,13 @@ class AllocationInsufficient(AgentError):
     http_status = 400
 
 
+class WalletInputBalanceEmpty(AgentError):
+    """The swap wallet holds none of the token it would spend (no tx signed)."""
+
+    code = "WALLET_INPUT_BALANCE_EMPTY"
+    http_status = 400
+
+
 # -- Knowledge / market data -------------------------------------------
 
 

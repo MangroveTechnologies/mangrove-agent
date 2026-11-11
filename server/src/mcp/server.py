@@ -3,6 +3,13 @@
 Mounted at /mcp on the FastAPI app via Streamable HTTP transport.
 """
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
+from mcp.shared.exceptions import UrlElicitationRequiredError
+from pydantic import ValidationError
+
+from src.shared.logging import get_logger
+
+_log = get_logger(__name__)
 
 _mcp_server = None
 
@@ -16,6 +23,19 @@ _OAUTH_UNSUPPORTED_LOCAL = frozenset({
     'marketplace_prepare', 'marketplace_submit',
     'agent_adopt_strategy', 'agent_activate_deployment', 'agent_get_deployment',
 })
+
+
+def _error_message(exc: Exception) -> str:
+    """The client-facing text of a tool error, with validation input values left out."""
+    cause = exc if isinstance(exc, ValidationError) else exc.__cause__
+    if not isinstance(cause, ValidationError):
+        return str(exc)
+    details = '; '.join(
+        f"{'.'.join(str(part) for part in error['loc']) or 'arguments'}: {error['msg']}"
+        for error in cause.errors(include_input=False, include_url=False)
+    )
+    prefix = 'Invalid arguments' if cause is exc else str(exc).split(':', 1)[0]
+    return f'{prefix}: {details}'
 
 
 class PricedFastMCP(FastMCP):
@@ -69,6 +89,60 @@ class PricedFastMCP(FastMCP):
         return result + upstream
 
     async def call_tool(self, name, arguments):
+        """Apply the client-independent secret guard around every tool call.
+
+        Every MCP client reaches tools through this method, so the guard
+        covers Claude Code, the command client used by other hosts, the
+        restricted launcher and remote clients alike. Arguments are scanned
+        before dispatch and results after it. A raised error is re-raised with
+        argument validation details stripped of input values and with every
+        argument value it repeats removed; an error that still holds a secret
+        shape is replaced by a SECRET_IN_ERROR failure. See
+        src/shared/secret_guard.py and .claude/hooks/README.md.
+        """
+        from src.mcp import mangrove_proxy
+        from src.shared import secret_guard
+
+        found = secret_guard.find_in_arguments(arguments or {})
+        if found:
+            _log.warning('mcp.secret_guard.arguments_refused', tool=name, kind=found)
+            return mangrove_proxy.failure(
+                'SECRET_IN_ARGUMENTS',
+                f'The tool arguments contain {secret_guard.LABELS[found]}. The call was refused '
+                'and nothing was sent to any tool or upstream service. To import a wallet, run '
+                './scripts/stash-secret.sh in your own terminal and pass only the vault token '
+                'from its handoff file. Remove the secret from the chat.',
+            )
+        try:
+            result = await self._dispatch(name, arguments)
+        except UrlElicitationRequiredError:
+            raise
+        except Exception as exc:
+            message, found = secret_guard.redact_error(_error_message(exc), arguments or {})
+            if found:
+                _log.error('mcp.secret_guard.error_withheld', tool=name, kind=found)
+                return mangrove_proxy.failure(
+                    'SECRET_IN_ERROR',
+                    f'The tool failed and its error message was withheld because it contained '
+                    f'{secret_guard.LABELS[found]}. The operation may have completed; inspect its '
+                    'state before retrying.',
+                )
+            if message != str(exc):
+                raise ToolError(message) from None
+            raise
+        found = secret_guard.find_in_result(result)
+        if found:
+            _log.error('mcp.secret_guard.result_withheld', tool=name, kind=found)
+            return mangrove_proxy.failure(
+                'SECRET_IN_RESULT',
+                f'The tool response contained {secret_guard.LABELS[found]} in a secret field and '
+                'was withheld. The operation may have completed; inspect its state before '
+                'retrying. Report this to the maintainers: tool responses must carry only a '
+                'vault token.',
+            )
+        return result
+
+    async def _dispatch(self, name, arguments):
         from src.mcp import mangrove_proxy, marketplace_proxy
         from src.services import mangrove_oauth
         from src.services.marketplace_catalog import RETIRED_READ_TOOLS, is_markets_tool
