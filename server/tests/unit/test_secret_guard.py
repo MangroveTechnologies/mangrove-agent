@@ -359,7 +359,7 @@ def test_large_adversarial_text_is_scanned_in_linear_time(make_text):
     assert len(small) >= 1_000_000 and len(large) >= 2_000_000
     for scan in (lambda text: secret_guard.find_in_arguments({"query": text}),
                  lambda text: secret_guard.find_in_arguments({"payload": text}),
-                 lambda text: secret_guard.find_in_result(text)):
+                 secret_guard.find_in_result):
         timings = []
         for text in (small, large):
             started = time.perf_counter()
