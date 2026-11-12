@@ -955,7 +955,8 @@ def _state_lock_is_held(state_dir):
 
 
 def test_serve_releases_state_lock_only_after_in_flight_dispatch(custody, short_socket_dir, monkeypatch):
-    """A successor cannot sweep reservations while a request may still store a signature."""
+    """A successor cannot sweep reservations while a request may still store a signature,
+    and no request can start once the lock is released."""
     import threading
     from types import SimpleNamespace
 
@@ -982,8 +983,16 @@ def test_serve_releases_state_lock_only_after_in_flight_dispatch(custody, short_
                     continue
             raise SystemExit(0)
 
+    dispatch_locks = []
+
+    def recorded_lock():
+        dispatch_locks.append(threading.Lock())
+        return dispatch_locks[-1]
+
     monkeypatch.setattr(daemon, "socket", SimpleNamespace(
         socket=StoppableListener, AF_UNIX=socket.AF_UNIX, SOCK_STREAM=socket.SOCK_STREAM))
+    monkeypatch.setattr(daemon, "threading", SimpleNamespace(
+        Lock=recorded_lock, BoundedSemaphore=threading.BoundedSemaphore, Thread=threading.Thread))
     server, errors = _serve_in_thread(monkeypatch, settings, broker_class=SlowBroker)
     replies = []
     client = threading.Thread(target=lambda: replies.append(
@@ -999,6 +1008,7 @@ def test_serve_releases_state_lock_only_after_in_flight_dispatch(custody, short_
     assert not server.is_alive() and not errors
     assert replies == [{"ok": True, "result": {"echo": "list_wallets"}}]
     assert not _state_lock_is_held(state_dir)
+    assert len(dispatch_locks) == 1 and dispatch_locks[0].locked()
     assert not Path(settings["socket_path"]).exists()
 
 
@@ -1030,18 +1040,6 @@ def test_shutdown_ignores_signals_before_waiting_for_dispatch(custody, short_soc
     with pytest.raises(SystemExit):
         terminate(signal.SIGTERM, None)
     assert installed == ignored
-
-
-def test_released_state_lock_keeps_dispatch_closed(protected_directory):
-    """After shutdown releases the state lock, no later request can begin dispatch."""
-    import threading
-
-    from src.custody import daemon
-
-    dispatch_lock = threading.Lock()
-    daemon._release_state_lock(daemon._acquire_state_lock(protected_directory), dispatch_lock)
-    assert dispatch_lock.locked()
-    assert not _state_lock_is_held(protected_directory)
 
 
 def test_migration_never_prints_a_crafted_skipped_address(custody, protected_directory, capsys):

@@ -91,23 +91,6 @@ def _ignore_shutdown_signals() -> None:
         pass  # Off the main thread, no Python signal handler can interrupt this thread.
 
 
-def _release_state_lock(descriptor: int, dispatch_lock: threading.Lock) -> None:
-    """Release the state directory lock once no request can still sign.
-
-    Taking ``dispatch_lock`` and keeping it waits for a request that is
-    reserving, signing or journaling, and stops any later request from
-    starting. Every reservation this daemon made then has its signature stored
-    or has been refunded, so a successor's startup sweep cannot refund a
-    signature that is about to leave custody. ``serve()`` ignores SIGTERM and
-    SIGINT before calling this, so no signal can interrupt the wait. The
-    descriptor is closed on every path.
-    """
-    try:
-        dispatch_lock.acquire()
-    finally:
-        os.close(descriptor)
-
-
 def _handle(connection, broker, agent_uid, dispatch_lock, slots):
     """Read, authorize and answer one client; only dispatch is serialized."""
     try:
@@ -135,11 +118,11 @@ def serve(settings):
     if path.exists() or path.is_symlink():
         # Do not unlink an existing daemon's endpoint or arbitrary files.
         raise ValueError("Custody socket already exists; stop the old service and remove its stale socket as the administrator")
-    state_lock = _acquire_state_lock(Path(settings["state_dir"]))
     # Each client reads its request in its own thread, so a silent or slow
     # client holds one slot until its read deadline instead of blocking the
     # service. Policy and signing still run one request at a time.
     dispatch_lock = threading.Lock()
+    state_lock = _acquire_state_lock(Path(settings["state_dir"]))
     try:
         broker = Broker(settings)
         broker.policy.recover_unfinished()
@@ -170,10 +153,19 @@ def serve(settings):
             finally:
                 path.unlink(missing_ok=True)
     finally:
+        # Release the state lock only once no request can still sign. Taking
+        # dispatch_lock and keeping it waits for a request that is reserving,
+        # signing or journaling and stops any later one, so every reservation
+        # has its signature stored or has been refunded before a successor's
+        # startup sweep can run. Stop signals are ignored first, and the
+        # handler ignores repeats, so no signal can cut the wait short.
         try:
             _ignore_shutdown_signals()
         finally:
-            _release_state_lock(state_lock, dispatch_lock)
+            try:
+                dispatch_lock.acquire()
+            finally:
+                os.close(state_lock)
 
 
 def main():
