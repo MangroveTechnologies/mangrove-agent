@@ -55,7 +55,7 @@ def _emit(request, response, is_json):
             if isinstance(candidate, str) and candidate in _METHODS:
                 method = candidate
         except (ValueError, UnicodeError, RecursionError):
-            pass
+            pass  # Malformed request metadata leaves the method unknown.
         code, reason = "unknown", "unknown"
         try:
             error = response.document().get("error") if is_json else None
@@ -74,7 +74,7 @@ def _emit(request, response, is_json):
                     elif message.startswith("Bad Request: Unsupported protocol version:"):
                         reason = "protocol"
         except (ValueError, UnicodeError, RecursionError):
-            pass
+            pass  # Malformed error bodies must not affect the delivered response.
         # Do not inherit client-supplied correlation IDs or arbitrary bound
         # logging context: this event has a strictly finite, non-secret schema.
         contextvars.Context().run(
@@ -91,7 +91,8 @@ class MCPTransportDiagnostics:
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
-            return await self.app(scope, receive, send)
+            await self.app(scope, receive, send)
+            return
         request, response = _Body(), _Body()
         rejected, is_json, emitted = False, False, False
 
