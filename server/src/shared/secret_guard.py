@@ -133,7 +133,8 @@ only exemptions are:
 - tool output and errors: a line holding only a hash label and one 64-hex
   value (``Transaction hash: 0x...``), with spaces or tabs only;
 - structured MCP tool results: a 64-hex value that is the whole value of a
-  public-hash field (``tx_hash``, ``block_hash``, ``sha256`` and similar).
+  public-hash field (``tx_hash``, ``block_hash``, ``sha256`` and similar), or
+  the SHA-256 ``version`` in a server skill document's metadata.
 
 Label words in free text never exempt a value in hook content.
 
@@ -1027,6 +1028,20 @@ def _decode_json(text: str) -> Any:
         return None
 
 
+def _skill_version_metadata(value: dict) -> bool:
+    """Recognize the server skill document contract, not arbitrary version fields.
+
+    load_skill uses a SHA-256 content fingerprint as its opaque version. Only
+    that field gets the public-hash treatment; instructions and resources are
+    still scanned, including below secret-named ancestors.
+    """
+    return (isinstance(value.get("skill"), str) and bool(value["skill"])
+            and isinstance(value.get("instructions"), str)
+            and all(isinstance(value.get(key), list)
+                    and all(isinstance(name, str) for name in value[key])
+                    for key in ("required_tools", "optional_tools")))
+
+
 def scan_hook_content(value: Any, *, output: bool, structured: bool = False) -> tuple[Any, bool]:
     """Strict scan of client hook content; returns (shape-preserving redaction, found).
 
@@ -1056,10 +1071,13 @@ def scan_hook_content(value: Any, *, output: bool, structured: bool = False) -> 
             result, hit = {}, False
             endpoint = not secret and _rpc_endpoint(item)
             rpc_read = (rpc_ok or endpoint) and not secret and transaction_read_request(item)
+            skill_metadata = output and structured and not secret and _skill_version_metadata(item)
             for key, child in item.items():
                 clean_key, key_hit = scan(str(key), False, "", depth + 1, False, exempt)
                 name = normalize_field(str(key))
                 child_field = _RPC_HASH_PARAM if rpc_read and key == "params" else name
+                if skill_metadata and key == "version":
+                    child_field = "sha256"
                 # Only the endpoint dictionary's own field values may hold the request.
                 clean, found = scan(child, secret or is_key_field(str(key), arguments=True),
                                     child_field, depth + 1, endpoint, exempt)
