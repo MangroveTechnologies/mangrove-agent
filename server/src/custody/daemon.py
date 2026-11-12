@@ -82,6 +82,19 @@ def _acquire_state_lock(state_dir: Path) -> int:
     return descriptor
 
 
+def _release_state_lock(descriptor: int, dispatch_lock: threading.Lock) -> None:
+    """Release the state directory lock once no request can still sign.
+
+    Taking ``dispatch_lock`` and keeping it waits for a request that is
+    reserving, signing or journaling, and stops any later request from
+    starting. Every reservation this daemon made then has its signature stored
+    or has been refunded, so a successor's startup sweep cannot refund a
+    signature that is about to leave custody.
+    """
+    dispatch_lock.acquire()
+    os.close(descriptor)
+
+
 def _handle(connection, broker, agent_uid, dispatch_lock, slots):
     """Read, authorize and answer one client; only dispatch is serialized."""
     try:
@@ -109,41 +122,41 @@ def serve(settings):
     if path.exists() or path.is_symlink():
         # Do not unlink an existing daemon's endpoint or arbitrary files.
         raise ValueError("Custody socket already exists; stop the old service and remove its stale socket as the administrator")
-    # The lock descriptor is never closed: the OS releases it when this
-    # process exits, so a successor cannot sweep reservations while a worker
-    # thread of this daemon may still be storing or sending a signature.
-    _acquire_state_lock(Path(settings["state_dir"]))
-    broker = Broker(settings)
-    broker.policy.recover_unfinished()
-    def terminate(_signum, _frame):
-        raise SystemExit(0)
-    signal.signal(signal.SIGTERM, terminate)
-    signal.signal(signal.SIGINT, terminate)
+    state_lock = _acquire_state_lock(Path(settings["state_dir"]))
     # Each client reads its request in its own thread, so a silent or slow
     # client holds one slot until its read deadline instead of blocking the
     # service. Policy and signing still run one request at a time.
     dispatch_lock = threading.Lock()
-    slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
-        listener.bind(str(path))
-        # Traversal is read-only to the agent; peer UID authenticates every call.
-        path.chmod(0o666)
-        listener.listen(16)
-        try:
-            while True:
-                connection, _ = listener.accept()
-                if not slots.acquire(blocking=False):
-                    with connection:
-                        connection.settimeout(1)
-                        try:
-                            send(connection, {"ok": False, "error": "Custody service is busy"})
-                        except (OSError, ValueError):
-                            pass  # A refused client that does not read gets nothing.
-                    continue
-                threading.Thread(target=_handle, args=(connection, broker, settings["agent_uid"], dispatch_lock, slots),
-                                 daemon=True).start()
-        finally:
-            path.unlink(missing_ok=True)
+    try:
+        broker = Broker(settings)
+        broker.policy.recover_unfinished()
+        def terminate(_signum, _frame):
+            raise SystemExit(0)
+        signal.signal(signal.SIGTERM, terminate)
+        signal.signal(signal.SIGINT, terminate)
+        slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(path))
+            # Traversal is read-only to the agent; peer UID authenticates every call.
+            path.chmod(0o666)
+            listener.listen(16)
+            try:
+                while True:
+                    connection, _ = listener.accept()
+                    if not slots.acquire(blocking=False):
+                        with connection:
+                            connection.settimeout(1)
+                            try:
+                                send(connection, {"ok": False, "error": "Custody service is busy"})
+                            except (OSError, ValueError):
+                                pass  # A refused client that does not read gets nothing.
+                        continue
+                    threading.Thread(target=_handle, args=(connection, broker, settings["agent_uid"], dispatch_lock, slots),
+                                     daemon=True).start()
+            finally:
+                path.unlink(missing_ok=True)
+    finally:
+        _release_state_lock(state_lock, dispatch_lock)
 
 
 def main():

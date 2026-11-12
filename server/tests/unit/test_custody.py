@@ -940,34 +940,78 @@ def test_serve_sweeps_crashed_reservations_and_refuses_a_second_daemon(custody, 
     assert not Path(second["socket_path"]).exists()
 
 
-def test_state_lock_outlives_serve_until_process_exit(custody, short_socket_dir, monkeypatch):
-    """Detached worker threads may still be signing after serve() returns, so it keeps the lock."""
+def _state_lock_is_held(state_dir):
+    """Whether another open file description holds the daemon state lock."""
+    import fcntl
+
+    descriptor = os.open(state_dir / "daemon.lock", os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(descriptor)
+    return False
+
+
+def test_serve_releases_state_lock_only_after_in_flight_dispatch(custody, short_socket_dir, monkeypatch):
+    """A successor cannot sweep reservations while a request may still store a signature."""
+    import threading
     from types import SimpleNamespace
 
     from src.custody import daemon
 
     _, _, _, settings = custody
     settings.update(socket_path=str(short_socket_dir / "s.sock"), agent_uid=os.getuid())
+    state_dir = Path(settings["state_dir"])
+    entered, finish, stop = threading.Event(), threading.Event(), threading.Event()
 
-    class StoppingListener(socket.socket):
+    class SlowBroker(_EchoBroker):
+        def dispatch(self, request):
+            entered.set()
+            finish.wait(5)
+            return super().dispatch(request)
+
+    class StoppableListener(socket.socket):
         def accept(self):
+            self.settimeout(0.05)
+            while not stop.is_set():
+                try:
+                    return super().accept()
+                except TimeoutError:
+                    continue
             raise SystemExit(0)
 
-    acquired = []
-    acquire = daemon._acquire_state_lock
-    monkeypatch.setattr(daemon, "_acquire_state_lock", lambda state_dir: acquired.append(acquire(state_dir)) or acquired[-1])
     monkeypatch.setattr(daemon, "socket", SimpleNamespace(
-        socket=StoppingListener, AF_UNIX=socket.AF_UNIX, SOCK_STREAM=socket.SOCK_STREAM))
-    monkeypatch.setattr(daemon.signal, "signal", lambda *_: None)
-    try:
-        with pytest.raises(SystemExit):
-            daemon.serve(settings)
-        assert not Path(settings["socket_path"]).exists()
-        with pytest.raises(ValueError, match="already running"):
-            acquire(Path(settings["state_dir"]))
-    finally:
-        for descriptor in acquired:
-            os.close(descriptor)
+        socket=StoppableListener, AF_UNIX=socket.AF_UNIX, SOCK_STREAM=socket.SOCK_STREAM))
+    server, errors = _serve_in_thread(monkeypatch, settings, broker_class=SlowBroker)
+    replies = []
+    client = threading.Thread(target=lambda: replies.append(
+        _rpc(settings["socket_path"], {"operation": "list_wallets", "arguments": {}})), daemon=True)
+    client.start()
+    assert entered.wait(5)
+    stop.set()
+    time.sleep(0.2)
+    assert server.is_alive() and _state_lock_is_held(state_dir)
+    finish.set()
+    server.join(5)
+    client.join(5)
+    assert not server.is_alive() and not errors
+    assert replies == [{"ok": True, "result": {"echo": "list_wallets"}}]
+    assert not _state_lock_is_held(state_dir)
+    assert not Path(settings["socket_path"]).exists()
+
+
+def test_released_state_lock_keeps_dispatch_closed(protected_directory):
+    """After shutdown releases the state lock, no later request can begin dispatch."""
+    import threading
+
+    from src.custody import daemon
+
+    dispatch_lock = threading.Lock()
+    daemon._release_state_lock(daemon._acquire_state_lock(protected_directory), dispatch_lock)
+    assert dispatch_lock.locked()
+    assert not _state_lock_is_held(protected_directory)
 
 
 def test_migration_never_prints_a_crafted_skipped_address(custody, protected_directory, capsys):
