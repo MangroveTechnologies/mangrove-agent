@@ -1002,6 +1002,34 @@ def test_serve_releases_state_lock_only_after_in_flight_dispatch(custody, short_
     assert not Path(settings["socket_path"]).exists()
 
 
+def test_shutdown_signal_ignores_repeated_signals(custody, short_socket_dir, monkeypatch):
+    """A second SIGTERM or SIGINT cannot interrupt the wait for in-flight signing."""
+    import signal
+    from types import SimpleNamespace
+
+    from src.custody import daemon
+
+    _, _, _, settings = custody
+    settings.update(socket_path=str(short_socket_dir / "s.sock"), agent_uid=os.getuid())
+
+    class StoppingListener(socket.socket):
+        def accept(self):
+            raise SystemExit(0)
+
+    installed = []
+    monkeypatch.setattr(daemon.signal, "signal", lambda signum, handler: installed.append((signum, handler)))
+    monkeypatch.setattr(daemon, "socket", SimpleNamespace(
+        socket=StoppingListener, AF_UNIX=socket.AF_UNIX, SOCK_STREAM=socket.SOCK_STREAM))
+    with pytest.raises(SystemExit):
+        daemon.serve(settings)
+    terminate = dict(installed)[signal.SIGTERM]
+    installed.clear()
+    with pytest.raises(SystemExit):
+        terminate(signal.SIGTERM, None)
+    assert installed == [(signal.SIGTERM, signal.SIG_IGN), (signal.SIGINT, signal.SIG_IGN)]
+    assert not _state_lock_is_held(Path(settings["state_dir"]))
+
+
 def test_released_state_lock_keeps_dispatch_closed(protected_directory):
     """After shutdown releases the state lock, no later request can begin dispatch."""
     import threading

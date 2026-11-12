@@ -89,10 +89,14 @@ def _release_state_lock(descriptor: int, dispatch_lock: threading.Lock) -> None:
     reserving, signing or journaling, and stops any later request from
     starting. Every reservation this daemon made then has its signature stored
     or has been refunded, so a successor's startup sweep cannot refund a
-    signature that is about to leave custody.
+    signature that is about to leave custody. ``serve()`` ignores repeated
+    SIGTERM and SIGINT once shutdown starts, so a second signal cannot
+    interrupt the wait. The descriptor is closed on every path.
     """
-    dispatch_lock.acquire()
-    os.close(descriptor)
+    try:
+        dispatch_lock.acquire()
+    finally:
+        os.close(descriptor)
 
 
 def _handle(connection, broker, agent_uid, dispatch_lock, slots):
@@ -131,6 +135,10 @@ def serve(settings):
         broker = Broker(settings)
         broker.policy.recover_unfinished()
         def terminate(_signum, _frame):
+            # A repeated signal must not interrupt the shutdown wait for a
+            # request that is still signing.
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
             raise SystemExit(0)
         signal.signal(signal.SIGTERM, terminate)
         signal.signal(signal.SIGINT, terminate)
