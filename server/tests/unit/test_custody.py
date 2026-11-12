@@ -1002,8 +1002,8 @@ def test_serve_releases_state_lock_only_after_in_flight_dispatch(custody, short_
     assert not Path(settings["socket_path"]).exists()
 
 
-def test_shutdown_signal_ignores_repeated_signals(custody, short_socket_dir, monkeypatch):
-    """A second SIGTERM or SIGINT cannot interrupt the wait for in-flight signing."""
+def test_shutdown_ignores_signals_before_waiting_for_dispatch(custody, short_socket_dir, monkeypatch):
+    """No SIGTERM or SIGINT can interrupt the wait for in-flight signing, whatever ended serve()."""
     import signal
     from types import SimpleNamespace
 
@@ -1022,12 +1022,14 @@ def test_shutdown_signal_ignores_repeated_signals(custody, short_socket_dir, mon
         socket=StoppingListener, AF_UNIX=socket.AF_UNIX, SOCK_STREAM=socket.SOCK_STREAM))
     with pytest.raises(SystemExit):
         daemon.serve(settings)
-    terminate = dict(installed)[signal.SIGTERM]
+    ignored = [(signal.SIGTERM, signal.SIG_IGN), (signal.SIGINT, signal.SIG_IGN)]
+    terminate = installed[0][1]
+    assert installed == [(signal.SIGTERM, terminate), (signal.SIGINT, terminate), *ignored]
+    assert not _state_lock_is_held(Path(settings["state_dir"]))
     installed.clear()
     with pytest.raises(SystemExit):
         terminate(signal.SIGTERM, None)
-    assert installed == [(signal.SIGTERM, signal.SIG_IGN), (signal.SIGINT, signal.SIG_IGN)]
-    assert not _state_lock_is_held(Path(settings["state_dir"]))
+    assert installed == ignored
 
 
 def test_released_state_lock_keeps_dispatch_closed(protected_directory):

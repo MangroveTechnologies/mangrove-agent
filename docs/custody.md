@@ -206,10 +206,11 @@ and storing the signature, means no signature left custody: the reservation is
 refunded and its nonce is free for the next request. At startup the daemon takes
 an exclusive lock on its state directory, refuses to start if another daemon
 holds it, and then refunds every reservation that has no stored signature, so a
-crash cannot hold budget for a nonce that is never retried. On shutdown it lets
-a request that is already signing finish journaling, starts no further request,
-and only then releases the lock, so a successor never refunds a signature that
-is about to be returned. A stored signature
+crash cannot hold budget for a nonce that is never retried. On shutdown it
+ignores further SIGTERM and SIGINT, lets a request that is already signing
+finish journaling, starts no further request, and only then releases the lock,
+so a successor never refunds a signature that is about to be returned. Use
+SIGKILL only if a stuck shutdown must be forced. A stored signature
 was returned only after it was journaled, so stored signatures stay counted.
 Exact successful retries return the stored signature without signing or
 spending twice; after a policy change, the cached request must pass the current

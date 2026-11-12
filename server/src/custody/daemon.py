@@ -82,6 +82,15 @@ def _acquire_state_lock(state_dir: Path) -> int:
     return descriptor
 
 
+def _ignore_shutdown_signals() -> None:
+    """Stop SIGTERM and SIGINT from interrupting a shutdown that has started."""
+    try:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except ValueError:
+        pass  # Off the main thread, no Python signal handler can interrupt this thread.
+
+
 def _release_state_lock(descriptor: int, dispatch_lock: threading.Lock) -> None:
     """Release the state directory lock once no request can still sign.
 
@@ -89,9 +98,9 @@ def _release_state_lock(descriptor: int, dispatch_lock: threading.Lock) -> None:
     reserving, signing or journaling, and stops any later request from
     starting. Every reservation this daemon made then has its signature stored
     or has been refunded, so a successor's startup sweep cannot refund a
-    signature that is about to leave custody. ``serve()`` ignores repeated
-    SIGTERM and SIGINT once shutdown starts, so a second signal cannot
-    interrupt the wait. The descriptor is closed on every path.
+    signature that is about to leave custody. ``serve()`` ignores SIGTERM and
+    SIGINT before calling this, so no signal can interrupt the wait. The
+    descriptor is closed on every path.
     """
     try:
         dispatch_lock.acquire()
@@ -135,10 +144,7 @@ def serve(settings):
         broker = Broker(settings)
         broker.policy.recover_unfinished()
         def terminate(_signum, _frame):
-            # A repeated signal must not interrupt the shutdown wait for a
-            # request that is still signing.
-            signal.signal(signal.SIGTERM, signal.SIG_IGN)
-            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            _ignore_shutdown_signals()
             raise SystemExit(0)
         signal.signal(signal.SIGTERM, terminate)
         signal.signal(signal.SIGINT, terminate)
@@ -164,7 +170,10 @@ def serve(settings):
             finally:
                 path.unlink(missing_ok=True)
     finally:
-        _release_state_lock(state_lock, dispatch_lock)
+        try:
+            _ignore_shutdown_signals()
+        finally:
+            _release_state_lock(state_lock, dispatch_lock)
 
 
 def main():
