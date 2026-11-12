@@ -78,8 +78,7 @@ class PricedFastMCP(FastMCP):
             self.mangroveai_available = False
             self.mangroveai_error = {
                 'code': error.code,
-                'message': ('Mangrove OAuth connection could not be verified. Run '
-                            './scripts/setup.sh --auth oauth --oauth login to reconnect.'
+                'message': ('Mangrove OAuth connection could not be verified. ' + mangrove_oauth.RECONNECT_ACTION
                             if oauth_mode else 'MangroveAI tool discovery failed. Check the configured connection.'),
             }
             upstream = []
