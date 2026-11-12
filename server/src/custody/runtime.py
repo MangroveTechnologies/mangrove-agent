@@ -1,7 +1,8 @@
 """Internal custody role, enabled only after the service's OS checks.
 
-This flag is routing, not the security boundary. Separate OS ownership of keys,
-policy, installation and process provides that boundary.
+The active flag and the administrator command prefix are routing state, not the
+security boundary. Separate OS ownership of keys, policy, installation and
+process provides that boundary.
 """
 _active = False
 _admin_command_prefix: tuple[str, ...] | None = None
@@ -12,7 +13,7 @@ def active() -> bool:
 
 
 def admin_command_prefix() -> tuple[str, ...] | None:
-    """Command that runs the protected custody administrator, set by bootstrap."""
+    """Return the argv prefix that runs the protected custody administrator, or None outside an initialized custody process."""
     return _admin_command_prefix
 
 

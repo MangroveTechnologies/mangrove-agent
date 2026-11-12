@@ -13,6 +13,7 @@ import os
 import pty
 import re
 import select
+import shlex
 import signal
 import sqlite3
 import subprocess
@@ -370,7 +371,11 @@ def exercise_x402(settings):
     from eth_account import Account
     from eth_account.messages import encode_typed_data
 
-    wallet = rpc('create_wallet', {'chain': 'evm', 'network': 'testnet', 'chain_id': 84532})['result']['address']
+    created = rpc('create_wallet', {'chain': 'evm', 'network': 'testnet', 'chain_id': 84532})['result']
+    wallet = created['address']
+    check('custody names the protected administrator backup command',
+          shlex.split(created['reveal_cmd']) == ['sudo', '-u', 'custody', PYTHON, '-I', LAUNCHER,
+                                                 'admin', '--config', str(POLICY), 'backup', wallet])
     settings['policy']['x402']['wallet_address'] = wallet
     settings['policy'].update(siwx_origins=['https://custody-test.invalid'],
                               identity_chains=['eip155:84532'], identity_wallets=[wallet])
@@ -442,9 +447,9 @@ def exercise_frames():
         outcome = run_as(AGENT, [PYTHON, '-I', '-c', program, SOCKET], input=frame)
         check('socket refuses ' + name, b'"ok":true' not in outcome.stdout)
         check('daemon remains usable after ' + name, rpc('list_wallets', {}).get('ok') is True)
-    silent = subprocess.Popen([PYTHON, '-I', '-c',
-                               'import socket,sys,time; s=socket.socket(socket.AF_UNIX); ' +
-                               's.connect(sys.argv[1]); print("connected", flush=True); time.sleep(30)', SOCKET],
+    silent_program = ('import socket,sys,time; s=socket.socket(socket.AF_UNIX); '
+                      's.connect(sys.argv[1]); print("connected", flush=True); time.sleep(30)')
+    silent = subprocess.Popen([PYTHON, '-I', '-c', silent_program, SOCKET],
                               user=AGENT, group=AGENT, extra_groups=[], stdout=subprocess.PIPE)
     try:
         check('silent agent client connects', silent.stdout.readline().strip() == b'connected')

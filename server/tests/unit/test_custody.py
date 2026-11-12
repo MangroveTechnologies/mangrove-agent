@@ -940,6 +940,36 @@ def test_serve_sweeps_crashed_reservations_and_refuses_a_second_daemon(custody, 
     assert not Path(second["socket_path"]).exists()
 
 
+def test_state_lock_outlives_serve_until_process_exit(custody, short_socket_dir, monkeypatch):
+    """Detached worker threads may still be signing after serve() returns, so it keeps the lock."""
+    from types import SimpleNamespace
+
+    from src.custody import daemon
+
+    _, _, _, settings = custody
+    settings.update(socket_path=str(short_socket_dir / "s.sock"), agent_uid=os.getuid())
+
+    class StoppingListener(socket.socket):
+        def accept(self):
+            raise SystemExit(0)
+
+    acquired = []
+    acquire = daemon._acquire_state_lock
+    monkeypatch.setattr(daemon, "_acquire_state_lock", lambda state_dir: acquired.append(acquire(state_dir)) or acquired[-1])
+    monkeypatch.setattr(daemon, "socket", SimpleNamespace(
+        socket=StoppingListener, AF_UNIX=socket.AF_UNIX, SOCK_STREAM=socket.SOCK_STREAM))
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_: None)
+    try:
+        with pytest.raises(SystemExit):
+            daemon.serve(settings)
+        assert not Path(settings["socket_path"]).exists()
+        with pytest.raises(ValueError, match="already running"):
+            acquire(Path(settings["state_dir"]))
+    finally:
+        for descriptor in acquired:
+            os.close(descriptor)
+
+
 def test_migration_never_prints_a_crafted_skipped_address(custody, protected_directory, capsys):
     """A legacy row's address is untrusted DB text: it must not reach the terminal raw."""
     from src.custody.admin import migrate, print_migration_result
