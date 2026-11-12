@@ -275,9 +275,11 @@ async def test_oauth_status_keeps_event_loop_responsive(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_free_status_omits_oauth_grant_details(client, monkeypatch):
-    """REST /status and the MCP status tool (same route function) need no key."""
-    from src.api.routes import discovery
+    """REST /status and the MCP status tool both return the readiness summary."""
+    import json
+
     from src.config import app_config
+    from src.mcp.server import create_mcp_server
     from src.services import mangrove_oauth
 
     monkeypatch.setattr(app_config, 'MANGROVE_ACCESS_MODE', 'oauth')
@@ -286,34 +288,15 @@ async def test_free_status_omits_oauth_grant_details(client, monkeypatch):
         'action': 'OAuth grant revocation is pending for https://issuer.example.test. Configure it.',
         'scopes': ['strategies:read', 'offline_access'], 'expires_at': 1_900_000_000,
     })
-    expected = {
-        'connected': True, 'revocation_pending': True, 'reason': None,
-        'action': 'OAuth grant cleanup is pending. Run ./scripts/setup.sh --oauth status '
-                  'for the cleanup instructions.',
-    }
+    expected = {'connected': True, 'revocation_pending': True, 'reason': None,
+                'action': mangrove_oauth.REVOCATION_PENDING_ACTION}
     response = client.get('/api/v1/agent/status')
     assert response.json()['oauth_connection'] == expected
-    assert (await discovery.status())['oauth_connection'] == expected
+    tool_output = await create_mcp_server()._tool_manager._tools['status'].run({})
+    assert json.loads(tool_output)['oauth_connection'] == expected
     for private in ('issuer.example.test', 'strategies:read', '1900000000'):
         assert private not in response.text
-
-
-@pytest.mark.parametrize('reported,reason', [
-    ({'connected': False, 'reason': 'access_token_expired'}, 'access_token_expired'),
-    ({'connected': False, 'reason': 'Private upstream text'}, None),
-    ({'connected': False}, None),
-])
-def test_free_status_oauth_reason_and_action_are_fixed(client, monkeypatch, reported, reason):
-    from src.config import app_config
-    from src.services import mangrove_oauth
-
-    monkeypatch.setattr(app_config, 'MANGROVE_ACCESS_MODE', 'oauth')
-    monkeypatch.setattr(mangrove_oauth, 'status', lambda: {**reported, 'action': 'Private upstream text'})
-    connection = client.get('/api/v1/agent/status').json()['oauth_connection']
-    assert connection == {
-        'connected': False, 'revocation_pending': False, 'reason': reason,
-        'action': 'Run ./scripts/setup.sh --auth oauth --oauth login to reconnect.',
-    }
+        assert private not in tool_output
 
 
 @pytest.mark.parametrize('error_type', [OSError, sqlite3.OperationalError])
@@ -326,15 +309,22 @@ def test_oauth_store_errors_are_sanitized(client, monkeypatch, error_type):
     monkeypatch.setattr(mangrove_oauth, 'status', failed)
     response = client.get('/api/v1/agent/status')
     assert response.status_code == 200
-    assert response.json()['oauth_connection']['reason'] == 'credential_store_unavailable'
+    assert response.json()['oauth_connection'] == {
+        'connected': False, 'revocation_pending': None, 'reason': 'credential_store_unavailable',
+        'action': mangrove_oauth.STORE_UNAVAILABLE_ACTION,
+    }
     assert 'private filesystem' not in response.text
 
 
 def test_corrupt_oauth_store_keeps_status_available(client, monkeypatch, tmp_path):
     from src.config import app_config
+    from src.services import mangrove_oauth
     monkeypatch.setattr(app_config, 'MANGROVE_ACCESS_MODE', 'oauth')
     monkeypatch.setattr(app_config, 'DB_PATH', str(tmp_path / 'agent.db'))
     (tmp_path / 'oauth.db').write_bytes(b'not a sqlite database')
     response = client.get('/api/v1/agent/status')
     assert response.status_code == 200
-    assert response.json()['oauth_connection']['reason'] == 'credential_store_unavailable'
+    assert response.json()['oauth_connection'] == {
+        'connected': False, 'revocation_pending': None, 'reason': 'credential_store_unavailable',
+        'action': mangrove_oauth.STORE_UNAVAILABLE_ACTION,
+    }

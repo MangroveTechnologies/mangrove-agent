@@ -629,3 +629,61 @@ def test_status_guides_required_cleanup_before_login(env, monkeypatch, state):
     with pytest.raises(oauth.OAuthError) as refused:
         oauth.start()
     assert status['action'] == refused.value.message
+
+
+def update_record(**changes):
+    with oauth.store() as conn:
+        record = oauth.read(conn)
+        record.update(changes)
+        oauth.save(conn, record)
+
+
+def test_readiness_when_connected_has_no_grant_details(env, monkeypatch):
+    connect(monkeypatch)
+    oauth.start()
+    assert oauth.status()['pending'] and oauth.status()['scopes']
+    assert oauth.readiness() == {'connected': True, 'revocation_pending': False, 'reason': None, 'action': None}
+
+
+def test_readiness_without_a_connection_asks_for_sign_in(env):
+    assert oauth.readiness() == {'connected': False, 'revocation_pending': False,
+                                 'reason': 'sign_in_required', 'action': oauth.RECONNECT_ACTION}
+
+
+@pytest.mark.parametrize('changes,reason', [
+    ({'state': 'refresh_pending'}, 'refresh_incomplete'),
+    ({'resource': 'https://issuer.test/other'}, 'connection_destination_changed'),
+    ({'refresh_token': None, 'expires_at': 1}, 'access_token_expired'),
+])
+def test_readiness_keeps_status_reason_with_the_reconnect_action(env, monkeypatch, changes, reason):
+    connect(monkeypatch)
+    update_record(**changes)
+    assert oauth.status()['reason'] == reason
+    assert oauth.readiness() == {'connected': False, 'revocation_pending': False,
+                                 'reason': reason, 'action': oauth.RECONNECT_ACTION}
+
+
+def test_readiness_reports_pending_revocation_without_issuer_origins(env, monkeypatch):
+    connect(monkeypatch)
+    monkeypatch.setattr(oauth.app_config, 'MANGROVE_OAUTH_ISSUER', 'https://replacement.test')
+    assert 'issuer.test' in oauth.status()['action']
+    readiness = oauth.readiness()
+    assert readiness == {'connected': False, 'revocation_pending': True,
+                         'reason': 'connection_destination_changed', 'action': oauth.REVOCATION_PENDING_ACTION}
+    assert 'issuer.test' not in json.dumps(readiness)
+
+
+def test_readiness_reports_unreadable_store_as_unknown_revocation(env, monkeypatch):
+    connect(monkeypatch)
+    monkeypatch.setattr(oauth, 'decrypt', Fernet(Fernet.generate_key()).decrypt)
+    with pytest.raises(oauth.OAuthError):
+        oauth.status()
+    assert oauth.readiness() == {'connected': False, 'revocation_pending': None,
+                                 'reason': 'credential_store_unavailable', 'action': oauth.STORE_UNAVAILABLE_ACTION}
+
+
+def test_readiness_reports_invalid_issuer_configuration(env, monkeypatch):
+    connect(monkeypatch)
+    monkeypatch.setattr(oauth.app_config, 'MANGROVE_OAUTH_ISSUER', 'ftp://issuer.test')
+    assert oauth.readiness() == {'connected': False, 'revocation_pending': None,
+                                 'reason': 'issuer_configuration_invalid', 'action': oauth.ISSUER_INVALID_ACTION}

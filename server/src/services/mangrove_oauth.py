@@ -28,6 +28,13 @@ SCOPES = ('strategies:read strategies:write strategies:archive strategies:evalua
           'backtests:read backtests:run sweeps:read sweeps:run signals:read '
           'signals:evaluate positions:read data:read offline_access')
 ALLOWED_SCOPES = frozenset(SCOPES.split())
+RECONNECT_ACTION = 'Run ./scripts/setup.sh --auth oauth --oauth login to reconnect.'
+REVOCATION_PENDING_ACTION = ('OAuth grant revocation is pending. Run ./scripts/setup.sh --oauth status '
+                             'for the cleanup instructions.')
+ISSUER_INVALID_ACTION = ('Set MANGROVE_OAUTH_ISSUER to an HTTPS or loopback HTTP issuer, restart the agent, '
+                         'then check OAuth status again.')
+STORE_UNAVAILABLE_ACTION = ('Restore access to the OAuth credential store and its encryption key, '
+                            'then check OAuth status again.')
 _lock = threading.RLock()
 _pending: dict | None = None
 
@@ -293,7 +300,7 @@ def status():
                 reason = 'access_token_expired'
             else:
                 reason = 'sign_in_required'
-        action = None if connected else 'Run ./scripts/setup.sh --auth oauth --oauth login to reconnect.'
+        action = None if connected else RECONNECT_ACTION
         cleanup_required = False
         try:
             require_replaceable(record)
@@ -305,6 +312,37 @@ def status():
                 'action': action,
                 'scopes': record['scope'].split() if connected else [],
                 'expires_at': record['expires_at'] if connected else None}
+
+
+def readiness():
+    """Credential readiness without grant details, for unauthenticated status readers.
+
+    Returns `connected`, `revocation_pending` (None when it cannot be determined),
+    the `reason` code from `status()` or a configuration or credential-store code,
+    and a fixed `action` sentence. Granted scopes, token expiry, whether a browser
+    sign-in is in progress and the issuer-bearing cleanup text are returned only by
+    `status()`.
+    """
+    try:
+        issuer()
+    except OAuthError:
+        return {'connected': False, 'revocation_pending': None,
+                'reason': 'issuer_configuration_invalid', 'action': ISSUER_INVALID_ACTION}
+    try:
+        full = status()
+    except (AgentError, OSError, sqlite3.Error):
+        return {'connected': False, 'revocation_pending': None,
+                'reason': 'credential_store_unavailable', 'action': STORE_UNAVAILABLE_ACTION}
+    connected = full.get('connected') is True
+    revocation_pending = full.get('revocation_pending') is True
+    if revocation_pending:
+        action = REVOCATION_PENDING_ACTION
+    elif not connected:
+        action = RECONNECT_ACTION
+    else:
+        action = None
+    return {'connected': connected, 'revocation_pending': revocation_pending,
+            'reason': full.get('reason'), 'action': action}
 
 
 def cancel():

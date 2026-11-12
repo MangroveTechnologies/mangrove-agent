@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import importlib.metadata
-import sqlite3
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -178,46 +177,11 @@ def _portfolio_risk_status() -> dict:
         return {"tripped": None, "error": "unavailable"}
 
 
-_OAUTH_REASONS = frozenset({
-    "sign_in_required", "access_token_expired", "refresh_incomplete",
-    "connection_destination_changed", "credential_store_unavailable",
-})
-_OAUTH_RECONNECT_ACTION = "Run ./scripts/setup.sh --auth oauth --oauth login to reconnect."
-_OAUTH_CLEANUP_ACTION = ("OAuth grant cleanup is pending. Run ./scripts/setup.sh --oauth status "
-                         "for the cleanup instructions.")
-_OAUTH_STORE_ACTION = ("Restore access to the OAuth credential store and its encryption key, "
-                       "then check OAuth status again.")
-
-
 def _oauth_connection_status() -> dict:
-    """Credential readiness for the free status route and MCP status tool.
-
-    Returns only `connected`, `revocation_pending`, a fixed `reason` code and a
-    fixed `action` sentence. Granted scopes, token expiry, sign-in state and
-    issuer-bearing cleanup text are served only by the authenticated
-    `/api/v1/agent/oauth/status` route.
-    """
+    """OAuth credential readiness without grant details; see `mangrove_oauth.readiness()`."""
     from src.services import mangrove_oauth
-    from src.shared.errors import AgentError
 
-    try:
-        full = mangrove_oauth.status()
-    except (AgentError, OSError, sqlite3.Error):
-        return {"connected": False, "revocation_pending": False,
-                "reason": "credential_store_unavailable", "action": _OAUTH_STORE_ACTION}
-    connected = full.get("connected") is True
-    revocation_pending = full.get("revocation_pending") is True
-    reason = full.get("reason") if full.get("reason") in _OAUTH_REASONS else None
-    if reason == "credential_store_unavailable":
-        action = _OAUTH_STORE_ACTION
-    elif revocation_pending:
-        action = _OAUTH_CLEANUP_ACTION
-    elif not connected:
-        action = _OAUTH_RECONNECT_ACTION
-    else:
-        action = None
-    return {"connected": connected, "revocation_pending": revocation_pending,
-            "reason": reason, "action": action}
+    return mangrove_oauth.readiness()
 
 
 def _x402_spend_status() -> dict:
