@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import importlib.metadata
-import sqlite3
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -189,14 +188,10 @@ def _portfolio_risk_status() -> dict:
 
 
 def _oauth_connection_status() -> dict:
+    """OAuth credential readiness without grant details; see `mangrove_oauth.readiness()`."""
     from src.services import mangrove_oauth
-    from src.shared.errors import AgentError
 
-    try:
-        return mangrove_oauth.status()
-    except (AgentError, OSError, sqlite3.Error):
-        return {"connected": False, "reason": "credential_store_unavailable",
-                "action": "Restore access to the OAuth credential store and its encryption key, then check OAuth status again."}
+    return mangrove_oauth.readiness()
 
 
 def _x402_spend_status() -> dict:

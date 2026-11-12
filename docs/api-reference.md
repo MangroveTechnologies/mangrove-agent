@@ -88,6 +88,9 @@ listing do not exist and return 404.
 
 - `agent_name` (`null` until chosen), `version` and `server_version`, and installed SDK
   versions under `sdk_versions`.
+- `access_mode` (`oauth`, `api-key` or `x402`). In OAuth mode, `oauth_connection` reports
+  credential readiness without grant details; see [OAuth status reporting](oauth-login.md#status-reporting).
+  It is `null` in the other modes.
 - `catalog`: MangroveAI signal and knowledge-base counts, cached for 10 minutes. `catalog.error`
   is set when they are unavailable, including in wallet (x402) payment mode, where the agent
   does not spend money on a status read.
