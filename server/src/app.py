@@ -26,6 +26,7 @@ from src.shared.auth.middleware import (
 from src.shared.errors import AgentError, agent_error_handler
 from src.shared.logging import CorrelationIdMiddleware, get_logger
 from src.shared.logging import configure as configure_logging
+from src.shared.mcp_transport_diagnostics import MCPTransportDiagnostics
 from src.shared.x402.config import get_network, get_pay_to
 from src.shared.x402.server import get_x402_server
 
@@ -169,7 +170,7 @@ def create_app() -> FastAPI:
 
     application.include_router(api_router)
     application.include_router(x402_router)
-    application.mount("/mcp", _MCPApiKeyHeaderMiddleware(mcp_app))
+    application.mount("/mcp", MCPTransportDiagnostics(_MCPApiKeyHeaderMiddleware(mcp_app)))
 
     @application.get(
         "/health",

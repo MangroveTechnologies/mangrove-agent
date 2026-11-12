@@ -74,6 +74,85 @@ def test_public_hash_fields_pass_structured_mcp_results(value):
         assert result.stdout == result.stderr == ''
 
 
+def skill_document():
+    return dict(skill='strategy-composition', instructions='Build a strategy.',
+                required_tools=['match_signals'], optional_tools=[], version=ZERO)
+
+
+@pytest.mark.parametrize('client', ['claude', 'codex'])
+@pytest.mark.parametrize('view', ['mcp', 'file', 'numbered', 'truncated', 'shell'])
+@pytest.mark.parametrize('secret', [None, HEX, PHRASE, XRPL])
+def test_grouped_skill_fingerprint_survives_file_handoff_without_exempting_secrets(
+        client, view, secret):
+    document = skill_document()
+    document['version'] = 'sha256:' + '-'.join(ZERO[i:i + 8] for i in range(0, 64, 8))
+    if secret:
+        document['instructions'] = secret
+    text = json.dumps(document)
+    tool = 'Read'
+    if view == 'mcp':
+        tool = 'mcp__mangrove-agent__load_skill'
+        value = {'content': [{'type': 'text', 'text': text}]}
+    elif view == 'file':
+        value = {'type': 'text', 'file': {'content': text, 'numLines': 1,
+                                         'startLine': 1, 'totalLines': 1}}
+    elif view == 'numbered':
+        value = '1\t' + text
+    elif view == 'truncated':
+        # No parseable JSON or complete version: protection must remain effective.
+        value = '1\t' + text[:-12] + '\n[output truncated]'
+    else:
+        tool = 'Bash'
+        value = {'stdout': text, 'stderr': ''}
+    result = invoke(client, 'PostToolUse', tool_name=tool, tool_response=value)
+    assert result.returncode == 0
+    if secret:
+        assert json.loads(result.stdout)['decision'] == 'block'
+        assert secret not in result.stdout + result.stderr
+    else:
+        assert result.stdout == result.stderr == ''
+
+
+@pytest.mark.parametrize('client', ['claude', 'codex'])
+@pytest.mark.parametrize('wrapped', [False, True])
+def test_skill_version_content_hash_passes(client, wrapped):
+    document = skill_document()
+    value = {'content': [{'type': 'text', 'text': json.dumps(document)}]} if wrapped else document
+    result = invoke(client, 'PostToolUse', tool_name='mcp__mangrove-agent__load_skill', tool_response=value)
+    assert result.returncode == 0
+    assert result.stdout == result.stderr == ''
+
+
+@pytest.mark.parametrize('client', ['claude', 'codex'])
+@pytest.mark.parametrize('wrapped', [False, True])
+@pytest.mark.parametrize('case', ['instructions', 'private_key', 'ancestor', 'arbitrary_version',
+                                  'embedded_version', 'shell', 'input'])
+def test_skill_hash_exception_does_not_exempt_secrets(client, wrapped, case):
+    value = skill_document()
+    tool, event, field = 'mcp__mangrove-agent__load_skill', 'PostToolUse', 'tool_response'
+    if case in {'instructions', 'private_key'}:
+        value[case] = HEX
+    elif case == 'ancestor':
+        value = {'private_key': value}
+    elif case == 'arbitrary_version':
+        value = {'version': ZERO}
+    elif case == 'embedded_version':
+        value['version'] = 'private key: ' + HEX
+    elif case == 'shell':
+        tool = 'Bash'
+    elif case == 'input':
+        event, field = 'PreToolUse', 'tool_input'
+    if wrapped:
+        value = {'content': [{'type': 'text', 'text': json.dumps(value)}]}
+    result = invoke(client, event, tool_name=tool, **{field: value})
+    output = json.loads(result.stdout)
+    if case == 'input':
+        assert output['hookSpecificOutput']['permissionDecision'] == 'deny'
+    else:
+        assert output['decision'] == 'block'
+    assert (HEX if case in {'instructions', 'private_key', 'embedded_version'} else ZERO) not in result.stdout
+
+
 @pytest.mark.parametrize('value', [
     {'stdout': 'Transaction hash: ' + HEX, 'stderr': ''},
     {'stdout': 'done\n  tx_hash:\t' + HEX + '\r\nnext line'},
