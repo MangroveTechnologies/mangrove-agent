@@ -17,6 +17,13 @@ All three live hooks are **blockers** (they `exit 2` to stop the action). There 
 
 ## Server-side equivalents (every client)
 
+The wallet detector recognizes `load_skill` document metadata (`skill`,
+`instructions`, `required_tools`, and `optional_tools`): its whole-value
+64-hex `version` is a public content fingerprint. This exception applies only
+to structured MCP output, never shell output or inputs. Instructions and all
+other fields are still scanned; a secret-named ancestor disables the exception.
+An arbitrary `version` field outside this document shape remains protected.
+
 These hooks run only in Claude Code; Codex sessions started by `scripts/client_session.py` run only the wallet-secret adapter. Other hosts that use the command client (`scripts/local_mcp_bridge.py`: Codex, Grok, Grok Bot, Perplexity) or another MCP client get none of them, so the enforceable parts also run inside the agent. See [guardrails across clients](../../docs/clients.md#guardrails-across-clients).
 
 | Hook | Agent-side equivalent | Still host-only |
