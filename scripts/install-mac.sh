@@ -307,6 +307,10 @@ printf "\n${GREEN}${BOLD}
     2. Run:  cd ~/Desktop/mangrove-agent
     3. Run:  claude
 
+  Later, from any terminal:
+    mangrove-agent start    updates to the latest version and starts the agent
+    mangrove-agent status   shows whether it is running
+
   The agent will greet you and run a platform tour.
   Then say: \"Build me a momentum strategy on ETH\"
 

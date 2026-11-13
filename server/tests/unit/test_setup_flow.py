@@ -323,7 +323,7 @@ def checkout(tmp_path):
     (repo / 'server/src/config').mkdir(parents=True)
     (repo / '.claude').mkdir()
     for name in ['setup.sh', 'setup_support.py', 'verify_quickstart.sh', 'setup-mcp.sh',
-                 'agent_context.py', 'local_mcp_bridge.py']:
+                 'agent_context.py', 'local_mcp_bridge.py', 'update.sh', 'mangrove-agent']:
         shutil.copy2(ROOT / 'scripts' / name, repo / 'scripts' / name)
     for name in ['SAGE.md', '.claude/rules/trading-bot-workflow.md',
                  '.claude/rules/wallet-presentation.md', '.claude/rules/risk-management.md']:
@@ -388,8 +388,9 @@ HTTPServer(('127.0.0.1', int(sys.argv[sys.argv.index('--port')+1])), Handler).se
     example_config = json.loads(example_path.read_text())
     example_config['MANGROVEAI_BASE_URL'] = f'http://127.0.0.1:{port}/api/v1'
     example_path.write_text(json.dumps(example_config))
-    env = dict(os.environ, BARE_PORT=str(port))
-    for key in ['BASE_URL', 'BARE_HOST', 'MANGROVE_AGENT_HOME', 'PYTHONPATH']:
+    # Never touch the developer's real PATH directory or shell startup files.
+    env = dict(os.environ, BARE_PORT=str(port), MANGROVE_AGENT_BIN_DIR=str(tmp_path / 'bin'))
+    for key in ['BASE_URL', 'BARE_HOST', 'MANGROVE_AGENT_HOME', 'PYTHONPATH', 'MANGROVE_AGENT_UPDATED']:
         env.pop(key, None)
     yield repo, env
     pid = repo / 'agent-data/bare.pid'
@@ -406,6 +407,25 @@ def run_setup(checkout, *args, input=None):
     return subprocess.run(['bash', str(repo / 'scripts/setup.sh'), *args], cwd=repo, env=env,
                           capture_output=True, text=True, timeout=25, input=input)
 
+
+
+def test_setup_installs_cli_link_and_never_clobbers_foreign_files(checkout):
+    repo, env = checkout
+    bin_dir = Path(env['MANGROVE_AGENT_BIN_DIR'])
+    result = run_setup(checkout, '--yes', '--no-mcp', '--no-verify')
+    assert result.returncode == 0, result.stdout + result.stderr
+    link = bin_dir / 'mangrove-agent'
+    assert link.is_symlink() and link.resolve() == (repo / 'scripts/mangrove-agent').resolve()
+    assert 'mangrove-agent start' in result.stdout
+    where = subprocess.run([str(link), 'where'], capture_output=True, text=True, check=True)
+    assert Path(where.stdout.strip()) == repo.resolve()
+    # A file setup did not create stays untouched on rerun.
+    link.unlink()
+    link.write_text('#!/bin/sh\necho mine\n')
+    result = run_setup(checkout, '--yes', '--no-mcp', '--no-verify')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert link.read_text() == '#!/bin/sh\necho mine\n'
+    assert 'left unchanged' in result.stdout
 
 def test_agent_install_loads_sage_and_calls_status_without_claude(checkout):
     repo, env = checkout

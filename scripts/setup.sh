@@ -5,6 +5,11 @@
 # Alt:     Docker (compose up with ./agent-data/ directory mount +
 #          keyfile-based master key). Use --docker.
 #
+# Before either flow, the checkout fast-forwards to the latest published code
+# (scripts/update.sh: main branch only, never discards local work, never
+# blocks setup when offline) and setup restarts itself if that changed it.
+# Skip with --no-update or MANGROVE_AGENT_NO_UPDATE=1.
+#
 # Flow (bare-metal, default):
 #   0. Preflight (python3, claude CLI if we're registering MCP)
 #   1. Seed server/src/config/local-config.json from the example if missing
@@ -50,6 +55,8 @@ LOG_FILE="agent-data/bare.log"
 # Defaults
 MODE="bare"
 DO_MCP="yes"
+DO_UPDATE="yes"
+DO_CLI="yes"
 DO_VERIFY="yes"
 ASSUME_YES="no"
 FOREGROUND="no"
@@ -97,6 +104,9 @@ Options:
                         Default: background via nohup, logs in $LOG_FILE.
   --no-mcp              Skip Claude Code MCP registration.
   --no-verify           Skip the final verify pass.
+  --no-update           Do not fetch and fast-forward to the latest code first.
+                        (Also: MANGROVE_AGENT_NO_UPDATE=1.)
+  --no-cli              Do not install the 'mangrove-agent' command on PATH.
   --skip-tour           Suppress the first-run platform tour by writing the
                         .claude/.onboarded marker before Claude Code launches.
                         Replay it later by asking or 'rm .claude/.onboarded'.
@@ -119,12 +129,16 @@ EOF
 
 # -- parse args -------------------------------------------------------------
 
+# Kept verbatim so setup can restart itself after an update.
+ORIGINAL_ARGS=("$@")
 while [ $# -gt 0 ]; do
   case "$1" in
     --docker) MODE="docker"; shift ;;
     --foreground) FOREGROUND="yes"; shift ;;
     --no-mcp) DO_MCP="no"; shift ;;
     --no-verify) DO_VERIFY="no"; shift ;;
+    --no-update) DO_UPDATE="no"; shift ;;
+    --no-cli) DO_CLI="no"; shift ;;
     --skip-tour) SKIP_TOUR="yes"; shift ;;
     --api-key) fail "--api-key was removed to protect credentials. Use --auth api-key for hidden entry, or --api-key-stdin with a private pipe." ;;
     --api-key-stdin) API_KEY_STDIN="yes"; shift ;;
@@ -213,6 +227,24 @@ PYCHECK
   if [ "$MODE" = "docker" ]; then
     command -v docker >/dev/null 2>&1 || fail "Docker not found."
     docker info >/dev/null 2>&1 || fail "Docker daemon is not running."
+  fi
+fi
+
+# -- update to the latest code before anything is configured or started -------
+# Runs before the setup lock so the restarted setup takes the lock itself. The
+# MANGROVE_AGENT_UPDATED guard makes the restart happen at most once.
+if [ "$DO_UPDATE" = "yes" ] && [ -z "$WALLET_ACTION" ] && [ -z "${MANGROVE_AGENT_UPDATED:-}" ] \
+   && [ -f "$SCRIPT_DIR/update.sh" ]; then
+  HEAD_BEFORE="$(git -C "$REPO_ROOT" rev-parse -q --verify HEAD 2>/dev/null || true)"
+  bash "$SCRIPT_DIR/update.sh" || true
+  HEAD_AFTER="$(git -C "$REPO_ROOT" rev-parse -q --verify HEAD 2>/dev/null || true)"
+  if [ -n "$HEAD_BEFORE" ] && [ "$HEAD_BEFORE" != "$HEAD_AFTER" ]; then
+    info "restarting setup on the updated code"
+    export MANGROVE_AGENT_UPDATED=1
+    # Hand the new setup the caller's environment, not values derived above.
+    if [ -n "$REQUESTED_BASE_URL" ]; then export BASE_URL="$REQUESTED_BASE_URL"; else unset BASE_URL; fi
+    unset SETUP_PYTHON
+    exec bash "$SCRIPT_DIR/setup.sh" ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
   fi
 fi
 
@@ -476,6 +508,62 @@ if [ "$DO_VERIFY" = "yes" ]; then
   fi
 fi
 
+# -- 8. install the `mangrove-agent` command ----------------------------------
+# A symlink to scripts/mangrove-agent so `mangrove-agent start` works from any
+# directory. Never replaces a file it did not create or a link to another live
+# clone. Never fails setup.
+CLI_SOURCE="$REPO_ROOT/scripts/mangrove-agent"
+CLI_READY="no"
+install_cli() {
+  local bin_dir="${MANGROVE_AGENT_BIN_DIR:-$HOME/.local/bin}" target current rc line
+  target="$bin_dir/mangrove-agent"
+  [ -x "$CLI_SOURCE" ] || chmod +x "$CLI_SOURCE" 2>/dev/null || { info "could not make $CLI_SOURCE executable"; return 0; }
+  mkdir -p "$bin_dir" 2>/dev/null || { info "could not create $bin_dir; run $CLI_SOURCE directly"; return 0; }
+  if [ -L "$target" ]; then
+    current="$(readlink "$target")"
+    if [ "$current" != "$CLI_SOURCE" ]; then
+      if [ -e "$target" ]; then
+        info "$target already points to another clone ($current); left unchanged."
+        info "To manage this clone with it instead: ln -sfn $(printf '%q' "$CLI_SOURCE") $(printf '%q' "$target")"
+        return 0
+      fi
+      rm -f "$target" && ln -s "$CLI_SOURCE" "$target" 2>/dev/null \
+        || { info "could not relink $target; run $CLI_SOURCE directly"; return 0; }
+    fi
+  elif [ -e "$target" ]; then
+    info "$target exists and is not a mangrove-agent link; left unchanged. Run $CLI_SOURCE directly."
+    return 0
+  else
+    ln -s "$CLI_SOURCE" "$target" 2>/dev/null || { info "could not link $target; run $CLI_SOURCE directly"; return 0; }
+  fi
+  CLI_READY="yes"
+  case ":$PATH:" in *":$bin_dir:"*) ok "'mangrove-agent' command installed ($target)"; return 0 ;; esac
+  # Not on PATH yet. Only the default location is added to the login shell's
+  # startup file, once, with a marker; anything else gets instructions.
+  if [ -z "${MANGROVE_AGENT_BIN_DIR:-}" ]; then
+    case "$(basename "${SHELL:-}")" in
+      zsh) rc="$HOME/.zshrc" ;;
+      bash) if [ -f "$HOME/.bash_profile" ]; then rc="$HOME/.bash_profile"; else rc="$HOME/.bashrc"; fi ;;
+      *) rc="" ;;
+    esac
+    line='export PATH="$HOME/.local/bin:$PATH"'
+    if [ -n "$rc" ] && { [ ! -e "$rc" ] || [ -w "$rc" ]; }; then
+      if ! grep -qsF "$line" "$rc"; then
+        printf '\n# Added by mangrove-agent setup: makes the mangrove-agent command available\n%s\n' "$line" >> "$rc"
+        info "added $bin_dir to PATH in $rc"
+      fi
+      ok "'mangrove-agent' command installed; open a new terminal to use it"
+      return 0
+    fi
+  fi
+  ok "'mangrove-agent' command installed at $target"
+  info "$bin_dir is not on your PATH. Add it, e.g.: export PATH=\"$bin_dir:\$PATH\""
+}
+if [ "$DO_CLI" = "yes" ]; then
+  step "8. Install the mangrove-agent command"
+  install_cli || info "command installation skipped"
+fi
+
 echo
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
   printf '\033[1;32m  Setup complete\033[0m\n'
@@ -483,6 +571,12 @@ else
   echo "  Setup complete"
 fi
 printf '  Local agent: %s\n\n' "$BASE_URL"
+if [ "$CLI_READY" = "yes" ]; then
+  echo "  Next time, from any terminal:"
+  echo "    mangrove-agent start     update to the latest code and start the agent"
+  echo "    mangrove-agent status    check what is running; see 'mangrove-agent help'"
+  echo
+fi
 if [ "$DO_MCP" = "yes" ]; then
   if [ "$FOREGROUND" = "yes" ]; then
     echo "  Open another terminal and run Claude from your agent folder:"

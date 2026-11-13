@@ -155,6 +155,22 @@ When it finishes:
 - The agent runs at `http://127.0.0.1:9080`. Its process ID is in `agent-data/bare.pid` and its log is `agent-data/bare.log`.
 - `setup.sh` has run `scripts/verify_quickstart.sh`, which checks authenticated local access, scheduler readiness and that the onboarding tools are discoverable.
 - Claude registration is saved when the CLI is available and you did not pass `--no-mcp`. Other clients use the command client or their own MCP connection.
+- The `mangrove-agent` command is on your PATH (a link in `~/.local/bin`). Open a new terminal if setup says it added that folder to your PATH.
+
+### Day to day: the `mangrove-agent` command
+
+You don't need to `cd` into the clone or remember to `git pull`. From any terminal:
+
+```bash
+mangrove-agent start      # pull the latest code, then set up / restart the agent
+mangrove-agent status     # version, whether an update is waiting, whether the agent is running
+mangrove-agent update     # pull the latest code only (run start to apply it)
+mangrove-agent stop       # stop the agent; restart, logs and chat are also available
+```
+
+`mangrove-agent start` takes the same options as `setup.sh` (for example `mangrove-agent start --yes --no-mcp`).
+
+**Updates are automatic and safe.** Every `start` (and every `./scripts/setup.sh` run) first fetches the latest code and fast-forwards your `main` branch. If anything changed, setup starts again on the new code. A running agent restarts only if code or configuration changed. Setup never discards your work. It skips the update and tells you why if you're on another branch, have local commits, or have edited a file the update also changes. If GitHub can't be reached, setup carries on with the code you already have. Edits to other files, such as your Project Context in `SAGE.md`, are kept. Use `--no-update` or `MANGROVE_AGENT_NO_UPDATE=1` to turn this off.
 
 **After setup, continue with your chosen client** using the [user guide](docs/user-guide.md#come-back-or-switch-clients). For Claude, run the command displayed at the end of setup—it changes to your checkout folder and launches `claude`. In x402 mode, complete the guided payment-wallet setup before requesting paid data or backtests. API-key users can paper-trade without a payment wallet. Simulated trades do not make upstream API calls free.
 Continue with your client using the [user guide](docs/user-guide.md#come-back-or-switch-clients). Claude users can run `./scripts/chat.sh` for a session with shell and file tools disabled and only the Mangrove MCP server; see [restricted chat](docs/restricted-chat.md). In x402 mode, finish the printed payment-wallet steps before you request paid data or backtests ([details](docs/setup-x402.md)). With an API key you can paper trade without a payment wallet. Paper trades are simulated, but the upstream data and evaluation calls behind them still count against your API-key allowance or cost x402 payments.
@@ -169,6 +185,8 @@ Continue with your client using the [user guide](docs/user-guide.md#come-back-or
 ./scripts/setup.sh --foreground                    # run uvicorn in your terminal (Ctrl+C to stop)
 ./scripts/setup.sh --no-mcp                        # skip Claude Code registration
 ./scripts/setup.sh --no-verify                     # skip the post-start verify pass
+./scripts/setup.sh --no-update                     # don't pull the latest code first
+./scripts/setup.sh --no-cli                        # don't install the mangrove-agent command
 ./scripts/setup.sh --docker                        # use Docker instead of bare-metal
 BARE_PORT=9085 ./scripts/setup.sh                  # use a different port (9080 busy/squatted)
 ```

@@ -95,8 +95,9 @@ privately. If a config needs merging, follow the exact message and
 reconnect. The restricted Claude launcher has different tool permissions from
 normal developer sessions; other clients do not inherit those restrictions.
 
-If the server stopped after a reboot, run `./scripts/setup.sh --yes --no-mcp`
-from the existing checkout to start it again. Setup can apply code/config
+If the server stopped after a reboot, run `mangrove-agent start --yes --no-mcp`
+(or `./scripts/setup.sh --yes --no-mcp` from the checkout) to start it again. It
+pulls the latest code first. Setup can apply code/config
 changes and restart the process, so do not rerun it just to switch clients
 while a live trading installation is running.
 

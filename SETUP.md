@@ -38,14 +38,19 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/Man
 
 ## Already set up and coming back
 
-First check whether the existing server is still running. Switching clients or returning the next day does not need a restart. If the server stopped, for example after a reboot, start it from the existing checkout. Open your terminal (Mac) or Git Bash (Windows) and run:
+Check whether the agent is running and whether an update is available:
 
 ```bash
-cd ~/Desktop/mangrove-agent
-./scripts/setup.sh --yes
+mangrove-agent status
 ```
 
-If you cloned somewhere other than the Desktop, use that path instead. `--yes` keeps your saved access mode and settings. Add `--no-mcp` if you do not use Claude Code. Then follow [returning or switching clients](docs/user-guide.md#come-back-or-switch-clients). The saved agent name and records come from the same installation, and Claude users can start `./scripts/chat.sh`.
+Switching clients or coming back the next day doesn't need a restart. If the agent stopped (after a reboot, for example), or you want the latest version, run:
+
+```bash
+mangrove-agent start --yes
+```
+
+This pulls the latest code first, so you never need to run `git pull` yourself. If `mangrove-agent` isn't found, your setup predates the command, or the terminal was opened before setup added it to your PATH. Run `cd ~/Desktop/mangrove-agent && ./scripts/setup.sh --yes` once (use your own clone path), then open a new terminal. `--yes` keeps your saved access mode and settings. Add `--no-mcp` if you do not use Claude Code. Then follow [returning or switching clients](docs/user-guide.md#come-back-or-switch-clients). The saved agent name and records come from the same installation, and Claude users can start `./scripts/chat.sh`.
 
 ---
 
@@ -241,6 +246,7 @@ On an interactive run, setup asks how you want to access MangroveAI: with an API
 
 Setup then runs on its own:
 
+0. Pulls the latest code from GitHub (fast-forward on `main` only; it never overwrites your local edits and continues offline), then restarts itself if anything changed.
 1. Creates or updates `server/src/config/local-config.json` and a unique local credential for your AI client.
 2. Creates `agent-data/` for local state (database, logs, pid file, master key).
 3. Creates a virtual environment at `.venv/` and installs the dependencies.
@@ -248,6 +254,7 @@ Setup then runs on its own:
 5. Verifies authenticated local access and that unauthenticated wallet requests are refused.
 6. Registers the MCP server with Claude Code, if the `claude` CLI is installed and you did not pass `--no-mcp`.
 7. Runs the verification pass (`scripts/verify_quickstart.sh`).
+8. Installs the `mangrove-agent` command, so later you can run `mangrove-agent start` from any folder.
 
 When it succeeds you see, in addition to the wallet instructions or API-key message:
 

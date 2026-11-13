@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+# mangrove-agent — everyday command for a mangrove-agent clone.
+#
+# setup.sh links this file onto PATH (default ~/.local/bin/mangrove-agent), so
+# it works from any directory. It resolves its own symlink to find the clone it
+# belongs to; every command acts on that clone only.
+#
+#   mangrove-agent start [setup options]   update to the latest code, then set up / start
+#   mangrove-agent update                  update the code only
+#   mangrove-agent stop | restart | status | logs | chat | where | version
+#
+# Compatible with the bash 3.2 that ships with macOS.
+
+set -euo pipefail
+
+# -- locate the clone (follow symlinks without GNU readlink -f) --------------
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in /*) ;; *) SOURCE="$DIR/$SOURCE" ;; esac
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+PROG="$(basename "${BASH_SOURCE[0]}")"
+PID_FILE="$REPO_ROOT/agent-data/bare.pid"
+LOG_FILE="$REPO_ROOT/agent-data/bare.log"
+LOCK_DIR="$REPO_ROOT/agent-data/.setup.lock"
+
+if [ ! -f "$SCRIPT_DIR/setup.sh" ]; then
+  printf '%s: cannot find setup.sh next to this command (%s).\n' "$PROG" "$SCRIPT_DIR" >&2
+  printf 'The clone may have been moved or deleted. Rerun ./scripts/setup.sh from the clone.\n' >&2
+  exit 1
+fi
+
+usage() {
+  cat <<EOF
+Usage: $PROG <command> [options]
+
+Commands:
+  start [options]  Update to the latest code, then configure and start the agent.
+                   Options are passed to setup.sh (see '$PROG start --help'),
+                   e.g. --docker, --foreground, --auth oauth, --no-update.
+  update           Fetch and fast-forward to the latest code. Does not restart.
+  stop             Stop the running local agent.
+  restart [opts]   Stop, then start (same options as start).
+  status           Show the checkout version and whether the agent is running.
+  logs [-n N]      Follow the agent log (Ctrl+C to exit).
+  chat             Open the restricted Claude chat for this agent.
+  where            Print the path of the clone this command manages.
+  version          Print the checked-out version.
+  help             Show this help.
+
+Clone: $REPO_ROOT
+EOF
+}
+
+# The clone's Python helpers prefer the project venv when setup created one.
+python_bin() {
+  if [ -x "$REPO_ROOT/.venv/bin/python3" ]; then printf '%s\n' "$REPO_ROOT/.venv/bin/python3"; return; fi
+  local cmd
+  for cmd in python3.13 python3.12 python3.11 python3; do
+    if command -v "$cmd" >/dev/null 2>&1; then printf '%s\n' "$cmd"; return; fi
+  done
+  printf 'python3\n'
+}
+
+git_version() {
+  if command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    local branch commit date
+    branch="$(git -C "$REPO_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || echo detached)"
+    commit="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    date="$(git -C "$REPO_ROOT" log -1 --format=%cs 2>/dev/null || true)"
+    printf '%s@%s%s\n' "$branch" "$commit" "${date:+ ($date)}"
+  else
+    printf 'unknown (not a git clone)\n'
+  fi
+}
+
+# Echo the PID of this clone's bare-metal agent, if one is running. Matches the
+# same argv evidence setup.sh uses, so an unrelated process that reused the PID
+# is never reported or signalled.
+bare_pid() {
+  [ -f "$PID_FILE" ] || return 1
+  local pid command
+  pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  case "$pid" in ""|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  case "$command" in
+    *"uvicorn src.app:app --app-dir $REPO_ROOT/server "*) printf '%s\n' "$pid" ;;
+    *) return 1 ;;
+  esac
+}
+
+docker_running() {
+  [ -f "$REPO_ROOT/docker-compose.yml" ] || return 1
+  command -v docker >/dev/null 2>&1 || return 1
+  docker info >/dev/null 2>&1 || return 1
+  [ -n "$(cd "$REPO_ROOT" && docker compose ps -q --status running 2>/dev/null)" ]
+}
+
+refuse_during_setup() {
+  if [ -d "$LOCK_DIR" ]; then
+    printf '%s: a setup run is in progress (or was interrupted).\n' "$PROG" >&2
+    printf 'Wait for it to finish. If none is running, remove %s and retry.\n' "$LOCK_DIR" >&2
+    exit 1
+  fi
+}
+
+cmd_stop() {
+  refuse_during_setup
+  local pid stopped=no
+  if pid="$(bare_pid)"; then
+    kill "$pid"
+    local _
+    for _ in $(seq 1 40); do kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
+    if kill -0 "$pid" 2>/dev/null; then
+      printf 'Agent (pid %s) did not stop within 10s; inspect it before retrying.\n' "$pid" >&2
+      exit 1
+    fi
+    rm -f "$PID_FILE"
+    printf 'Stopped local agent (pid %s).\n' "$pid"
+    stopped=yes
+  elif [ -f "$PID_FILE" ]; then
+    local recorded
+    recorded="$(cat "$PID_FILE" 2>/dev/null || true)"
+    case "$recorded" in
+      ""|*[!0-9]*) ;;
+      *) if kill -0 "$recorded" 2>/dev/null; then
+           printf 'PID %s in %s is not identifiable as this clone'"'"'s agent; not stopping it.\n' "$recorded" "$PID_FILE" >&2
+           exit 1
+         fi ;;
+    esac
+    rm -f "$PID_FILE"
+  fi
+  if docker_running; then
+    (cd "$REPO_ROOT" && docker compose stop)
+    printf 'Stopped Docker agent.\n'
+    stopped=yes
+  fi
+  [ "$stopped" = yes ] || printf 'Agent is not running.\n'
+}
+
+cmd_status() {
+  printf 'Clone:    %s\n' "$REPO_ROOT"
+  printf 'Version:  %s\n' "$(git_version)"
+  # Offline: compare against the last fetched remote state only.
+  if command -v git >/dev/null 2>&1; then
+    local behind
+    behind="$(git -C "$REPO_ROOT" rev-list --count 'HEAD..@{upstream}' 2>/dev/null || true)"
+    case "$behind" in
+      ""|0) ;;
+      *) printf 'Updates:  %s commit(s) available; run %s update\n' "$behind" "$PROG" ;;
+    esac
+  fi
+  local pid running=no
+  if pid="$(bare_pid)"; then
+    printf 'Agent:    running (bare-metal, pid %s)\n' "$pid"
+    running=yes
+  elif docker_running; then
+    printf 'Agent:    running (Docker)\n'
+    running=yes
+  else
+    printf 'Agent:    not running; start it with %s start\n' "$PROG"
+  fi
+  if [ "$running" = yes ] && [ -f "$REPO_ROOT/server/src/config/local-config.json" ]; then
+    if (cd "$REPO_ROOT" && "$(python_bin)" scripts/setup_support.py check >/dev/null 2>&1); then
+      printf 'Access:   local authenticated access OK\n'
+    else
+      printf 'Access:   agent is not answering authenticated requests yet\n'
+      return 1
+    fi
+  fi
+  [ "$running" = yes ]
+}
+
+cmd_logs() {
+  local lines=100
+  if [ "${1:-}" = "-n" ]; then
+    case "${2:-}" in ''|*[!0-9]*) printf 'logs -n needs a number\n' >&2; exit 2 ;; esac
+    lines="$2"; shift 2
+  fi
+  [ $# -eq 0 ] || { printf 'Unknown logs option: %s\n' "$1" >&2; exit 2; }
+  if bare_pid >/dev/null || { [ -f "$LOG_FILE" ] && ! docker_running; }; then
+    [ -f "$LOG_FILE" ] || { printf 'No log yet at %s\n' "$LOG_FILE" >&2; exit 1; }
+    exec tail -n "$lines" -f "$LOG_FILE"
+  elif docker_running; then
+    cd "$REPO_ROOT" && exec docker compose logs -f --tail "$lines"
+  else
+    printf 'No agent log found; start the agent with %s start\n' "$PROG" >&2
+    exit 1
+  fi
+}
+
+COMMAND="${1:-help}"
+[ $# -eq 0 ] || shift
+
+case "$COMMAND" in
+  start)
+    exec bash "$SCRIPT_DIR/setup.sh" "$@"
+    ;;
+  update)
+    exec bash "$SCRIPT_DIR/update.sh" "$@"
+    ;;
+  stop)
+    [ $# -eq 0 ] || { printf 'stop takes no options\n' >&2; exit 2; }
+    cmd_stop
+    ;;
+  restart)
+    cmd_stop
+    exec bash "$SCRIPT_DIR/setup.sh" "$@"
+    ;;
+  status)
+    [ $# -eq 0 ] || { printf 'status takes no options\n' >&2; exit 2; }
+    cmd_status
+    ;;
+  logs)
+    cmd_logs "$@"
+    ;;
+  chat)
+    exec bash "$SCRIPT_DIR/chat.sh" "$@"
+    ;;
+  where)
+    printf '%s\n' "$REPO_ROOT"
+    ;;
+  version|--version|-V)
+    printf 'mangrove-agent %s\n' "$(git_version)"
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    printf '%s: unknown command '"'"'%s'"'"'\n\n' "$PROG" "$COMMAND" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

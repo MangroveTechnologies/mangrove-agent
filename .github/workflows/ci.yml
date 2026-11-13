@@ -81,8 +81,8 @@ jobs:
 
       - name: Check setup flow
         run: |
-          bash -n scripts/reveal-secret.sh scripts/confirm-backup.sh scripts/install-mac.sh scripts/setup.sh scripts/setup-mcp.sh scripts/verify_quickstart.sh
-          ruff check --config server/pyproject.toml scripts/setup_support.py scripts/wallet_backup.py server/tests/unit/test_setup_flow.py
+          bash -n scripts/reveal-secret.sh scripts/confirm-backup.sh scripts/install-mac.sh scripts/setup.sh scripts/setup-mcp.sh scripts/verify_quickstart.sh scripts/update.sh scripts/mangrove-agent
+          ruff check --config server/pyproject.toml scripts/setup_support.py scripts/wallet_backup.py server/tests/unit/test_setup_flow.py server/tests/unit/test_self_update.py
 
       - name: Run tests
         env:
