@@ -11,6 +11,7 @@ import os
 import time
 import traceback
 from pathlib import Path
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -207,34 +208,48 @@ def _script(path):
     return module
 
 
-@pytest.mark.parametrize("url", [
-    "https://example.com", "http://127.0.0.1.evil.test", "http://127.0.0.1:9082/path",
-    "http://user:pass@localhost", "http://localhost?token=x", "http://localhost#fragment",
-    "file:///tmp/a", "http://localhost:invalid", "http://169.254.169.254",
-])
-def test_secret_entry_refuses_unsafe_destinations(url):
+@pytest.mark.parametrize("url", ["https://example.invalid", "http://localhost:9082", "file:///untrusted"])
+def test_retired_stash_does_not_read_input_config_or_call_network(tmp_path, monkeypatch, capsys, url):
+    import getpass
+    import socket
+    import urllib.request
+
     module = _script("scripts/stash-secret.py")
-    with pytest.raises(ValueError):
-        module.loopback_url(url)
+    monkeypatch.setenv("CONFIG_FILE", str(tmp_path / "missing-config.json"))
+    monkeypatch.setenv("LOCAL_AGENT_URL", url)
+    prompt = Mock(side_effect=AssertionError("Secret input forbidden"))
+    network = Mock(side_effect=AssertionError("Secret transport forbidden"))
+    monkeypatch.setattr(getpass, "getpass", prompt)
+    monkeypatch.setattr("builtins.input", prompt)
+    monkeypatch.setattr(urllib.request, "urlopen", network)
+    monkeypatch.setattr(socket, "create_connection", network)
+    assert module.main() == 1
+    prompt.assert_not_called()
+    network.assert_not_called()
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "isolated custody administrator" in output.err
+    assert list(tmp_path.iterdir()) == []
 
 
-def test_secret_entry_bypasses_proxies_and_refuses_redirects(monkeypatch):
-    module = _script("scripts/stash-secret.py")
-    monkeypatch.setenv("HTTP_PROXY", "http://example.invalid:1234")
-    monkeypatch.setenv("HTTPS_PROXY", "http://example.invalid:1234")
-    monkeypatch.setattr(module.urllib.request, "getproxies", lambda: pytest.fail("ambient proxies consulted"))
-    captured = []
-    def open_request(self, request, timeout):
-        captured.append(request)
-        raise module.urllib.error.HTTPError(request.full_url, 307, "synthetic", {}, io.BytesIO(b"SYNTHETIC_SECRET"))
-    monkeypatch.setattr(module.urllib.request.OpenerDirector, "open", open_request)
-    with pytest.raises(ValueError) as caught:
-        module.stash("http://localhost:9082", "synthetic-key", "SYNTHETIC_SECRET")
-    assert "SYNTHETIC_SECRET" not in str(caught.value)
-    assert len(captured) == 1
-    assert captured[0].full_url.startswith("http://127.0.0.1:9082/")
-    assert "SECRET" not in os.environ
-    assert module.NoRedirect().redirect_request(None, None, 307, None, {}, "https://example.invalid") is None
+@pytest.mark.parametrize("script,args", [("stash-secret.sh", []), ("reveal-secret.sh", ["obsolete-token"]),
+                                         ("reveal-secret.sh", ["--address", PAYER]),
+                                         ("confirm-backup.sh", [PAYER]),
+                                         ("reveal-secret.sh", ["--setup"])])
+def test_retired_shell_secret_helpers_refuse_without_emitting_input_or_handoff(tmp_path, script, args):
+    import subprocess
+
+    config = tmp_path / "invalid-config.json"
+    config.write_text("deliberately invalid configuration with SYNTHETIC_API_KEY")
+    result = subprocess.run(["bash", str(ROOT / "scripts" / script), *args],
+                            input="SYNTHETIC_PRIVATE_INPUT\n", text=True, capture_output=True,
+                            cwd=tmp_path, env=dict(os.environ, CONFIG_FILE=str(config),
+                                LOCAL_AGENT_URL="http://127.0.0.1:1"), timeout=10)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "isolated custody administrator" in result.stderr
+    assert "SYNTHETIC" not in result.stdout + result.stderr
+    assert list(tmp_path.iterdir()) == [config]
 
 
 def test_quote_watcher_omits_arbitrary_remote_content(monkeypatch):
@@ -412,66 +427,3 @@ def test_unsigned_rollback_concurrent_with_new_period_does_not_unlock_it(databas
                 worker.terminate()
                 worker.join(5)
         result.close()
-
-
-@pytest.mark.skipif(os.name != "posix", reason="POSIX private handoff")
-def test_stash_handoff_is_private_and_not_reused(tmp_path, monkeypatch):
-    module = _script("scripts/stash-secret.py")
-    monkeypatch.setattr(module.tempfile, "tempdir", str(tmp_path))
-    first = module.write_handoff("synthetic-vault-token", 300)
-    second = module.write_handoff("different-vault-token", 300)
-    assert first != second
-    assert first.stat().st_mode & 0o777 == 0o600
-    assert first.parent.stat().st_mode & 0o777 == 0o700
-    assert json.loads(first.read_text()) == {
-        "vault_token": "synthetic-vault-token", "secret_ttl_seconds": 300,
-    }
-
-
-def test_stash_handoff_cleans_up_failed_write(tmp_path, monkeypatch):
-    module = _script("scripts/stash-secret.py")
-    monkeypatch.setattr(module.tempfile, "tempdir", str(tmp_path))
-    def broken_dump(*args):
-        raise OSError("synthetic write failure")
-    monkeypatch.setattr(module.json, "dump", broken_dump)
-    with pytest.raises(OSError):
-        module.write_handoff("synthetic-vault-token", 300)
-    assert list(tmp_path.iterdir()) == []
-
-
-@pytest.mark.parametrize("failure", [None, "network", "handoff", "echo"])
-def test_stash_cli_never_logs_credentials(tmp_path, monkeypatch, capsys, failure):
-    module = _script("scripts/stash-secret.py")
-    config = tmp_path / "config.json"
-    config.write_text(json.dumps({"API_KEYS": "SYNTHETIC_API_KEY"}))
-    monkeypatch.setenv("CONFIG_FILE", str(config))
-    monkeypatch.setenv("LOCAL_AGENT_URL", "http://127.0.0.1:9082")
-    monkeypatch.setattr(module.sys.stdin, "isatty", lambda: True)
-    def prompt(*args):
-        if failure == "echo":
-            module.warnings.warn("synthetic fallback", module.getpass.GetPassWarning)
-        return "SYNTHETIC_PRIVATE_KEY"
-    monkeypatch.setattr(module.getpass, "getpass", prompt)
-    calls = []
-    def stash(*args):
-        calls.append(args)
-        if failure == "network":
-            raise ValueError("SYNTHETIC_PRIVATE_KEY")
-        return "SYNTHETIC_VAULT_TOKEN", 300
-    monkeypatch.setattr(module, "stash", stash)
-    handoffs = []
-    def handoff(token, ttl):
-        if failure == "handoff":
-            raise OSError("SYNTHETIC_VAULT_TOKEN")
-        handoffs.append((token, ttl))
-        return tmp_path / "handoff.json"
-    monkeypatch.setattr(module, "write_handoff", handoff)
-    assert module.main() == (0 if failure is None else 1)
-    output = capsys.readouterr()
-    for sensitive in ("SYNTHETIC_PRIVATE_KEY", "SYNTHETIC_VAULT_TOKEN", "SYNTHETIC_API_KEY"):
-        assert sensitive not in output.out + output.err
-    if failure == "echo":
-        assert calls == []
-    if failure is None:
-        assert handoffs == [("SYNTHETIC_VAULT_TOKEN", 300)]
-        assert str(tmp_path / "handoff.json") in output.out

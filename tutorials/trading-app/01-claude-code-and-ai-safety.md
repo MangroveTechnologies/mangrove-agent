@@ -124,15 +124,9 @@ shows the attack these controls are built to stop.
 **Problem it prevents:** you create a wallet and fund it, but never save its
 secret. The machine fails and the funds are unrecoverable.
 
-**How it works:** every wallet has a `backup_confirmed_at` value in the local
-database, empty at creation. `create_wallet` returns a `vault_token` and a
-`reveal_cmd`. You run `./scripts/reveal-secret.sh <vault_token>` in a terminal,
-save the secret somewhere durable, then run
-`./scripts/confirm-backup.sh <address>` to set the value. Until it is set,
-`execute_swap` refuses to sign for that wallet.
+**How it works:** isolated custody records `backup_confirmed_at`. Creation returns public metadata and human-admin instructions, with no export capability. The human uses an independent terminal under the custody UID to save and confirm a backup. Ordinary API/MCP credentials cannot do that. The protected signer also checks independent wallet, destination, amount and fee limits.
 
-**What you see:** a refusal that names the two commands. That is the gate
-working, not a bug. Chapter 06 walks through the steps.
+**What you see:** a refusal when the backup or protected policy is missing. [Chapter 06](06-wallet-setup.md) explains the separate human workflow.
 
 ### Server-side check 2 - slippage cap and confirmation
 
@@ -166,14 +160,7 @@ Three scripts in `.claude/hooks/` are registered in `.claude/settings.json`.
 All three block by exiting with status 2, and each block message names the hook
 file. Only a person should edit or remove a hook.
 
-- **`block-wallet-secrets.sh`** runs on every prompt you submit and on tool
-  output. It blocks a private-key shape (`0x` plus 64 hex characters) and any
-  run of 12 or more consecutive words from the BIP-39 word list. In tool output
-  it blocks only when such a value sits in a key-named field, so transaction
-  hashes do not trip it. Its message points you to `./scripts/stash-secret.sh`.
-  If you paste a key by mistake, the prompt never reaches the model. Prose
-  rarely contains 12 BIP-39 words in a row, but if a message is blocked
-  unexpectedly, rephrase it.
+- **`block-wallet-secrets.sh`** uses the shared structured detector for prompts, tool results and relevant failures, and blocks known secret-access operations before execution where supported. Coverage and output contracts vary by host. It supplements isolated custody; it cannot prove that a prior transcript or telemetry copy was erased. Wallet import and backup belong in the independent custody administrator terminal, never in a captured model tool.
 - **`preflight-swap.sh`** runs before `execute_swap` and blocks the call when
   the wallet holds none of the input token on the target chain. It passes the
   call through if the balance is non-zero or cannot be read, and the agent

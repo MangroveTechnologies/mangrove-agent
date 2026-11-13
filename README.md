@@ -185,13 +185,13 @@ See [Robinhood execution](docs/robinhood-execution.md#connect-once).
 
 ## Alternate quick start — Docker
 
-If you can't run Python on the host (corporate restrictions, reproducibility mandate), Docker works the same way. The tradeoff: the container can't reach your OS keychain, so the Fernet master key lives in `./agent-data/master.key` (chmod 600, gitignored) instead of Keychain / Secret Service / Credential Manager.
+Docker can run the ordinary agent without a host Python installation. Wallet custody still requires its separate protected OS deployment; Docker controlled by the coding agent is insufficient isolation.
 
 ```bash
 ./scripts/setup.sh --docker
 ```
 
-Docker setup uses port 9080, published on loopback only. State persists in the `./agent-data/` directory, which is bind-mounted into the container as a directory (single-file mounts drift on macOS and Windows). The wallet master key is stored the same way as in a bare-metal install, in `agent-data/master.key` (mode 0600, gitignored).
+Docker setup uses port 9080, published on loopback only. Agent journal and credential state persists in `./agent-data/`. Wallet custody requires the separate protected deployment in [isolated custody](docs/custody.md); an agent-controlled Docker container does not isolate keys from that agent.
 
 ## Your first strategy and trade
 
@@ -214,8 +214,8 @@ The agent calls `agent_start_paper_schedule` with the server strategy ID, an int
 **Go live (optional, needs funds).** Live trading is a separate, explicit decision.
 
 - **Robinhood:** use the bundled `setup-robinhood` skill and the [execution venue guide](docs/robinhood-execution.md). It uses broker OAuth and needs no local trading wallet.
-- **DEX:** wallet setup and live trading are covered in chapters 06 and 07 of the tutorial. In outline: create or import a wallet (`create_wallet`, or `./scripts/stash-secret.sh` and then `import_wallet`); save its secret in your own terminal with `./scripts/reveal-secret.sh --address WALLET_ADDRESS`; run `./scripts/confirm-backup.sh WALLET_ADDRESS`; fund the wallet with a small amount of USDC on Base; then trade. `execute_swap` needs `confirm=true`, an explicit `slippage_pct` of at most 0.0025 (0.25%) and a backup-confirmed wallet. A strategy moves to `live` through `PATCH /api/v1/agent/strategies/{strategy_id}/status` with `confirm=true` and an allocation (`wallet_address`, `token`, `token_address`, `amount`, `slippage_pct`).
-- At swap time the agent signs locally and sends only the signed transaction to MangroveMarkets to broadcast. The agent builds each swap's intent (chain, wallet, router, assets, amount and minimum output) from the original order and signs only a generic 1inch V5/V6 swap or the finite ERC-20 approval that matches it. EIP-7702 and blob transactions, authorization lists, unknown selectors and unreviewed chains, including Base Sepolia, are refused before the key is decrypted.
+- **DEX:** first install [isolated custody](docs/custody.md) under a separate protected OS identity. Create a wallet through the agent or have the human administrator import one. The human saves and confirms its backup in the independent custody terminal and reviews the protected wallet/token/destination/spending policy. `execute_swap` requires `confirm=true`, explicit slippage of at most 0.25%, and a backed-up wallet. Unknown router selectors and unreviewed chains fail closed.
+- At swap time the isolated broker validates decoded effects, independent spending policy, gas limits and replay state before signing. MangroveMarkets receives only the signed transaction for broadcast.
 - Token metadata from MangroveMarkets is trusted input. When an order names a token by symbol, its contract address comes from Markets token search, and the decimals that convert a human amount to base units come from Markets token data; a wrong value there yields a wrong but internally consistent intent. Locally, the agent refuses ambiguous symbol matches and quotes that change the requested assets, chain or base-unit amount, approves and swaps one float-exact amount (Markets carries amounts as floats), takes the minimum output from the quote the swap is prepared from, and checks the signed transaction against the intent and per-chain gas bounds. The quote price is also Markets data, so slippage is bounded relative to that quote.
 
 ## Connect your Kraken account
@@ -234,11 +234,13 @@ Say **"set up Kraken"** or **"connect Kraken without a key"** in a session and t
 
 ## Safety model
 
-- **Private keys stay out of the chat.** `create_wallet` returns a `vault_token`, never the plaintext secret. You reveal the secret in your own terminal with `./scripts/reveal-secret.sh`, which refuses to write to anything but a terminal.
+- **Secrets are outside ordinary agent authority.** Creation returns public metadata and human backup instructions, with no usable export token. Both former reveal endpoints, stash/import and backup confirmation refuse ordinary API authority.
+- **Custody has a separate OS identity.** Keys, policy, runtime and signing journal are protected from the restricted agent UID. Host admin/root/container control over custody invalidates that isolation claim.
+- **Humans own backup and import.** These commands run directly in the independent administrator terminal, never through the agent's captured shell or PTY. Existing-wallet recovery uses verified migration and guarded legacy retirement.
 - **The agent refuses secrets in tool calls, for every client.** An MCP tool call is refused before it runs or reaches MangroveAI when its arguments carry a private key (64 hex characters, with or without `0x`) in a key-named field, in `vault_token` or inside free text, a recovery phrase with a valid BIP-39 checksum, or an XRPL seed. A 64-hex value that is a whole field value or is labelled as a hash, such as a transaction hash, passes because a key and a hash have the same shape. A tool result with a secret in a key-named field is withheld. In Claude Code sessions, `.claude/hooks/block-wallet-secrets.sh` also refuses the prompt itself. Other clients cannot stop a pasted secret from reaching their own chat history, so never paste one into any AI chat. See [guardrails across clients](docs/clients.md#guardrails-across-clients).
-- **Live trading needs a confirmed backup.** After you save a wallet's secret off the agent, `./scripts/confirm-backup.sh WALLET_ADDRESS` records it. Live swaps and paying x402 from a wallet refuse wallets without it.
-- **The master key stays local.** Wallet secrets are encrypted with a Fernet key stored in `agent-data/master.key` (mode 0600, gitignored). If no keyfile exists, the agent reads an OS keychain entry instead; it never silently generates a replacement for a key that is missing.
-- **Local access is authenticated.** The agent binds to `127.0.0.1`, and setup generates a unique local credential (`API_KEYS`) for the AI client. That credential is separate from your MangroveAI key.
+- **Signing checks intent and protected limits.** The broker binds decoded effects to wallet, chain, assets, amounts, recipients, executor and fees, and maintains durable budget/nonce state. The agent cannot raise those limits through request arguments.
+- **Hooks supplement custody.** Client hooks have host-specific coverage and cannot prove earlier transcripts erased. Read the [client guide](docs/clients.md) and [custody deployment requirements](docs/custody.md).
+- **Local and upstream credentials differ.** Unique inbound `API_KEYS` authenticates ordinary local access; outbound `MANGROVE_API_KEY` authenticates managed-service requests. Disabled local auth fails closed for privileged requests.
 
 ## What the agent can do
 
@@ -263,7 +265,7 @@ The local agent exposes `list_tools` for its own MCP catalog, including local he
 |---|---|
 | Discovery (free) | `status`, `list_tools` |
 | Naming | `set_agent_name` |
-| Wallet custody | `create_wallet`, `import_wallet`, `list_wallets` |
+| Wallet metadata and creation | `create_wallet`, `list_wallets`; import is human custody administration |
 | Kraken (CEX) | `cex_status`, `cex_connect_kraken`, `cex_balances`, `cex_validate_order`, `cex_sync_fills` |
 | DEX execution | `execute_swap` (local approval, signing and human-unit conversion) |
 | Paper scheduling | `agent_start_paper_schedule`, `agent_list_paper_schedules`, `agent_get_paper_schedule`, `agent_pause_paper_schedule`, `agent_reconcile_paper_schedule` |
@@ -293,7 +295,7 @@ Local tools also have REST endpoints under `/api/v1/agent/`, backed by the same 
 |  |  - auth middleware (X-API-Key)                          | |
 |  |  - service layer shared by REST and MCP                 | |
 |  |  - APScheduler (paper clock, reconciliation workers)    | |
-|  |  - locally encrypted wallets and signing                | |
+|  |  - public metadata and isolated custody RPC                | |
 |  +----------------------------------------------------------+ |
 |        |                                  |                 |
 |        v                                  v                 |
@@ -307,7 +309,7 @@ Local tools also have REST endpoints under `/api/v1/agent/`, backed by the same 
    paper evaluation)
 ```
 
-The agent does not re-implement signal logic, risk gates, position sizing or cooldowns; those run on MangroveAI. The agent orchestrates: it forwards tools, supplies the paper clock, and handles everything that needs your keys, wallets or local records. For a live trade it decrypts the wallet secret in-process, signs the unsigned transaction that MangroveMarkets prepared, and sends only the signed transaction back to be broadcast. MangroveMarkets never sees your key.
+The agent does not re-implement signal logic, risk gates, position sizing or cooldowns; those run on MangroveAI. The agent orchestrates: it forwards tools, supplies the paper clock, and handles everything that needs your keys, wallets or local records. For a live trade it submits the prepared payload and immutable intent to the isolated custody service. The broker validates its independently authorized policy before signing and returns only the signed transaction for broadcast. MangroveMarkets never receives your key.
 
 ## Documentation
 
@@ -318,6 +320,7 @@ The agent does not re-implement signal logic, risk gates, position sizing or coo
 | [SETUP.md](SETUP.md) | Step-by-step prerequisites and manual setup for macOS and Windows |
 | [docs/setup-x402.md](docs/setup-x402.md) | API-key and x402 access, the wallet commands, spend budget and payment recovery |
 | [docs/configuration.md](docs/configuration.md) | Config files, keys, environments and secrets |
+| [docs/custody.md](docs/custody.md) | Protected OS custody, human backup/import, signing policy and legacy recovery |
 | [docs/restricted-chat.md](docs/restricted-chat.md) | The restricted Claude session started by `./scripts/chat.sh` |
 | [docs/strategy-lifecycle.md](docs/strategy-lifecycle.md) | Strategy states, transitions, scheduling and execution |
 | [docs/paper-scheduling.md](docs/paper-scheduling.md) | Server-owned paper schedules |
@@ -350,12 +353,16 @@ cd server
 ENVIRONMENT=test ../.venv/bin/python3 -m pytest tests/ -v
 ```
 
-CI runs the same suite, including the offline rejection of unsupported Sepolia swap signing. The live mainnet swap test in `tests/e2e/test_live_swap.py` is skipped unless you opt in:
+CI runs the same suite, including the offline rejection of unsupported Sepolia swap signing. The funded Base mainnet acceptance test in `tests/e2e/test_live_swap.py` is skipped by default. It calls an already running agent over loopback HTTP and uses only a public wallet address; it never imports private keys or changes custody policy.
+
+A human administrator must first provision isolated custody, confirm the wallet backup, authorize the exact USDC/native pair, executor, exchange-rate floor, routing fee and gas/spend bounds, and fund the wallet with 0.10 USDC plus native gas. Supply the local incoming agent credential through `LIVE_AGENT_API_KEY` in the test process environment, outside chat. This explicit opt-in can broadcast a finite approval and one real swap:
 
 ```bash
-# Base mainnet, real funds (budget cap 0.10 USDC per run)
-ENABLE_MAINNET_TEST=1 BASE_MAINNET_PRIVATE_KEY=0x... ENVIRONMENT=test ../.venv/bin/python3 -m pytest tests/e2e/test_live_swap.py::test_mainnet_live_swap
+# Run from server/ only after explicit funded-run authorization.
+ENABLE_MAINNET_TEST=1 LIVE_AGENT_URL=http://127.0.0.1:9080 LIVE_WALLET_ADDRESS=PUBLIC_ADDRESS ENVIRONMENT=test ../.venv/bin/python3 -m pytest tests/e2e/test_live_swap.py::test_mainnet_live_swap
 ```
+
+The request spends `amount=0.1` human USDC with decimal `slippage_pct=0.002` (0.2%), separately bounded from the routing fee. Failed preparation can leave a confirmed finite approval and its gas cost; an uncertain broadcast requires inspection of the agent journal and custody audit before any retry. See [isolated custody](docs/custody.md) for installation and authorization requirements.
 
 ### Deployment
 

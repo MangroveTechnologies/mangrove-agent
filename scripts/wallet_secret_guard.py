@@ -24,8 +24,8 @@ safe decision instead of an allow: ``PreToolUse`` denies the tool call,
 a block reason. Output events never stop the session for a failed check. When
 the event is unknown, the adapter exits 2, which blocks an input event.
 
-The hooks supplement the agent's server-side secret guard: a host can record
-tool output before a hook runs. Feedback never includes the inspected payload, a matched
+The hooks supplement the custody boundary: a host can record tool output
+before a hook runs. Feedback never includes the inspected payload, a matched
 value, a path or exception text.
 """
 from __future__ import annotations
@@ -43,7 +43,7 @@ MAX_BYTES = 8 * 1024 * 1024
 STRUCTURED_BYTES = 1024 * 1024
 REDACTED = '[wallet-secret content withheld]'
 REASON = ('Wallet-secret protection blocked this content or operation. '
-          'To import a wallet, run ./scripts/stash-secret.sh in your own terminal; never paste secrets into chat.')
+          'Use the independently controlled custody administrator; never paste secrets into chat.')
 INCOMPLETE = REASON + ' The protection check could not complete.'
 EVENT_HINT = re.compile(rb'"hook_event_name"\s*:\s*"([A-Za-z]{1,40})"')
 KNOWN_ACCESS = re.compile(

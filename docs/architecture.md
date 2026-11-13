@@ -1,13 +1,13 @@
 # Architecture
 
 mangrove-agent is a local service that gives an AI client safe access to trading. It runs on
-the user's own machine, holds the user's wallet keys, runs scheduled evaluations and logs
+the user's own machine, calls isolated wallet custody, runs scheduled evaluations and logs
 everything it does. Research, strategy building and strategy evaluation happen in Mangrove's
 hosted services; the agent keeps only what has to be local.
 
 The design follows four rules:
 
-- **One process.** A single FastAPI app serves REST, MCP and OpenAPI, and runs the scheduler.
+- **One agent process plus isolated custody.** A single FastAPI app serves REST, MCP and OpenAPI, and runs the scheduler. Wallet custody runs under its separate protected OS identity.
   The process must run as one worker, because the secret vault and the scheduler are
   per-process state.
 - **One datastore.** SQLite holds business data, the scheduler's job store and the payment
@@ -15,8 +15,7 @@ The design follows four rules:
 - **Hosted services do the thinking.** Strategy evaluation, signals, risk gates, position
   sizing and cooldowns live in MangroveAI. The agent calls them and executes what comes back.
   It does not reimplement that logic.
-- **The agent controls the money.** Keys, signing, confirmations, allocations and spending
-  limits are enforced locally, in code the user can read.
+- **Independent custody authority.** The agent manages allocations and execution. A separate-UID broker owns keys and independently enforces human policy, backup and durable spending/replay limits.
 
 ## System overview
 
@@ -36,7 +35,9 @@ graph TB
 
         subgraph "Local state"
             DB[(SQLite<br/>agent.db)]
-            Key[(Master key<br/>keyfile or OS keychain)]
+            Key[(Agent credential key)]
+            Custody[Separate-UID custody broker]
+            CustodyState[(Private wallet keys<br/>protected policy and audit)]
         end
     end
 
@@ -52,7 +53,9 @@ graph TB
     Auth --> Services
     Sched -->|tick| Services
     Services --> DB
-    Services -->|decrypt to sign| Key
+    Services -->|credential encryption| Key
+    Services -->|narrow authenticated Unix RPC| Custody
+    Custody --> CustodyState
     Services --> AI
     Services --> Mkts
     Services -->|OAuth MCP| RH[Robinhood]
@@ -293,13 +296,9 @@ reconciled rather than retried. See [Robinhood execution](robinhood-execution.md
 
 These controls are enforced in the agent, independent of the AI client.
 
-- **Keys stay local and out of the transcript.** `create_wallet` returns a `vault_token`, not
-  a secret. The user reveals the secret with a local script that talks to the loopback REST
-  API, so it never passes through MCP or a chat. Vault entries are single-read and expire.
-- **Master key.** Wallet secrets are Fernet-encrypted. The key is read from `MASTER_KEY_PATH`
-  (a keyfile with owner-only permissions), then the OS keychain; a missing key is generated
-  into the keyfile only when none exists anywhere. The agent never invents a replacement for a
-  key it cannot find.
+- **Isolated keys.** Wallet keys, master key, policy and signature journal live under the dedicated custody UID. Ordinary API credentials cannot export, import or confirm backups. Human administration runs directly in an independent protected terminal; [deployment requirements](custody.md) include immutable code/runtime, ACL checks and no agent root/sudo/container control over custody.
+- **Backup and policy.** Live signing requires a human-confirmed backup plus independently approved wallet/network/assets/recipients and spending/fee limits. Request `confirm=true` cannot widen custody policy.
+- **Strict signing.** Transaction ABI and immutable intent bind chain, token, router, executor, amount, output floor, recipient, value and fees. New delegation/auth-list signing and unreviewed selectors/chains fail closed. x402, SIWX and marketplace proofs retain separate guarded structures, validity and approval controls. Migration does not revoke already released signatures or recover trust in a copied key.
 - **Secret guard at the MCP boundary.** Every tool call is checked before it runs: a private
   key (64 hex characters, with or without `0x`) in a key-named field, in `vault_token` or
   inside free text, a recovery phrase (also with a mistyped word), or an XRPL seed is refused
@@ -309,15 +308,6 @@ These controls are enforced in the agent, independent of the AI client.
 - **Empty-wallet swap refusal.** A live swap, or a live strategy entry, is refused before
   quoting or approval when the wallet holds 0 of the input token on that chain. Exits are
   never checked.
-- **Backup gate.** Live swaps, live strategy activation and x402 payments refuse a wallet
-  until `confirm-backup` has recorded that the user saved its secret off the machine.
-- **Signing guard.** The wallet manager signs a transaction only when its decoded effects
-  match an intent the agent built from the original order: a generic 1inch V5/V6 swap with the
-  requested chain, wallet, assets, amount, minimum output and recipient, or the finite ERC-20
-  approval for that amount. It also signs the narrow typed-data forms used for x402 payment
-  authorizations, marketplace proofs and Sign-In-With-X. EIP-7702 and blob transactions,
-  authorization lists, unknown selectors and unreviewed chains, including Base Sepolia, are
-  refused before the key is decrypted.
 - **Explicit confirmation.** Swaps, going live, leaving live, starting a paper schedule,
   marketplace submission and spend top-ups each need `confirm=true`.
 - **Slippage cap.** Swaps and allocations require an explicit tolerance of at most 0.25

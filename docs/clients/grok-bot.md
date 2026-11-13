@@ -19,6 +19,23 @@ and refuses a live swap or strategy entry from a wallet with no input-token
 balance, because those checks run in the agent for every client. See
 [guardrails across clients](../clients.md#guardrails-across-clients).
 
+## Custody and inference hooks
+
+Keep wallet keys and custody administration outside the box identity controlled
+by Grok Bot. Connect only the restricted agent service and its narrow signing
+interface. Installing this checkout, reading policy or using the command client
+does not isolate secrets from other shell commands on the same box. If the host
+cannot provide a separately protected custody runtime, use non-wallet workflows
+and stop wallet setup; do not fall back to local key storage readable by the bot.
+
+Optional [Grok Bot inference hooks](https://docs.x.ai/grok-bot/inference-hooks)
+are an Enterprise beta feature administered outside the repository. They check
+model requests after any preceding tool action. Shadow mode does not enforce
+denials; availability, enforcement and failure handling need an actual account
+check. These hooks do not prevent earlier tool side effects or establish that
+transcripts were erased. No Grok Bot inference endpoint is installed by setup.
+Grok Build is a different client; do not reuse this feature claim for Build.
+
 ## First run
 
 Use `/workspace/mangrove-agent` unless the owner names another path.
@@ -129,8 +146,9 @@ These guards are not enforced on this host and remain Grok Bot's duty:
 
 - A key or recovery phrase the owner types into the Grok Bot chat reaches the
   host transcript before any tool runs. If one arrives, do not pass it to any
-  tool or file; tell the owner to run `./scripts/stash-secret.sh` in their own
-  terminal. A tool call that carries one is refused with `SECRET_IN_ARGUMENTS`.
+  tool or file; tell the owner that wallet import runs only in the independent
+  custody administrator terminal ([isolated custody](../custody.md)). A tool
+  call that carries one is refused with `SECRET_IN_ARGUMENTS`.
 - Shell output on the box is not checked for secrets. Do not run commands that
   print keys, phrases, vault tokens or config contents.
 - For repository maintenance, work on a feature branch and open a pull request;

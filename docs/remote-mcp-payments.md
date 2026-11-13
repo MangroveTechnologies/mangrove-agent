@@ -3,8 +3,8 @@
 The agent can pay for a tool call on a remote MCP server over x402. This page is for
 developers extending the agent. It explains the payer entry points, how a payment is
 identified and recovered, and where the agent uses them. The payer lives in
-`server/src/services/x402_payer.py` and reuses the same wallet vault, signer, spending
-budget and payment ledger as the REST payer. It adds no second payment implementation
+`server/src/services/x402_payer.py` and reuses the same isolated custody signer, agent spending
+budget and payment ledger as the REST payer. Custody independently enforces its protected wallet/payee and lifetime limits. It adds no second payment implementation
 and moves no secrets to the server.
 
 ## Where the agent uses it

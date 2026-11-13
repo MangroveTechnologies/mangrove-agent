@@ -74,11 +74,8 @@ request shapes. This section records the behavior that the rest of the system de
 
 - **Base path.** Agent routes live under `/api/v1/agent`. x402-gated routes live under
   `/api/x402`.
-- **Wallet secrets.** No route or tool returns a plaintext secret except the two reveal routes
-  called by the local scripts. `create` and `stash-secret` return a `vault_token`, a
-  single-read, in-memory handle that expires after `SECRET_VAULT_TTL_SECONDS`.
-- **Backup gate.** Live swaps, live strategy activation and x402 payments are refused for a
-  wallet until `POST /wallet/{address}/confirm-backup` has set its `backup_confirmed_at`.
+- **Wallet secrets.** The separate-UID custody service owns wallet keys. Creation returns public metadata with an empty deprecated `vault_token` and TTL zero. Both old reveal routes, stash/import and backup confirmation return 410. No ordinary API/MCP/RPC authority exports wallet plaintext.
+- **Backup gate.** Direct human custody administration records backup confirmation. Live swaps, activation and x402 signing also require independent protected wallet, destination, budget and replay policy; see [custody](custody.md).
 - **Swaps.** `POST /dex/swap` requires `confirm: true` and an explicit `slippage_pct` that is
   greater than 0 and at most `0.0025`. Amounts are in human units.
 - **Lifecycle.** `PATCH /strategies/{id}/status` is the only way to activate, deactivate or
@@ -105,8 +102,8 @@ tools requires the API key.
 | `status` | Free | Agent name, version, counts, kill-switch and budget state | `GET /status` |
 | `list_tools` | Free | Tool catalog | `GET /tools` |
 | `set_agent_name` | Auth | Save the user-chosen agent name | `PUT /identity` |
-| `create_wallet` | Auth | Create and encrypt a wallet; returns a `vault_token` | `POST /wallet/create` |
-| `import_wallet` | Auth | Import a wallet from a stashed `vault_token` | `POST /wallet/import` |
+| `create_wallet` | Auth | Create in isolated custody; returns public metadata and human backup instructions | `POST /wallet/create` |
+| `import_wallet` | Auth | Retired compatibility tool; human custody import only | `POST /wallet/import` |
 | `list_wallets` | Auth | List wallets, without secrets | `GET /wallet/list` |
 | `execute_swap` | Auth | Execute a DEX swap in asset units; see below | `POST /dex/swap` (exact input quantity) |
 | `cex_status` | Auth | Whether Kraken is connected | `GET /cex/status` |
@@ -131,8 +128,7 @@ tools requires the API key.
 | `agent_reconcile_paper_schedule` | Auth | Recover an unresolved evaluation | `POST /strategies/paper-schedules/{id}/reconcile` |
 | `hello_mangrove` | x402 | Payment demo; hidden from `list_tools` | `GET /api/x402/hello-mangrove` |
 
-Some REST routes have no local tool: the wallet stash, reveal and confirm-backup routes (which
-handle secrets and are called by scripts), the `/cex/oauth/*` routes, the DEX read routes
+Some REST routes have no local tool: the retired wallet secret/confirmation routes (always 410), the `/cex/oauth/*` routes, the DEX read routes
 (`venues`, `pairs`, `tx-status`, `token-info`, `spot-price`, `gas-price`) and `quote`, the
 wallet `balances`, `portfolio` and `history` routes, `POST /portfolio/risk/reset`,
 `PATCH /strategies/{id}/status`, `POST /strategies/{id}/evaluate` and the execution-log
@@ -414,7 +410,7 @@ in `server/src/shared/db/migrations/` apply in filename order at startup and are
 
 | Table | Purpose | Key columns |
 |-------|---------|-------------|
-| `wallets` | Encrypted wallets | `address` (unique), `chain` (`evm` or `xrpl`), `network`, `chain_id`, `encrypted_secret` (Fernet), `encryption_method`, `label`, `backup_confirmed_at`, `created_at` |
+| `wallets` | Agent metadata-only wallet rows; private custody DB retains encrypted keys | `address` (unique), `chain` (`evm` or `xrpl`), `network`, `chain_id`, `encrypted_secret` (Fernet), `encryption_method`, `label`, `backup_confirmed_at`, `created_at` |
 | `strategies` | Local execution records | `id`, `mangrove_id` (unique), `name`, `asset`, `timeframe`, `status`, `entry_json`, `exit_json`, `execution_config_json`, `generation_report_json`, `execution_state_json`, `evaluation_lane`, `open_positions_json`, `market_context_json` |
 | `allocations` | Per-strategy fund commitments | `strategy_id`, `wallet_address`, `token_address`, `token_symbol`, `amount`, `slippage_pct`, `active`, `released_at` |
 | `evaluations` | One row per tick | `strategy_id`, `timestamp`, `market_snapshot_json`, `sdk_response_json`, `order_intents_json`, `duration_ms`, `status`, `error_msg` |
@@ -555,8 +551,7 @@ marketplace actions.
 
 - `MANGROVEMARKETS_BASE_URL` points at the Markets server, used by both the SDK and the MCP
   client. The example config uses `http://localhost:9081`.
-- Signing is local. The SDK returns unsigned transactions; the agent signs them with the
-  wallet's decrypted key and broadcasts the signed bytes. The key is never passed to the SDK.
+- The SDK returns unsigned transactions. The separate-UID custody broker checks exact intent and independent policy, signs inside its protected process, and returns only signed bytes for broadcast. No key is passed to the ordinary agent or SDK.
 - Markets tools that move assets or pay money return an approval preview and need
   `marketplace_submit`.
 
@@ -614,15 +609,15 @@ it. See the [configuration guide](configuration.md).
 
 | Key | Meaning | Example-config value |
 |-----|---------|----------------------|
-| `AUTH_ENABLED` | Turn API key checking on or off | `true` |
+| `AUTH_ENABLED` | Require API authentication; false refuses privileged access | `true` |
 | `API_KEYS` | Comma-separated valid keys | generated by setup |
 | `MANGROVEMARKETS_BASE_URL` | Markets server | `http://localhost:9081` |
 | `DB_PATH` | SQLite file | `./agent-data/agent.db` |
-| `MASTER_KEY_PATH` | Master keyfile | `./agent-data/master.key` |
+| `MASTER_KEY_PATH` | Agent credential/payment encryption key; wallet keys are separate | `./agent-data/master.key` |
 | `KEYRING_SERVICE_NAME` | OS keychain service name | `mangrove-agent` |
 | `MANGROVE_SDK_TIMEOUT_SECONDS` | SDK and upstream call timeout | `180` |
 | `LOG_RETENTION_DAYS` | Log retention period | `90` |
-| `SECRET_VAULT_TTL_SECONDS` | Lifetime of a `vault_token` | `300` |
+| `SECRET_VAULT_TTL_SECONDS` | Internal/venue handoff lifetime; no wallet export capability | `300` |
 | `X402_FACILITATOR_URL` | Facilitator for the demo route and tool | Coinbase CDP facilitator |
 | `X402_NETWORK` | Payment network, CAIP-2 | `eip155:8453` |
 | `X402_PAY_TO` | Address that receives demo payments | set |
@@ -651,8 +646,9 @@ duplicated between the two interfaces.
 
 | Module | Responsibility |
 |--------|----------------|
-| `wallet_manager` | Key generation, Fernet encryption, the signing guard, local signing, backup gate |
-| `secret_vault` | In-memory, single-read, expiring store behind `vault_token` |
+| `wallet_manager` | Public metadata and isolated signing adapters; custody-internal key operations |
+| `custody` | Dedicated-UID broker, protected policy/journal, OS checks and direct human administration |
+| `secret_vault` | Internal/venue single-use handoffs; wallet tokens do not authorize agent export |
 | `strategy_service` | Lifecycle transitions and the scheduler tick for local records |
 | `order_executor` | Direct user swaps and paper helpers; shared quote/signing boundaries |
 | `confirmed_execution`, `dex_confirmed` | Confirmed account, revision fences and durable DEX execution journal |
