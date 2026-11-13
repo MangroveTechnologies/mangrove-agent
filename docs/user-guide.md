@@ -155,19 +155,16 @@ The connected server's `list_signals` and `get_signal` results are authoritative
 availability, composability and parameter defaults. Check them before composing a strategy.
 
 `social_price_divergence`, in the `social` category, is an exit for long positions, never an
-entry. It is not yet available on the production Mangrove service
-(`api.mangrovedeveloper.ai`). The signal reads Cambrian Deep42 sentiment data, and that
-service does not attach this data to price bars yet. `get_signal` therefore reports the
-signal as disabled and non-composable, with the reason that the data columns it reads are
-not attached, so it would never fire. A new strategy cannot use it there, and the agent
-should report the signal as unavailable instead of substituting another signal.
+entry. It reads Cambrian Deep42 sentiment when the connected server supports and enables
+that data. If `get_signal` reports it disabled or non-composable, a new strategy cannot
+use it; report the signal as unavailable instead of substituting another signal.
 
 The signal fires when the closing price fell at least `min_drop_pct` percent over the last
 `window` bars while the crowd's average net bullish share of posts (bullish minus bearish)
 over those bars stayed at or above its average over the `window_baseline` readings before
-them: the price is dropping and the crowd is not reacting yet. All three parameters count
-bars, not days. The defaults are `window=7`, `min_drop_pct=3.0` and `window_baseline=60`, so
-on daily bars the signal looks for a 3% drop over 7 days against the 60 days before. The
+them: the price is dropping and the crowd is not reacting yet. `window` and
+`window_baseline` count bars; `min_drop_pct` is a percentage. The defaults are `window=7`,
+`min_drop_pct=3.0` and `window_baseline=60`, so on daily bars the signal looks for a 3% drop over 7 days against the 60 days before. The
 knowledge base tested it on daily bars. It types the signal as a trigger because it has no
 exit-only type, so the signal belongs only in the exit rules of a strategy that has its own
 entry trigger and a price filter. On a service that attaches Cambrian data, ask in plain
@@ -187,14 +184,12 @@ sentiment as it is scored now, not as it was known at the time.
 Six other Cambrian signals are disabled for new strategies: `social_sentiment_surge`,
 `social_sentiment_capitulation`, `social_crowd_bullish` and `social_crowd_cooling`
 (`social`), and `whale_share_divergence` and `holder_growth_trend` (`onchain`, Solana holder
-data). The production service reports each as disabled and non-composable, so a new strategy
-cannot use them. The reason `get_signal` gives is a backtest result: in Oracle engine
-strategy backtests on daily bars, no tested version of any of them beat a reference strategy
-that enters on an RSI cross up with a price filter, on a later period that was not used to
-choose its settings, and several lost money. The social signals were tested on BTC, ETH, SOL,
-XRP, DOGE, BNB and LINK, and the holder signals on six Solana tokens. `get_signal` returns
-the figures for each signal. A stored strategy that names one keeps evaluating it. The agent
-should not suggest them.
+data). They remain disabled for new strategies until validated in strategy backtests
+across market regimes. The connected server's catalogue supplies the current status and
+reason. Stored strategies retain their signal definitions, subject to data availability;
+the agent should not suggest these signals for new strategies. Missing, null or expired
+observations make a required evaluation window unavailable, and historical backtests
+reject incomplete coverage.
 
 ## If something is unavailable
 
