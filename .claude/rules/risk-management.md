@@ -21,7 +21,7 @@ the strategy's `execution_config`):
 
 - **`max_open_positions`** — caps concurrent open positions. Denial: `max_positions`.
 - **`max_trades_per_day`** — daily entry cap. Denial: `daily_limit`.
-- **Loss pause** (`cooldown_model='trades'`, canonical) — four consecutive net
+- **Loss pause** (`cooldown_model='trades'`, canonical) — two consecutive net
   losing closes or cumulative net losses of 6% of the reset baseline start a
   nominal 36-primary-bar pause, with configured floor/cap (defaults 24h/14d).
   After all pauses end, new alpha entries use half size until three alpha

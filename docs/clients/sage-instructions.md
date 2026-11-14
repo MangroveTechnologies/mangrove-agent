@@ -353,7 +353,7 @@ from verified current results, never infer control from local row presence.
 
 ## SOURCE: .claude/rules/risk-management.md
 
-<!-- sha256: dec80a934bc49b2b9df4113a9e4e0a7561a65ff167234bc9876ae7208fe7ae3d -->
+<!-- sha256: 1d97a3cd01d857741223f774f48389832a5fa0c58ca114657af7be59ba3d5d33 -->
 
 # Risk Management -- What Happens Behind the Scenes
 
@@ -378,7 +378,7 @@ the strategy's `execution_config`):
 
 - **`max_open_positions`** -- caps concurrent open positions. Denial: `max_positions`.
 - **`max_trades_per_day`** -- daily entry cap. Denial: `daily_limit`.
-- **Loss pause** (`cooldown_model='trades'`, canonical) -- four consecutive net
+- **Loss pause** (`cooldown_model='trades'`, canonical) -- two consecutive net
   losing closes or cumulative net losses of 6% of the reset baseline start a
   nominal 36-primary-bar pause, with configured floor/cap (defaults 24h/14d).
   After all pauses end, new alpha entries use half size until three alpha

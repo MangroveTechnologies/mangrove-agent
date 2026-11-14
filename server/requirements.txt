@@ -44,7 +44,8 @@ PyJWT>=2.9.0
 # 2.0.0 adds regime-window/venue metadata and removes obsolete market_era.
 # 2.3.0 adds strategies.local_deployment for the local Robinhood deployment tools.
 # 2.4.0 adds DeFi Pro filters and pagination.
-mangroveai>=2.4.0,<3.0.0
+# 2.5.0 preserves server defaults for omitted backtest controls and adds signal capability metadata.
+mangroveai>=2.5.0,<3.0.0
 # mangrovemarkets 1.0.0 moved EVM wallet keypair generation client-side.
 # The agent's wallet_manager.create_wallet() is unaffected — the SDK
 # call signature is unchanged, only the implementation shifted from
