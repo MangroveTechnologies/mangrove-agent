@@ -7,6 +7,16 @@ repository plugin, not from a published `mangrove-agent` PyPI package. Every ins
 path (`scripts/setup.sh`, `scripts/run-bare.sh`, `scripts/plugin-start-agent.sh` and
 `server/Dockerfile`) installs the lock, so the lock decides which SDK version runs.
 
+## Current locked release
+
+The normal and custody installs pin published `mangroveai==2.5.0`, while
+`mangrovemarkets==1.1.1` is unchanged. MangroveAI SDK 2.5.0 omits unset legacy
+backtest controls so the service selects its current defaults, and preserves
+optional signal capability metadata. It retains the local-deployment helper and
+flat legacy import shim. This dependency update does not change Mangrove's risk
+policy, activate a strategy, upgrade an existing installation automatically, or
+establish acceptance of live trading and provider workflows.
+
 ## Local deployment requirements
 
 The local Robinhood deployment tools read a validated strategy snapshot through the
@@ -42,7 +52,10 @@ that returns the synthetic fixture `server/tests/fixtures/local-deployment-not-r
 
 1. Change the `mangroveai` range in `server/requirements.txt`.
 2. Regenerate the lock with the command at the top of `server/requirements.txt`, and
-   confirm the diff changes only the packages you intended to change.
+   confirm the diff changes only the packages you intended to change. For a
+   bounded SDK update, use `--upgrade-package mangroveai` to preserve other pins.
+   Regenerate `server/requirements-custody.lock` with
+   `python scripts/hash_custody_lock.py` and verify its PyPI wheel hashes.
 3. Run the test suite from `server/` with `ENVIRONMENT=test`.
 4. Verify an authenticated deployment against a real strategy only with the user's
    separate authorization. Installing an SDK and passing CI do not authorize

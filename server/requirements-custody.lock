@@ -1022,8 +1022,8 @@ jeepney==0.9.0 ; sys_platform == 'linux' \
     --hash=sha256:97e5714520c16fc0a45695e5365a2e11b81ea79bba796e26f9f1d178cb182683
 keyring==25.7.0 \
     --hash=sha256:be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f
-mangroveai==2.4.0 \
-    --hash=sha256:fa8f6c8cb275191fde24e4e940bce79e6ef82e68c0fc0a0dd23d495bd074d341
+mangroveai==2.5.0 \
+    --hash=sha256:e6081a1c3014dea7d71bb4e70c1e4f4cc775f7a2e7956529e2a1f31e1f4b7462
 mangrovemarkets==1.1.1 \
     --hash=sha256:e88767193d7b6ea4a8282152bcb5eaebf8bec8c79d98d3540b631c36a6c9c39f
 more-itertools==11.1.0 \
