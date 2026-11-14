@@ -15,7 +15,7 @@ import urllib.request
 from pathlib import Path
 
 from agent_context import render_context
-from setup_support import NoRedirect, SetupError, local_key, origin, read_config, require_auth
+from setup_support import CONFIG, NoRedirect, SetupError, local_key, origin, read_config, require_auth
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_BYTES = 8 * 1024 * 1024
@@ -142,7 +142,7 @@ def failed(response: dict) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', type=Path, default=ROOT / 'server/src/config/local-config.json',
+    parser.add_argument('--config', type=Path, default=CONFIG,
                         help='Local agent configuration file; never pass a key as an argument.')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--list-tools', action='store_true', help='Print the live MCP tool catalog as JSON.')
