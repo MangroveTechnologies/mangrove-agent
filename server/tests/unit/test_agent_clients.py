@@ -63,7 +63,15 @@ def installation(tmp_path):
 
 
 @pytest.mark.parametrize('client', ['codex', 'grok'])
-def test_native_client_receives_key_in_environment_only(installation, tmp_path, client):
+@pytest.mark.parametrize('plugin_home', [False, True])
+def test_native_client_receives_key_in_environment_only(installation, tmp_path, client, plugin_home):
+    env = dict(os.environ)
+    env.pop('MANGROVE_AGENT_HOME', None)
+    if plugin_home:
+        home = tmp_path / 'plugin state'
+        (home / 'config').mkdir(parents=True)
+        (installation / 'server/src/config/local-config.json').rename(home / 'config/local-config.json')
+        env['MANGROVE_AGENT_HOME'] = str(home)
     binary = tmp_path / 'bin'
     binary.mkdir()
     capture = tmp_path / 'capture.json'
@@ -79,7 +87,7 @@ pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps({
     cli.chmod(0o700)
     result = subprocess.run([sys.executable, str(installation / 'scripts/client_session.py'), client],
                             cwd=tmp_path, capture_output=True, text=True,
-                            env=dict(os.environ, PATH=f'{binary}{os.pathsep}{os.environ["PATH"]}',
+                            env=dict(env, PATH=f'{binary}{os.pathsep}{os.environ["PATH"]}',
                                      CAPTURE=str(capture)))
     assert result.returncode == 0, result.stderr
     data = json.loads(capture.read_text())

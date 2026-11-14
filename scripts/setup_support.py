@@ -35,7 +35,11 @@ except ImportError:  # Windows: menus fall back to numbered choices.
     termios = tty = None
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG = ROOT / 'server/src/config/local-config.json'
+# Match the server's explicit plugin-home override; never fall back to a clone
+# config when that home is missing or invalid. Keep clone setup unchanged.
+_AGENT_HOME = os.environ.get('MANGROVE_AGENT_HOME')
+CONFIG = (Path(_AGENT_HOME).expanduser().absolute() / 'config/local-config.json'
+          if _AGENT_HOME else ROOT / 'server/src/config/local-config.json')
 EXAMPLE = ROOT / 'server/src/config/local-example-config.json'
 PUBLISHED = {'dev-key-1', 'GENERATED_BY_SETUP'}
 PLACEHOLDER = 'REPLACE_WITH_YOUR_DEV_OR_PROD_KEY'
@@ -1430,7 +1434,9 @@ def main():
         elif args.command == 'fingerprint':
             digest = hashlib.sha256()
             for path in [CONFIG, ROOT / 'server/requirements.lock', *sorted((ROOT / 'server/src').rglob('*.py'))]:
-                digest.update(str(path.relative_to(ROOT)).encode())
+                # Plugin state is outside the versioned code directory.
+                label = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+                digest.update(str(label).encode())
                 digest.update(path.read_bytes())
             print(digest.hexdigest())
         else:
