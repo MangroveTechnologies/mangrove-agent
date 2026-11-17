@@ -2499,3 +2499,79 @@ def test_oauth_status_shows_cleanup_for_still_connected_grant(monkeypatch, capsy
     output = capsys.readouterr().out
     assert 'Connected.' in output
     assert '--oauth disconnect' in output
+
+
+@pytest.mark.parametrize('home_value', ['absolute', 'relative', 'tilde'])
+def test_plugin_helpers_use_explicit_home_and_keep_clone_config(checkout, tmp_path, home_value):
+    repo, env = checkout
+    clone = repo / 'server/src/config/local-config.json'
+    clone.write_text('{"clone": true}')
+    home = tmp_path / 'plugin state with spaces'
+    config = home / 'config/local-config.json'
+    config.parent.mkdir(parents=True)
+    config.write_text((repo / 'server/src/config/local-example-config.json').read_text())
+    value = {'absolute': str(home), 'relative': home.name, 'tilde': '~/' + home.name}[home_value]
+    env = dict(env, MANGROVE_AGENT_HOME=value, HOME=str(tmp_path))
+    support = str(repo / 'scripts/setup_support.py')
+    configured = subprocess.run([sys.executable, support, 'configure', '--yes', '--auth', 'x402'],
+                                cwd=tmp_path, env=env, capture_output=True, text=True, timeout=10)
+    assert configured.returncode == 0, configured.stderr
+    saved = json.loads(config.read_text())
+    assert saved['MANGROVE_ACCESS_MODE'] == 'x402'
+    assert len(saved['API_KEYS']) >= 32
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert clone.read_text() == '{"clone": true}'
+    def fingerprint():
+        result = subprocess.run([sys.executable, support, 'fingerprint'], cwd=tmp_path,
+                                env=env, capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+        assert re.fullmatch(r'[0-9a-f]{64}\n', result.stdout)
+        return result.stdout
+    before = fingerprint()
+    clone.write_text('{"clone": "changed"}')
+    assert fingerprint() == before
+    saved['custom'] = 'changed'
+    config.write_text(json.dumps(saved))
+    assert fingerprint() != before
+
+
+@pytest.mark.parametrize('symlink', [False, True])
+def test_plugin_home_missing_or_symlink_config_never_uses_clone(checkout, tmp_path, symlink):
+    repo, env = checkout
+    clone = repo / 'server/src/config/local-config.json'
+    clone.write_text('{"AUTH_ENABLED": true, "API_KEYS": "clone-secret"}')
+    home = tmp_path / 'plugin home'
+    config = home / 'config/local-config.json'
+    config.parent.mkdir(parents=True)
+    if symlink:
+        config.symlink_to(clone)
+    result = subprocess.run([sys.executable, str(repo / 'scripts/setup_support.py'), 'check'],
+                            env=dict(env, MANGROVE_AGENT_HOME=str(home)),
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 1
+    assert ('symlink' if symlink else 'Cannot read configuration') in result.stderr
+    assert 'clone-secret' not in result.stdout + result.stderr
+    assert clone.read_text() == '{"AUTH_ENABLED": true, "API_KEYS": "clone-secret"}'
+
+
+def test_plugin_quickstart_and_bridge_use_home_without_clone_config(checkout, tmp_path):
+    repo, env = checkout
+    started = run_setup(checkout, '--yes', '--no-mcp')
+    assert started.returncode == 0, started.stdout + started.stderr
+    clone = repo / 'server/src/config/local-config.json'
+    original = clone.read_bytes()
+    home = tmp_path / 'private plugin home'
+    config = home / 'config/local-config.json'
+    config.parent.mkdir(parents=True)
+    clone.rename(config)
+    env = dict(env, MANGROVE_AGENT_HOME=str(home), SETUP_PYTHON=sys.executable)
+    quickstart = subprocess.run(['bash', str(repo / 'scripts/verify_quickstart.sh')],
+                                env=env, cwd=tmp_path, capture_output=True, text=True, timeout=15)
+    assert quickstart.returncode == 0, quickstart.stdout + quickstart.stderr
+    assert 'unauthenticated access refused' in quickstart.stdout
+    bridge = subprocess.run([sys.executable, str(repo / 'scripts/local_mcp_bridge.py'), '--list-tools'],
+                            env=env, cwd=tmp_path, capture_output=True, text=True, timeout=15)
+    assert bridge.returncode == 0, bridge.stderr
+    assert json.loads(bridge.stdout)['result']['tools'][0]['name'] == 'status'
+    assert not clone.exists()
+    assert config.read_bytes() == original

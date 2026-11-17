@@ -97,7 +97,7 @@ def launch(client: str) -> int:
     executable = shutil.which(client)
     if executable is None:
         raise SetupError(f'Install {client} before starting its agent session.')
-    cfg = read_config(ROOT / 'server/src/config/local-config.json')
+    cfg = read_config()
     require_auth(cfg)
     try:
         render_context(ROOT)
