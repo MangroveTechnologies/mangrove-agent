@@ -282,6 +282,15 @@ Local tools also have REST endpoints under `/api/v1/agent/`, backed by the same 
 
 **Backtests and the Strategy Engine.** Backtests run on MangroveAI, never in the agent. For a saved strategy, `run_backtest` submits the run and `get_backtest` reads the result. `screen_candidates` ranks up to 99 candidates cheaply with the SIEVE model, and `find_sweep_runs` searches what the Strategy Engine has already measured. To size and launch a new sweep, the agent loads MangroveAI's `sweeps` skill, shows the estimated run count and waits for your agreement before it launches compute. Deeper dives: the knowledge base [SIEVE guide](https://mangrove.io/docs/guides/using-sieve-prefilter) and [Experiments reference](https://mangrove.io/docs/api-reference/experiments).
 
+For existing results, ask for the history length and return measure explicitly,
+for example: "Search stored 90-180 day backtests, rank by simple annualized
+return, and show the effective filters." A minimum-IRR search can apply the
+server's visible 182-day default; the current `sweep-results` skill explains how
+to change or clear it. These are backtest days, not days deployed. The agent uses
+the live server schema and reports its notice; it does not implement its own
+cutoff. See [receiver contract provenance](docs/mcp-contracts.md#result-search-source-override)
+for what the checked-in fixture does and does not establish.
+
 ## How it works
 
 ```

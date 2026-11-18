@@ -156,7 +156,18 @@
   "source": {
     "endpoint": "https://api.mangrovedeveloper.ai/mcp/",
     "kind": "anonymous-tools-list",
-    "retrieved_at": "2026-11-02T16:33:41.635204+00:00"
+    "retrieved_at": "2026-11-02T16:33:41.635204+00:00",
+    "tool_overrides": {
+      "find_sweep_runs": {
+        "deployment_verified": false,
+        "descriptor_sha256": "492d822534cce43d978c1b8d26a8c423eae484af1783429e7da9796ca9cc5824",
+        "generator": "FindSweepRuns().to_schema() -> schema_contract(function.parameters)",
+        "kind": "source-generated-tool-schema",
+        "repository": "https://github.com/MangroveTechnologies/MangroveAI",
+        "schema_sha256": "ea4fa3042901d77351062a7792e6799fad58360994ff680ac571003bf325129b",
+        "source_commit": "5401291b7ee6f4073c7e8bb9baac382ac298c5b9"
+      }
+    }
   },
   "tools": [
     "build_strategy_for_regime",

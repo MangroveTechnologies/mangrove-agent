@@ -197,6 +197,23 @@ discovery. Do not copy those server workflows into this repository or infer an
 available replacement from a retired name. The snapshot refresh does not change
 local scheduling, wallet custody, payment recovery or execution policy.
 
+### Result-search source override
+
+The `find_sweep_runs` fixture has a source-generated override in
+`upstream/index.json`; other entries retain their earlier receiver observation.
+The override identifies the exact clean MangroveAI producer and hashes the
+actual tool descriptor and normalized input schema. It covers recorded-day
+bounds, the conditional IRR-duration-default switch, separate return-measure
+bounds, and the closed-trade sample floor. It is a contract review artifact,
+not evidence that the configured receiver has deployed those controls.
+
+Runtime forwarding continues to discover the authoritative tool; it does not
+load this fixture or calculate a local 182-day cutoff. Load the receiver's
+`sweep-results` skill for current usage and inspect the returned
+`effective_filters` notice. Do not substitute a missing metric with zero or
+interpret historical backtest days as deployment age. Source approval, API
+serving acceptance and package release remain separate checks.
+
 ### Live receiver comparison
 
 Pass an explicit destination to compare the snapshot with a running receiver:
