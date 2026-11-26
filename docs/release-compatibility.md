@@ -9,11 +9,14 @@ path (`scripts/setup.sh`, `scripts/run-bare.sh`, `scripts/plugin-start-agent.sh`
 
 ## Current locked release
 
-The normal and custody installs pin published `mangroveai==2.5.0`, while
-`mangrovemarkets==1.1.1` is unchanged. MangroveAI SDK 2.5.0 omits unset legacy
-backtest controls so the service selects its current defaults, and preserves
-optional signal capability metadata. It retains the local-deployment helper and
-flat legacy import shim. This dependency update does not change Mangrove's risk
+The normal and custody installs pin published `mangroveai==2.8.0`, while
+`mangrovemarkets==1.1.1` is unchanged. MangroveAI SDK 2.8.0 adds Oracle
+result-search filters and order-book, order-flow and liquidation market-data
+reads. It keeps the behavior of 2.5.0, which omits unset legacy backtest
+controls so the service selects its current defaults and preserves optional
+signal capability metadata. It retains the local-deployment helper and flat
+legacy import shim, and its runtime dependencies (`httpx`, `pydantic`) are
+unchanged. This dependency update does not change Mangrove's risk
 policy, activate a strategy, upgrade an existing installation automatically, or
 establish acceptance of live trading and provider workflows.
 
