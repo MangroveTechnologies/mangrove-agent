@@ -162,7 +162,11 @@ def test_paper_simulates_at_mark_price(temp_db, mock_mangroveai, mock_markets):
     assert trade.mode == "paper"
     assert trade.status == "simulated"
     assert trade.tx_hash is None
-    assert trade.fill_price == 2500.0
+    # Mark 2500 moved by the mean backtest slippage (0.0025 / 2).
+    assert trade.fill_price == pytest.approx(2503.125)
+    assert trade.fees["model"] == "backtest"
+    assert trade.fees["fee"] == "0"  # the fee is charged on a profitable close
+    assert float(trade.input_amount) == pytest.approx(250.3125)
     # No DEX calls whatsoever.
     assert not mock_markets.dex.get_quote.called
     assert not mock_markets.dex.prepare_swap.called
@@ -189,10 +193,11 @@ def test_position_lifecycle_paper_enter_exit(temp_db, mock_mangroveai, mock_mark
     assert pos is not None and pos.status == "open"
     assert pos.asset == "ETH"
     assert pos.entry_amount == pytest.approx(0.1)
-    assert pos.entry_price == pytest.approx(2500.0)
+    assert pos.entry_price == pytest.approx(2503.125)
     assert pos.stop_loss == pytest.approx(2400.0)
 
-    # Exit at a higher mark: 0.1 ETH sold at 3000 vs entered at 2500 -> +50.
+    # Exit mark 3000. Expected slippage on both legs, plus the fee because
+    # the round trip is profitable. 0.1 * (2996.25 - 2503.125) - 2.12765625.
     mock_mangroveai.crypto_assets.get_market_data.return_value.data = {"current_price": 3000.0}
     exit_i = OrderIntent(action="exit", side="sell", symbol="ETH", amount=0.1,
                          engine_position_id="engine-pos-1", reason="tp")
@@ -201,9 +206,10 @@ def test_position_lifecycle_paper_enter_exit(temp_db, mock_mangroveai, mock_mark
     pos = get_position("engine-pos-1")
     assert pos.status == "closed"
     assert pos.exit_trade_id == exit_trade.id
-    assert pos.exit_price == pytest.approx(3000.0)
+    assert pos.exit_price == pytest.approx(2996.25)
     stored = [t for t in list_trades("s1") if t.id == exit_trade.id][0]
-    assert stored.p_and_l == pytest.approx(50.0)
+    assert stored.p_and_l == pytest.approx(47.18484375)
+    assert stored.fees["fee"] == "2.12765625"
 
 
 def test_position_exit_fifo_fallback_without_engine_id(temp_db, mock_mangroveai, mock_markets):

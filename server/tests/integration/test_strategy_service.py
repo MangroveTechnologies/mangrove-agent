@@ -375,11 +375,12 @@ def test_tick_maps_engine_shaped_orders(temp_db, mock_ai_sdk, monkeypatch):
     assert len(trades) == 1, "engine-shaped order must NOT be skipped"
     t = trades[0]
     assert t.mode == "paper"
-    # amount is ASSET units: buys 0.04 ETH, spending 0.04 * 2500 = 100 USDC
+    # amount is ASSET units: buys 0.04 ETH. The mark is 2500 and the
+    # backtest slippage mean (0.125%) spends 0.04 * 2503.125 = 100.125 USDC.
     assert t.output_token == "ETH"
     assert t.output_amount == pytest.approx(0.04)
     assert t.input_token == "USDC"
-    assert t.input_amount == pytest.approx(100.0)
+    assert t.input_amount == pytest.approx(100.125)
     assert t.order_intent.action == "enter"
     assert t.order_intent.side == "buy"
     assert t.order_intent.ref_price == pytest.approx(2500.0)
@@ -540,9 +541,10 @@ def test_tick_stateless_lane_round_trips_state(temp_db, mock_ai_sdk, monkeypatch
     _, kwargs2 = mock_ai_sdk.execution.evaluate_by_object.call_args
     assert len(kwargs2["open_positions"]) == 1
     assert kwargs2["open_positions"][0]["id"] == "pos-e1"
-    assert kwargs2["open_positions"][0]["entry_price"] == 2500
+    # The echoed entry is the simulated fill, mark plus mean backtest slippage.
+    assert kwargs2["open_positions"][0]["entry_price"] == pytest.approx(2503.125)
     sent2 = mock_ai_sdk.execution.evaluate_by_object.call_args.args[0]
-    assert sent2["execution_state"]["cash_balance"] == 9900.0
+    assert sent2["execution_state"]["cash_balance"] == pytest.approx(9899.875)
 
 
 def test_tick_default_lane_stays_server(temp_db, mock_ai_sdk, monkeypatch):

@@ -34,7 +34,7 @@ from typing import Any, Literal
 
 from src.config import app_config
 from src.models.domain import OrderIntent, Position, Trade
-from src.services import dex_service, trade_log
+from src.services import dex_service, fill_costs, trade_log
 from src.services.transaction_intent import (
     NATIVE_TOKEN,
     ONEINCH_ROUTING_FEE_BPS,
@@ -72,20 +72,70 @@ def _fetch_mark_price(symbol: str) -> float:
     )
 
 
+def _open_paper_position(intent: OrderIntent, strategy_id: str):
+    """Open position a paper exit closes, if one is already booked."""
+    if intent.action != "exit":
+        return None
+    position = trade_log.get_position(intent.engine_position_id) if intent.engine_position_id else None
+    if position is None or position.status != "open" or position.strategy_id != strategy_id:
+        position = trade_log.find_open_position(strategy_id, intent.symbol)
+    if position is None or position.status != "open":
+        return None
+    return position
+
+
 def _paper_fill(intent: OrderIntent, strategy_id: str, evaluation_id: str | None, *, record: bool = True) -> Trade:
-    """Simulate a paper fill at the current mark price."""
-    mark = _fetch_mark_price(intent.symbol)
+    """Simulate a paper fill with the backtester's fee and slippage.
+
+    The mark is moved by the mean of the backtester's per-leg slippage
+    draw. A long close pays the size-dependent fee only when that round
+    trip is profitable. Live swaps do not use this path.
+    """
+    from decimal import Decimal
+
+    mark = Decimal(str(_fetch_mark_price(intent.symbol)))
+    quantity = Decimal(str(intent.amount))
+    params = fill_costs.load_cost_params()
+    charged = Decimal(0)
+    pnl = None
+    entry_fees: dict = {}
+    position = _open_paper_position(intent, strategy_id)
+    if position is not None and intent.side == "sell":
+        entry_fees = trade_log.trade_fees(position.entry_trade_id)
+        params = fill_costs.params_from_fees(entry_fees, params)
+    quote = fill_costs.quote_leg(mark, intent.side, quantity, params)
+    if position is not None and intent.side == "sell" and position.entry_amount:
+        entry_qty = Decimal(str(position.entry_amount))
+        closed_qty = min(quantity, entry_qty)
+        if entry_fees.get("model") == "backtest":
+            try:
+                entry_notional = Decimal(entry_fees["notional"]) * closed_qty / entry_qty
+            except Exception:
+                entry_notional = Decimal(str(position.entry_price)) * closed_qty
+        else:
+            entry_notional = Decimal(str(position.entry_price)) * closed_qty
+        charged = fill_costs.round_trip_fee(
+            entry_notional=entry_notional,
+            entry_price=Decimal(str(position.entry_price)),
+            exit_price=quote.fill_price,
+            quantity=closed_qty,
+            fee_pct=params.fee_pct,
+        )
+        pnl = fill_costs.round_trip_pnl(
+            entry_price=Decimal(str(position.entry_price)),
+            exit_price=quote.fill_price,
+            quantity=closed_qty,
+            fee=charged,
+        )
     # Convention: "buy" spends USDC for the asset; "sell" does the reverse.
-    # For paper we're not actually moving funds; we just record what the fill
-    # would have looked like.
     if intent.side == "buy":
         input_token, output_token = "USDC", intent.symbol
-        input_amount = intent.amount * mark
-        output_amount = intent.amount
+        input_amount = quote.notional
+        output_amount = quantity
     else:
         input_token, output_token = intent.symbol, "USDC"
-        input_amount = intent.amount
-        output_amount = intent.amount * mark
+        input_amount = quantity
+        output_amount = quote.notional - charged
 
     trade = Trade(
         id=str(uuid.uuid4()),
@@ -95,17 +145,17 @@ def _paper_fill(intent: OrderIntent, strategy_id: str, evaluation_id: str | None
         mode="paper",
         tx_hash=None,
         input_token=input_token,
-        input_amount=input_amount,
+        input_amount=float(input_amount),
         output_token=output_token,
-        output_amount=output_amount,
-        fill_price=mark,
-        fees={},
+        output_amount=float(output_amount),
+        fill_price=float(quote.fill_price),
+        fees=fill_costs.fee_record(params, quote.notional, charged),
         status="simulated",
         executed_at=trade_log.now_utc(),
+        p_and_l=float(pnl) if pnl is not None else None,
     )
     if record:
         trade_log.log_trade(trade)
-    if record:
         _log.info(
             "order.paper.simulated",
             trade_id=trade.id,
@@ -113,7 +163,9 @@ def _paper_fill(intent: OrderIntent, strategy_id: str, evaluation_id: str | None
             symbol=intent.symbol,
             side=intent.side,
             amount=intent.amount,
-            fill_price=mark,
+            fill_price=trade.fill_price,
+            fee=trade.fees.get("fee"),
+            slippage_applied=trade.fees.get("slippage_applied"),
         )
     return trade
 
@@ -599,7 +651,12 @@ def _maintain_position(trade: Trade, strategy_id: str) -> None:
         position.status = "closed"
         trade_log.update_position(position)
 
-        # P&L on the exit trade, pro-rata for partial exits.
+        # P&L on the exit trade, pro-rata for partial exits. Paper already
+        # priced the round trip with the backtest fee; keep that figure.
+        # Live settlement is unchanged.
+        if trade.mode == "paper" and trade.p_and_l is not None:
+            trade_log.set_trade_pnl(trade.id, trade.p_and_l)
+            return
         closed_fraction = min(exit_amount / position.entry_amount, 1.0) if position.entry_amount else 1.0
         entry_cost = position.entry_price * position.entry_amount * closed_fraction
         exit_proceeds = trade.fill_price * exit_amount

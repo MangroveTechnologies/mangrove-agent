@@ -237,7 +237,7 @@ def test_paper_lifecycle_end_to_end(client):
     assert trade["mode"] == "paper"
     assert trade["status"] == "simulated"
     assert trade["tx_hash"] is None
-    assert trade["fill_price"] == 2500.0
+    assert trade["fill_price"] == pytest.approx(2503.125)
     assert trade["input_token"] == "USDC"
     assert trade["output_token"] == "ETH"
 

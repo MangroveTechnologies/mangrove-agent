@@ -48,17 +48,40 @@ def test_entry_activation_actual_cash_close_pnl_and_duplicate_fill(ledger, monke
     assert fill()
     assert not fill()
     state, positions, closes, complete = paper.inputs("s", service._get_row("s"), 110)
-    assert complete and state["cash_balance"] == 800 and state["account_value"] == 1020
-    assert len(positions) == 1 and positions[0]["entry_price"] == 100 and positions[0]["position_size"] == 2
+    # 2 units at 100, plus the mean slippage of 0.125%: spend 200.25.
+    assert complete and state["cash_balance"] == pytest.approx(799.75)
+    assert state["account_value"] == pytest.approx(1019.75)
+    assert len(positions) == 1 and positions[0]["entry_price"] == pytest.approx(100.125)
+    assert positions[0]["position_size"] == 2
     assert positions[0]["orders"][0]["status"] == "pending" and closes == []
     monkeypatch.setattr(paper.order_executor, "_fetch_mark_price", lambda _: 90)
     assert fill("exit", "exit")
     assert not fill("exit", "exit")
     state, positions, closes, complete = paper.inputs("s", service._get_row("s"), 110)
-    assert complete and positions == [] and state["cash_balance"] == 980
-    assert len(closes) == 1 and closes[0]["realized_pnl"] == -20
+    # A loss pays slippage and no fee: 2 * 89.8875 comes back. Net -20.475.
+    assert complete and positions == [] and state["cash_balance"] == pytest.approx(979.525)
+    assert len(closes) == 1 and closes[0]["realized_pnl"] == pytest.approx(-20.475)
     with store.connection() as conn:
         assert conn.execute("SELECT count(*) FROM trades WHERE mode='paper'").fetchone()[0] == 2
+
+
+def test_profitable_close_pays_the_backtest_fee(ledger, monkeypatch):
+    fill()
+    monkeypatch.setattr(paper.order_executor, "_fetch_mark_price", lambda _: 120)
+    assert fill("exit", "exit")
+    state, positions, closes, complete = paper.inputs("s", service._get_row("s"), 120)
+    # Entry 200.25, exit proceeds 239.7, fee 200.25 * 0.0085. Net +37.747875.
+    assert complete and positions == []
+    assert state["cash_balance"] == pytest.approx(1037.747875)
+    assert closes[0]["realized_pnl"] == pytest.approx(37.747875)
+
+
+def test_unknown_fee_payload_holds_entries(ledger):
+    fill()
+    with store.connection() as conn:
+        conn.execute("UPDATE trades SET fees_json=? WHERE mode='paper'", (json.dumps({"gas_usd": 1}),))
+    _, positions, _, complete = paper.inputs("s", service._get_row("s"), 100)
+    assert not complete and positions[0]["entry_price"] == pytest.approx(100.125)
 
 
 def test_book_revision_rejects_stale_fill_before_any_journal_mutation(ledger):
