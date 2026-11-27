@@ -12,9 +12,20 @@ amounts atomically with the position, prospective bracket template, order dedup
 key and book revision. The next tick supplies that actual simulated book and
 one net close per fully closed paper position. An engine exit estimate cannot
 advance paper risk until the simulated fill is recorded and delivered. Paper
-fills have no venue fees; their net PnL uses actual simulated entry and exit
-prices. Historical paper fills without complete journal evidence hold entries
-while recorded protective templates remain available.
+fills use the backtester's cost model. `fee_pct` and `slippage_pct` come from
+MangroveAI trading defaults (`backtest_defaults`), the same source a backtest
+uses when those fields are omitted. Each leg fills at the mark moved by half
+the configured slippage, the mean of the backtester's uniform draw from zero
+through `slippage_pct`. A profitable long close also pays the size-dependent
+fee on the closed entry notional: $10,000 and below pay `fee_pct`, $1,000,000
+and above pay 0.0589% (and never more than `fee_pct`), and sizes in between
+pay the linear rate. Losing closes pay slippage only. For the same order, the
+paper fill and that deterministic backtest cost match within a relative
+tolerance of 1e-9. One backtest slippage draw can differ from the paper fill
+by at most half of `slippage_pct` of the mark notional on each leg. An empty
+historical fee record stays a complete journal. Any other fee payload still
+holds new entries. Historical paper fills without complete journal evidence
+hold entries while recorded protective templates remain available.
 
 Paper opening capital is immutable after adoption. Paper risk, receipts and
 cash remain separate from LIVE history. A closed LIVE position does not poison

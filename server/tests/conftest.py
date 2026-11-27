@@ -37,6 +37,20 @@ def _synthetic_custody_runtime(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _offline_backtest_costs(monkeypatch):
+    """Paper fills read canon backtest rates. Tests stay offline.
+
+    The live source is MangroveAI ``trading_defaults().backtest_defaults``.
+    These are the published defaults (fee 0.85%, slippage 0.25%). A test that
+    needs another schedule replaces ``_fetch_trading_defaults``.
+    """
+    monkeypatch.setattr(
+        "src.services.fill_costs._fetch_trading_defaults",
+        lambda: {"backtest_defaults": {"fee_pct": "0.0085", "slippage_pct": "0.0025"}},
+    )
+
+
+@pytest.fixture(autouse=True)
 def _offline_facilitator_metadata(monkeypatch):
     """Generic test app construction must not depend on a public facilitator."""
     if os.environ.get("ENVIRONMENT") == "test":

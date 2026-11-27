@@ -145,6 +145,20 @@ def _row_to_position(r) -> Position:
     )
 
 
+def trade_fees(trade_id: str) -> dict:
+    """Fee payload for one trade. A legacy or unreadable row contributes nothing."""
+    row = get_connection().execute(
+        "SELECT fees_json FROM trades WHERE id = ?", (trade_id,)
+    ).fetchone()
+    if row is None or not row["fees_json"]:
+        return {}
+    try:
+        fees = json.loads(row["fees_json"])
+    except (TypeError, ValueError):
+        return {}
+    return fees if isinstance(fees, dict) else {}
+
+
 def get_position(position_id: str) -> Position | None:
     r = get_connection().execute(
         "SELECT * FROM positions WHERE id = ?", (position_id,)

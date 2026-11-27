@@ -12,7 +12,7 @@ import uuid
 from src.models.domain import Evaluation
 from src.services import broker_store as store
 from src.services import confirmed_execution as confirmed
-from src.services import order_executor, trade_log
+from src.services import fill_costs, order_executor, trade_log
 from src.shared.errors import SdkError
 from src.shared.logging import get_logger
 
@@ -58,7 +58,8 @@ def inputs(strategy_id, row, mark):
             response = json.loads(fill["sdk_response_json"] or "{}")
             for template in response.get("proposed_positions") or []:
                 templates.setdefault(template["id"], template)
-        if fill["status"] != "simulated" or fill["template_json"] is None or json.loads(fill["fees_json"] or "{}"):
+        fees = json.loads(fill["fees_json"] or "{}")
+        if fill["status"] != "simulated" or fill["template_json"] is None or not fill_costs.journal_complete(fees):
             complete = False
             continue
         intent = json.loads(fill["order_intent_json"])
@@ -146,11 +147,14 @@ def fill(strategy_id, evaluation_id, intent, template, revision):
             entry = conn.execute("SELECT mode,status FROM trades WHERE id=?", (position["entry_trade_id"],)).fetchone()
             if not entry or tuple(entry) != ("paper", "simulated") or quantity != confirmed.decimal(position["entry_amount"]):
                 raise SdkError("Paper exit requires the exact paper-owned quantity.")
-            pnl = float(quantity * (price - confirmed.decimal(position["entry_price"])))
+            if trade.p_and_l is None:
+                raise SdkError("Paper exit has no costed round trip.")
+            pnl = trade.p_and_l
         conn.execute(
             "INSERT INTO trades(id,strategy_id,evaluation_id,order_intent_json,mode,input_token,input_amount,output_token,output_amount,fill_price,fees_json,status,executed_at,p_and_l) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (trade.id, strategy_id, evaluation_id, intent.model_dump_json(), "paper", trade.input_token,
-             trade.input_amount, trade.output_token, trade.output_amount, trade.fill_price, "{}", "simulated", trade.executed_at.isoformat(), pnl),
+             trade.input_amount, trade.output_token, trade.output_amount, trade.fill_price,
+             json.dumps(trade.fees), "simulated", trade.executed_at.isoformat(), pnl),
         )
         if intent.action == "enter":
             conn.execute(
